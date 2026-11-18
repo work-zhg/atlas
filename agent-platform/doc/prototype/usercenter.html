@@ -1,0 +1,1773 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>用户中心 · 登录 — 改版原型</title>
+<style>
+/* 设计 token 与 Atlas 控制台改版原型（atlas-console.html）、packages/chat-ui/src/theme/tokens.css 同一套 */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --surface-2: #fbfbfd; --hover: #f2f4f8;
+  --ink: #0f172a; --ink-2: #334155; --ink-3: #64748b; --ink-4: #94a3b8;
+  --line: #e6e8ee; --line-2: #eef0f4;
+  --primary: #4f46e5; --primary-2: #6366f1; --primary-weak: #eef0ff; --primary-ink: #4338ca;
+  --secondary: #0ea5e9; --secondary-weak: #e6f6fe;
+  --success: #16a34a; --success-weak: #e7f6ec;
+  --warning: #d97706; --warning-weak: #fef3e2;
+  --danger: #dc2626; --danger-weak: #fdeaea;
+  --radius: 12px; --radius-sm: 8px; --radius-xs: 6px;
+  --shadow-xs: 0 1px 2px rgba(16,24,40,.05);
+  --shadow-md: 0 6px 18px rgba(16,24,40,.08), 0 2px 6px rgba(16,24,40,.05);
+  --shadow-lg: 0 20px 48px rgba(16,24,40,.16);
+  --font: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --top-h: 52px; --sider-w: 248px; --sider-w-min: 60px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { font-family: var(--font); background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+a { color: var(--primary); text-decoration: none; cursor: pointer; }
+button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+h1, h2, h3, h4 { margin: 0; color: var(--ink); }
+h1 { font-size: 20px; font-weight: 650; }
+h2 { font-size: 16px; font-weight: 650; }
+h3 { font-size: 14px; font-weight: 650; }
+p { margin: 0; }
+code, .mono { font-family: var(--mono); font-size: 12px; }
+code { background: var(--line-2); padding: 1px 5px; border-radius: 5px; }
+svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+svg.i.fill { fill: currentColor; stroke: none; }
+input[type=checkbox], input[type=radio] { accent-color: var(--primary); width: 15px; height: 15px; margin: 0; flex: none; }
+.muted { color: var(--ink-3); }
+.faint { color: var(--ink-4); }
+.sm { font-size: 12.5px; }
+.xs { font-size: 12px; }
+.row { display: flex; align-items: center; gap: 8px; }
+.col { display: flex; flex-direction: column; gap: 8px; }
+.grow { flex: 1; min-width: 0; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp { flex: 1; }
+
+/* ---------- 顶栏：一级菜单 ---------- */
+.top { height: var(--top-h); background: var(--surface); border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 16px 0 14px; gap: 20px; position: relative; z-index: 20; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px; letter-spacing: .01em; cursor: pointer; white-space: nowrap; }
+.logo { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, #6366f1, #0ea5e9); color: #fff; display: grid; place-items: center; font-size: 14px; font-weight: 700; flex: none; }
+.pnav { display: flex; gap: 2px; height: 100%; }
+.pnav a { display: flex; align-items: center; gap: 7px; padding: 0 14px; color: var(--ink-2); font-weight: 550; position: relative; white-space: nowrap; }
+.pnav a:hover { color: var(--ink); background: var(--hover); }
+.pnav a.on { color: var(--primary-ink); }
+.pnav a.on::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; background: var(--primary); border-radius: 2px; }
+.top-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.avatar { width: 30px; height: 30px; border-radius: 50%; display: inline-grid; place-items: center; color: #fff; font-size: 12.5px; font-weight: 650; flex: none; vertical-align: middle; }
+.sq { display: inline-grid; place-items: center; border-radius: 10px; flex: none; }
+.sq svg { width: 52%; height: 52%; }
+
+/* ---------- 左侧：二级菜单（可收缩） ---------- */
+.body { display: flex; height: calc(100vh - var(--top-h)); }
+.body.full { height: 100vh; }
+.sider { width: var(--sider-w); flex: none; background: var(--surface-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; transition: width .18s ease; overflow: hidden; }
+.sider.min { width: var(--sider-w-min); }
+.sider-top { padding: 12px 10px 6px; display: flex; flex-direction: column; gap: 2px; }
+.snav { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: var(--radius-sm); color: var(--ink-2); font-weight: 520; white-space: nowrap; cursor: pointer; position: relative; }
+.snav:hover { background: var(--hover); color: var(--ink); }
+.snav.on { background: var(--primary-weak); color: var(--primary-ink); font-weight: 600; }
+.snav .badge { margin-left: auto; }
+.sider.min .snav { justify-content: center; padding: 0; }
+.sider.min .snav span, .sider.min .snav .badge { display: none; }
+.hist { flex: 1; overflow-y: auto; padding: 4px 10px 10px; border-top: 1px solid var(--line-2); margin-top: 6px; }
+.hist-group { font-size: 11.5px; color: var(--ink-4); padding: 10px 8px 4px; }
+.hist-item { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 8px; border-radius: var(--radius-sm); color: var(--ink-2); cursor: pointer; }
+.hist-item:hover { background: var(--hover); }
+.hist-item.on { background: #e9ebf3; color: var(--ink); font-weight: 550; }
+.hist-item .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.sider-foot { border-top: 1px solid var(--line-2); padding: 8px 10px; }
+.main { flex: 1; min-width: 0; overflow-y: auto; position: relative; }
+.page { padding: 24px 32px 60px; max-width: 1280px; margin: 0 auto; }
+.page.narrow { max-width: 880px; }
+.page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; min-height: 36px; }
+.page-head .sub { color: var(--ink-3); font-size: 13px; margin-top: 2px; }
+
+/* ---------- 通用组件（与 Atlas 原型相同） ---------- */
+.btn { height: 34px; padding: 0 14px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface); display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; font-weight: 550; white-space: nowrap; color: var(--ink); }
+.btn:hover { border-color: #cfd3dd; background: var(--hover); }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn.primary:hover { background: var(--primary-2); }
+.btn.danger { color: var(--danger); }
+.btn.danger.solid { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.ghost:hover { background: var(--hover); }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 13px; }
+.btn.lg { height: 40px; font-size: 14.5px; }
+.btn.block { width: 100%; }
+.btn[disabled] { opacity: .5; cursor: not-allowed; }
+.ibtn { width: 32px; height: 32px; border-radius: var(--radius-sm); border: none; background: transparent; display: inline-grid; place-items: center; cursor: pointer; color: var(--ink-3); flex: none; }
+.ibtn:hover { background: var(--hover); color: var(--ink); }
+.ibtn.sm { width: 26px; height: 26px; }
+.input, .select, textarea.input { height: 34px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 11px; background: var(--surface); outline: none; width: 100%; }
+.input.lg { height: 40px; font-size: 14.5px; }
+textarea.input { height: auto; padding: 9px 11px; resize: vertical; line-height: 1.6; }
+.input:focus, .select:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px var(--primary-weak); }
+.input[readonly] { background: var(--surface-2); color: var(--ink-2); }
+.search { position: relative; }
+.search svg { position: absolute; left: 10px; top: 9px; color: var(--ink-4); }
+.search .input { padding-left: 32px; }
+.tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 550; background: var(--line-2); color: var(--ink-2); white-space: nowrap; }
+.tag.xs { height: 18px; padding: 0 6px; font-size: 11px; }
+.tag.primary { background: var(--primary-weak); color: var(--primary-ink); }
+.tag.success { background: var(--success-weak); color: var(--success); }
+.tag.warning { background: var(--warning-weak); color: #b45309; }
+.tag.danger { background: var(--danger-weak); color: var(--danger); }
+.tag.blue { background: var(--secondary-weak); color: #0369a1; }
+.tag.mono { font-family: var(--mono); font-weight: 500; }
+.badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: #fff; font-size: 11px; font-weight: 650; display: inline-grid; place-items: center; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.card.pad { padding: 16px 18px; }
+.card-h { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line-2); min-height: 50px; }
+.card-b { padding: 14px 16px; }
+.tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+.tabs a { padding: 10px 0; color: var(--ink-3); font-weight: 550; position: relative; white-space: nowrap; }
+.tabs a:hover { color: var(--ink); }
+.tabs a.on { color: var(--ink); }
+.tabs a.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--primary); border-radius: 2px; }
+.tabs.inner { padding: 0 16px; margin-bottom: 0; }
+.seg { display: inline-flex; background: var(--line-2); border-radius: 9px; padding: 3px; gap: 2px; }
+.seg a { padding: 4px 12px; border-radius: 7px; color: var(--ink-3); font-weight: 550; font-size: 13px; white-space: nowrap; }
+.seg a.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-xs); }
+.seg a .n { color: var(--ink-4); font-weight: 500; margin-left: 3px; }
+.seg.block { display: flex; } .seg.block a { flex: 1; text-align: center; }
+.switch { display: inline-block; vertical-align: middle; width: 36px; height: 20px; border-radius: 10px; background: #d5d9e2; position: relative; cursor: pointer; flex: none; transition: background .15s; }
+.switch::after { content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%; background: #fff; top: 2px; left: 2px; transition: left .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.switch.on { background: var(--primary); }
+.switch.on::after { left: 18px; }
+.table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.table th { text-align: left; font-weight: 600; font-size: 12.5px; color: var(--ink-3); background: var(--surface-2); padding: 10px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.table td { padding: 11px 14px; border-bottom: 1px solid var(--line-2); vertical-align: middle; }
+.table tr:last-child td { border-bottom: none; }
+.table tr.click:hover td { background: var(--surface-2); cursor: pointer; }
+.table tr.grp td { background: var(--surface-2); font-size: 12.5px; font-weight: 600; color: var(--ink-3); padding: 7px 14px; }
+.table.flat { border: none; border-radius: 0 0 var(--radius) var(--radius); }
+.table .acts { text-align: right; white-space: nowrap; }
+.table .acts > * { vertical-align: middle; }
+.nw { white-space: nowrap; }
+.empty { text-align: center; padding: 48px 20px; color: var(--ink-3); }
+.empty .ill { width: 52px; height: 52px; border-radius: 16px; background: var(--primary-weak); color: var(--primary); display: grid; place-items: center; margin: 0 auto 12px; }
+.empty .ill svg { width: 24px; height: 24px; }
+.empty h3 { margin-bottom: 4px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-size: 13px; color: var(--ink-2); white-space: nowrap; }
+a.chip:hover { background: var(--hover); color: var(--ink); }
+.chip .x { color: var(--ink-4); cursor: pointer; display: inline-grid; }
+.chip .x:hover { color: var(--danger); }
+.chip .x svg { width: 13px; height: 13px; }
+.kv { display: grid; grid-template-columns: 110px 1fr; gap: 12px 14px; font-size: 13.5px; margin: 0; }
+.kv dt { color: var(--ink-3); }
+.kv dd { margin: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.divider { height: 1px; background: var(--line-2); margin: 16px 0; }
+.label { font-size: 13px; font-weight: 600; color: var(--ink-2); margin-bottom: 6px; display: block; }
+.help { font-size: 12.5px; color: var(--ink-3); margin-top: 5px; }
+.radio-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; cursor: pointer; display: flex; gap: 10px; align-items: flex-start; background: var(--surface); }
+.radio-card:hover { border-color: #cfd3dd; }
+.radio-card.on { border-color: var(--primary-2); background: #f8f8ff; box-shadow: 0 0 0 3px var(--primary-weak); }
+.radio-card .r { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid #c5cad6; flex: none; margin-top: 2px; }
+.radio-card.on .r { border: 5px solid var(--primary); }
+.toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
+.acard { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px; cursor: pointer; transition: box-shadow .15s, border-color .15s; position: relative; }
+.acard:hover { border-color: #d6d9e3; box-shadow: var(--shadow-md); }
+.acard .desc { color: var(--ink-3); font-size: 13px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 40px; }
+.acard .foot { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-3); margin-top: auto; }
+.alert { display: flex; gap: 8px; align-items: flex-start; padding: 9px 12px; border-radius: 8px; font-size: 13px; line-height: 1.5; }
+.alert svg { margin-top: 1px; }
+.alert.danger { background: var(--danger-weak); color: #b91c1c; }
+.alert.warning { background: var(--warning-weak); color: #92400e; }
+.alert.info { background: var(--primary-weak); color: var(--primary-ink); }
+.alert.plain { background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-2); }
+.pager { display: flex; align-items: center; gap: 6px; padding: 10px 14px; border-top: 1px solid var(--line-2); }
+.pager .pg { min-width: 26px; height: 26px; border-radius: 6px; display: inline-grid; place-items: center; font-size: 13px; color: var(--ink-2); }
+.pager .pg.on { background: var(--primary-weak); color: var(--primary-ink); font-weight: 600; }
+
+/* 浮层 */
+.pop { position: absolute; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 6px; z-index: 60; min-width: 200px; }
+.pop .mi { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 7px; cursor: pointer; color: var(--ink-2); }
+.pop .mi:hover { background: var(--hover); color: var(--ink); }
+.pop .mi.on { color: var(--primary-ink); }
+.pop .mi.danger { color: var(--danger); }
+.pop .sep { height: 1px; background: var(--line-2); margin: 5px 4px; }
+.pop .ph { font-size: 11.5px; color: var(--ink-4); padding: 6px 10px 2px; }
+.mask { position: fixed; inset: 0; background: rgba(15,23,42,.36); z-index: 80; display: grid; place-items: center; }
+.modal { background: var(--surface); border-radius: 14px; width: 560px; max-width: calc(100vw - 40px); max-height: calc(100vh - 60px); display: flex; flex-direction: column; box-shadow: var(--shadow-lg); }
+.modal.wide { width: 720px; }
+.modal-h { display: flex; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--line-2); }
+.modal-b { padding: 18px 20px; overflow-y: auto; }
+.modal-f { padding: 12px 20px; border-top: 1px solid var(--line-2); display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.drawer-mask { position: fixed; inset: 0; background: rgba(15,23,42,.2); z-index: 70; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 600px; max-width: 92vw; background: var(--surface); z-index: 71; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; }
+.drawer-b { flex: 1; overflow-y: auto; padding: 18px 20px; }
+.toast { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 10px; font-size: 13.5px; z-index: 100; box-shadow: var(--shadow-md); }
+.form { display: flex; flex-direction: column; gap: 14px; }
+.form-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+/* ---------- 用户中心专用 ---------- */
+.split { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 16px; align-items: start; }
+.split.narrow { grid-template-columns: 250px minmax(0, 1fr); }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; position: sticky; top: 0; max-height: calc(100vh - var(--top-h) - 48px); overflow: hidden; }
+.panel-h { display: flex; align-items: center; gap: 8px; padding: 10px; border-bottom: 1px solid var(--line-2); }
+.panel-b { overflow-y: auto; padding: 6px; }
+.tn { display: flex; align-items: center; gap: 6px; height: 32px; padding-right: 8px; border-radius: var(--radius-sm); cursor: pointer; color: var(--ink-2); font-size: 13.5px; }
+.tn:hover { background: var(--hover); }
+.tn.on { background: var(--primary-weak); color: var(--primary-ink); font-weight: 600; }
+.tn .tw { width: 18px; height: 18px; display: grid; place-items: center; color: var(--ink-4); flex: none; border-radius: 4px; }
+.tn .tw:hover { background: var(--line-2); color: var(--ink); }
+.tn .tw svg { width: 14px; height: 14px; }
+.tn > svg { color: var(--ink-4); width: 15px; height: 15px; }
+.tn.on > svg { color: var(--primary); }
+.tn .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tn .n { font-size: 12px; color: var(--ink-4); font-weight: 500; }
+.li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer; }
+.li:hover { background: var(--hover); }
+.li.on { background: var(--primary-weak); }
+.li.on b { color: var(--primary-ink); }
+.lg-label { font-size: 11.5px; color: var(--ink-4); padding: 10px 10px 4px; }
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; margin-top: 14px; }
+.stat { background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 10px; padding: 10px 12px; min-width: 0; }
+.stat .k { font-size: 12px; color: var(--ink-3); margin-bottom: 4px; }
+.stat .v { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 600; }
+.opt { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+.opt:hover { background: var(--hover); }
+.opt input { margin-top: 3px; }
+.grp { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.grp + .grp { margin-top: 10px; }
+.grp-h { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--surface-2); border-bottom: 1px solid var(--line-2); font-weight: 600; font-size: 13.5px; }
+.opgrid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 0 8px; padding: 4px; }
+.savebar { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--line-2); background: var(--surface-2); border-radius: 0 0 var(--radius) var(--radius); }
+.secret { font-family: var(--mono); font-size: 12.5px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; }
+.once { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 4px 14px; }
+.once .r { display: grid; grid-template-columns: 80px 1fr auto; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px dashed var(--line); }
+.once .r:last-child { border-bottom: none; }
+.once .r .v { font-family: var(--mono); font-size: 13px; word-break: break-all; }
+.quota { display: flex; align-items: center; gap: 8px; }
+.quota .bar { width: 72px; height: 6px; border-radius: 3px; background: var(--line-2); overflow: hidden; }
+.quota .bar i { display: block; height: 100%; background: var(--primary-2); }
+.quota .bar i.warn { background: var(--warning); }
+.stack { display: inline-flex; }
+.stack .sq { border: 2px solid var(--surface); margin-left: -6px; }
+.stack .sq:first-child { margin-left: 0; }
+.apps-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; }
+.app-tile { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px 10px; border-radius: 10px; cursor: pointer; font-size: 12.5px; color: var(--ink-2); text-align: center; line-height: 1.3; }
+.app-tile:hover { background: var(--hover); }
+.app-tile.cur { background: var(--primary-weak); color: var(--primary-ink); font-weight: 600; }
+.mini { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); font-size: 12.5px; }
+.mini-top { height: 36px; display: flex; align-items: center; gap: 4px; padding: 0 10px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.mini-top .logo { width: 20px; height: 20px; border-radius: 6px; font-size: 11px; margin-right: 6px; }
+.mini-top .p { color: var(--ink-3); padding: 0 8px; height: 100%; display: flex; align-items: center; position: relative; white-space: nowrap; }
+.mini-top .p.on { color: var(--primary-ink); font-weight: 600; }
+.mini-top .p.on::after { content: ""; position: absolute; left: 6px; right: 6px; bottom: -1px; height: 2px; background: var(--primary); border-radius: 2px; }
+.mini-body { display: flex; height: 200px; }
+.mini-side { width: 150px; background: var(--surface-2); border-right: 1px solid var(--line); padding: 8px 6px; display: flex; flex-direction: column; gap: 2px; }
+.mini-side .it { height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 6px; color: var(--ink-2); }
+.mini-side .it.on { background: var(--primary-weak); color: var(--primary-ink); font-weight: 600; }
+.mini-main { flex: 1; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.mini-main i { display: block; height: 10px; border-radius: 4px; background: var(--line); }
+
+/* ---------- 登录 ---------- */
+.lg-main { flex: 1; overflow-y: auto; display: flex; flex-direction: column; align-items: center; justify-content: safe center; padding: 40px 20px; background: radial-gradient(900px 420px at 50% -8%, rgba(99,102,241,.10), transparent 70%), radial-gradient(700px 360px at 100% 100%, rgba(14,165,233,.07), transparent 70%), var(--bg); }
+.lg-brand { display: flex; align-items: center; gap: 10px; font-size: 21px; font-weight: 700; margin-bottom: 20px; letter-spacing: .01em; }
+.lg-brand .logo { width: 36px; height: 36px; border-radius: 10px; font-size: 17px; }
+.lg-card { width: 400px; max-width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-md); padding: 28px 28px 22px; }
+.lg-sub { color: var(--ink-3); font-size: 13.5px; margin: 4px 0 18px; }
+.lg-from { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px; background: var(--primary-weak); color: var(--primary-ink); font-size: 12.5px; margin-bottom: 14px; }
+.lg-from svg { width: 14px; height: 14px; }
+.field { margin-bottom: 14px; }
+.pw { position: relative; }
+.pw .input { padding-right: 40px; }
+.pw .ibtn { position: absolute; right: 4px; top: 4px; }
+.lg-help { display: flex; justify-content: space-between; margin-top: 14px; font-size: 13px; }
+.lg-foot { margin-top: 22px; font-size: 12px; color: var(--ink-4); }
+.tenant-chip { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.rules { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin-top: 8px; font-size: 12.5px; }
+.rule { display: flex; align-items: center; gap: 6px; color: var(--ink-3); }
+.rule .dotc { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid #c5cad6; display: grid; place-items: center; flex: none; }
+.rule.ok { color: var(--success); }
+.rule.ok .dotc { background: var(--success); border-color: var(--success); color: #fff; }
+.rule .dotc svg { width: 10px; height: 10px; stroke-width: 3; }
+.rule.bad { color: var(--danger); }
+.who { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line-2); background: var(--surface-2); border-radius: 10px; margin-bottom: 18px; }
+
+/* ---------- 设计说明（评审用，非产品界面） ---------- */
+.notes { width: 300px; flex: none; overflow-y: auto; background: #fffdf3; border-left: 1px solid #f3e3a6; padding: 14px 16px; font-size: 13px; }
+.notes h4 { font-size: 13px; margin: 12px 0 4px; color: #92400e; }
+.notes ul { margin: 0; padding-left: 18px; }
+.notes li { margin: 3px 0; color: #57534e; }
+.notes .be { display: inline-block; font-size: 11px; background: #fde68a; color: #92400e; border-radius: 4px; padding: 0 5px; margin-right: 4px; }
+.notes .diff { display: inline-block; font-size: 11px; background: #e0e7ff; color: #3730a3; border-radius: 4px; padding: 0 5px; margin-right: 4px; }
+.demo { background: #fff; border: 1px solid #f3e3a6; border-radius: 10px; padding: 6px 10px 8px; margin-top: 10px; }
+.demo .dl { font-size: 11.5px; color: #92400e; margin: 6px 0 3px; }
+.demo .opts { display: flex; flex-wrap: wrap; gap: 4px; }
+.demo .opts a { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: #fef3c7; color: #78350f; }
+.demo .opts a.on { background: #92400e; color: #fff; }
+.notes .nav a { display: block; color: #78350f; padding: 2px 0; }
+.notes .nav a:hover { text-decoration: underline; }
+
+/* 信息架构页 */
+.ia { max-width: 1080px; margin: 0 auto; padding: 32px 32px 80px; }
+.ia h2 { margin: 28px 0 10px; }
+.ia .table td { vertical-align: top; }
+.ia ul { margin: 6px 0; padding-left: 20px; }
+.ia li { margin: 4px 0; color: var(--ink-2); }
+.arrow { color: var(--ink-4); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* =====================================================================
+ * 图标（lucide 风格，内联 SVG）
+ * ===================================================================== */
+const ICONS = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  users: '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 3.1a4 4 0 0 1 0 7.8M22 21a7 7 0 0 0-5-6.7"/>',
+  userPlus: '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M19 8v6M16 11h6"/>',
+  sitemap: '<rect x="9" y="2" width="6" height="5" rx="1"/><rect x="2" y="17" width="6" height="5" rx="1"/><rect x="16" y="17" width="6" height="5" rx="1"/><path d="M12 7v5M5 17v-3a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v3"/>',
+  building: '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4M8 6h.01M12 6h.01M16 6h.01M8 10h.01M12 10h.01M16 10h.01M8 14h.01M12 14h.01M16 14h.01"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  box: '<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
+  bot: '<rect x="3" y="8" width="18" height="12" rx="3"/><path d="M12 8V4M8.5 14h.01M15.5 14h.01"/>',
+  briefcase: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
+  database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/>',
+  list: '<path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  left: '<path d="m15 18-6-6 6-6"/>',
+  right: '<path d="m9 18 6-6-6-6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  up: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  arrowRight: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  waffle: '<circle cx="5" cy="5" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="12" cy="19" r="2"/><circle cx="19" cy="19" r="2"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
+  pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+  login: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14 9l2 2"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  unlock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.7-1.5"/>',
+  ban: '<circle cx="12" cy="12" r="9"/><path d="m5.7 5.7 12.6 12.6"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  eyeOff: '<path d="M9.9 4.2A10 10 0 0 1 12 4c6.5 0 10 8 10 8a17 17 0 0 1-2.2 3.2M6.6 6.6A17 17 0 0 0 2 12s3.5 8 10 8a9.7 9.7 0 0 0 5.4-1.6"/><path d="M14.1 14.1a3 3 0 1 1-4.2-4.2M2 2l20 20"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
+  external: '<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+  mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/>',
+  phone: '<rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/>',
+  zap: '<path d="M13 2 3 14h8l-1 8 10-12h-8z"/>',
+  flow: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="12" r="3"/><path d="M6 9v6M8.6 7.5l6.8 3M8.6 16.5l6.8-3"/>',
+  spark: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>',
+  plug: '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
+  chart: '<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/>',
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  bulb: '<path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/>',
+  code: '<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>',
+  menu: '<path d="M4 6h16M4 12h16M4 18h10"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  map: '<path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15M15 6v15"/>',
+  badge: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="11" r="2.5"/><path d="M5.5 17a3.5 3.5 0 0 1 7 0M15 10h3M15 14h3"/>',
+  star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
+};
+const FILL = new Set(['more', 'waffle']);
+const ic = (n, cls = '') => `<svg class="i ${FILL.has(n) ? 'fill' : ''} ${cls}" viewBox="0 0 24 24">${ICONS[n] || ''}</svg>`;
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const COLORS = ['#6366f1', '#0ea5e9', '#f59e0b', '#10b981', '#ec4899', '#8b5cf6', '#14b8a6', '#ef4444'];
+const colorOf = (s) => COLORS[[...String(s)].reduce((a, c) => a + c.charCodeAt(0), 0) % COLORS.length];
+/** 人：圆形头像，取姓名最后一个字（与现有用户中心、Atlas 顶栏一致） */
+const pav = (name, size = 30) =>
+  `<span class="avatar" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px;background:${colorOf(name)}">${esc(String(name).slice(-1))}</span>`;
+/** 应用 / 部门 / 数字员工：方形图标 */
+const sq = (icon, color = '#6366f1', size = 36) => `<span class="sq" style="width:${size}px;height:${size}px;background:${color}1a;color:${color};border-radius:${Math.round(size * 0.28)}px">${ic(icon)}</span>`;
+
+/* =====================================================================
+ * 演示数据（内存态，刷新后重置）
+ * ===================================================================== */
+const TENANT = { name: '星海科技', code: 'xinghai' };
+const LOGIN_URL = 'https://atlas.xinghai.com/uc/login';
+const D = {
+  depts: [
+    { id: 'd0', p: null, name: '星海科技', leader: 'u9' },
+    { id: 'rd', p: 'd0', name: '研发中心', leader: 'u2' },
+    { id: 'plat', p: 'rd', name: '平台部', leader: 'u1' },
+    { id: 'fe', p: 'rd', name: '前端组', leader: 'u5' },
+    { id: 'ai', p: 'rd', name: '算法组', leader: null },
+    { id: 'pd', p: 'd0', name: '产品中心', leader: 'u6' },
+    { id: 'pm', p: 'pd', name: '产品部', leader: null },
+    { id: 'ux', p: 'pd', name: '设计部', leader: null },
+    { id: 'cs', p: 'd0', name: '客服中心', leader: 'u8' },
+    { id: 'adm', p: 'd0', name: '行政部', leader: 'u10' },
+  ],
+  users: [
+    { id: 'u1', name: '周景行', account: 'zhou.jx', dept: 'plat', pos: ['研发工程师'], status: 'active', last: '刚刚', uc: ['超级管理员'], phone: '138 0013 2201', created: '2026-09-02' },
+    { id: 'u2', name: '李工', account: 'li.gong', dept: 'rd', pos: ['部门经理'], status: 'active', last: '今天 09:12', uc: ['组织管理员'], created: '2026-09-02' },
+    { id: 'u3', name: '王芳', account: 'wang.fang', dept: 'plat', pos: ['研发工程师'], status: 'active', last: '昨天 18:40', created: '2026-09-05' },
+    { id: 'u4', name: '赵强', account: 'zhao.qiang', dept: 'ai', pos: ['算法工程师'], status: 'locked', last: '11-15 10:02', created: '2026-09-05' },
+    { id: 'u5', name: '陈晨', account: 'chen.chen', dept: 'fe', pos: ['前端工程师'], status: 'active', last: '今天 10:30', created: '2026-09-08' },
+    { id: 'u14', name: '高原', account: 'gao.yuan', dept: 'fe', pos: ['前端工程师'], status: 'active', last: '昨天 20:05', created: '2026-10-09' },
+    { id: 'u6', name: '刘洋', account: 'liu.yang', dept: 'pd', pos: ['产品经理'], status: 'active', last: '11-16 17:22', created: '2026-09-08' },
+    { id: 'u12', name: '林可', account: 'lin.ke', dept: 'pm', pos: ['产品经理'], status: 'active', last: '11-16 15:31', created: '2026-10-02' },
+    { id: 'u7', name: '孙悦', account: 'sun.yue', dept: 'ux', pos: ['设计师'], status: 'pending', last: '', created: '2026-11-16' },
+    { id: 'u8', name: '吴敏', account: 'wu.min', dept: 'cs', pos: ['客服主管'], status: 'active', last: '今天 08:55', created: '2026-09-10' },
+    { id: 'u13', name: '许诺', account: 'xu.nuo', dept: 'cs', pos: ['客服专员'], status: 'active', last: '今天 09:41', created: '2026-10-12' },
+    { id: 'u11', name: '马超', account: 'ma.chao', dept: 'cs', pos: ['客服专员'], status: 'disabled', last: '10-20 11:00', reason: '已离职', created: '2026-09-10' },
+    { id: 'u9', name: '郑远', account: 'zheng.yuan', dept: 'd0', pos: ['总经理'], status: 'active', last: '11-14 09:00', created: '2026-09-02' },
+    { id: 'u10', name: '何静', account: 'he.jing', dept: 'adm', pos: ['行政专员'], status: 'active', last: '11-12 14:10', created: '2026-09-12' },
+  ],
+  digital: [
+    { id: 'a1', name: '通用助手', account: 'agent.general', owner: 'u1', app: 'atlas', pos: [], status: 'active', desc: '默认智能体：写代码、查资料、整理文档' },
+    { id: 'a2', name: '编程助手', account: 'agent.coder', owner: 'u1', app: 'atlas', pos: ['研发工程师'], status: 'active', desc: 'Claude Code 驱动的工程任务助手' },
+    { id: 'a3', name: '产品知识问答', account: 'agent.kbqa', owner: 'u2', app: 'atlas', pos: [], status: 'active', desc: '基于产品手册回答客户咨询' },
+    { id: 'a4', name: '客服回复助手', account: 'agent.cs', owner: 'u11', app: 'atlas', pos: ['客服专员'], status: 'active', desc: '起草客服工单回复' },
+    { id: 'a5', name: '周报助手', account: 'agent.weekly', owner: 'u3', app: 'atlas', pos: [], status: 'disabled', desc: '汇总本周提交与会议纪要', reason: '负责人申请下线' },
+  ],
+  apps: [
+    { id: 'uc', name: '用户中心', icon: 'users', color: '#14b8a6', builtin: true, desc: '用户、组织与权限；各应用的统一登录', ops: 19, menus: 5, roles: 3, dtypes: 0, status: 'active', url: '/uc', scopeAll: true, users: 14, last: '正在使用' },
+    { id: 'atlas', name: 'Atlas 智能平台', icon: 'zap', color: '#6366f1', code: 'atlas', key: 'ak_7f3c2a91d0e4', tail: '9QxZ', desc: '智能体、对话、知识库与工作空间', ops: 10, menus: 9, roles: 4, dtypes: 2, status: 'active', scopeAll: true, users: 14, url: '/', created: '2026-09-02', last: '今天 10:31' },
+    { id: 'teamflow', name: 'AI TeamFlow', icon: 'flow', color: '#0ea5e9', code: 'teamflow', key: 'ak_21b9e07c55fa', tail: 'mK2p', desc: '从需求到交付的团队协作流程', ops: 16, menus: 6, roles: 3, dtypes: 2, status: 'active', scopeAll: false, scope: ['rd', 'pd'], users: 9, url: '/teamflow', created: '2026-09-06', last: '今天 08:02' },
+    { id: 'skill', name: '技能应用', icon: 'spark', color: '#f59e0b', code: 'atlas_skill', key: 'ak_5d0a8c3e71b2', tail: 'Hn4w', desc: '技能上传、审查与发布', ops: 6, menus: 3, roles: 2, dtypes: 1, status: 'active', scopeAll: true, users: 14, url: '/skills', created: '2026-10-29', last: '11-15' },
+    { id: 'mcp', name: 'MCP 网关', icon: 'plug', color: '#10b981', code: 'atlas_mcp', key: 'ak_e41f9b02c6d7', tail: 'Pz8r', desc: 'MCP 服务接入、授权与调用', ops: 8, menus: 3, roles: 2, dtypes: 1, status: 'active', scopeAll: true, users: 14, url: '/mcp', created: '2026-10-29', last: '11-14' },
+    { id: 'model', name: '模型平台', icon: 'layers', color: '#8b5cf6', code: 'atlas_model', key: 'ak_9a2c61e0f3b8', tail: 'Qe1t', desc: '模型登记、Key 与用量', ops: 7, menus: 3, roles: 2, dtypes: 1, status: 'active', scopeAll: false, scope: ['rd'], users: 6, url: '/models', created: '2026-10-29', last: '11-12' },
+    { id: 'report', name: '经营报表', icon: 'chart', color: '#64748b', code: 'bi_report', key: 'ak_0c7e3d5a9f12', tail: 'Lw2s', desc: '旧版经营数据报表（迁移中）', ops: 4, menus: 2, roles: 1, dtypes: 0, status: 'disabled', scopeAll: false, scope: [], users: 0, url: '/report', created: '2026-09-15' },
+  ],
+  roles: [
+    { id: 'uc-super', app: 'uc', name: '超级管理员', code: 'UC_SUPER', builtin: true, desc: '本租户的全部操作；在平台租户内还包括租户与应用目录', holders: 1, ops: '*', menus: ['组织', '权限', '应用', '租户', '个人中心'] },
+    { id: 'uc-org', app: 'uc', name: '组织管理员', code: 'UC_ORG', desc: '维护部门、人员，给人员授权', holders: 1, ops: ['org:view', 'org:manage', 'user:view', 'user:create', 'user:edit', 'user:disable', 'user:reset_pwd', 'grant:view', 'grant:manage'], menus: ['组织', '权限', '个人中心'] },
+    { id: 'uc-perm', app: 'uc', name: '权限管理员', code: 'UC_PERM', desc: '只管授权与岗位，不能改人员资料', holders: 0, ops: ['org:view', 'user:view', 'grant:view', 'grant:manage', 'position:view', 'position:manage', 'role:view'], menus: ['权限', '个人中心'] },
+    { id: 'at-user', app: 'atlas', name: '普通用户', code: 'ATLAS_USER', desc: '使用对话，创建自己的智能体与知识库', holders: 13, ops: ['chat:use', 'chat:share', 'agent:create', 'kb:create', 'workspace:use'], menus: ['智能平台', '知识库'] },
+    { id: 'at-agent', app: 'atlas', name: '智能体管理员', code: 'AGENT_ADMIN', desc: '发布、下架全平台的智能体', holders: 2, ops: ['chat:use', 'agent:create', 'agent:publish', 'agent:share'], menus: ['智能平台', '知识库'] },
+    { id: 'at-kb', app: 'atlas', name: '知识库管理员', code: 'KB_ADMIN', desc: '审核文档、管理公有知识库', holders: 1, ops: ['kb:create', 'kb:review'], menus: ['知识库'] },
+    { id: 'at-sys', app: 'atlas', name: '系统管理员', code: 'ATLAS_SYS', desc: '平台设置、配置项与定时任务', holders: 1, ops: ['config:manage', 'job:manage'], menus: ['智能平台', '知识库', '系统'] },
+    { id: 'tf-member', app: 'teamflow', name: '成员', code: 'TF_MEMBER', desc: '参与项目、处理分配给自己的任务', holders: 8 },
+    { id: 'tf-lead', app: 'teamflow', name: '项目负责人', code: 'TF_LEAD', desc: '创建项目、编排流程、验收交付', holders: 3 },
+    { id: 'tf-admin', app: 'teamflow', name: '流程管理员', code: 'TF_ADMIN', desc: '维护流程模板与全局设置', holders: 1 },
+    { id: 'sk-user', app: 'skill', name: '技能使用者', code: 'SKILL_USER', desc: '浏览、上传技能', holders: 14 },
+    { id: 'sk-rev', app: 'skill', name: '技能审查员', code: 'SKILL_REVIEWER', desc: '审查并发布技能', holders: 2 },
+    { id: 'mcp-user', app: 'mcp', name: 'MCP 使用者', code: 'MCP_USER', desc: '调用已授权的 MCP 服务', holders: 14 },
+    { id: 'mcp-admin', app: 'mcp', name: 'MCP 管理员', code: 'MCP_ADMIN', desc: '接入服务、分配智能体 Key', holders: 1 },
+    { id: 'md-user', app: 'model', name: '模型使用者', code: 'MODEL_USER', desc: '使用公有模型、申请个人 Key', holders: 6 },
+    { id: 'md-admin', app: 'model', name: '模型管理员', code: 'MODEL_ADMIN', desc: '登记模型、管理客户端 Key', holders: 1 },
+    { id: 'bi-view', app: 'report', name: '报表查看', code: 'BI_VIEW', desc: '查看经营报表', holders: 0 },
+  ],
+  ops: {
+    atlas: [
+      ['对话', 'chat:use', '使用对话', '上报'], ['对话', 'chat:share', '分享对话', '上报'],
+      ['智能体', 'agent:create', '创建智能体', '上报'], ['智能体', 'agent:publish', '发布 / 下架智能体', '上报'], ['智能体', 'agent:share', '共享智能体', '上报'],
+      ['知识库', 'kb:create', '新建知识库', '上报'], ['知识库', 'kb:review', '审核文档', '上报'],
+      ['工作空间', 'workspace:use', '使用工作空间', '上报'],
+      ['系统', 'config:manage', '平台设置与配置项', '上报'], ['系统', 'job:manage', '查看与触发定时任务', '手动'],
+    ],
+    uc: [
+      ['组织架构', 'org:view', '查看组织架构', '内置'], ['组织架构', 'org:manage', '管理部门（新建 / 编辑 / 删除 / 调整成员）', '内置'],
+      ['用户', 'user:view', '查看用户', '内置'], ['用户', 'user:create', '新建用户', '内置'], ['用户', 'user:edit', '编辑用户', '内置'], ['用户', 'user:disable', '停用 / 启用 / 解锁', '内置'], ['用户', 'user:reset_pwd', '重置密码', '内置'],
+      ['权限', 'grant:view', '查看授权', '内置'], ['权限', 'grant:manage', '授权 / 撤销', '内置'], ['权限', 'position:view', '查看岗位', '内置'], ['权限', 'position:manage', '管理岗位', '内置'], ['权限', 'role:view', '查看角色', '内置'], ['权限', 'role:manage', '管理角色', '内置'],
+      ['数据权限', 'data:view', '查看全部数据的权限（只读）', '内置'], ['数据权限', 'data:type_grant', '数据编码级授权', '内置'],
+      ['应用', 'tenant_app:manage', '本租户已开通应用的可访问范围', '内置'],
+      ['平台', 'app:manage', '应用目录：接入应用、凭据、操作、菜单与数据编码', '内置'], ['平台', 'tenant:view', '查看租户', '内置'], ['平台', 'tenant:manage', '新建 / 停用租户、配额、开通应用', '内置'],
+    ],
+  },
+  menus: {
+    atlas: [
+      { name: '智能平台', icon: 'zap', items: [['智能体', '/agents'], ['工作空间', '/workspace'], ['我的设备', '/devices'], ['个性化', '/me']] },
+      { name: '知识库', icon: 'book', items: [['知识集', '/knowledge']] },
+      { name: '系统', icon: 'sliders', items: [['平台设置', '/system'], ['配置项', '/system/configs'], ['定时任务', '/system/jobs']] },
+    ],
+    uc: [
+      { name: '组织', icon: 'sitemap', items: [['组织架构', '/org'], ['人员', '/org/users'], ['数字员工', '/org/digital']] },
+      { name: '权限', icon: 'shield', items: [['角色', '/perm/roles'], ['岗位', '/perm/positions'], ['数据', '/perm/data'], ['授权', '/perm/grants']] },
+      { name: '应用', icon: 'box', items: [['应用目录', '/apps']] },
+      { name: '租户', icon: 'building', items: [['租户', '/tenants']], tag: '平台' },
+      { name: '个人中心', icon: 'user', items: [['个人资料', '/me'], ['账号安全', '/me/security'], ['我的应用', '/me/apps'], ['我的数据', '/me/data']], tag: '公共' },
+    ],
+  },
+  dtypes: {
+    atlas: [
+      { code: 'agent', name: '智能体', count: 18, typeGrants: 1, desc: '创建人自动成为 Owner；共享 = 给别人只读 / 读写' },
+      { code: 'dataset', name: '知识库', count: 9, typeGrants: 0, desc: '私有知识库的查阅、维护权限' },
+    ],
+  },
+  positions: [
+    { id: 'p1', name: '研发工程师', desc: '研发中心的工程师', roles: [['atlas', '普通用户'], ['teamflow', '成员'], ['model', '模型使用者']], holders: 5, to: ['研发中心（含下级）'] },
+    { id: 'p2', name: '部门经理', desc: '各部门负责人', roles: [['teamflow', '项目负责人']], holders: 6, to: ['周景行', '李工', '陈晨', '刘洋', '吴敏', '何静'] },
+    { id: 'p3', name: '产品经理', desc: '', roles: [['teamflow', '项目负责人'], ['atlas', '普通用户']], holders: 2, to: ['产品中心（含下级）'] },
+    { id: 'p4', name: '客服专员', desc: '一线客服', roles: [['atlas', '普通用户']], holders: 2, to: ['客服中心'] },
+    { id: 'p5', name: '设计师', desc: '', roles: [['teamflow', '成员']], holders: 1, to: ['设计部'] },
+  ],
+  grants: [
+    { id: 'g1', st: 'dept', sid: 'd0', kind: 'role', target: '普通用户', app: 'atlas', sub: true, by: '周景行', at: '10-27 10:12' },
+    { id: 'g2', st: 'dept', sid: 'd0', kind: 'role', target: '技能使用者', app: 'skill', sub: true, by: '周景行', at: '10-29 16:40' },
+    { id: 'g3', st: 'dept', sid: 'rd', kind: 'position', target: '研发工程师', sub: true, by: '李工', at: '10-27 11:02' },
+    { id: 'g4', st: 'dept', sid: 'rd', kind: 'role', target: '成员', app: 'teamflow', sub: true, by: '李工', at: '10-28 09:30' },
+    { id: 'g5', st: 'dept', sid: 'pd', kind: 'role', target: '项目负责人', app: 'teamflow', sub: true, by: '周景行', at: '10-28 09:35' },
+    { id: 'g6', st: 'dept', sid: 'plat', kind: 'role', target: '技能审查员', app: 'skill', sub: false, by: '周景行', at: '11-03 14:20' },
+    { id: 'g7', st: 'dept', sid: 'cs', kind: 'position', target: '客服专员', sub: false, by: '吴敏', at: '11-05 10:00' },
+    { id: 'g8', st: 'user', sid: 'u1', kind: 'role', target: '超级管理员', app: 'uc', by: '系统', at: '09-02 08:00' },
+    { id: 'g9', st: 'user', sid: 'u1', kind: 'role', target: '智能体管理员', app: 'atlas', by: '系统', at: '10-27 10:05' },
+    { id: 'g10', st: 'user', sid: 'u1', kind: 'position', target: '部门经理', by: '李工', at: '10-27 11:10' },
+    { id: 'g11', st: 'user', sid: 'u2', kind: 'role', target: '组织管理员', app: 'uc', by: '周景行', at: '10-27 10:20' },
+    { id: 'g12', st: 'user', sid: 'u3', kind: 'role', target: '知识库管理员', app: 'atlas', by: '周景行', at: '11-01 15:12' },
+    { id: 'g13', st: 'user', sid: 'u1', kind: 'role', target: 'MCP 管理员', app: 'mcp', by: '系统', at: '10-29 18:00' },
+    { id: 'g14', st: 'user', sid: 'a2', kind: 'role', target: 'MCP 使用者', app: 'mcp', by: '周景行', at: '11-10 20:31' },
+  ],
+  data: [
+    { id: 'x1', name: '通用助手', did: 'agt_7c1e09a2', code: 'agent', app: 'atlas', my: 'OWNER', owners: ['周景行'], users: 0, depts: 1, created: '10-27', mine: true },
+    { id: 'x2', name: '编程助手', did: 'agt_2b9f41c7', code: 'agent', app: 'atlas', my: 'OWNER', owners: ['周景行'], users: 2, depts: 1, created: '10-28', mine: true },
+    { id: 'x3', name: '平台部技术文档', did: 'ds_91e3d0f5', code: 'dataset', app: 'atlas', my: 'OWNER', owners: ['周景行', '王芳'], users: 1, depts: 1, created: '11-02', mine: true },
+    { id: 'x4', name: '产品手册', did: 'ds_0a7c5e21', code: 'dataset', app: 'atlas', my: 'WRITE', owners: ['李工'], users: 3, depts: 2, created: '10-30', access: true },
+    { id: 'x5', name: '产品知识问答', did: 'agt_5f20b8d1', code: 'agent', app: 'atlas', my: 'READ', owners: ['李工'], users: 0, depts: 1, created: '10-30', access: true },
+    { id: 'x6', name: '客服回复助手', did: 'agt_c4d81e66', code: 'agent', app: 'atlas', my: 'READ', owners: [], users: 0, depts: 1, created: '10-12', access: true },
+    { id: 'x7', name: '需求评审流程', did: 'flow_6e0b2c', code: 'flow', app: 'teamflow', my: 'READ', owners: ['刘洋'], users: 0, depts: 1, created: '11-08', access: true },
+  ],
+  tenants: [
+    { id: 't0', name: '星海科技', code: 'xinghai', kind: 'platform', status: 'active', users: 14, max: null, exp: null, apps: ['atlas', 'teamflow', 'skill', 'mcp', 'model'], created: '2026-09-02' },
+    { id: 't1', name: '蓝鲸物流', code: 'bluewhale', status: 'active', users: 86, max: 100, exp: '2027-03-31', apps: ['atlas', 'skill'], created: '2026-10-11' },
+    { id: 't2', name: '远航制造', code: 'yuanhang', status: 'active', expired: true, users: 120, max: 200, exp: '2026-11-01', apps: ['atlas', 'teamflow'], created: '2026-10-15' },
+    { id: 't3', name: '青禾教育', code: 'qinghe', status: 'suspended', users: 40, max: 50, exp: '2027-06-30', apps: ['atlas'], created: '2026-10-20' },
+  ],
+  logins: [
+    { at: '今天 10:31', app: 'Atlas 智能平台', ip: '10.0.3.21', ua: 'Chrome · macOS', ok: true },
+    { at: '今天 08:02', app: 'AI TeamFlow', ip: '10.0.3.21', ua: 'Chrome · macOS', ok: true },
+    { at: '昨天 22:15', app: 'Atlas 智能平台', ip: '112.64.8.17', ua: 'Atlas App · Android', ok: true },
+    { at: '昨天 22:14', app: 'Atlas 智能平台', ip: '112.64.8.17', ua: 'Atlas App · Android', ok: false, why: '密码错误' },
+    { at: '11-15 09:20', app: '用户中心', ip: '10.0.3.21', ua: 'Chrome · macOS', ok: true },
+    { at: '11-14 19:47', app: 'Atlas 智能平台', ip: '34.97.37.179', ua: 'Safari · iOS', ok: true },
+  ],
+};
+const ME = D.users[0];
+
+/* ---------- 查询助手 ---------- */
+const userOf = (id) => D.users.find((u) => u.id === id) || D.digital.find((u) => u.id === id);
+const deptOf = (id) => D.depts.find((d) => d.id === id);
+const appOf = (id) => D.apps.find((a) => a.id === id);
+const kidsOf = (id) => D.depts.filter((d) => d.p === id);
+const deptPath = (id) => { const out = []; let d = deptOf(id); while (d) { out.unshift(d.name); d = deptOf(d.p); } return out; };
+const ancestors = (id) => { const out = []; let d = deptOf(deptOf(id)?.p); while (d) { out.push(d); d = deptOf(d.p); } return out; };
+const descIds = (id) => [id, ...kidsOf(id).flatMap((k) => descIds(k.id))];
+const membersOf = (id, sub) => { const ids = sub ? descIds(id) : [id]; return D.users.filter((u) => ids.includes(u.dept)); };
+const rolesOf = (app) => D.roles.filter((r) => r.app === app);
+const posOf = (name) => D.positions.find((p) => p.name === name);
+const opsOf = (a) => D.ops[a.id] || [['基础', `${a.code}:use`, `使用${a.name}`, '上报'], ['基础', `${a.code}:export`, '导出数据', '上报'], ['管理', `${a.code}:manage`, '管理设置', '上报'], ['管理', `${a.code}:audit`, '查看操作记录', '手动']];
+/** 角色有哪些操作：没登记明细的演示角色，名字带「管理员 / 负责人」的给全部，其余只给「基础」 */
+const roleHas = (a, r, code) => r.ops === '*' || (r.ops ? r.ops.includes(code) : /管理员|负责人/.test(r.name) || opsOf(a).find((o) => o[1] === code)?.[0] === '基础');
+/** 直属上级：所在部门负责人；本人就是负责人时取上级部门负责人（与现有规则一致） */
+function managerOf(u) {
+  let d = deptOf(u.dept);
+  while (d) { if (d.leader && d.leader !== u.id) return { u: userOf(d.leader), d }; d = deptOf(d.p); }
+  return null;
+}
+const subjName = (st, sid) => (st === 'dept' ? deptOf(sid)?.name : userOf(sid)?.name) || '—';
+
+const STATUS = { active: ['正常', 'success'], pending: ['未激活', 'primary'], locked: ['已锁定', 'warning'], disabled: ['已停用', ''] };
+const statusTag = (s) => `<span class="tag ${STATUS[s][1]}">${STATUS[s][0]}</span>`;
+const LEVEL = { READ: ['只读', ''], WRITE: ['读写', 'blue'], OWNER: ['Owner', 'primary'] };
+const levelTag = (l) => `<span class="tag ${LEVEL[l][1]}">${LEVEL[l][0]}</span>`;
+const appTag = (id) => { const a = appOf(id); return a ? `<span class="row xs muted" style="gap:4px">${sq(a.icon, a.color, 18)}${esc(a.name)}</span>` : ''; };
+
+/** 某个对象（部门 / 用户）的授权：自己的 + 继承的（部门链上「含下级」的；用户所在部门的不论是否含下级） */
+function subjectGrants(s) {
+  const own = D.grants.filter((g) => g.st === s.type && g.sid === s.id);
+  let inherited = [];
+  if (s.type === 'dept') {
+    const anc = ancestors(s.id).map((d) => d.id);
+    inherited = D.grants.filter((g) => g.st === 'dept' && anc.includes(g.sid) && g.sub);
+  } else {
+    const u = D.users.find((x) => x.id === s.id);
+    if (u) {
+      const anc = ancestors(u.dept).map((d) => d.id);
+      inherited = D.grants.filter((g) => g.st === 'dept' && (g.sid === u.dept || (anc.includes(g.sid) && g.sub)));
+    }
+  }
+  return { own, inherited };
+}
+/** 用户的有效角色：直接 + 部门继承 + 岗位默认角色，带来源（回答「他为什么有这个权限」） */
+function effectiveRoles(uid) {
+  const { own, inherited } = subjectGrants({ type: 'user', id: uid });
+  const rows = [];
+  const srcOf = (g) => (g.st === 'user' ? '直接授权' : `部门「${deptOf(g.sid).name}」${g.sub ? '（含下级）' : ''}`);
+  for (const g of [...own, ...inherited]) {
+    if (g.kind === 'role') rows.push({ app: g.app, role: g.target, src: srcOf(g) });
+    else (posOf(g.target)?.roles || []).forEach(([app, role]) => rows.push({ app, role, src: `岗位「${g.target}」← ${srcOf(g)}` }));
+  }
+  return rows;
+}
+
+/* =====================================================================
+ * 状态、权限与路由
+ * ===================================================================== */
+const S = {
+  role: 'super',          // super | orgadmin | user（头像菜单里切换，演示权限差异）
+  notes: true, collapsed: false, pop: null, modal: null, drawer: null, toast: null, refocus: null,
+  login: { tenants: 'remembered', from: 'atlas', result: 'ok', expired: false, step: 'form', err: '', showPw: false, caps: false, pw1: '', pw2: '' },
+  orgSel: 'rd', orgSub: true, treeOpen: { d0: true, rd: true, pd: true }, orgQ: '',
+  userStatus: 'all', userQ: '', userDept: '', digStatus: 'all',
+  userTab: 'info',
+  subjMode: 'dept', subj: { type: 'dept', id: 'rd' }, subjQ: '',
+  glKind: 'all', glSubj: 'all',
+  dataScope: 'mine',
+  appTab: 'conf', roleApp: '', roleSel: 'at-user', roleTab: 'ops', menuRole: 'at-user',
+  scope: {},
+};
+const PERMS = {
+  super: ['org.view', 'org.manage', 'user.view', 'user.manage', 'grant.view', 'grant.manage', 'role.view', 'role.manage', 'position.manage', 'data.all', 'app.manage', 'tenant'],
+  orgadmin: ['org.view', 'org.manage', 'user.view', 'user.manage', 'grant.view', 'grant.manage', 'role.view', 'position.manage'],
+  user: [],
+};
+const ROLE_NAME = { super: '超级管理员（平台租户）', orgadmin: '组织管理员', user: '普通员工' };
+const can = (p) => PERMS[S.role].includes(p);
+
+/* 一级菜单（顶部）。个人中心人人可见，放最后：普通员工进来只看到它 */
+const PLATFORMS = [
+  { id: 'org', name: '组织', icon: 'sitemap', vis: () => can('org.view') },
+  { id: 'perm', name: '权限', icon: 'shield', vis: () => can('grant.view') },
+  { id: 'apps', name: '应用', icon: 'box', vis: () => can('app.manage') },
+  { id: 'tenants', name: '租户', icon: 'building', vis: () => can('tenant') },
+  { id: 'me', name: '个人中心', icon: 'user', vis: () => true },
+];
+const landing = () => PLATFORMS.find((p) => p.vis()).id;
+
+function parseRoute() {
+  const h = (location.hash || '#/login').slice(2).split('/');
+  return { p: h[0] || 'login', a: h[1] || '', b: h[2] || '', c: h[3] || '' };
+}
+const go = (h) => { S.pop = null; location.hash = h; };
+window.addEventListener('hashchange', () => { S.pop = null; S.modal = null; S.drawer = null; render(); document.querySelector('.main')?.scrollTo(0, 0); });
+
+function siderItems(p) {
+  switch (p) {
+    case 'org': return [
+      { h: '#/org', icon: 'sitemap', t: '组织架构', on: (r) => !r.a },
+      { h: '#/org/users', icon: 'users', t: '人员', on: (r) => r.a === 'users' },
+      { h: '#/org/digital', icon: 'bot', t: '数字员工', on: (r) => r.a === 'digital' },
+    ];
+    case 'perm': return [
+      ...(can('role.view') ? [{ h: '#/perm/roles', icon: 'badge', t: '角色', on: (r) => r.a === 'roles' }] : []),
+      { h: '#/perm/positions', icon: 'briefcase', t: '岗位', on: (r) => r.a === 'positions' },
+      ...(can('data.all') ? [{ h: '#/perm/data', icon: 'database', t: '数据', on: (r) => r.a === 'data' }] : []),
+      { h: '#/perm/grants', icon: 'shield', t: '授权', on: (r) => r.a === 'grants' },
+    ];
+    case 'apps': return [{ h: '#/apps', icon: 'grid', t: '应用目录', on: (r) => !r.a }];
+    case 'tenants': return [{ h: '#/tenants', icon: 'building', t: '租户', on: () => true }];
+    case 'me': return [
+      { h: '#/me', icon: 'user', t: '个人资料', on: (r) => !r.a },
+      { h: '#/me/security', icon: 'lock', t: '账号安全', on: (r) => r.a === 'security' },
+      { h: '#/me/apps', icon: 'grid', t: '我的应用', on: (r) => r.a === 'apps' },
+      { h: '#/me/data', icon: 'database', t: '我的数据', on: (r) => r.a === 'data' },
+    ];
+  }
+  return [];
+}
+
+function topbar(r) {
+  return `<header class="top">
+    <div class="brand" data-go="#/${landing()}"><span class="logo">A</span>用户中心</div>
+    <nav class="pnav">${PLATFORMS.filter((p) => p.vis()).map((p) =>
+      `<a href="#/${p.id}" class="${r.p === p.id ? 'on' : ''}">${ic(p.icon)}${p.name}</a>`).join('')}</nav>
+    <div class="top-right">
+      <button class="btn sm ${S.notes ? '' : 'ghost'}" data-act="toggleNotes" title="评审用：每页的设计说明与后端依赖">${ic('bulb')}设计说明</button>
+      <button class="ibtn" data-pop="apps" title="切换应用">${ic('waffle')}</button>
+      <span style="cursor:pointer;display:inline-flex" data-pop="me">${pav(ME.name, 30)}</span>
+    </div>
+  </header>`;
+}
+
+function sider(r) {
+  const min = S.collapsed;
+  const items = siderItems(r.p);
+  const extra = r.p === 'apps' && !min
+    ? `<div class="hist"><div class="hist-group">已接入的应用</div>${D.apps.map((a) => `
+        <a class="hist-item ${r.a === a.id ? 'on' : ''}" href="#/apps/${a.id}">${sq(a.icon, a.color, 22)}<span class="t">${esc(a.name)}</span>${a.status === 'disabled' ? '<span class="tag xs">停用</span>' : a.builtin ? '<span class="tag xs">内置</span>' : ''}</a>`).join('')}</div>`
+    : '<div class="sp"></div>';
+  return `<aside class="sider ${min ? 'min' : ''}">
+    <div class="sider-top">${items.map((it) => `<a class="snav ${it.on(r) ? 'on' : ''}" href="${it.h}" title="${it.t}">${ic(it.icon)}<span>${it.t}</span></a>`).join('')}</div>
+    ${extra}
+    <div class="sider-foot"><a class="snav" data-act="collapse" title="${min ? '展开菜单' : '收起菜单'}">${ic(min ? 'right' : 'left')}<span>收起</span></a></div>
+  </aside>`;
+}
+
+/* =====================================================================
+ * 渲染
+ * ===================================================================== */
+function render() {
+  const r = parseRoute();
+  const app = document.getElementById('app');
+  const tail = overlays() + (S.toast ? `<div class="toast">${esc(S.toast)}</div>` : '');
+  if (r.p === 'login') {
+    app.innerHTML = `<div class="body full"><main class="main lg-main">${loginPage()}</main>${S.notes ? notesPanel(r) : ''}</div>` + tail;
+    return afterRender(r);
+  }
+  if (r.p === 'ia') { app.innerHTML = `<div class="body full"><main class="main">${iaPage()}</main></div>` + tail; return; }
+  const plat = PLATFORMS.find((p) => p.id === r.p);
+  if (!plat || !plat.vis()) { location.replace('#/' + landing()); return; }
+  app.innerHTML = topbar(r) + `<div class="body">${sider(r)}<main class="main">${page(r)}</main>${S.notes ? notesPanel(r) : ''}</div>` + tail;
+  afterRender(r);
+}
+
+function page(r) {
+  switch (r.p) {
+    case 'org':
+      if (r.a === 'users' && r.b) return userDetail(r.b);
+      if (r.a === 'users') return usersPage();
+      if (r.a === 'digital' && r.b) return userDetail(r.b);
+      if (r.a === 'digital') return digitalPage();
+      return orgPage();
+    case 'perm':
+      if (r.a === 'roles' && can('role.view')) return rolesPage();
+      if (r.a === 'positions') return positionsPage();
+      if (r.a === 'data' && can('data.all')) return dataPage('all');
+      if (r.a === 'grants') return bySubject();
+      location.replace(siderItems('perm')[0].h); return '';
+    case 'apps':
+      if (r.a) return appDetail(r.a);
+      return appsPage();
+    case 'tenants': return tenantsPage();
+    case 'me':
+      if (r.a === 'security') return securityPage();
+      if (r.a === 'apps') return myAppsPage();
+      if (r.a === 'data') return dataPage('me');
+      return profilePage();
+  }
+  return '<div class="page">404</div>';
+}
+
+function toast(msg) {
+  S.toast = msg; render();
+  clearTimeout(toast.t); toast.t = setTimeout(() => { S.toast = null; render(); }, 2200);
+}
+
+/* ---------- 公共片段 ---------- */
+function head(title, right = '', sub = '') {
+  return `<div class="page-head"><div class="grow"><h1>${title}</h1>${sub ? `<div class="sub">${sub}</div>` : ''}</div>${right}</div>`;
+}
+function detailHead(back, iconHtml, title, sub, tags, right) {
+  return `<div class="page-head" style="align-items:flex-start;margin-bottom:6px">
+    <button class="ibtn" data-go="${back}" title="返回">${ic('left')}</button>${iconHtml}
+    <div class="grow"><div class="row" style="flex-wrap:wrap"><h1>${esc(title)}</h1>${tags || ''}</div><div class="sm muted" style="margin-top:2px">${sub}</div></div>${right || ''}</div>`;
+}
+function seg(key, opts, cls = '') {
+  return `<div class="seg ${cls}">${opts.map(([k, t, n]) => `<a class="${S[key] === k ? 'on' : ''}" data-act="setS" data-k="${key}" data-v="${k}">${t}${n !== undefined ? `<span class="n">${n}</span>` : ''}</a>`).join('')}</div>`;
+}
+function tabs(key, opts, cls = '') {
+  return `<div class="tabs ${cls}">${opts.map(([k, t]) => `<a class="${S[key] === k ? 'on' : ''}" data-act="setS" data-k="${key}" data-v="${k}">${t}</a>`).join('')}</div>`;
+}
+const searchBox = (ph, key, w = 260) => `<div class="search" style="width:${w}px">${ic('search')}<input class="input" placeholder="${ph}" ${key ? `data-input="${key}" value="${esc(S[key])}"` : ''}></div>`;
+const pager = (total, unit = '条') => `<div class="pager"><span class="sm muted">共 ${total} ${unit}</span><span class="sp"></span><button class="ibtn sm" disabled>${ic('left')}</button><span class="pg on">1</span><button class="ibtn sm">${ic('right')}</button></div>`;
+const empty = (icon, title, text) => `<div class="empty"><div class="ill">${ic(icon)}</div><h3>${title}</h3><p class="sm">${text}</p></div>`;
+const personCell = (u, extra = '') => `<div class="row" style="gap:10px">${u.account?.startsWith('agent.') ? sq('bot', '#0ea5e9', 30) : pav(u.name, 30)}<div class="grow"><div class="row" style="gap:6px"><b class="ellipsis">${esc(u.name)}</b>${extra}</div><div class="xs muted">${esc(u.account)}</div></div></div>`;
+
+/** 部门树（组织架构、按对象授权共用） */
+function treeHtml(act, selId, counts) {
+  const q = (act === 'selDept' ? S.orgQ : '').trim();
+  const hit = (d) => !q || descIds(d.id).some((id) => deptOf(id).name.includes(q));
+  const node = (d, depth) => {
+    if (!hit(d)) return '';
+    const kids = kidsOf(d.id);
+    const open = q || S.treeOpen[d.id];
+    return `<div class="tn ${selId === d.id ? 'on' : ''}" style="padding-left:${4 + depth * 16}px" data-act="${act}" data-id="${d.id}">
+        <span class="tw" ${kids.length ? `data-act="toggleTree" data-id="${d.id}"` : ''}>${kids.length ? ic(open ? 'down' : 'right') : ''}</span>
+        ${ic(d.p ? 'folder' : 'building')}<span class="t">${esc(d.name)}</span>${counts ? `<span class="n">${membersOf(d.id, true).length}</span>` : ''}</div>
+      ${kids.length && open ? kids.map((k) => node(k, depth + 1)).join('') : ''}`;
+  };
+  return D.depts.filter((d) => !d.p).map((d) => node(d, 0)).join('');
+}
+
+/* =====================================================================
+ * 登录（统一登录：Atlas、TeamFlow 未登录都跳到这里）
+ * ===================================================================== */
+const FROM = { atlas: 'Atlas 智能平台', teamflow: 'AI TeamFlow', direct: '' };
+const LOGIN_ERR = {
+  failed: ['danger', '企业代码、账号或密码错误（再错 2 次将锁定）'],
+  locked: ['warning', '账号已锁定，请 15 分钟后重试，或联系管理员解锁'],
+  disabled: ['danger', '账号已停用，请联系管理员'],
+  tenant: ['warning', '企业账号已停用或已到期，请联系管理员'],
+  temp: ['warning', '临时密码已过期，请联系管理员重置'],
+};
+const alertBox = (kind, text) => `<div class="alert ${kind}" style="margin-bottom:14px">${ic(kind === 'info' || kind === 'plain' ? 'info' : 'alert')}<span>${text}</span></div>`;
+const PW_RULES = [
+  ['至少 8 位', (p) => p.length >= 8],
+  ['含大写字母', (p) => /[A-Z]/.test(p)],
+  ['含数字', (p) => /\d/.test(p)],
+  ['与临时密码不同', (p) => p.length > 0 && p !== 'Tmp#2026xh'],
+];
+const rulesHtml = (p) => PW_RULES.map(([t, f]) => `<span class="rule ${f(p) ? 'ok' : ''}"><span class="dotc">${f(p) ? ic('check') : ''}</span>${t}</span>`).join('');
+const pwOk = () => PW_RULES.every(([, f]) => f(S.login.pw1)) && S.login.pw1 === S.login.pw2;
+const matchHtml = () => !S.login.pw2 ? '' : S.login.pw1 === S.login.pw2
+  ? `<div class="rule ok" style="margin-top:6px"><span class="dotc">${ic('check')}</span>两次输入一致</div>`
+  : `<div class="rule bad" style="margin-top:6px">${ic('alert')}两次输入不一致</div>`;
+
+function loginPage() {
+  const L = S.login;
+  const target = FROM[L.from];
+  const brand = `<div class="lg-brand"><span class="logo">A</span>Atlas</div>`;
+  const foot = `<div class="lg-foot">© 2026 星海科技 · 统一身份认证</div>`;
+  if (L.step === 'setpw') {
+    return `${brand}<div class="lg-card">
+      <div class="who">${pav(ME.name, 32)}<div class="grow"><b>${ME.name}</b><div class="xs muted">${ME.account}${L.tenants !== 'single' ? ' · ' + TENANT.name : ''}</div></div><a class="sm" data-act="loginBack">不是你？</a></div>
+      <h1>设置新密码</h1>
+      <p class="lg-sub">${L.result === 'first' ? '首次登录，请把管理员给的临时密码换成你自己的密码' : '管理员要求你修改密码后再继续'}</p>
+      <div class="field"><label class="label">新密码</label>
+        <div class="pw"><input class="input lg" type="${L.showPw ? 'text' : 'password'}" data-input="pw1" value="${esc(L.pw1)}" autocomplete="new-password" placeholder="输入新密码"><button class="ibtn sm" data-act="togglePw" title="${L.showPw ? '隐藏' : '显示'}密码">${ic(L.showPw ? 'eyeOff' : 'eye')}</button></div>
+        <div class="rules" id="rules">${rulesHtml(L.pw1)}</div></div>
+      <div class="field"><label class="label">确认新密码</label>
+        <input class="input lg" type="${L.showPw ? 'text' : 'password'}" data-input="pw2" value="${esc(L.pw2)}" autocomplete="new-password" placeholder="再输入一次">
+        <div id="match">${matchHtml()}</div></div>
+      <button class="btn primary lg block" id="setpwBtn" data-act="doSetPw" ${pwOk() ? '' : 'disabled'}>${target ? `设置并进入 ${target}` : '设置并进入'}</button>
+    </div>${foot}`;
+  }
+  const err = L.err ? alertBox(...LOGIN_ERR[L.err]) : L.expired ? alertBox('info', '登录已过期，请重新登录') : '';
+  const tenantField = L.tenants === 'single' ? ''
+    : L.tenants === 'remembered'
+      ? `<div class="field"><span class="label">企业</span><div class="tenant-chip">${sq('building', '#6366f1', 32)}<div class="grow"><b>${TENANT.name}</b><div class="xs muted mono">${TENANT.code}</div></div><a class="sm" data-act="tenantChange">更换</a></div></div>`
+      : `<div class="field"><label class="label">企业代码</label><input class="input lg" placeholder="由管理员提供，例如 xinghai" autocomplete="organization"></div>`;
+  return `${brand}<div class="lg-card">
+    ${target ? `<div class="lg-from">${ic('arrowRight')}登录后返回 <b>${target}</b></div>` : ''}
+    <h1>登录</h1>
+    <p class="lg-sub">使用公司账号登录，一个账号通用所有应用</p>
+    ${err}${tenantField}
+    <div class="field"><label class="label">账号</label><input class="input lg" value="zhou.jx" autocomplete="username" data-enter="login"></div>
+    <div class="field"><label class="label">密码</label>
+      <div class="pw"><input class="input lg" type="${L.showPw ? 'text' : 'password'}" value="Xinghai2026" autocomplete="current-password" data-enter="login"><button class="ibtn sm" data-act="togglePw" title="${L.showPw ? '隐藏' : '显示'}密码">${ic(L.showPw ? 'eyeOff' : 'eye')}</button></div>
+      ${L.caps ? `<div class="help" style="color:#b45309">${ic('up')} 大写锁定已打开</div>` : ''}</div>
+    <button class="btn primary lg block" data-act="doLogin">登录</button>
+    <div class="lg-help"><a data-pop="forgot">忘记密码？</a>${L.tenants === 'single' ? '' : `<span class="muted">${L.tenants === 'remembered' ? '' : '不知道企业代码？问管理员'}</span>`}</div>
+  </div>${foot}`;
+}
+
+/* =====================================================================
+ * 组织 · 组织架构
+ * ===================================================================== */
+function orgPage() {
+  const d = deptOf(S.orgSel) || D.depts[0];
+  const kids = kidsOf(d.id);
+  const members = membersOf(d.id, S.orgSub);
+  const leader = d.leader && userOf(d.leader);
+  const direct = membersOf(d.id, false).length;
+  const total = membersOf(d.id, true).length;
+  return `<div class="page">
+    ${head('组织架构')}
+    <div class="split">
+      <div class="panel">
+        <div class="panel-h">${searchBox('搜索部门', 'orgQ', 0).replace('width:0px', 'flex:1')}${can('org.manage') ? `<button class="ibtn" title="在「${esc(d.name)}」下新建部门" data-act="deptForm" data-mode="new">${ic('plus')}</button>` : ''}</div>
+        <div class="panel-b">${treeHtml('selDept', d.id, true)}</div>
+      </div>
+      <div class="col" style="gap:14px;min-width:0">
+        <div class="card pad">
+          <div class="xs muted">${deptPath(d.id).join(' / ')}</div>
+          <div class="row" style="margin-top:6px;gap:10px">${sq(d.p ? 'folder' : 'building', '#6366f1', 36)}<h2 style="font-size:18px">${esc(d.name)}</h2>${!d.p ? '<span class="tag">根部门</span>' : ''}<span class="sp"></span>
+            ${can('grant.view') ? `<button class="btn" data-act="grantFor" data-t="dept" data-id="${d.id}">${ic('shield')}授权</button>` : ''}
+            ${can('org.manage') ? `<button class="btn" data-act="deptForm" data-mode="new">${ic('plus')}新建子部门</button><button class="btn" data-act="deptForm" data-mode="edit">${ic('pencil')}编辑</button>` : ''}
+            ${can('org.manage') && d.p ? `<button class="ibtn" data-pop="dept">${ic('more')}</button>` : ''}
+          </div>
+          <div class="stats">
+            <div class="stat"><div class="k">负责人</div><div class="v">${leader ? `${pav(leader.name, 22)}${esc(leader.name)}` : '<span class="muted" style="font-weight:500">未设置</span>'}</div>${!leader && d.p ? '<div class="xs muted" style="margin-top:2px">成员的直属上级取上级部门负责人</div>' : ''}</div>
+            <div class="stat"><div class="k">成员</div><div class="v">${direct} 人<span class="sm muted" style="font-weight:500">· 含下级 ${total} 人</span></div></div>
+            <div class="stat"><div class="k">子部门</div><div class="v">${kids.length ? kids.map((k) => `<a class="chip" style="height:24px" data-act="selDept" data-id="${k.id}">${esc(k.name)}</a>`).join('') : '<span class="muted" style="font-weight:500">无</span>'}</div></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h3>成员</h3><span class="sm muted">${members.length} 人</span>
+            <span class="row sm muted" style="margin-left:12px">包含子部门<span class="switch ${S.orgSub ? 'on' : ''}" data-act="orgSub"></span></span><span class="sp"></span>
+            ${can('org.manage') ? `<button class="btn sm" data-act="modal" data-type="moveIn">${ic('login')}调入成员</button>` : ''}
+            ${can('user.manage') ? `<button class="btn sm primary" data-act="modal" data-type="userForm">${ic('userPlus')}新建用户</button>` : ''}</div>
+          ${members.length ? `<table class="table flat"><tr><th>成员</th>${S.orgSub ? '<th>部门</th>' : ''}<th>岗位</th><th>状态</th><th></th></tr>
+            ${members.map((u) => `<tr class="click" data-go="#/org/users/${u.id}"><td>${personCell(u, u.id === d.leader ? '<span class="tag primary xs">负责人</span>' : '')}</td>
+              ${S.orgSub ? `<td class="sm">${esc(deptOf(u.dept).name)}</td>` : ''}
+              <td class="sm">${u.pos.join('、') || '<span class="faint">—</span>'}</td><td>${statusTag(u.status)}</td>
+              <td class="acts">${can('org.manage') ? `<button class="ibtn sm" data-pop="member:${u.id}">${ic('more')}</button>` : ''}</td></tr>`).join('')}</table>`
+            : empty('users', '这个部门还没有成员', '「调入成员」把已有的人调进来，或者新建用户')}
+        </div>
+      </div>
+    </div></div>`;
+}
+
+/* =====================================================================
+ * 组织 · 人员 / 数字员工 / 详情
+ * ===================================================================== */
+function usersPage() {
+  const cnt = (s) => D.users.filter((u) => s === 'all' || u.status === s).length;
+  let list = D.users.filter((u) => S.userStatus === 'all' || u.status === S.userStatus);
+  if (S.userDept) list = list.filter((u) => descIds(S.userDept).includes(u.dept));
+  const q = S.userQ.trim();
+  if (q) list = list.filter((u) => (u.name + u.account).includes(q));
+  return `<div class="page">
+    ${head('人员', can('user.manage') ? `<button class="btn primary" data-act="modal" data-type="userForm">${ic('userPlus')}新建用户</button>` : '')}
+    <div class="toolbar">
+      ${seg('userStatus', [['all', '全部', cnt('all')], ['active', '正常', cnt('active')], ['pending', '未激活', cnt('pending')], ['locked', '已锁定', cnt('locked')], ['disabled', '已停用', cnt('disabled')]])}
+      <select class="select" style="width:180px" data-change="userDept"><option value="">全部部门</option>${D.depts.map((d) => `<option value="${d.id}" ${S.userDept === d.id ? 'selected' : ''}>${'　'.repeat(deptPath(d.id).length - 1)}${esc(d.name)}</option>`).join('')}</select>
+      ${searchBox('搜索姓名、账号、邮箱、手机', 'userQ', 260)}
+    </div>
+    <div class="card">${list.length ? `<table class="table flat"><tr><th>用户</th><th>部门</th><th>岗位</th><th>状态</th><th>最近登录</th><th></th></tr>
+      ${list.map((u) => `<tr class="click" data-go="#/org/users/${u.id}">
+        <td>${personCell(u, (u.uc || []).map((r) => `<span class="tag primary xs">${r}</span>`).join(''))}</td>
+        <td class="sm">${deptPath(u.dept).slice(1).join(' / ') || deptPath(u.dept)[0]}</td>
+        <td class="sm">${u.pos.join('、') || '<span class="faint">—</span>'}</td>
+        <td>${statusTag(u.status)}${u.reason ? `<div class="xs muted" style="margin-top:2px">${esc(u.reason)}</div>` : ''}</td>
+        <td class="sm muted">${u.last || '从未登录'}</td>
+        <td class="acts">${can('user.manage') ? `<button class="btn sm ghost" data-act="modal" data-type="userForm" data-id="${u.id}">编辑</button><button class="ibtn sm" data-pop="user:${u.id}">${ic('more')}</button>` : ''}</td></tr>`).join('')}
+      </table>${pager(list.length, '人')}` : empty('search', '没有找到人员', '换个关键词或筛选条件')}</div>
+  </div>`;
+}
+
+function digitalPage() {
+  const cnt = (s) => D.digital.filter((u) => s === 'all' || u.status === s).length;
+  const list = D.digital.filter((u) => S.digStatus === 'all' || u.status === S.digStatus);
+  return `<div class="page">
+    ${head('数字员工')}
+    <div class="alert plain" style="margin-bottom:14px">${ic('info')}<span>每个智能体一个数字员工，由来源应用自动创建和维护。不能登录、不在组织架构里；权限只来自直接授给它的角色和岗位，授给部门的对它不生效。</span></div>
+    <div class="toolbar">${seg('digStatus', [['all', '全部', cnt('all')], ['active', '正常', cnt('active')], ['disabled', '已停用', cnt('disabled')]])}${searchBox('搜索名称、账号')}</div>
+    <table class="table"><tr><th>数字员工</th><th>负责人</th><th>来源应用</th><th>岗位</th><th>状态</th><th></th></tr>
+      ${list.map((u) => { const o = userOf(u.owner); return `<tr class="click" data-go="#/org/digital/${u.id}">
+        <td>${personCell(u)}</td>
+        <td><div class="row">${pav(o.name, 22)}<span>${esc(o.name)}</span>${o.status === 'disabled' ? '<span class="tag warning xs">负责人已停用</span>' : ''}</div></td>
+        <td>${appTag(u.app)}</td><td class="sm">${u.pos.join('、') || '<span class="faint">—</span>'}</td><td>${statusTag(u.status)}</td>
+        <td class="acts">${can('user.manage') ? (u.status === 'disabled' ? `<button class="btn sm" data-act="toast" data-msg="已启用「${esc(u.name)}」">启用</button>` : `<button class="btn sm danger" data-act="modal" data-type="disable" data-id="${u.id}">停用</button>`) : ''}</td></tr>`; }).join('')}
+    </table></div>`;
+}
+
+function userDetail(id) {
+  const u = userOf(id) || ME;
+  const digital = !!u.owner;
+  const back = digital ? '#/org/digital' : '#/org/users';
+  const icon = digital ? sq('bot', '#0ea5e9', 44) : pav(u.name, 44);
+  const tags = statusTag(u.status) + (digital ? '<span class="tag blue">数字员工</span>' : '') + (u.status === 'pending' ? '<span class="tag warning">须改密</span>' : '') + (u.uc || []).map((r) => `<span class="tag primary">${r}</span>`).join('');
+  const sub = digital ? `${u.account} · 来源：${appOf(u.app).name}` : `${u.account} · ${deptPath(u.dept).join(' / ')}`;
+  const right = !can('user.manage') ? '' : digital
+    ? (u.status === 'disabled' ? '<button class="btn">启用</button>' : `<button class="btn danger" data-act="modal" data-type="disable" data-id="${u.id}">停用</button>`)
+    : `<button class="btn" data-act="modal" data-type="userForm" data-id="${u.id}">${ic('pencil')}编辑</button><button class="btn" data-act="modal" data-type="resetPw" data-id="${u.id}">${ic('key')}重置密码</button><button class="ibtn" data-pop="user:${u.id}">${ic('more')}</button>`;
+  const mgr = !digital && managerOf(u);
+  const info = digital
+    ? `<dl class="kv"><dt>负责人</dt><dd>${pav(userOf(u.owner).name, 22)}<a data-go="#/org/users/${u.owner}">${esc(userOf(u.owner).name)}</a>${userOf(u.owner).status === 'disabled' ? '<span class="tag warning xs">负责人已停用，请在 Atlas 里转交</span>' : ''}</dd>
+        <dt>来源应用</dt><dd>${appTag(u.app)}</dd><dt>说明</dt><dd>${esc(u.desc)}</dd>
+        <dt>岗位</dt><dd>${u.pos.join('、') || '—'}<a class="sm" data-act="grantFor" data-t="user" data-id="${u.id}">去授权</a></dd>
+        ${u.reason ? `<dt>停用原因</dt><dd>${esc(u.reason)}</dd>` : ''}<dt>能否登录</dt><dd class="muted">不能（只作为智能体运行时的身份）</dd></dl>`
+    : `<dl class="kv"><dt>邮箱</dt><dd>${u.account}@xinghai.com</dd><dt>手机</dt><dd>${u.phone || '—'}</dd>
+        <dt>部门</dt><dd>${deptPath(u.dept).join(' / ')}</dd>
+        <dt>岗位</dt><dd>${u.pos.join('、') || '—'}${can('grant.view') ? `<a class="sm" data-act="grantFor" data-t="user" data-id="${u.id}">去授权</a>` : ''}</dd>
+        <dt>直属上级</dt><dd>${mgr ? `${pav(mgr.u.name, 22)}<a data-go="#/org/users/${mgr.u.id}">${esc(mgr.u.name)}</a><span class="sm muted">${mgr.d.id === u.dept ? '所在部门负责人' : '上级部门「' + esc(mgr.d.name) + '」负责人'}，按组织架构计算</span>` : '—'}</dd>
+        ${u.reason ? `<dt>停用原因</dt><dd>${esc(u.reason)}</dd>` : ''}
+        <dt>创建时间</dt><dd>${u.created}</dd><dt>最近登录</dt><dd>${u.last || '从未登录'}</dd></dl>`;
+  const eff = effectiveRoles(u.id);
+  const byApp = [...new Set(eff.map((x) => x.app))];
+  const perm = `<div class="col" style="gap:14px">
+      <div class="card"><div class="card-h"><h3>各应用的有效角色</h3><span class="sm muted">每个角色都写明来源</span><span class="sp"></span>${can('grant.view') ? `<a class="sm" data-act="grantFor" data-t="user" data-id="${u.id}">在权限管理中授权 →</a>` : ''}</div>
+        ${eff.length ? `<table class="table flat"><tr><th style="width:200px">应用</th><th>角色</th><th>来源</th></tr>
+          ${byApp.map((a) => eff.filter((x) => x.app === a).map((x, i) => `<tr>${i === 0 ? `<td rowspan="${eff.filter((y) => y.app === a).length}" style="vertical-align:top">${appTag(a)}</td>` : ''}<td><b>${esc(x.role)}</b></td><td class="sm muted">${esc(x.src)}</td></tr>`).join('')).join('')}</table>`
+          : empty('shield', '没有任何角色', digital ? '数字员工只认直接授给它的角色和岗位' : '在「权限 › 授权」里给他授权')}</div>
+      ${digital ? '' : `<div class="card"><div class="card-h"><h3>数据权限</h3><span class="sm muted">来自数据 Owner 的授权</span></div>
+        <table class="table flat"><tr><th>数据</th><th>类型</th><th>权限</th><th>来源</th></tr>
+        ${D.data.slice(0, 3).map((x) => `<tr><td><b>${esc(x.name)}</b></td><td><span class="tag mono">${x.code}</span></td><td>${levelTag(x.my)}</td><td class="sm muted">${x.my === 'OWNER' ? '创建人' : '部门「平台部」（含下级）'}</td></tr>`).join('')}</table></div>`}
+    </div>`;
+  const logins = `<table class="table"><tr><th>时间</th><th>来源应用</th><th>设备</th><th>IP</th><th>结果</th></tr>${D.logins.map((l) => `<tr><td class="sm">${l.at}</td><td class="sm">${l.app}</td><td class="sm muted">${l.ua}</td><td class="mono">${l.ip}</td><td>${l.ok ? '<span class="tag success">成功</span>' : `<span class="tag danger">失败</span> <span class="xs muted">${l.why}</span>`}</td></tr>`).join('')}</table>`;
+  const apps = `<div class="grid">${D.apps.filter((a) => a.status === 'active' && (a.scopeAll || (a.scope || []).some((s) => descIds(s).includes(u.dept)))).map((a) => `<div class="acard" style="cursor:default"><div class="row">${sq(a.icon, a.color, 36)}<div class="grow"><b>${esc(a.name)}</b><div class="xs muted">${a.scopeAll ? '全员可访问' : '所在部门在可访问范围内'}</div></div></div></div>`).join('')}</div>`;
+  const tabOpts = digital ? [['info', '基本信息'], ['perm', '权限']] : [['info', '基本信息'], ['perm', '权限'], ['logins', '登录记录'], ['apps', '可访问的应用']];
+  if (!tabOpts.some(([k]) => k === S.userTab)) S.userTab = 'info';
+  return `<div class="page">
+    ${detailHead(back, icon, u.name, sub, tags, right)}
+    ${tabs('userTab', tabOpts, '')}
+    ${{ info: `<div class="card pad">${info}</div>`, perm, logins, apps }[S.userTab]}
+  </div>`;
+}
+
+/* =====================================================================
+ * 权限
+ * ===================================================================== */
+function bySubject() {
+  const s = S.subj;
+  const q = S.subjQ.trim();
+  const people = D.users.filter((u) => !q || (u.name + u.account).includes(q));
+  const bots = D.digital.filter((u) => !q || (u.name + u.account).includes(q));
+  const left = S.subjMode === 'dept'
+    ? `<div class="panel-b">${treeHtml('selSubjDept', s.type === 'dept' ? s.id : '', false)}</div>`
+    : `<div style="padding:8px 8px 0">${searchBox('搜索姓名或账号', 'subjQ', 0).replace('width:0px', 'width:100%')}</div>
+       <div class="panel-b">${people.map((u) => `<div class="li ${s.id === u.id ? 'on' : ''}" data-act="selSubjUser" data-id="${u.id}">${pav(u.name, 26)}<div class="grow"><b class="sm">${esc(u.name)}</b><div class="xs muted ellipsis">${esc(deptOf(u.dept).name)}</div></div>${u.status === 'disabled' ? '<span class="tag xs">停用</span>' : ''}</div>`).join('')}
+         ${bots.length ? `<div class="lg-label">数字员工</div>${bots.map((u) => `<div class="li ${s.id === u.id ? 'on' : ''}" data-act="selSubjUser" data-id="${u.id}">${sq('bot', '#0ea5e9', 26)}<div class="grow"><b class="sm">${esc(u.name)}</b><div class="xs muted">${esc(u.account)}</div></div></div>`).join('')}` : ''}</div>`;
+  return `<div class="page">
+    ${head('授权', '', '按对象授权：选一个部门或人，看它有哪些岗位、角色，以及从哪来')}
+    <div class="split">
+      <div class="panel"><div class="panel-h">${seg('subjMode', [['dept', '组织'], ['user', '人员']], 'block').replace('class="seg block"', 'class="seg block" style="flex:1"')}</div>${left}</div>
+      ${subjectPanel(s)}
+    </div></div>`;
+}
+
+function subjectPanel(s) {
+  const { own, inherited } = subjectGrants(s);
+  const isDept = s.type === 'dept';
+  const u = !isDept && userOf(s.id);
+  const digital = u && !!u.owner;
+  const header = isDept
+    ? `${sq('building', '#6366f1', 40)}<div class="grow"><div class="xs muted">${deptPath(s.id).slice(0, -1).join(' / ') || '根部门'}</div><h2 style="font-size:18px">${esc(deptOf(s.id).name)}</h2></div>`
+    : `${digital ? sq('bot', '#0ea5e9', 40) : pav(u.name, 40)}<div class="grow"><div class="row"><h2 style="font-size:18px">${esc(u.name)}</h2>${statusTag(u.status)}${digital ? '<span class="tag blue">数字员工</span>' : ''}</div><div class="sm muted">${esc(u.account)} · ${digital ? '负责人 ' + userOf(u.owner).name : deptPath(u.dept).join(' / ')}</div></div>`;
+  const hint = isDept ? '授予本部门的岗位和角色，部门成员自动获得；选「含下级」时下级部门的成员也获得。'
+    : digital ? '数字员工只认直接授给它的角色和岗位，授给部门的对它不生效。'
+      : '有效授权 = 直接授给本人的 + 所在部门的 + 上级部门「含下级」的。';
+  const table = (kind) => {
+    const rows = [...own.map((g) => ({ g, own: true })), ...inherited.map((g) => ({ g, own: false }))].filter((x) => x.g.kind === kind);
+    if (!rows.length) return `<div class="card-b sm muted">${kind === 'role' ? '没有角色' : '没有岗位'}</div>`;
+    return `<table class="table flat"><tr><th>${kind === 'role' ? '角色' : '岗位'}</th><th>来源</th><th></th></tr>
+      ${rows.map(({ g, own: mine }) => `<tr>
+        <td><b class="nw">${esc(g.target)}</b><div style="margin-top:3px">${kind === 'role' ? appTag(g.app) : `<span class="xs muted">默认角色：${(posOf(g.target)?.roles || []).map(([a, r]) => r).join('、')}</span>`}</div></td>
+        <td class="sm nw">${mine ? (isDept ? `本部门${g.sub ? ' · <span class="tag xs">含下级</span>' : ' · 仅本部门'}` : '直接授权')
+          : `继承自 <a data-act="selSubjDept" data-id="${g.sid}">${esc(deptOf(g.sid).name)}</a>${g.sub ? '（含下级）' : ''}`}<div class="xs muted" style="margin-top:3px">${g.by} · ${g.at}</div></td>
+        <td class="acts">${mine ? (can('grant.manage') ? `${isDept ? `<button class="btn sm ghost" data-act="toast" data-msg="已改为${g.sub ? '仅本部门' : '含下级部门'}">${g.sub ? '改为仅本部门' : '改为含下级'}</button>` : ''}<button class="btn sm ghost danger" data-act="modal" data-type="revoke" data-id="${g.id}">撤销</button>` : '') : '<span class="xs faint">在来源处管理</span>'}</td></tr>`).join('')}</table>`;
+  };
+  return `<div class="col" style="gap:14px;min-width:0">
+    <div class="card pad"><div class="row" style="gap:12px">${header}
+      ${can('grant.manage') ? `<button class="btn" data-act="modal" data-type="grant" data-kind="position">${ic('briefcase')}授予岗位</button><button class="btn primary" data-act="modal" data-type="grant" data-kind="role">${ic('plus')}授予角色</button>` : ''}</div>
+      <div class="sm muted" style="margin-top:10px">${hint}</div></div>
+    <div class="card"><div class="card-h"><h3>岗位</h3><span class="sm muted">岗位的默认角色随岗位一起生效</span></div>${table('position')}</div>
+    <div class="card"><div class="card-h"><h3>角色</h3></div>${table('role')}</div>
+    ${!isDept && !digital ? `<div style="text-align:right"><a class="sm" data-go="#/org/users/${u.id}" data-act="userTabPerm">查看他在各应用的有效角色 →</a></div>` : ''}
+  </div>`;
+}
+
+
+function positionsPage() {
+  return `<div class="page">
+    ${head('岗位', can('position.manage') ? `<button class="btn primary" data-act="modal" data-type="position">${ic('plus')}新建岗位</button>` : '', '岗位 = 一组默认角色。把岗位授给人或部门，拿到岗位的人自动拥有它的默认角色。')}
+    <table class="table"><tr><th>岗位</th><th>默认角色</th><th>授予给</th><th>持有人</th><th></th></tr>
+      ${D.positions.map((p) => `<tr>
+        <td><b>${esc(p.name)}</b>${p.desc ? `<div class="xs muted">${esc(p.desc)}</div>` : ''}</td>
+        <td><div class="row" style="flex-wrap:wrap;gap:6px">${p.roles.map(([a, r]) => `<span class="chip" style="height:24px;gap:5px">${sq(appOf(a).icon, appOf(a).color, 16)}${esc(r)}</span>`).join('')}</div></td>
+        <td class="sm">${p.to.length > 2 ? `${p.to.slice(0, 2).join('、')} 等 ${p.to.length} 个` : p.to.join('、')}</td>
+        <td class="sm">${p.holders} 人</td>
+        <td class="acts">${can('position.manage') ? `<button class="btn sm ghost" data-act="toast" data-msg="授予岗位：选择人员或部门">授予</button><button class="btn sm ghost" data-act="modal" data-type="position" data-id="${p.id}">编辑</button><button class="ibtn sm" data-pop="pos:${p.id}">${ic('more')}</button>` : ''}</td></tr>`).join('')}
+    </table></div>`;
+}
+
+/* 数据权限：个人中心「我的数据」（我管理的 / 我可访问的）与 权限「数据」共用 */
+function dataPage(where) {
+  const mine = D.data.filter((x) => x.mine), access = D.data.filter((x) => x.access);
+  const list = where === 'all' ? D.data : S.dataScope === 'mine' ? mine : access;
+  const title = where === 'all' ? '数据' : '我的数据';
+  const sub = where === 'all' ? '各应用登记的全部数据及其授权（只读）。授权由每条数据的 Owner 管理。' : '';
+  return `<div class="page">
+    ${head(title, '', sub)}
+    <div class="toolbar">${where === 'me' ? seg('dataScope', [['mine', '我管理的', mine.length], ['access', '我可访问的', access.length]]) : ''}
+      <select class="select" style="width:200px"><option>全部数据类型</option><option>agent · 智能体</option><option>dataset · 知识库</option><option>flow · 流程</option></select>${searchBox('搜索数据名称或 Id', '', 240)}</div>
+    ${list.length ? `<table class="table"><tr><th>数据</th><th>类型</th>${where === 'me' ? '<th>我的权限</th>' : ''}<th>Owner</th><th>授权</th><th>创建</th></tr>
+      ${list.map((x) => `<tr class="click" data-act="drawer" data-type="data" data-id="${x.id}">
+        <td><b>${esc(x.name)}</b><div class="xs muted mono">${x.did}</div></td>
+        <td><div class="row"><span class="tag mono">${x.code}</span>${appTag(x.app)}</div></td>
+        ${where === 'me' ? `<td>${levelTag(x.my)}</td>` : ''}
+        <td class="sm">${x.owners.length ? x.owners.join('、') : '<span style="color:var(--danger)">无可用 Owner</span>'}</td>
+        <td class="sm muted">${x.users} 个人 · ${x.depts} 个组织</td><td class="sm muted">${x.created}</td></tr>`).join('')}</table>`
+      : `<div class="card">${empty('database', '还没有数据', S.dataScope === 'mine' ? '在应用里创建智能体、知识库时，你会自动成为它的 Owner' : '还没有人把数据授权给你或你所在的部门')}</div>`}
+  </div>`;
+}
+
+/* =====================================================================
+ * 应用
+ * ===================================================================== */
+function appsPage() {
+  return `<div class="page">
+    ${head('应用目录', `<button class="btn primary" data-act="modal" data-type="newApp">${ic('plus')}接入应用</button>`)}
+    <div class="toolbar"><div class="seg"><a class="on">全部<span class="n">${D.apps.length}</span></a><a>已启用</a><a>已停用</a></div>${searchBox('搜索应用名称或编码')}</div>
+    <div class="grid">${D.apps.map((a) => `<div class="acard" data-go="#/apps/${a.id}">
+      <div class="row">${sq(a.icon, a.color, 40)}<div class="grow"><div class="row"><b class="ellipsis">${esc(a.name)}</b>${a.builtin ? '<span class="tag xs">内置</span>' : a.status === 'disabled' ? '<span class="tag xs">已停用</span>' : ''}</div>
+        <div class="xs muted mono">${a.code || '内置应用'}</div></div></div>
+      <div class="desc">${esc(a.desc)}</div>
+      <div class="foot">${ic('users')}<span>${a.status === 'disabled' ? '不可访问' : a.scopeAll ? '全员' : `${a.scope.map((s) => deptOf(s).name).join('、')} · ${a.users} 人`}</span><span class="sp"></span><span>${a.roles} 个角色 · ${a.ops} 个操作</span></div></div>`).join('')}</div>
+  </div>`;
+}
+
+function appDetail(id) {
+  const a = appOf(id) || D.apps[1];
+  const tabOpts = [
+    ...(!a.builtin ? [['conf', '接入配置']] : []),
+    ['ops', `操作 ${a.ops}`], ['menus', `菜单 ${a.menus}`],
+    ...(!a.builtin ? [['dtypes', `数据编码 ${a.dtypes}`]] : []),
+  ];
+  if (!tabOpts.some(([k]) => k === S.appTab)) S.appTab = tabOpts[0][0];
+  const right = a.builtin ? '' : a.status === 'active'
+    ? `<button class="btn danger" data-act="modal" data-type="confirm" data-title="停用应用 · ${esc(a.name)}" data-msg="停用后该应用不能再获取接口令牌，已签发的令牌立即失效；角色、菜单与授权全部保留。" data-ok="停用">停用</button>`
+    : '<button class="btn primary" data-act="toast" data-msg="已启用，应用可以重新获取接口令牌">启用</button>';
+  const body = { conf: appConf, ops: appOps, menus: appMenus, dtypes: appDtypes }[S.appTab](a);
+  return `<div class="page">
+    ${detailHead('#/apps', sq(a.icon, a.color, 44), a.name, a.builtin ? '本系统 · 操作与菜单随版本发布（只读）' : `${esc(a.desc)} · 接入于 ${a.created}`, a.builtin ? '<span class="tag">内置</span>' : a.status === 'active' ? '<span class="tag success">已启用</span>' : '<span class="tag">已停用</span>', right)}
+    ${a.status === 'disabled' ? `<div class="alert warning" style="margin:10px 0 0">${ic('alert')}<span>应用已停用：开放接口拒绝该应用的调用。</span></div>` : ''}
+    <div style="margin-top:12px">${tabs('appTab', tabOpts)}</div>
+    ${body}
+  </div>`;
+}
+
+function appConf(a) {
+  const all = S.scope[a.id]?.all ?? a.scopeAll;
+  const depts = S.scope[a.id]?.depts ?? (a.scope || []);
+  const n = all ? D.users.filter((u) => u.status !== 'disabled').length : D.users.filter((u) => u.status !== 'disabled' && depts.some((d) => descIds(d).includes(u.dept))).length;
+  return `<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;align-items:start">
+    <div class="col" style="gap:16px">
+      <div class="card"><div class="card-h"><h3>应用凭据</h3><span class="tag blue xs">服务端调用开放接口</span></div><div class="card-b">
+        <dl class="kv"><dt>应用编码</dt><dd><span class="secret">${a.code}</span><button class="ibtn sm" title="修改">${ic('pencil')}</button><span class="xs muted">内网调用时请求头 X-Caller-App 写它</span></dd>
+          <dt>App Key</dt><dd><span class="secret">${a.key}</span><button class="ibtn sm" title="复制" data-act="toast" data-msg="已复制 App Key">${ic('copy')}</button></dd>
+          <dt>App Secret</dt><dd><span class="secret">••••••••••••${a.tail}</span><button class="btn sm" data-act="modal" data-type="confirm" data-title="重新生成 Secret · ${esc(a.name)}" data-msg="旧 Secret 及其签发的接口令牌立即失效，应用更新配置前无法调用开放接口。" data-ok="重新生成">${ic('refresh')}重新生成</button></dd>
+          <dt>入口地址</dt><dd><span class="secret">${a.url}</span><button class="ibtn sm" title="修改">${ic('pencil')}</button><span class="tag warning xs">新</span></dd></dl>
+        <div class="help" style="margin-top:12px">Secret 只在生成时显示一次，只能保存在应用后端。入口地址用于「应用切换」和「我的应用」。</div></div></div>
+      <div class="card"><div class="card-h"><h3>开放接口</h3></div><div class="card-b">
+        <dl class="kv"><dt>Base URL</dt><dd><span class="secret">/open/v1</span></dd><dt>获取令牌</dt><dd><span class="secret">POST /auth/token</span></dd>
+          <dt>主要接口</dt><dd class="sm">用户与部门查询、授权快照（可否访问 / 角色 / 操作码 / 菜单）、实时校验、数据权限</dd></dl></div></div>
+    </div>
+    <div class="card"><div class="card-h"><h3>可访问范围</h3><span class="sm muted">本租户</span><span class="sp"></span><span class="tag ${n ? 'success' : 'danger'}">当前 ${n} 人可访问</span></div><div class="card-b col" style="gap:10px">
+      <div class="radio-card ${all ? 'on' : ''}" data-act="scopeAll" data-id="${a.id}" data-v="1"><span class="r"></span><div><b>全员</b><div class="sm muted">本租户所有未停用的人</div></div></div>
+      <div class="radio-card ${!all ? 'on' : ''}" data-act="scopeAll" data-id="${a.id}" data-v="0"><span class="r"></span><div class="grow"><b>指定部门</b><div class="sm muted">含这些部门的下级部门</div>
+        ${!all ? `<div class="row" style="flex-wrap:wrap;gap:6px;margin-top:10px">${depts.map((d) => `<span class="chip">${ic('folder')}${esc(deptOf(d).name)}<span class="x" data-act="scopeDel" data-id="${a.id}" data-d="${d}">${ic('x')}</span></span>`).join('')}
+          <a class="chip" data-pop="scopeAdd:${a.id}" style="border-style:dashed">${ic('plus')}添加部门</a></div>
+          ${!depts.length ? '<div class="sm" style="color:var(--danger);margin-top:8px">还没选部门：没有人能访问</div>' : ''}` : ''}</div></div>
+      <div class="row" style="margin-top:4px"><span class="xs muted">访问不了的人在应用里会看到「没有访问权限」</span><span class="sp"></span><button class="btn primary" data-act="toast" data-msg="已保存，当前 ${n} 人可访问">保存</button></div>
+    </div></div>
+  </div>`;
+}
+
+function appOps(a) {
+  const ops = opsOf(a);
+  const mods = [...new Set(ops.map((o) => o[0]))];
+  const used = (code) => rolesOf(a.id).filter((r) => roleHas(a, r, code)).length;
+  return `<div class="toolbar">${searchBox('搜索操作码或名称')}<span class="sp"></span>${can('role.view') ? `<a class="sm" data-act="rolesOfApp" data-id="${a.id}">用这些操作配角色：权限 › 角色 →</a>` : ''}${a.builtin ? '<span class="sm muted">内置应用的操作随版本发布</span>' : `<button class="btn" data-act="toast" data-msg="新增操作：模块、操作码、名称">${ic('plus')}新增操作</button>`}</div>
+    <table class="table"><tr><th>操作码</th><th>名称</th><th>来源</th><th>使用它的角色</th><th></th></tr>
+      ${mods.map((m) => `<tr class="grp"><td colspan="5">${esc(m)}</td></tr>${ops.filter((o) => o[0] === m).map(([, c, t, src]) => `<tr><td class="mono">${c}</td><td>${esc(t)}</td><td><span class="tag xs ${src === '手动' ? 'warning' : ''}">${src === '上报' ? '应用上报' : src}</span></td><td class="sm">${used(c)} 个</td><td class="acts">${src === '手动' ? `<button class="ibtn sm">${ic('more')}</button>` : ''}</td></tr>`).join('')}`).join('')}
+    </table>`;
+}
+
+function miniShell(appId, dirs, title) {
+  const first = dirs[0];
+  return `<div class="mini"><div class="mini-top"><span class="logo">A</span><b style="margin-right:6px">${title}</b>${dirs.map((d, i) => `<span class="p ${i === 0 ? 'on' : ''}">${d.name}</span>`).join('')}<span class="sp"></span>${pav(ME.name, 20)}</div>
+    <div class="mini-body"><div class="mini-side">${first ? first.items.map(([t], i) => `<div class="it ${i === 0 ? 'on' : ''}">${t}</div>`).join('') : ''}</div>
+      <div class="mini-main"><i style="width:40%;height:14px"></i><i style="width:90%"></i><i style="width:80%"></i><i style="width:85%"></i></div></div></div>`;
+}
+function appMenus(a) {
+  const menus = D.menus[a.id] || [{ name: a.name, icon: a.icon, items: [['首页', '/'], ['设置', '/settings']] }];
+  const roles = rolesOf(a.id);
+  const role = roles.find((r) => r.id === S.menuRole) || roles[0];
+  const visible = menus.filter((d) => !role || !role.menus || role.menus.includes(d.name));
+  return `<div style="display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:16px;align-items:start">
+    <div class="card"><div class="card-h"><h3>菜单</h3><span class="sm muted">目录 = 顶部一级，菜单 = 左侧二级</span><span class="sp"></span>${a.builtin ? '' : `<button class="btn sm" data-act="toast" data-msg="新增菜单：目录或菜单、名称、路由、图标">${ic('plus')}新增</button>`}</div>
+      <table class="table flat"><tr><th>名称</th><th>路由</th><th>类型</th><th></th></tr>
+        ${menus.map((d) => `<tr><td><div class="row">${ic(d.icon)}<b>${esc(d.name)}</b>${d.tag ? `<span class="tag xs">${d.tag}</span>` : ''}</div></td><td class="faint">—</td><td><span class="tag xs">目录</span></td><td class="acts">${a.builtin ? '' : `<button class="ibtn sm">${ic('more')}</button>`}</td></tr>
+          ${d.items.map(([t, p]) => `<tr><td style="padding-left:40px">${esc(t)}</td><td class="mono">${p}</td><td><span class="tag primary xs">菜单</span></td><td class="acts">${a.builtin ? '' : `<button class="ibtn sm">${ic('more')}</button>`}</td></tr>`).join('')}`).join('')}
+      </table></div>
+    <div class="card" style="position:sticky;top:0"><div class="card-h"><h3>预览</h3><span class="sp"></span><select class="select" style="width:170px;height:30px" data-change="menuRole">${roles.map((r) => `<option value="${r.id}" ${r === role ? 'selected' : ''}>按「${esc(r.name)}」看</option>`).join('')}</select></div>
+      <div class="card-b">${miniShell(a.id, visible, a.builtin ? '用户中心' : a.name.replace('Atlas 智能平台', 'Atlas'))}<div class="help">登录人只看到自己角色包含的菜单；目录下没有可见菜单时整个目录不显示。</div></div></div>
+  </div>`;
+}
+
+function rolesPage() {
+  const apps = D.apps.filter((a) => (!S.roleApp || a.id === S.roleApp) && rolesOf(a.id).length);
+  const all = apps.flatMap((a) => rolesOf(a.id));
+  const cur = all.find((r) => r.id === S.roleSel) || all[0];
+  return `<div class="page">
+    ${head('角色', can('role.manage') ? `<button class="btn primary" data-act="toast" data-msg="新建角色：选应用，填名称、编码、说明，再勾选操作与菜单">${ic('plus')}新建角色</button>` : '')}
+    <div class="split narrow">
+      <div class="panel">
+        <div class="panel-h"><select class="select" data-change="roleApp"><option value="">全部应用</option>${D.apps.filter((a) => rolesOf(a.id).length).map((a) => `<option value="${a.id}" ${S.roleApp === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></div>
+        <div class="panel-b">${apps.map((a) => `<div class="lg-label row" style="gap:6px">${sq(a.icon, a.color, 16)}${esc(a.name)}<span class="sp"></span>${rolesOf(a.id).length}</div>
+          ${rolesOf(a.id).map((r) => `<div class="li ${r === cur ? 'on' : ''}" data-act="selRole" data-id="${r.id}"><div class="grow"><div class="row"><b class="sm">${esc(r.name)}</b>${r.builtin ? '<span class="tag xs">内置</span>' : ''}</div><div class="xs muted mono">${r.code}</div></div><span class="xs muted">${r.holders} 人</span></div>`).join('')}`).join('')}</div>
+      </div>
+      ${cur ? roleCard(cur) : `<div class="card">${empty('badge', '还没有角色', '先在应用的「操作」里登记操作，再新建角色')}</div>`}
+    </div></div>`;
+}
+
+function roleCard(cur) {
+  const a = appOf(cur.app);
+  const ops = opsOf(a);
+  const has = (c) => roleHas(a, cur, c);
+  const mods = [...new Set(ops.map((o) => o[0]))];
+  const nOps = ops.filter((o) => has(o[1])).length;
+  const menus = D.menus[a.id] || [];
+  const holders = D.users.filter((u) => effectiveRoles(u.id).some((x) => x.app === a.id && x.role === cur.name));
+  const grants = D.grants.filter((g) => g.kind === 'role' && g.app === a.id && g.target === cur.name);
+  const ro = (a.builtin && cur.builtin) || !can('role.manage');
+  const dis = ro ? 'disabled' : '';
+  const content = {
+    ops: `<div class="card-b">${mods.map((m) => { const items = ops.filter((o) => o[0] === m); const n = items.filter((o) => has(o[1])).length; return `<div class="grp">
+        <label class="grp-h"><input type="checkbox" data-act="opGroup" data-g="${esc(m)}" ${n === items.length ? 'checked' : ''} ${dis}>${esc(m)}<span class="xs muted" style="font-weight:500">${n}/${items.length}</span></label>
+        <div class="opgrid">${items.map(([, c, t]) => `<label class="opt"><input type="checkbox" data-g="${esc(m)}" ${has(c) ? 'checked' : ''} ${dis}><div><div class="sm">${esc(t)}</div><div class="xs muted mono">${c}</div></div></label>`).join('')}</div></div>`; }).join('')}</div>
+      ${a.builtin && cur.builtin ? '<div class="savebar"><span class="sm muted">内置角色随版本发布，不能修改</span></div>'
+        : !can('role.manage') ? '<div class="savebar"><span class="sm muted">你只能查看角色；修改需要「管理角色」权限</span></div>'
+        : `<div class="savebar"><span class="sm muted">保存后，拥有该角色的 ${cur.holders} 人在应用下次刷新授权时生效</span><span class="sp"></span><button class="btn primary" data-act="toast" data-msg="已保存角色「${esc(cur.name)}」的操作权限">保存</button></div>`}`,
+    menus: `<div class="card-b">${menus.length ? menus.map((d) => `<div class="grp"><label class="grp-h"><input type="checkbox" ${!cur.menus || cur.menus.includes(d.name) ? 'checked' : ''} ${dis}>${ic(d.icon)}${esc(d.name)}</label>
+        <div class="opgrid">${d.items.map(([t, p]) => `<label class="opt"><input type="checkbox" ${!cur.menus || cur.menus.includes(d.name) ? 'checked' : ''} ${dis}><div><div class="sm">${esc(t)}</div><div class="xs muted mono">${p}</div></div></label>`).join('')}</div></div>`).join('') : '<span class="sm muted">该应用没有登记菜单</span>'}</div>`,
+    grants: `<div class="card-h" style="border-top:none"><span class="sm muted">直接授予的人和组织；通过岗位获得的见「拥有者」</span><span class="sp"></span>${can('grant.manage') ? `<button class="btn sm primary" data-act="toast" data-msg="授予角色「${esc(cur.name)}」：选择人员或部门">${ic('plus')}授权</button>` : ''}</div>
+      ${grants.length ? `<table class="table flat"><tr><th>对象</th><th>范围</th><th>授权人 · 时间</th><th></th></tr>${grants.map((g) => `<tr><td><div class="row">${g.st === 'dept' ? sq('building', '#6366f1', 24) : pav(subjName(g.st, g.sid), 24)}<a data-act="grantFor" data-t="${g.st}" data-id="${g.sid}">${esc(subjName(g.st, g.sid))}</a></div></td><td class="sm">${g.st === 'dept' ? (g.sub ? '含下级部门' : '仅本部门') : '—'}</td><td class="sm muted">${g.by} · ${g.at}</td><td class="acts">${can('grant.manage') ? `<button class="btn sm ghost danger" data-act="modal" data-type="revoke" data-id="${g.id}">撤销</button>` : ''}</td></tr>`).join('')}</table>` : '<div class="card-b sm muted">还没有直接授予</div>'}`,
+    holders: holders.length ? `<table class="table flat"><tr><th>拥有者</th><th>来源</th></tr>${holders.map((u) => `<tr><td>${personCell(u)}</td><td class="sm muted">${effectiveRoles(u.id).filter((x) => x.app === a.id && x.role === cur.name).map((x) => esc(x.src)).join('；')}</td></tr>`).join('')}</table>` : '<div class="card-b sm muted">暂无</div>',
+  }[S.roleTab];
+  return `<div class="card">
+      <div class="card-h" style="min-height:68px"><div class="grow"><div class="row"><h2>${esc(cur.name)}</h2><span class="xs muted mono">${cur.code}</span>${cur.builtin ? '<span class="tag xs">内置</span>' : ''}</div>
+        <div class="row sm muted" style="margin-top:2px;gap:6px">${appTag(a.id)}<span>·</span><span class="ellipsis">${esc(cur.desc)}</span></div></div>
+        ${ro ? '' : `<button class="btn sm" data-act="toast" data-msg="复制为新角色（操作与菜单一起复制）">${ic('copy')}复制</button><button class="btn sm" data-act="toast" data-msg="编辑名称、说明">${ic('pencil')}编辑</button><button class="ibtn sm" data-pop="role">${ic('more')}</button>`}</div>
+      ${tabs('roleTab', [['ops', `操作权限 ${nOps}`], ['menus', `菜单权限`], ['grants', `授权 ${grants.length}`], ['holders', `拥有者 ${holders.length}`]], 'inner')}
+      ${content}
+    </div>`;
+}
+
+function appDtypes(a) {
+  const list = D.dtypes[a.id] || [];
+  return `<div class="toolbar"><span class="sm muted">应用创建数据时登记到这里，创建人自动成为 Owner；Owner 之外的人要经授权才能访问。</span><span class="sp"></span><button class="btn" data-act="toast" data-msg="登记数据编码：编码、名称、说明">${ic('plus')}登记数据编码</button></div>
+    ${list.length ? `<table class="table"><tr><th>编码</th><th>名称</th><th>数据条数</th><th>编码级授权</th><th></th></tr>
+      ${list.map((t) => `<tr><td class="mono">${t.code}</td><td><b>${esc(t.name)}</b><div class="xs muted">${esc(t.desc)}</div></td><td class="sm">${t.count}</td>
+        <td class="sm">${t.typeGrants ? `${t.typeGrants} 条 <span class="xs muted">（如「平台部 · 只读全部智能体」）</span>` : '<span class="faint">无</span>'}</td>
+        <td class="acts">${can('data.all') ? `<button class="btn sm" data-act="toast" data-msg="全部数据授权：把「${esc(t.name)}」下的全部数据授给某人 / 某部门（只有超级管理员能做）">${ic('shield')}全部数据授权</button>` : ''}</td></tr>`).join('')}</table>`
+      : `<div class="card">${empty('database', '还没有数据编码', '应用需要按条控制访问权限时再登记')}</div>`}`;
+}
+
+/* =====================================================================
+ * 租户（仅平台租户）
+ * ===================================================================== */
+function tenantsPage() {
+  const st = (t) => t.status === 'suspended' ? '<span class="tag warning">已停用</span>' : t.status === 'closed' ? '<span class="tag">已注销</span>' : t.expired ? '<span class="tag danger">已到期</span>' : '<span class="tag success">正常</span>';
+  return `<div class="page">
+    ${head('租户', `<button class="btn primary" data-act="modal" data-type="newTenant">${ic('plus')}新建租户</button>`, '每个租户是一个相互隔离的组织空间。这里只管理租户本身与开通的应用，看不到租户内的人员与授权。')}
+    <div class="toolbar"><div class="seg"><a class="on">全部<span class="n">${D.tenants.length}</span></a><a>正常</a><a>已到期</a><a>已停用</a></div>${searchBox('搜索租户名称或企业代码')}</div>
+    <table class="table"><tr><th>租户 · 企业代码</th><th>状态</th><th>人数 / 配额</th><th>已开通应用</th><th>到期</th><th></th></tr>
+      ${D.tenants.map((t) => { const pct = t.max ? Math.min(100, Math.round(t.users / t.max * 100)) : 0; return `<tr>
+        <td><div class="row" style="gap:10px">${sq('building', t.kind ? '#8b5cf6' : '#6366f1', 32)}<div><div class="row" style="gap:6px"><b class="nw">${esc(t.name)}</b>${t.kind ? '<span class="tag primary xs">平台</span>' : ''}</div><div class="xs muted mono">${t.code}</div></div></div></td>
+        <td>${st(t)}</td>
+        <td><div class="quota">${t.max ? `<span class="bar"><i class="${pct >= 90 ? 'warn' : ''}" style="width:${pct}%"></i></span>` : ''}<span class="sm nw">${t.users} / ${t.max ?? '不限'}</span></div></td>
+        <td><span class="stack" title="${t.apps.map((a) => appOf(a).name).join('、')}">${t.apps.map((a) => sq(appOf(a).icon, appOf(a).color, 24)).join('')}</span></td>
+        <td class="sm nw ${t.expired ? '' : 'muted'}" ${t.expired ? 'style="color:var(--danger)"' : ''}>${t.exp || '—'}</td>
+        <td class="acts"><button class="btn sm ghost" data-act="drawer" data-type="tenantApps" data-id="${t.id}">开通应用</button>${t.kind ? '<span style="display:inline-block;width:26px"></span>' : `<button class="ibtn sm" data-pop="tenant:${t.id}">${ic('more')}</button>`}</td></tr>`; }).join('')}
+    </table></div>`;
+}
+
+/* =====================================================================
+ * 个人中心
+ * ===================================================================== */
+function profilePage() {
+  const mgr = managerOf(ME);
+  return `<div class="page narrow">
+    ${head('个人资料')}
+    <div class="card pad">
+      <div class="row" style="gap:14px">${pav(ME.name, 56)}<div class="grow"><div class="row"><h2 style="font-size:18px">${ME.name}</h2>${S.role !== 'user' ? `<span class="tag primary">${ROLE_NAME[S.role].replace('（平台租户）', '')}</span>` : ''}</div>
+        <div class="sm muted">${ME.account} · ${TENANT.name}</div></div></div>
+      <div class="divider"></div>
+      <dl class="kv" style="grid-template-columns:96px 1fr">
+        <dt>部门</dt><dd>${deptPath(ME.dept).join(' / ')}</dd>
+        <dt>岗位</dt><dd>${ME.pos.join('、')}</dd>
+        <dt>直属上级</dt><dd>${mgr ? `${pav(mgr.u.name, 22)}${esc(mgr.u.name)}<span class="sm muted">（${esc(mgr.d.name)}负责人）</span>` : '—'}</dd>
+      </dl>
+      <div class="help" style="margin:10px 0 0 110px">姓名、部门、岗位由管理员维护；有误请联系管理员。</div>
+      <div class="divider"></div>
+      <div class="form-2">
+        <div><label class="label">邮箱</label><input class="input" value="${ME.account}@xinghai.com"></div>
+        <div><label class="label">手机</label><input class="input" value="${ME.phone}"></div>
+      </div>
+      <div class="row" style="margin-top:16px"><span class="sp"></span><button class="btn primary" data-act="toast" data-msg="已保存">保存</button></div>
+    </div></div>`;
+}
+
+function securityPage() {
+  return `<div class="page narrow">
+    ${head('账号安全')}
+    <div class="card pad"><div class="row" style="gap:14px">${sq('key', '#6366f1', 40)}<div class="grow"><b>登录密码</b><div class="sm muted">上次修改：11-01（16 天前）</div></div><button class="btn" data-act="modal" data-type="changePw">修改密码</button></div></div>
+    <div class="card" style="margin-top:14px"><div class="card-h"><h3>最近登录</h3><span class="sm muted">只显示最近 30 天</span><span class="sp"></span><span class="xs muted">不是你本人操作？立即修改密码</span></div>
+      <table class="table flat"><tr><th>时间</th><th>登录到</th><th>设备</th><th>IP</th><th>结果</th></tr>
+        ${D.logins.map((l) => `<tr><td class="sm">${l.at}</td><td class="sm">${l.app}</td><td class="sm muted">${l.ua}</td><td class="mono">${l.ip}</td><td>${l.ok ? '<span class="tag success">成功</span>' : `<span class="tag danger">失败</span> <span class="xs muted">${l.why}</span>`}</td></tr>`).join('')}</table></div>
+  </div>`;
+}
+
+function myAppsPage() {
+  const list = D.apps.filter((a) => a.status === 'active' && (a.scopeAll || (a.scope || []).some((s) => descIds(s).includes(ME.dept))));
+  return `<div class="page">
+    ${head('我的应用', '', '你能访问的应用；能访问哪些由管理员设置。右上角的应用切换也是这份列表。')}
+    <div class="grid">${list.map((a) => `<div class="acard" ${a.id === 'uc' ? 'style="cursor:default"' : `data-act="toast" data-msg="打开 ${esc(a.name)}（${a.url}）"`}>
+      <div class="row">${sq(a.icon, a.color, 40)}<div class="grow"><b>${esc(a.name)}</b><div class="xs muted">${a.id === 'uc' ? '当前应用' : '上次使用 ' + a.last}</div></div></div>
+      <div class="desc">${esc(a.desc)}</div>
+      <div class="foot"><span class="sp"></span>${a.id === 'uc' ? '' : `<span class="btn sm">打开${ic('external')}</span>`}</div></div>`).join('')}</div>
+  </div>`;
+}
+
+/* =====================================================================
+ * 信息架构（评审用）
+ * ===================================================================== */
+function iaPage() {
+  const rows = [
+    ['登录 /login、修改密码 /change-password（两个页面）', '登录（一张卡片两步：登录 → 设置新密码）', '须改密时不再整页跳转；/change-password 保留给经网关 401 跳来的情况'],
+    ['左侧深色侧栏（5 个菜单 + 底部头像）', '顶部一级 + 左侧二级（与 Atlas 同一个骨架）', '浅色、可收起；右上角加应用切换、头像菜单'],
+    ['组织架构', '组织 › 组织架构', '树上加搜索；部门信息三格摘要'],
+    ['用户管理（页内切换「人员 / 数字员工」）', '组织 › 人员、组织 › 数字员工', '拆成两个左侧菜单'],
+    ['应用接入 › 应用详情 › 角色', '权限 › 角色', '全部应用的角色集中一处，按应用分组；应用详情不再有角色页签'],
+    ['权限管理 › 角色授权（按对象 / 全部）', '权限 › 授权（按对象授权）', '页签 + 分段器两层 → 左侧菜单一层；「全部授权」列表不再单列（按对象看，或看角色的「授权」页签）'],
+    ['权限管理 › 岗位管理', '权限 › 岗位', '直接显示默认角色和持有人数'],
+    ['权限管理 › 数据授权（我管理的 / 我可访问的 / 全部）', '个人中心 › 我的数据；权限 › 数据', '人人都可能是 Owner，个人的放个人中心；详情改右侧抽屉'],
+    ['应用接入（卡片 → 详情页签）', '应用 › 应用目录；左侧直接列出各应用', '详情页签：接入配置 / 操作 / 菜单 / 数据编码；菜单加预览'],
+    ['租户管理', '租户（仅平台租户可见）', '配额条、已开通应用一列看全'],
+    ['个人中心（侧栏底部头像进入，一页三块）', '个人中心 › 个人资料 / 账号安全 / 我的应用 / 我的数据', '人人可见；普通员工进用户中心只看到它'],
+  ];
+  const pages = [
+    ['登录', [['#/login', '登录（含首次登录设置新密码）']]],
+    ['组织', [['#/org', '组织架构'], ['#/org/users', '人员'], ['#/org/users/u1', '人员详情'], ['#/org/digital', '数字员工']]],
+    ['权限', [['#/perm/roles', '角色'], ['#/perm/positions', '岗位'], ['#/perm/data', '数据'], ['#/perm/grants', '授权（按对象授权）']]],
+    ['应用', [['#/apps', '应用目录'], ['#/apps/atlas', '应用详情 · Atlas'], ['#/apps/uc', '应用详情 · 用户中心（内置）']]],
+    ['租户', [['#/tenants', '租户']]],
+    ['个人中心', [['#/me', '个人资料'], ['#/me/security', '账号安全'], ['#/me/apps', '我的应用'], ['#/me/data', '我的数据']]],
+  ];
+  return `<div class="ia">
+    <div class="row" style="gap:12px"><span class="logo" style="width:36px;height:36px;font-size:17px">A</span><div class="grow"><h1>用户中心 · 登录改版：信息架构</h1><div class="sm muted">参照 Atlas 控制台改版（atlas-console.html），视觉 token、骨架、组件、交互统一</div></div><a class="btn primary" href="#/login">进入原型${ic('arrowRight')}</a></div>
+    <h2>统一的原则</h2>
+    <ul>
+      <li><b>同一套设计 token</b>：浅色底 #f6f7f9、indigo 主色 #4f46e5、12px 圆角卡片、Inter / 苹方字体栈 —— 直接用 packages/chat-ui 的 tokens.css 与 antd 主题，不再在用户中心另写一套（现在用户中心只抄了主色）。</li>
+      <li><b>同一个骨架</b>：顶部一级菜单（平台）+ 左侧二级菜单（可收起）+ 内容区最宽 1280；页头 = 标题 + 右侧主操作；详情页 = 返回 + 图标 + 标题 + 标签 + 操作 + 页签。</li>
+      <li><b>同样的组件用法</b>：筛选用分段器（带数量）+ 搜索框；列表行内只放 1 个常用操作，其余收进「…」；创建用弹窗，查看 / 编辑详情用右侧抽屉；危险操作二次确认并说清影响。</li>
+      <li><b>应用之间来回</b>：Atlas、TeamFlow、用户中心右上角都有同一个「应用切换」；头像菜单都有「个人中心 / 账号安全 / 退出登录」，退出都回 /uc/login。</li>
+      <li><b>文案</b>：说人话、先说结果再说原因；技术名词（App Key、Owner、操作码）保留，旁边一句话解释。</li>
+    </ul>
+    <h2>现状 → 改版</h2>
+    <table class="table"><tr><th style="width:32%">现状</th><th style="width:32%">改版后</th><th>说明</th></tr>${rows.map(([a, b, c]) => `<tr><td class="sm">${a}</td><td class="sm"><b>${b}</b></td><td class="sm muted">${c}</td></tr>`).join('')}</table>
+    <h2>需要 Atlas / TeamFlow 一起改的</h2>
+    <ul>
+      <li>顶栏右侧加「应用切换」（数据 = 用户中心 /me/apps，需要应用加「入口地址」字段）。</li>
+      <li>头像菜单加「账号安全」→ /uc/me/security；TeamFlow 顶栏若还是旧样式，换成同一个骨架。</li>
+      <li>Atlas 前端已用 packages/chat-ui 的主题；用户中心前端改为同样引用（ConfigProvider theme + tokens.css）。</li>
+    </ul>
+    <h2>页面导览</h2>
+    <div class="grid" style="grid-template-columns:repeat(3,1fr)">${pages.map(([g, ps]) => `<div class="card pad"><b>${g}</b><div class="col" style="gap:4px;margin-top:8px">${ps.map(([h, t]) => `<a href="${h}" class="sm">${t}</a>`).join('')}</div></div>`).join('')}</div>
+  </div>`;
+}
+
+/* =====================================================================
+ * 浮层：下拉 / 弹窗 / 抽屉
+ * ===================================================================== */
+function popContent(id) {
+  const [kind, arg] = id.split(':');
+  if (kind === 'me') return `<div style="padding:8px 10px 6px"><b>${ME.name}</b><div class="xs muted">${ME.account} · ${deptOf(ME.dept).name} · ${TENANT.name}</div></div>
+    <div class="sep"></div>
+    <div class="mi" data-go="#/me">${ic('user')}个人中心</div><div class="mi" data-go="#/me/security">${ic('lock')}账号安全</div>
+    <div class="sep"></div><div class="ph">演示：切换身份看权限差异</div>
+    ${Object.entries(ROLE_NAME).map(([k, t]) => `<div class="mi ${S.role === k ? 'on' : ''}" data-act="role" data-v="${k}">${S.role === k ? ic('check') : '<span style="width:16px"></span>'}${t}</div>`).join('')}
+    <div class="sep"></div><div class="mi danger" data-act="logout">${ic('logout')}退出登录</div>`;
+  if (kind === 'apps') {
+    const list = D.apps.filter((a) => a.status === 'active' && (a.scopeAll || (a.scope || []).some((s) => descIds(s).includes(ME.dept))));
+    return `<div style="width:300px;padding:4px"><div class="ph" style="padding:4px 6px 8px">切换应用</div><div class="apps-grid">${list.map((a) => `<div class="app-tile ${a.id === 'uc' ? 'cur' : ''}" data-act="toast" data-msg="${a.id === 'uc' ? '当前就在用户中心' : '打开 ' + esc(a.name) + '（' + a.url + '）'}">${sq(a.icon, a.color, 36)}<span>${esc(a.name.replace('Atlas 智能平台', 'Atlas'))}</span></div>`).join('')}</div>
+      <div class="sep"></div><div class="mi" data-go="#/me/apps" style="justify-content:center;font-size:13px">查看全部我的应用</div></div>`;
+  }
+  if (kind === 'forgot') return `<div style="width:280px;padding:8px 10px" class="sm">密码忘了请联系所在企业的管理员重置。重置后你会拿到一个临时密码，登录时会让你改成自己的密码。</div>`;
+  if (kind === 'user' || kind === 'member') {
+    const u = userOf(arg);
+    return `${kind === 'member' && can('org.manage') ? `<div class="mi" data-act="toast" data-msg="已把「${esc(u.name)}」设为负责人">${ic('star')}设为负责人</div>` : ''}
+      ${can('grant.view') ? `<div class="mi" data-act="grantFor" data-t="user" data-id="${u.id}">${ic('shield')}授权</div>` : ''}
+      ${u.status !== 'disabled' ? `<div class="mi" data-act="modal" data-type="resetPw" data-id="${u.id}">${ic('key')}重置密码</div>` : ''}
+      ${u.status === 'locked' ? `<div class="mi" data-act="toast" data-msg="已解锁，${esc(u.name)}可以重新登录">${ic('unlock')}解锁</div>` : ''}
+      <div class="sep"></div>
+      ${u.status === 'disabled' ? `<div class="mi" data-act="toast" data-msg="已启用">${ic('check')}启用</div>` : `<div class="mi danger" data-act="modal" data-type="disable" data-id="${u.id}" ${u.id === ME.id ? 'style="opacity:.45;pointer-events:none" title="不能停用自己"' : ''}>${ic('ban')}停用${u.id === ME.id ? '（不能停用自己）' : ''}</div>`}`;
+  }
+  if (kind === 'dept') return `<div class="mi" data-act="toast" data-msg="移动部门：在「编辑」里改上级部门">${ic('folder')}移动到…</div><div class="sep"></div><div class="mi danger" data-act="modal" data-type="delDept">${ic('trash')}删除部门</div>`;
+  if (kind === 'pos') return `<div class="mi" data-act="toast" data-msg="查看持有人">${ic('users')}查看持有人</div><div class="sep"></div><div class="mi danger" data-act="modal" data-type="confirm" data-title="删除岗位" data-msg="持有该岗位的人将失去它的默认角色（直接授予的角色不受影响）。" data-ok="删除">${ic('trash')}删除</div>`;
+  if (kind === 'tenant') return `<div class="mi" data-act="toast" data-msg="编辑租户：名称、人数上限、到期日">${ic('pencil')}编辑</div><div class="mi" data-act="toast" data-msg="已停用：该租户的人无法登录，数据保留">${ic('ban')}停用</div><div class="sep"></div><div class="mi danger" data-act="modal" data-type="confirm" data-title="注销租户" data-msg="注销后该租户的人员、授权、数据权限全部不可用，且不可恢复。请输入企业代码确认。" data-ok="注销">${ic('trash')}注销</div>`;
+  if (kind === 'role') return `<div class="mi danger" data-act="modal" data-type="confirm" data-title="删除角色" data-msg="拥有该角色的人将失去其中的操作与菜单；作为岗位默认角色的也一并移除。" data-ok="删除">${ic('trash')}删除角色</div>`;
+  if (kind === 'scopeAdd') return `<div class="ph">选择部门（含下级）</div>${D.depts.map((d) => `<div class="mi" data-act="scopeAdd" data-id="${arg}" data-d="${d.id}" style="padding-left:${10 + (deptPath(d.id).length - 1) * 14}px">${ic(d.p ? 'folder' : 'building')}${esc(d.name)}</div>`).join('')}`;
+  return '';
+}
+
+function modalShell(title, body, foot, wide = false) {
+  return `<div class="mask" data-act="closeModal"><div class="modal ${wide ? 'wide' : ''}">
+    <div class="modal-h"><h2>${title}</h2><span class="sp"></span><button class="ibtn sm" data-act="closeModal">${ic('x')}</button></div>
+    <div class="modal-b">${body}</div><div class="modal-f">${foot}</div></div></div>`;
+}
+const okBtn = (t, msg, cls = 'primary') => `<button class="btn" data-act="closeModal">取消</button><button class="btn ${cls}" data-act="toastClose" data-msg="${msg}">${t}</button>`;
+function onceBlock(rows) {
+  return `<div class="once">${rows.map(([k, v]) => `<div class="r"><span class="sm muted">${k}</span><span class="v">${v}</span><button class="ibtn sm" title="复制" data-act="toast" data-msg="已复制${k}">${ic('copy')}</button></div>`).join('')}</div>`;
+}
+
+function modal() {
+  const m = S.modal;
+  if (!m) return '';
+  if (m.type === 'userForm') {
+    const u = m.id && userOf(m.id);
+    const d = u ? u.dept : S.orgSel;
+    return modalShell(u ? `编辑用户 · ${esc(u.name)}` : '新建用户', `<div class="form">
+      <div class="form-2"><div><label class="label">姓名</label><input class="input" value="${u ? esc(u.name) : ''}" placeholder="真实姓名"></div>
+        <div><label class="label">账号</label><input class="input mono" value="${u ? u.account : ''}" ${u ? 'readonly' : ''} placeholder="如 zhang.san"><div class="help">${u ? '账号创建后不能修改' : '登录用，创建后不能修改'}</div></div></div>
+      <div class="form-2"><div><label class="label">邮箱</label><input class="input" value="${u ? u.account + '@xinghai.com' : ''}"></div><div><label class="label">手机 <span class="faint" style="font-weight:400">选填</span></label><input class="input" value="${u?.phone || ''}"></div></div>
+      <div><label class="label">部门</label><select class="select">${D.depts.map((x) => `<option ${x.id === d ? 'selected' : ''}>${'　'.repeat(deptPath(x.id).length - 1)}${esc(x.name)}</option>`).join('')}</select></div>
+      ${u ? '' : '<div class="help" style="margin:0">创建后会生成临时密码；岗位、角色在「权限」里授予。</div>'}
+    </div>`, u ? okBtn('保存', '已保存') : `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="modal" data-type="once" data-kind="newUser">创建</button>`);
+  }
+  if (m.type === 'once') {
+    const isTenant = m.kind === 'newTenant';
+    const isApp = m.kind === 'newApp';
+    if (isApp) return modalShell('应用已接入', `${alertBox('warning', 'App Secret 只显示这一次，只能保存在应用后端，不能下发到浏览器。')}
+      ${onceBlock([['应用编码', 'crm'], ['App Key', 'ak_3e8d1f0a7c62'], ['App Secret', 'sk_Vb7xQ2mN9pL4rT8wK1zH6cJ3']])}`,
+      `<button class="btn" data-act="toast" data-msg="已复制全部">${ic('copy')}复制全部</button><button class="btn primary" data-act="closeModal">我已保存</button>`);
+    const rows = [['登录地址', LOGIN_URL], ...(S.login.tenants !== 'single' || isTenant ? [['企业代码', isTenant ? 'jinqiao' : TENANT.code]] : []), ['账号', isTenant ? 'admin' : 'zhang.san'], ['临时密码', 'Tmp#7kQ2xVm9']];
+    return modalShell(isTenant ? '租户已创建' : m.kind === 'reset' ? '密码已重置' : '用户已创建', `
+      <p class="sm muted" style="margin-bottom:12px">${isTenant ? '把下面的登录信息交给租户管理员。应用还没有开通，请在「开通应用」里为该租户开通。' : '把下面的登录信息发给本人。首次登录时会要求改成自己的密码。'}</p>
+      ${onceBlock(rows)}
+      <div style="margin-top:12px">${alertBox('warning', '临时密码只显示这一次，3 天内有效。')}</div>`,
+      `<button class="btn" data-act="toast" data-msg="已复制整段登录信息">${ic('copy')}复制登录信息</button><button class="btn primary" data-act="closeModal">我已保存</button>`);
+  }
+  if (m.type === 'resetPw') {
+    const u = userOf(m.id);
+    return modalShell(`重置密码 · ${esc(u.name)}`, `<p>将生成新的临时密码，<b>${esc(u.name)}</b> 在其他设备上的登录会立即失效，下次登录须改密。</p>`,
+      `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="modal" data-type="once" data-kind="reset">重置</button>`);
+  }
+  if (m.type === 'disable') {
+    const u = userOf(m.id);
+    const digital = !!u.owner;
+    return modalShell(`停用 · ${esc(u.name)}`, `<div class="form">
+      <p>${digital ? '停用后，以这个数字员工身份运行的智能体立即无法调用任何应用（紧急止血用）。资料由来源应用维护。' : `停用后 <b>${esc(u.name)}</b> 立即无法登录任何应用；授权保留，启用后恢复。`}</p>
+      ${!digital && D.depts.some((d) => d.leader === u.id) ? alertBox('warning', `他是「${D.depts.filter((d) => d.leader === u.id).map((d) => d.name).join('、')}」的负责人，停用后请更换负责人。`) : ''}
+      <div><label class="label">停用原因 <span class="faint" style="font-weight:400">选填，会显示在人员列表</span></label><input class="input" placeholder="如：已离职"></div></div>`,
+      okBtn('停用', `已停用「${esc(u.name)}」`, 'danger solid'));
+  }
+  if (m.type === 'grant') {
+    const s = S.subj;
+    const name = subjName(s.type, s.id);
+    const owned = D.grants.filter((g) => g.st === s.type && g.sid === s.id).map((g) => g.target);
+    const isRole = m.kind === 'role';
+    const body = isRole
+      ? D.apps.filter((a) => a.status === 'active').map((a) => `<div class="grp"><div class="grp-h">${sq(a.icon, a.color, 20)}${esc(a.name)}</div>
+          ${rolesOf(a.id).map((r) => `<label class="opt"><input type="checkbox" ${owned.includes(r.name) ? 'checked disabled' : ''}><div class="grow"><div class="row"><b class="sm">${esc(r.name)}</b><span class="xs muted mono">${r.code}</span>${owned.includes(r.name) ? '<span class="tag xs">已授予</span>' : ''}</div><div class="xs muted">${esc(r.desc)}</div></div></label>`).join('')}</div>`).join('')
+      : `<div class="grp">${D.positions.map((p) => `<label class="opt"><input type="checkbox" ${owned.includes(p.name) ? 'checked disabled' : ''}><div class="grow"><b class="sm">${esc(p.name)}</b><div class="xs muted">默认角色：${p.roles.map(([a, r]) => `${appOf(a).name.replace('Atlas 智能平台', 'Atlas')} · ${r}`).join('、')}</div></div></label>`).join('')}</div>`;
+    return modalShell(`${isRole ? '授予角色' : '授予岗位'} · ${esc(name)}`, `
+      ${s.type === 'dept' ? `<div class="row" style="margin-bottom:12px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--line);border-radius:10px"><div class="grow"><b class="sm">含下级部门</b><div class="xs muted">下级部门的成员也获得</div></div><span class="switch on" data-act="toggleSwitch"></span></div>` : ''}
+      ${searchBox(isRole ? '搜索角色' : '搜索岗位', '', 0).replace('width:0px', 'width:100%;margin-bottom:12px')}${body}`,
+      okBtn('授权', `已授予${isRole ? '角色' : '岗位'}，${s.type === 'dept' ? '部门成员' : name}在应用刷新授权后生效`), true);
+  }
+  if (m.type === 'revoke') {
+    const g = D.grants.find((x) => x.id === m.id);
+    return modalShell('撤销授权', `<p>撤销「${esc(subjName(g.st, g.sid))}」的${g.kind === 'role' ? '角色' : '岗位'}「<b>${esc(g.target)}</b>」？</p>
+      ${g.st === 'dept' ? `<div style="margin-top:10px">${alertBox('warning', `「${esc(deptOf(g.sid).name)}」${g.sub ? '及下级部门' : ''}的 ${membersOf(g.sid, g.sub).length} 人将失去它（另有来源的不受影响）。`)}</div>` : ''}`,
+      okBtn('撤销', '已撤销', 'danger solid'));
+  }
+  if (m.type === 'moveIn') {
+    const d = deptOf(S.orgSel);
+    return modalShell(`调入成员 · ${esc(d.name)}`, `${searchBox('搜索姓名或账号', '', 0).replace('width:0px', 'width:100%')}
+      <div class="row" style="flex-wrap:wrap;gap:6px;margin:12px 0">${['王芳', '高原'].map((n) => `<span class="chip">${pav(n, 20)}${n}<span class="x">${ic('x')}</span></span>`).join('')}</div>
+      <div class="help">调入后，他们的部门变更为「${esc(d.name)}」；如果他原来是某部门负责人，会自动清空。</div>`, okBtn('调入', '已调入 2 人'));
+  }
+  if (m.type === 'deptForm') {
+    const d = deptOf(S.orgSel);
+    const edit = m.mode === 'edit';
+    return modalShell(edit ? `编辑部门 · ${esc(d.name)}` : `新建子部门 · ${esc(d.name)}`, `<div class="form">
+      <div><label class="label">部门名称</label><input class="input" value="${edit ? esc(d.name) : ''}" placeholder="不能包含 /"></div>
+      ${edit && d.p ? `<div><label class="label">上级部门</label><select class="select">${D.depts.filter((x) => !descIds(d.id).includes(x.id)).map((x) => `<option ${x.id === d.p ? 'selected' : ''}>${'　'.repeat(deptPath(x.id).length - 1)}${esc(x.name)}</option>`).join('')}</select><div class="help">移动部门会连同子部门和成员一起移动，保存前会显示影响</div></div>` : ''}
+      ${edit ? `<div><label class="label">负责人</label><select class="select"><option>不设置</option>${membersOf(d.id, true).filter((u) => u.status !== 'disabled').map((u) => `<option ${u.id === d.leader ? 'selected' : ''}>${esc(u.name)}（${u.account}）</option>`).join('')}</select><div class="help">从本部门及下级部门的人里选；直属上级按负责人计算</div></div>` : '<div class="help" style="margin:0">新部门还没有成员，调入成员后再设置负责人。</div>'}
+    </div>`, okBtn('保存', edit ? '部门已保存' : '已新建部门'));
+  }
+  if (m.type === 'delDept') {
+    const d = deptOf(S.orgSel);
+    return modalShell(`删除部门 · ${esc(d.name)}`, `<p>确定删除「${deptPath(d.id).join(' / ')}」？</p>
+      <div class="col" style="margin-top:12px">${alertBox('warning', '将从「AI TeamFlow」的可访问范围中移除')}${alertBox('warning', '将撤销授予该部门的 2 条角色授权、1 条数据授权')}</div>
+      <div class="help">部门里还有人时不能删除，请先把成员调走。</div>`, okBtn('删除', '已删除', 'danger solid'));
+  }
+  if (m.type === 'changePw') {
+    return modalShell('修改密码', `<div class="form">
+      <div><label class="label">当前密码</label><input class="input" type="password"></div>
+      <div><label class="label">新密码</label><input class="input" type="password" data-input="pw1" value="${esc(S.login.pw1)}"><div class="rules" id="rules">${rulesHtml(S.login.pw1)}</div></div>
+      <div><label class="label">确认新密码</label><input class="input" type="password" data-input="pw2" value="${esc(S.login.pw2)}"><div id="match">${matchHtml()}</div></div>
+      <div class="help" style="margin:0">修改后，其他设备上的登录会退出。</div></div>`, okBtn('修改', '密码已修改；其他设备上的登录已退出'));
+  }
+  if (m.type === 'position') {
+    const p = m.id && D.positions.find((x) => x.id === m.id);
+    const has = (a, r) => p && p.roles.some(([x, y]) => x === a && y === r);
+    return modalShell(p ? `编辑岗位 · ${esc(p.name)}` : '新建岗位', `<div class="form">
+      <div class="form-2"><div><label class="label">岗位名称</label><input class="input" value="${p ? esc(p.name) : ''}"></div><div><label class="label">说明 <span class="faint" style="font-weight:400">选填</span></label><input class="input" value="${p ? esc(p.desc) : ''}"></div></div>
+      <div><span class="label">默认角色</span><div class="help" style="margin:-2px 0 8px">拿到这个岗位的人自动拥有这些角色</div>
+        ${D.apps.filter((a) => !a.builtin && a.status === 'active').map((a) => `<div class="grp"><div class="grp-h">${sq(a.icon, a.color, 20)}${esc(a.name)}</div><div class="opgrid">${rolesOf(a.id).map((r) => `<label class="opt"><input type="checkbox" ${has(a.id, r.name) ? 'checked' : ''}><span class="sm">${esc(r.name)}</span></label>`).join('')}</div></div>`).join('')}</div>
+    </div>`, okBtn('保存', '岗位已保存'), true);
+  }
+  if (m.type === 'newApp') {
+    return modalShell('接入应用', `<div class="form">
+      <div class="form-2"><div><label class="label">应用名称</label><input class="input" placeholder="如 客户管理"></div><div><label class="label">应用编码</label><input class="input mono" placeholder="如 crm"><div class="help">内网调用时 X-Caller-App 写它，创建后不建议改</div></div></div>
+      <div><label class="label">入口地址</label><input class="input mono" placeholder="如 /crm 或 https://crm.xinghai.com"><div class="help">「应用切换」「我的应用」点开去这里</div></div>
+      <div><label class="label">说明</label><input class="input" placeholder="一句话说明这个应用做什么"></div>
+      <div class="help" style="margin:0">创建后生成 App Key / Secret；可访问范围默认「无人可访问」，在「接入配置」里设置。</div></div>`,
+      `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="modal" data-type="once" data-kind="newApp">创建</button>`);
+  }
+  if (m.type === 'newTenant') {
+    return modalShell('新建租户', `<div class="form">
+      <div class="form-2"><div><label class="label">企业名称</label><input class="input" placeholder="如 金桥贸易"></div><div><label class="label">企业代码</label><input class="input mono" placeholder="如 jinqiao"><div class="help">员工登录时填写，创建后不能改</div></div></div>
+      <div class="form-2"><div><label class="label">人数上限 <span class="faint" style="font-weight:400">选填</span></label><input class="input" placeholder="不填 = 不限"></div><div><label class="label">到期日 <span class="faint" style="font-weight:400">选填</span></label><input class="input" type="date"></div></div>
+      <div class="divider" style="margin:4px 0"></div><b class="sm">首个管理员</b>
+      <div class="form-2"><div><label class="label">账号</label><input class="input mono" value="admin"></div><div><label class="label">姓名</label><input class="input"></div></div>
+      <div><label class="label">邮箱</label><input class="input"></div></div>`,
+      `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="modal" data-type="once" data-kind="newTenant">创建</button>`, true);
+  }
+  if (m.type === 'confirm') {
+    return modalShell(m.title, `<p>${m.msg}</p>`, okBtn(m.ok, `已${m.ok}`, 'danger solid'));
+  }
+  return '';
+}
+
+function drawerShell(title, body, foot) {
+  return `<div class="drawer-mask" data-act="closeDrawer"></div><div class="drawer">
+    <div class="modal-h">${title}<span class="sp"></span><button class="ibtn sm" data-act="closeDrawer">${ic('x')}</button></div>
+    <div class="drawer-b">${body}</div>${foot ? `<div class="modal-f">${foot}</div>` : ''}</div>`;
+}
+function drawer() {
+  const d = S.drawer;
+  if (!d) return '';
+  if (d.type === 'data') {
+    const x = D.data.find((y) => y.id === d.id);
+    const owner = x.my === 'OWNER';
+    const creator = D.users.find((u) => u.name === (x.owners[0] || '马超'));
+    const acl = [
+      { t: 'user', id: creator.id, level: 'OWNER', sub: false, by: '系统（创建人）', at: x.created },
+      { t: 'dept', id: 'plat', level: 'READ', sub: true, by: creator.name, at: '11-02' },
+      owner ? { t: 'user', id: 'u3', level: 'WRITE', sub: false, by: '周景行', at: '11-05' } : { t: 'user', id: 'u1', level: x.my, sub: false, by: creator.name, at: '11-05' },
+    ];
+    return drawerShell(`<div class="row" style="gap:10px">${sq(x.code === 'agent' ? 'bot' : x.code === 'flow' ? 'flow' : 'book', '#6366f1', 34)}<div><h2>${esc(x.name)}</h2><div class="xs muted"><span class="mono">${x.code}</span> · ${appOf(x.app).name} · <span class="mono">${x.did}</span></div></div></div>`, `
+      ${owner ? '' : `<div style="margin-bottom:14px">${alertBox('plain', `你对它的权限是「${LEVEL[x.my][0]}」。只有 Owner 能修改授权。`)}</div>`}
+      <div class="row" style="margin-bottom:8px"><h3>授权</h3><span class="sm muted">${acl.length} 条</span><span class="sp"></span>${owner ? `<button class="btn sm primary" data-act="toast" data-msg="添加授权：选人或部门 + 只读 / 读写 / Owner">${ic('plus')}添加授权</button>` : ''}</div>
+      <table class="table"><tr><th>对象</th><th>权限</th><th>授权人 · 时间</th><th></th></tr>
+        ${acl.map((a) => `<tr><td><div class="row">${a.t === 'dept' ? sq('building', '#6366f1', 24) : pav(subjName('user', a.id), 24)}<span>${esc(subjName(a.t, a.id))}</span>${a.sub ? '<span class="tag xs">含下级</span>' : ''}${a.t === 'user' && userOf(a.id).status === 'disabled' ? '<span class="tag warning xs">已停用</span>' : ''}</div></td>
+          <td>${owner && a.by.indexOf('创建人') < 0 ? `<select class="select" style="width:96px;height:28px">${Object.entries(LEVEL).map(([k, [t]]) => `<option ${k === a.level ? 'selected' : ''}>${t}</option>`).join('')}</select>` : levelTag(a.level)}</td>
+          <td class="xs muted">${a.by} · ${a.at}</td><td class="acts">${owner && a.by.indexOf('创建人') < 0 ? `<button class="ibtn sm" title="撤销" data-act="toast" data-msg="已撤销">${ic('x')}</button>` : ''}</td></tr>`).join('')}</table>
+      ${owner ? '<div class="help">至少保留一个 Owner；Owner 之间权限相同。</div>' : ''}
+      <div class="row" style="margin:20px 0 8px"><h3>实际可访问的人</h3><span class="sm muted">按授权自动计算，多个来源取最高级别</span></div>
+      <div class="card">${['周景行', '王芳', '高原', '陈晨'].map((n, i) => `<div class="row" style="padding:9px 14px;border-bottom:1px solid var(--line-2)">${pav(n, 26)}<span class="grow">${n}</span><span class="xs muted">${['创建人', '直接授权', '平台部（含下级）', '平台部（含下级）'][i]}</span>${levelTag(['OWNER', 'WRITE', 'READ', 'READ'][i])}</div>`).join('')}<div class="row sm muted" style="padding:9px 14px">还有 2 人</div></div>`);
+  }
+  if (d.type === 'tenantApps') {
+    const t = D.tenants.find((x) => x.id === d.id);
+    return drawerShell(`<h2>开通应用 · ${esc(t.name)}</h2>`, `
+      <p class="sm muted" style="margin-bottom:14px">开通后，租户管理员在「应用 › 接入配置」里设置本租户内谁能访问。</p>
+      <div class="card">${D.apps.filter((a) => !a.builtin).map((a) => `<div class="row" style="padding:12px 14px;border-bottom:1px solid var(--line-2);gap:12px">${sq(a.icon, a.color, 34)}<div class="grow"><b>${esc(a.name)}</b><div class="xs muted">${t.apps.includes(a.id) ? '已开通 · 本租户 ' + Math.min(t.users, 12) + ' 人可访问' : esc(a.desc)}</div></div>${a.status === 'disabled' ? '<span class="tag xs">应用已停用</span>' : `<span class="switch ${t.apps.includes(a.id) ? 'on' : ''}" data-act="toggleSwitch"></span>`}</div>`).join('')}</div>`,
+      `<button class="btn" data-act="closeDrawer">取消</button><button class="btn primary" data-act="toastClose" data-msg="已保存「${esc(t.name)}」的开通应用">保存</button>`);
+  }
+  return '';
+}
+
+function overlays() {
+  let pop = '';
+  if (S.pop) pop = `<div class="pop" style="position:fixed;left:${S.pop.x}px;top:${S.pop.y}px;max-height:calc(100vh - ${S.pop.y + 12}px);overflow-y:auto" data-stop>${popContent(S.pop.id)}</div>`;
+  return pop + modal() + drawer();
+}
+
+/* =====================================================================
+ * 设计说明（评审用）
+ * ===================================================================== */
+const GLOBAL_NOTES = [
+  '骨架照搬 Atlas：顶部一级菜单、左侧二级菜单（可收起）、内容区最宽 1280 居中；用 packages/chat-ui 的 token 与 antd 主题',
+  '右上角「应用切换」：列出我能访问的应用；Atlas、TeamFlow 顶栏加同一个按钮',
+  '头像菜单：个人中心、账号安全、退出登录（演示用的身份切换也在这里）',
+];
+function notesFor(r) {
+  const N = (title, items, be = [], diff = []) => ({ title, items, be, diff });
+  if (r.p === 'login') return N('登录', [
+    '所有应用共用这一个登录页（Atlas、TeamFlow 未登录都跳 /uc/login?next=…）；视觉与 Atlas 同一套 token：浅底、indigo 主色、品牌色只出现在标识和主按钮',
+    '卡片上方写「登录后返回 xxx」：按 next 路径前缀判断（/teamflow → AI TeamFlow，其余 → Atlas），不需要后端',
+    '企业代码：单租户不显示；多租户记住上次的企业（显示企业名，可「更换」），只有第一次要输入',
+    '错误就地显示在表单上方，沿用后端原话（剩余次数、锁定分钟数）；大写锁定打开时提示',
+    '「忘记密码」说清楚找管理员重置（没有邮件 / 短信通道，不做自助找回）',
+    '须改密时同一张卡片进入第二步：临时密码刚输过，前端放内存带过去，不再让人重输；规则逐条实时打勾，两次一致才能提交',
+  ], ['/auth/me 的密码规则改成结构化字段（最少位数、要求大写 / 数字 / 符号），前端才能逐条打勾；现在只有一句文字'],
+  ['去掉左侧渐变大图和「登录用户中心」：员工是来登录 Atlas 的，不需要知道用户中心', '/change-password 地址保留（网关 401 跳来时没有刚输入的旧密码），界面与第二步相同，多一个「当前密码」']);
+  if (r.p === 'org' && r.a === 'users' && r.b || r.p === 'org' && r.a === 'digital' && r.b) return N('人员详情', [
+    '与 Atlas 详情页同一种页头：返回、头像、名称 + 状态标签、副标题、右侧操作',
+    '页签：基本信息 / 权限 / 登录记录 / 可访问的应用（数字员工只有前两个）',
+    '「权限」按应用分组列有效角色，每个角色写清来源：直接授权、部门继承、岗位带来的 —— 直接回答「他为什么能 / 不能用」',
+    '直属上级写明是怎么算出来的（所在部门负责人 / 上级部门负责人）',
+  ], ['有效权限接口返回每个角色的来源链（直接 / 部门 / 岗位←部门）；现在前端只能拿到授权列表和有效角色两份，拼不出「来自岗位」']);
+  if (r.p === 'org' && r.a === 'users') return N('组织 · 人员', [
+    '人员、数字员工拆成两个左侧菜单（现状是页内切换，容易漏看）',
+    '工具栏与 Atlas 列表相同：分段器（带数量）+ 部门 + 搜索',
+    '行内只留「编辑」，授权 / 重置密码 / 解锁 / 停用收进「…」；点整行进详情',
+    '新建用户后弹窗给出整段登录信息（地址、企业代码、账号、临时密码），一键复制发给本人',
+    '停用时可填原因，显示在列表；停用的是部门负责人时提醒更换',
+  ], ['登录地址取配置（对外域名），不要用浏览器当前地址拼'], ['临时密码弹窗原来只有账号 + 密码，发给员工还要自己补地址和企业代码']);
+  if (r.p === 'org' && r.a === 'digital') return N('组织 · 数字员工', [
+    '顶部一句话说明数字员工是什么、权限从哪来（替代页头长段落）',
+    '负责人已停用的打标签提醒（应在 Atlas 里转交）',
+    '只能停用 / 启用（紧急止血）；资料由来源应用维护',
+  ]);
+  if (r.p === 'org') return N('组织 · 组织架构', [
+    '左树右详情（同现状）；树上方加搜索，「+」在选中部门下新建子部门；节点右侧是含下级人数',
+    '部门卡片：路径、负责人、人数、子部门三格摘要，子部门可点',
+    '操作按频率排：授权、新建子部门、编辑；删除收进「…」，确认弹窗里列出影响（可访问范围、授权条数）',
+    '成员表默认含子部门（多一列「部门」），可关；负责人打标签，「设为负责人」在行的「…」里',
+  ], [], ['授权按钮直接带上部门跳到「权限 › 授权」，不再拼 URL 参数']);
+  if (r.p === 'perm' && r.a === 'roles') return N('权限 · 角色', [
+    '全部应用的角色集中在这里：左边按应用分组（可筛选应用），右边看 / 改一个角色',
+    '右边四个页签：操作权限 / 菜单权限 / 授权 / 拥有者；操作按模块分组、可整组勾选；保存栏说明影响人数',
+    '内置角色只读；只有「查看角色」权限的人（如组织管理员）也只读',
+    '授权页签里的对象可点，跳到「授权」看这个人 / 部门的全部授权',
+    '应用详情不再有「角色」页签，「操作」页签里有入口跳过来（筛好该应用）',
+  ], ['可选：加跨应用的角色列表接口（GET /roles?app_id=）；不加也能逐个应用调 /apps/{id}/roles 拼出来'],
+  ['原来角色藏在「应用接入 › 应用详情 › 角色」，给人授权时要先知道角色属于哪个应用']);
+  if (r.p === 'perm' && r.a === 'positions') return N('权限 · 岗位', [
+    '岗位 = 一组默认角色：列表直接显示默认角色（带应用图标）、授予给谁、持有人数',
+    '编辑岗位时默认角色按应用分组勾选',
+    '删除收进「…」并说明影响',
+  ], ['岗位列表返回持有人数']);
+  if (r.p === 'perm' && r.a === 'data' || r.p === 'me' && r.a === 'data') return N(r.p === 'me' ? '个人中心 · 我的数据' : '权限 · 数据', [
+    '「我的数据」放个人中心：每个人都可能是某条数据（智能体、知识库）的 Owner，不该去「权限」里找',
+    '点行打开右侧抽屉看授权、改授权，不离开列表（现状是跳新页面）',
+    '抽屉下半部分「实际可访问的人」按授权自动计算，多个来源取最高级别',
+    '「权限 › 数据」只给有 data:view 的管理员，只读；看全部应用登记的数据',
+  ], [], ['原来三个范围（我管理的 / 我可访问的 / 全部）挤在一个分段器里']);
+  if (r.p === 'perm') return N('权限 · 授权（按对象授权）', [
+    '左边选对象（组织树 / 搜人，数字员工单独一组），右边看它的岗位、角色及来源',
+    '继承来的授权写明来自哪个部门，点击跳过去；只能在来源处撤销',
+    '授予角色弹窗按应用分组、带角色说明，已有的打「已授予」；给部门授权时「含下级部门」默认打开',
+    '每个对象顶部一句话说明有效授权怎么算',
+  ], [], ['「全部授权」列表不再单列：按对象看，或看角色的「授权」页签']);
+  if (r.p === 'apps' && r.a) return N('应用 · 应用详情', [
+    '页签：接入配置 / 操作 / 菜单 / 数据编码（内置应用只有操作、菜单，只读）；角色在「权限 › 角色」里配',
+    '可访问范围用单选卡片：全员 / 指定部门（标签 + 添加），实时显示「当前 N 人可访问」，没人能访问时标红',
+    '菜单页右侧按角色预览成 Atlas 的样子：目录 = 顶部一级、菜单 = 左侧二级 —— 菜单怎么配、登录后就长什么样',
+  ], ['应用加「入口地址」字段', '用户中心内置菜单改成两级（组织 / 权限 / 应用 / 租户 / 个人中心 + 各自二级）：builtin.py 的 MENUS 加目录'],
+  ['原来应用详情里有「角色」页签（页签里再套页签），现在挪到「权限 › 角色」']);
+  if (r.p === 'apps') return N('应用 · 应用目录', [
+    '应用用卡片（同 Atlas 智能体卡片）：编码、说明、可访问范围、角色与操作数（角色在「权限 › 角色」里配）',
+    '左侧直接列出全部应用，配置几个应用时不用来回返回列表',
+    '接入应用：名称、编码、入口地址、说明 → 生成 App Key / Secret（只显示一次，可一键复制）',
+  ], ['应用加「入口地址」字段（应用切换、我的应用要用）']);
+  if (r.p === 'tenants') return N('租户（仅平台租户）', [
+    '一张表看全：企业代码、状态（正常 / 已到期 / 已停用）、人数与配额条（≥90% 变色）、已开通应用',
+    '开通应用用右侧抽屉，每个应用一个开关',
+    '新建租户后弹窗给出首个管理员的整段登录信息，一键复制',
+    '注销是不可恢复操作：收进「…」，确认时输入企业代码',
+  ]);
+  if (r.p === 'me' && r.a === 'security') return N('个人中心 · 账号安全', [
+    '修改密码改成弹窗，规则逐条打勾；改完提示「其他设备已退出」',
+    '最近登录：时间、登录到哪个应用、设备、IP、结果；失败的也列出，便于本人发现异常',
+  ], ['新增 /me/login-logs（现在只有管理员看别人的 /users/{id}/login-logs）', '登录记录加「登录到」（按 next 记）和设备（解析 User-Agent）']);
+  if (r.p === 'me' && r.a === 'apps') return N('个人中心 · 我的应用', [
+    '我能访问的应用，点「打开」进入；与右上角应用切换同一份数据',
+  ], ['应用「入口地址」字段'], ['现在只列名字和说明，不能点开']);
+  if (r.p === 'me') return N('个人中心 · 个人资料', [
+    '个人中心对所有人可见，放顶部最后一个；普通员工进用户中心只看到它（头像菜单切到「普通员工」看效果）',
+    '姓名、部门、岗位只读并注明「由管理员维护」；邮箱、手机可改',
+    '直属上级按组织架构计算，直接显示',
+  ], [], ['原来个人信息、改密码、可访问应用挤在一页两栏']);
+  return N('', []);
+}
+
+function loginDemo() {
+  const L = S.login;
+  const row = (label, key, opts) => `<div class="dl">${label}</div><div class="opts">${opts.map(([k, t]) => `<a class="${L[key] === k ? 'on' : ''}" data-act="loginSet" data-k="${key}" data-v="${k}">${t}</a>`).join('')}</div>`;
+  return `<div class="demo"><b style="font-size:12px;color:#92400e">演示控制</b>
+    ${row('部署', 'tenants', [['single', '单租户'], ['remembered', '多租户 · 记住上次'], ['new', '多租户 · 首次']])}
+    ${row('从哪来', 'from', [['atlas', 'Atlas'], ['teamflow', 'TeamFlow'], ['direct', '直接打开']])}
+    ${row('点「登录」的结果', 'result', [['ok', '成功'], ['first', '首次登录'], ['must', '须改密'], ['failed', '密码错误'], ['locked', '已锁定'], ['disabled', '已停用'], ['tenant', '企业停用'], ['temp', '临时密码过期']])}
+    <div class="dl">其他</div><div class="opts"><a class="${L.expired ? 'on' : ''}" data-act="loginToggle" data-k="expired">登录已过期跳来</a><a class="${L.caps ? 'on' : ''}" data-act="loginToggle" data-k="caps">大写锁定</a></div></div>`;
+}
+
+function notesPanel(r) {
+  const n = notesFor(r);
+  if (!n.items.length) return '';
+  return `<div class="notes"><div class="row"><b style="color:#92400e">${ic('bulb')} ${n.title}</b><span class="sp"></span><button class="ibtn sm" data-act="toggleNotes">${ic('x')}</button></div>
+    ${r.p === 'login' ? loginDemo() : ''}
+    <h4>设计要点</h4><ul>${n.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>
+    ${n.be.length ? `<h4>需要后端配合</h4><ul>${n.be.map((i) => `<li><span class="be">后端</span>${esc(i)}</li>`).join('')}</ul>` : ''}
+    ${n.diff.length ? `<h4>与现状的差异</h4><ul>${n.diff.map((i) => `<li><span class="diff">现状</span>${esc(i)}</li>`).join('')}</ul>` : ''}
+    ${r.p !== 'login' ? `<h4>全局</h4><ul>${GLOBAL_NOTES.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : ''}
+    <h4>导航</h4><div class="nav"><a href="#/ia">信息架构 · 现状对照 · 页面导览</a>${r.p === 'login' ? '<a data-act="doLoginOk">跳过登录，进入管理台 →</a>' : '<a href="#/login">回到登录页</a>'}</div>
+    <div class="xs" style="color:#a8a29e;margin-top:10px">右上角「设计说明」可关闭；头像菜单可切换演示身份</div></div>`;
+}
+
+/* =====================================================================
+ * 交互
+ * ===================================================================== */
+const ACT = {
+  toggleNotes: () => { S.notes = !S.notes; },
+  collapse: () => { S.collapsed = !S.collapsed; },
+  toast: (el) => { S.pop = null; toast(el.dataset.msg || '（原型）'); return false; },
+  toastClose: (el) => { S.modal = null; S.drawer = null; toast(el.dataset.msg); return false; },
+  setS: (el) => { S[el.dataset.k] = el.dataset.v; if (el.dataset.k === 'subjMode') S.subj = el.dataset.v === 'dept' ? { type: 'dept', id: 'rd' } : { type: 'user', id: 'u1' }; },
+  role: (el) => { S.role = el.dataset.v; S.pop = null; const r = parseRoute(); const p = PLATFORMS.find((x) => x.id === r.p); if (!p || !p.vis()) location.hash = '#/' + landing(); },
+  logout: () => { S.login.step = 'form'; S.login.err = ''; go('#/login'); return false; },
+  // 部门树
+  toggleTree: (el) => { S.treeOpen[el.dataset.id] = !S.treeOpen[el.dataset.id]; },
+  selDept: (el) => { S.orgSel = el.dataset.id; S.treeOpen[deptOf(el.dataset.id).p] = true; },
+  orgSub: () => { S.orgSub = !S.orgSub; },
+  grantFor: (el) => { S.subjMode = el.dataset.t; S.subj = { type: el.dataset.t, id: el.dataset.id }; S.pop = null; go('#/perm/grants'); return false; },
+  selSubjDept: (el) => { S.subjMode = 'dept'; S.subj = { type: 'dept', id: el.dataset.id }; },
+  selSubjUser: (el) => { S.subj = { type: 'user', id: el.dataset.id }; },
+  userTabPerm: () => { S.userTab = 'perm'; },
+  // 应用
+  selRole: (el) => { S.roleSel = el.dataset.id; },
+  rolesOfApp: (el) => { S.roleApp = el.dataset.id; S.roleSel = rolesOf(el.dataset.id)[0]?.id; go('#/perm/roles'); return false; },
+  scopeAll: (el) => { const a = appOf(el.dataset.id); const cur = S.scope[a.id] || { all: a.scopeAll, depts: [...(a.scope || [])] }; cur.all = el.dataset.v === '1'; S.scope[a.id] = cur; },
+  scopeDel: (el) => { const a = appOf(el.dataset.id); const cur = S.scope[a.id] || { all: a.scopeAll, depts: [...(a.scope || [])] }; cur.depts = cur.depts.filter((d) => d !== el.dataset.d); S.scope[a.id] = cur; },
+  scopeAdd: (el) => { const a = appOf(el.dataset.id); const cur = S.scope[a.id] || { all: a.scopeAll, depts: [...(a.scope || [])] }; if (!cur.depts.includes(el.dataset.d)) cur.depts.push(el.dataset.d); S.scope[a.id] = cur; S.pop = null; },
+  opGroup: (el) => { document.querySelectorAll(`input[data-g="${el.dataset.g}"]`).forEach((x) => { if (x !== el) x.checked = el.checked; }); return false; },
+  toggleSwitch: (el) => { el.classList.toggle('on'); return false; },
+  // 浮层
+  modal: (el) => { S.pop = null; S.modal = { ...el.dataset }; if (el.dataset.type === 'changePw') { S.login.pw1 = ''; S.login.pw2 = ''; } },
+  closeModal: () => { S.modal = null; },
+  drawer: (el) => { S.drawer = { ...el.dataset }; },
+  closeDrawer: () => { S.drawer = null; },
+  // 登录
+  togglePw: () => { S.login.showPw = !S.login.showPw; },
+  tenantChange: () => { S.login.tenants = 'new'; },
+  loginSet: (el) => { S.login[el.dataset.k] = el.dataset.v; S.login.err = ''; S.login.step = 'form'; },
+  loginToggle: (el) => { S.login[el.dataset.k] = !S.login[el.dataset.k]; },
+  loginBack: () => { S.login.step = 'form'; S.login.pw1 = ''; S.login.pw2 = ''; },
+  doLogin: () => {
+    const L = S.login;
+    L.expired = false;
+    if (LOGIN_ERR[L.result]) { L.err = L.result; return; }
+    L.err = '';
+    if (L.result === 'first' || L.result === 'must') { L.step = 'setpw'; L.pw1 = ''; L.pw2 = ''; S.refocus = { sel: '[data-input="pw1"]', pos: 0 }; return; }
+    ACT.doLoginOk(); return false;
+  },
+  doSetPw: () => { S.login.step = 'form'; ACT.doLoginOk(); return false; },
+  doLoginOk: () => {
+    const t = FROM[S.login.from];
+    S.toast = t ? `登录成功，正在返回 ${t}…（原型里进入用户中心）` : '登录成功';
+    clearTimeout(toast.t); toast.t = setTimeout(() => { S.toast = null; render(); }, 2200);
+    go('#/' + landing()); return false;
+  },
+};
+
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-act],[data-go],[data-pop]');
+  if (!el) { if (S.pop && !e.target.closest('[data-stop]')) { S.pop = null; render(); } return; }
+  if (el.dataset.act === 'closeModal' && el.classList.contains('mask') && e.target !== el) return; // 点在弹窗内部
+  if (el.tagName !== 'INPUT') e.preventDefault();
+  if (S.pop && !el.dataset.pop && !el.closest('.pop')) S.pop = null;
+  if (el.dataset.pop) {
+    const id = el.dataset.pop;
+    if (S.pop?.id === id) { S.pop = null; return render(); }
+    const rc = el.getBoundingClientRect();
+    const w = id === 'apps' ? 314 : 240;
+    const x = Math.max(12, Math.min(rc.left, window.innerWidth - w - 12));
+    S.pop = { id, x, y: rc.bottom + 6 }; return render();
+  }
+  if (el.dataset.go && !el.dataset.act) return go(el.dataset.go);
+  const fn = ACT[el.dataset.act];
+  if (fn) { if (fn(el, e) !== false) render(); if (el.dataset.go) go(el.dataset.go); }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && (S.modal || S.drawer || S.pop)) { S.modal = null; S.drawer = null; S.pop = null; render(); }
+  if (e.key === 'Enter' && e.target.dataset?.enter === 'login') { ACT.doLogin(); render(); }
+});
+document.addEventListener('input', (e) => {
+  const k = e.target.dataset?.input; if (!k) return;
+  if (k === 'pw1' || k === 'pw2') {
+    // 只局部更新，不整页重绘（保住输入焦点）
+    S.login[k] = e.target.value;
+    const rules = document.getElementById('rules'); if (rules) rules.innerHTML = rulesHtml(S.login.pw1);
+    const match = document.getElementById('match'); if (match) match.innerHTML = matchHtml();
+    const btn = document.getElementById('setpwBtn'); if (btn) btn.disabled = !pwOk();
+    return;
+  }
+  S[k] = e.target.value; S.refocus = { sel: `[data-input="${k}"]`, pos: e.target.selectionStart }; render();
+});
+document.addEventListener('change', (e) => {
+  const k = e.target.dataset?.change; if (!k) return;
+  if (k === 'userDept') S.userDept = e.target.value;
+  if (k === 'menuRole') S.menuRole = e.target.value;
+  if (k === 'roleApp') { S.roleApp = e.target.value; S.roleSel = (S.roleApp ? rolesOf(S.roleApp)[0] : D.roles[0])?.id; }
+  render();
+});
+
+function afterRender() {
+  if (S.refocus) { const el = document.querySelector(S.refocus.sel); if (el) { el.focus(); el.setSelectionRange?.(S.refocus.pos, S.refocus.pos); } S.refocus = null; }
+}
+
+render();
+</script>
+</body>
+</html>

@@ -1,0 +1,1579 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Atlas · 定时任务 — 原型</title>
+<style>
+/* 视觉与用户中心、TeamFlow、模型平台原型一致（同一套浅色设计 token） */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --surface-2: #fbfbfd; --hover: #f2f4f8;
+  --ink: #0f172a; --ink-2: #334155; --ink-3: #64748b; --ink-4: #94a3b8;
+  --line: #e6e8ee; --line-2: #eef0f4;
+  --primary: #4f46e5; --primary-2: #6366f1; --primary-weak: #eef0ff; --primary-ink: #4338ca;
+  --secondary: #0ea5e9; --secondary-weak: #e6f6fe;
+  --success: #16a34a; --success-weak: #e7f6ec;
+  --warning: #d97706; --warning-weak: #fef3e2;
+  --danger: #dc2626; --danger-weak: #fdeaea;
+  --radius: 12px; --radius-sm: 8px; --radius-xs: 6px;
+  --shadow-xs: 0 1px 2px rgba(16,24,40,.05);
+  --shadow-md: 0 6px 18px rgba(16,24,40,.08), 0 2px 6px rgba(16,24,40,.05);
+  --shadow-lg: 0 20px 48px rgba(16,24,40,.16);
+  --font: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --top-h: 52px; --sider-w: 248px; --sider-w-min: 60px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { font-family: var(--font); background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+a { color: var(--primary); text-decoration: none; cursor: pointer; }
+button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+h1, h2, h3, h4 { margin: 0; color: var(--ink); }
+h1 { font-size: 20px; font-weight: 650; }
+h2 { font-size: 16px; font-weight: 650; }
+h3 { font-size: 14px; font-weight: 650; }
+p { margin: 0; }
+code, .mono { font-family: var(--mono); font-size: 12px; }
+code { background: var(--line-2); padding: 1px 5px; border-radius: 5px; }
+svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+svg.i.fill { fill: currentColor; stroke: none; }
+.muted { color: var(--ink-3); }
+.faint { color: var(--ink-4); }
+.sm { font-size: 12.5px; }
+.xs { font-size: 12px; }
+.row { display: flex; align-items: center; gap: 8px; }
+.col { display: flex; flex-direction: column; gap: 8px; }
+.grow { flex: 1; min-width: 0; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp { flex: 1; }
+.hide { display: none !important; }
+
+/* ---------- 顶栏：一级菜单（平台） ---------- */
+.top { height: var(--top-h); background: var(--surface); border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 16px 0 14px; gap: 20px; position: relative; z-index: 20; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px; letter-spacing: .01em; cursor: pointer; }
+.brand .logo { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, #6366f1, #0ea5e9); color: #fff; display: grid; place-items: center; font-size: 14px; }
+.pnav { display: flex; gap: 2px; height: 100%; }
+.pnav a { display: flex; align-items: center; gap: 7px; padding: 0 14px; color: var(--ink-2); font-weight: 550; position: relative; }
+.pnav a:hover { color: var(--ink); background: var(--hover); }
+.pnav a.on { color: var(--primary-ink); }
+.pnav a.on::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; background: var(--primary); border-radius: 2px; }
+.top-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 12.5px; font-weight: 650; flex: none; }
+.avatar.sq { border-radius: 8px; }
+
+/* ---------- 左侧：二级菜单（可收缩） ---------- */
+.body { display: flex; height: calc(100vh - var(--top-h)); }
+.sider { width: var(--sider-w); flex: none; background: var(--surface-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; transition: width .18s ease; overflow: hidden; }
+.sider.min { width: var(--sider-w-min); }
+.sider-top { padding: 12px 10px 6px; display: flex; flex-direction: column; gap: 2px; }
+.snav { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: var(--radius-sm); color: var(--ink-2); font-weight: 520; white-space: nowrap; cursor: pointer; position: relative; }
+.snav:hover { background: var(--hover); color: var(--ink); }
+.snav.on { background: var(--primary-weak); color: var(--primary-ink); font-weight: 600; }
+.snav .badge { margin-left: auto; }
+.sider.min .snav { justify-content: center; padding: 0; }
+.sider.min .snav span, .sider.min .snav .badge, .sider.min .hist, .sider.min .new-chat span, .sider.min .sider-foot span { display: none; }
+.new-chat { display: flex; align-items: center; justify-content: center; gap: 8px; height: 38px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); font-weight: 600; color: var(--ink); cursor: pointer; margin-bottom: 8px; box-shadow: var(--shadow-xs); white-space: nowrap; }
+.new-chat:hover { border-color: #cfd3dd; background: var(--hover); }
+.hist { flex: 1; overflow-y: auto; padding: 4px 10px 10px; border-top: 1px solid var(--line-2); margin-top: 6px; }
+.hist-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 6px 4px; }
+.hist-group { font-size: 11.5px; color: var(--ink-4); padding: 10px 8px 4px; }
+.hist-item { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 6px 0 10px; border-radius: var(--radius-sm); color: var(--ink-2); cursor: pointer; }
+.hist-item:hover { background: var(--hover); }
+.hist-item.on { background: #e9ebf3; color: var(--ink); font-weight: 550; }
+.hist-item .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.hist-item .more { opacity: 0; }
+.hist-item:hover .more { opacity: 1; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.dot.run { background: var(--success); box-shadow: 0 0 0 3px var(--success-weak); }
+.dot.wait { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-weak); }
+.sider-foot { border-top: 1px solid var(--line-2); padding: 8px 10px; }
+.main { flex: 1; min-width: 0; overflow-y: auto; position: relative; }
+.main.white { background: var(--surface); }
+.page { padding: 24px 32px 60px; max-width: 1280px; margin: 0 auto; }
+.page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; min-height: 36px; }
+
+/* ---------- 通用组件 ---------- */
+.btn { height: 34px; padding: 0 14px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface); display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; font-weight: 550; white-space: nowrap; color: var(--ink); }
+.btn:hover { border-color: #cfd3dd; background: var(--hover); }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn.primary:hover { background: var(--primary-2); }
+.btn.danger { color: var(--danger); }
+.btn.danger.solid { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.ghost:hover { background: var(--hover); }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 13px; }
+.btn[disabled] { opacity: .5; cursor: not-allowed; }
+.ibtn { width: 32px; height: 32px; border-radius: var(--radius-sm); border: none; background: transparent; display: inline-grid; place-items: center; cursor: pointer; color: var(--ink-3); flex: none; }
+.ibtn:hover { background: var(--hover); color: var(--ink); }
+.ibtn.sm { width: 26px; height: 26px; }
+.ibtn.on { background: var(--primary-weak); color: var(--primary-ink); }
+.input, .select, textarea.input { height: 34px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 11px; background: var(--surface); outline: none; width: 100%; }
+textarea.input { height: auto; padding: 9px 11px; resize: vertical; line-height: 1.6; }
+.input:focus, .select:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px var(--primary-weak); }
+.search { position: relative; }
+.search svg { position: absolute; left: 10px; top: 9px; color: var(--ink-4); }
+.search .input { padding-left: 32px; }
+.tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 550; background: var(--line-2); color: var(--ink-2); white-space: nowrap; }
+.tag.primary { background: var(--primary-weak); color: var(--primary-ink); }
+.tag.success { background: var(--success-weak); color: var(--success); }
+.tag.warning { background: var(--warning-weak); color: var(--warning); }
+.tag.danger { background: var(--danger-weak); color: var(--danger); }
+.tag.blue { background: var(--secondary-weak); color: #0369a1; }
+.badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: #fff; font-size: 11px; font-weight: 650; display: inline-grid; place-items: center; }
+.badge.gray { background: var(--line); color: var(--ink-2); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.card.pad { padding: 16px 18px; }
+.tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+.tabs a { padding: 10px 0; color: var(--ink-3); font-weight: 550; position: relative; }
+.tabs a:hover { color: var(--ink); }
+.tabs a.on { color: var(--ink); }
+.tabs a.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--primary); border-radius: 2px; }
+.seg { display: inline-flex; background: var(--line-2); border-radius: 9px; padding: 3px; gap: 2px; }
+.seg a { padding: 4px 12px; border-radius: 7px; color: var(--ink-3); font-weight: 550; font-size: 13px; }
+.seg a.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-xs); }
+.switch { display: inline-block; vertical-align: middle; width: 36px; height: 20px; border-radius: 10px; background: #d5d9e2; position: relative; cursor: pointer; flex: none; transition: background .15s; }
+.switch::after { content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%; background: #fff; top: 2px; left: 2px; transition: left .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.switch.on { background: var(--primary); }
+.switch.on::after { left: 18px; }
+.switch.dis { opacity: .45; cursor: not-allowed; }
+.table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.table th { text-align: left; font-weight: 600; font-size: 12.5px; color: var(--ink-3); background: var(--surface-2); padding: 10px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.table td { padding: 12px 14px; border-bottom: 1px solid var(--line-2); vertical-align: middle; }
+.table tr:last-child td { border-bottom: none; }
+.table tr.click:hover td { background: var(--surface-2); cursor: pointer; }
+.empty { text-align: center; padding: 56px 20px; color: var(--ink-3); }
+.empty .ill { width: 56px; height: 56px; border-radius: 16px; background: var(--primary-weak); color: var(--primary); display: grid; place-items: center; margin: 0 auto 14px; }
+.empty .ill svg { width: 26px; height: 26px; }
+.empty h3 { margin-bottom: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-size: 13px; }
+.chip .x { color: var(--ink-4); cursor: pointer; }
+.chip .x:hover { color: var(--danger); }
+.kv { display: grid; grid-template-columns: 110px 1fr; gap: 10px 14px; font-size: 13.5px; }
+.kv dt { color: var(--ink-3); }
+.kv dd { margin: 0; }
+.divider { height: 1px; background: var(--line-2); margin: 14px 0; }
+.label { font-size: 13px; font-weight: 600; color: var(--ink-2); margin-bottom: 6px; display: block; }
+.help { font-size: 12.5px; color: var(--ink-3); margin-top: 4px; }
+.radio-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; cursor: pointer; display: flex; gap: 10px; align-items: flex-start; background: var(--surface); }
+.radio-card:hover { border-color: #cfd3dd; }
+.radio-card.on { border-color: var(--primary-2); background: #f8f8ff; box-shadow: 0 0 0 3px var(--primary-weak); }
+.radio-card .r { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid #c5cad6; flex: none; margin-top: 2px; }
+.radio-card.on .r { border: 5px solid var(--primary); }
+
+/* 下拉菜单 / 浮层 */
+.pop { position: absolute; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 6px; z-index: 60; min-width: 200px; }
+.pop .mi { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 7px; cursor: pointer; color: var(--ink-2); }
+.pop .mi:hover { background: var(--hover); color: var(--ink); }
+.pop .mi.on { color: var(--primary-ink); }
+.pop .mi.danger { color: var(--danger); }
+.pop .sep { height: 1px; background: var(--line-2); margin: 5px 4px; }
+.pop .ph { font-size: 11.5px; color: var(--ink-4); padding: 6px 10px 2px; }
+.mask { position: fixed; inset: 0; background: rgba(15,23,42,.36); z-index: 80; display: grid; place-items: center; }
+.modal { background: var(--surface); border-radius: 14px; width: 560px; max-width: calc(100vw - 40px); max-height: calc(100vh - 60px); display: flex; flex-direction: column; box-shadow: var(--shadow-lg); }
+.modal.wide { width: 760px; }
+.modal-h { display: flex; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--line-2); }
+.modal-b { padding: 18px 20px; overflow-y: auto; }
+.modal-f { padding: 12px 20px; border-top: 1px solid var(--line-2); display: flex; justify-content: flex-end; gap: 8px; }
+.drawer-mask { position: fixed; inset: 0; background: rgba(15,23,42,.2); z-index: 70; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 520px; max-width: 92vw; background: var(--surface); z-index: 71; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; }
+.toast { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 10px; font-size: 13.5px; z-index: 100; box-shadow: var(--shadow-md); }
+
+/* ---------- 设计说明（评审用，非产品界面） ---------- */
+.notes { width: 300px; flex: none; overflow-y: auto; background: #fffdf3; border-left: 1px solid #f3e3a6; padding: 14px 16px; font-size: 13px; }
+.notes h4 { font-size: 13px; margin: 10px 0 4px; color: #92400e; }
+.notes ul { margin: 0; padding-left: 18px; }
+.notes li { margin: 3px 0; color: #57534e; }
+.notes .be { display: inline-block; font-size: 11px; background: #fde68a; color: #92400e; border-radius: 4px; padding: 0 5px; margin-right: 4px; }
+
+/* ---------- 智能平台首页 ---------- */
+.hero { min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 40px 24px 90px; }
+.hero h1 { font-size: 28px; font-weight: 650; margin-bottom: 26px; letter-spacing: .01em; }
+.hero .composer { width: 100%; max-width: 760px; }
+.quick { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; max-width: 760px; }
+.quick .chip { cursor: pointer; height: 34px; border-radius: 17px; color: var(--ink-2); }
+.quick .chip:hover { background: var(--hover); }
+.composer { background: var(--surface); border: 1px solid #dfe2ea; border-radius: 18px; box-shadow: 0 2px 10px rgba(16,24,40,.06); padding: 12px 12px 10px 16px; }
+.composer:focus-within { border-color: #c7cbf6; box-shadow: 0 0 0 4px var(--primary-weak), 0 2px 10px rgba(16,24,40,.06); }
+.composer textarea { width: 100%; border: none; outline: none; resize: none; min-height: 52px; max-height: 220px; font-size: 15px; line-height: 1.6; background: transparent; padding: 2px 0; }
+.composer .bar { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.pill { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border-radius: 15px; border: 1px solid var(--line); background: var(--surface); cursor: pointer; font-size: 13px; color: var(--ink-2); font-weight: 550; white-space: nowrap; }
+.pill:hover { background: var(--hover); }
+.send { width: 34px; height: 34px; border-radius: 50%; border: none; background: var(--primary); color: #fff; display: grid; place-items: center; cursor: pointer; margin-left: auto; }
+.send[disabled] { background: #c7cbd6; cursor: not-allowed; }
+.attach { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+
+/* ---------- 对话页 ---------- */
+.chat { display: flex; flex-direction: column; height: 100%; }
+.chat-head { height: 52px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 16px 0 22px; border-bottom: 1px solid var(--line-2); background: var(--surface); }
+.chat-scroll { flex: 1; overflow-y: auto; }
+.chat-col { max-width: 780px; margin: 0 auto; padding: 24px 24px 20px; }
+.chat-foot { flex: none; padding: 0 24px 18px; }
+.chat-foot .composer { max-width: 780px; margin: 0 auto; }
+.m-user { display: flex; justify-content: flex-end; margin: 6px 0 22px; }
+.m-user .b { background: #f1f3f9; padding: 10px 14px; border-radius: 16px 16px 4px 16px; max-width: 78%; white-space: pre-wrap; }
+.m-ai { margin-bottom: 26px; }
+.m-ai .who { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-weight: 600; font-size: 13.5px; }
+.m-ai .prose { font-size: 15px; line-height: 1.75; color: var(--ink); }
+.m-ai .prose p { margin: 0 0 10px; }
+.m-ai .prose ul { margin: 0 0 10px; padding-left: 22px; }
+.m-ai .prose.aside { color: var(--ink-3); font-size: 14px; }
+.m-actions { display: flex; gap: 2px; margin-top: 4px; }
+.m-actions .ibtn { width: 28px; height: 28px; color: var(--ink-4); }
+.m-actions .ibtn:hover { color: var(--ink); }
+.steps { border: 1px solid var(--line); border-radius: 12px; margin: 4px 0 12px; background: var(--surface); overflow: hidden; }
+.steps-h { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; color: var(--ink-2); font-size: 13.5px; font-weight: 550; }
+.steps-h:hover { background: var(--surface-2); }
+.steps-b { border-top: 1px solid var(--line-2); padding: 6px 12px 8px; }
+.step { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 13.5px; color: var(--ink-2); }
+.step .ic { width: 24px; height: 24px; border-radius: 7px; background: var(--line-2); display: grid; place-items: center; color: var(--ink-3); flex: none; }
+.step .ic svg { width: 14px; height: 14px; }
+.step .tm { margin-left: auto; color: var(--ink-4); font-size: 12px; }
+.spin { width: 14px; height: 14px; border: 2px solid #c7cbf6; border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.subcard { border: 1px solid var(--line); border-left: 3px solid var(--secondary); border-radius: 10px; margin: 8px 0; background: var(--surface); }
+.subcard .h { display: flex; align-items: center; gap: 8px; padding: 9px 12px; cursor: pointer; font-size: 13.5px; }
+.subcard .b { border-top: 1px solid var(--line-2); padding: 8px 12px 10px 14px; font-size: 13.5px; color: var(--ink-2); }
+.ask { border: 1px solid #f5d38b; background: #fffbf0; border-radius: 12px; padding: 14px 16px; margin: 8px 0 12px; }
+.ask pre { background: #fff; border: 1px solid #f3e2b8; border-radius: 8px; padding: 8px 10px; margin: 8px 0 10px; font-family: var(--mono); font-size: 12.5px; white-space: pre-wrap; }
+.todo { border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; margin: 6px 0 12px; }
+.todo .it { display: flex; gap: 8px; align-items: center; padding: 3px 0; font-size: 13.5px; }
+.todo .ck { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid #c5cad6; flex: none; display: grid; place-items: center; }
+.todo .ck.done { background: var(--success); border-color: var(--success); color: #fff; }
+.todo .ck.doing { border-color: var(--primary); border-top-color: transparent; animation: spin 1.2s linear infinite; }
+.todo .done-t { color: var(--ink-4); text-decoration: line-through; }
+.cursor { display: inline-block; width: 8px; height: 16px; background: var(--primary); vertical-align: -2px; animation: blink 1s step-end infinite; border-radius: 2px; }
+@keyframes blink { 50% { opacity: 0; } }
+
+/* ---------- 列表卡片 ---------- */
+.toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
+.acard { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px; cursor: pointer; transition: box-shadow .15s, border-color .15s; position: relative; }
+.acard:hover { border-color: #d6d9e3; box-shadow: var(--shadow-md); }
+.acard .desc { color: var(--ink-3); font-size: 13px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 40px; }
+.acard .foot { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-3); margin-top: auto; }
+.acard .acts { position: absolute; top: 12px; right: 10px; }
+
+/* ---------- 智能体编辑（编排 + 调试预览） ---------- */
+.ed { display: flex; flex-direction: column; height: 100%; background: var(--bg); }
+.ed-head { height: 58px; flex: none; display: flex; align-items: center; gap: 12px; padding: 0 18px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.ed-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 440px; }
+.ed-left { overflow-y: auto; padding: 20px 24px 60px; }
+.ed-left-in { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+.sec { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
+.sec-h { display: flex; align-items: center; gap: 10px; padding: 13px 16px; cursor: pointer; }
+.sec-h .chev { transition: transform .15s; color: var(--ink-4); }
+.sec.open .sec-h .chev { transform: rotate(90deg); }
+.sec-h .sum { margin-left: auto; color: var(--ink-3); font-size: 12.5px; }
+.sec-b { padding: 2px 16px 16px; display: none; }
+.sec.open .sec-b { display: block; }
+.cap { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line-2); }
+.cap:last-child { border-bottom: none; }
+.cap .ic { width: 32px; height: 32px; border-radius: 9px; background: var(--primary-weak); color: var(--primary); display: grid; place-items: center; flex: none; }
+.ed-preview { border-left: 1px solid var(--line); background: var(--surface); display: flex; flex-direction: column; min-height: 0; }
+.ed-preview .ph { height: 46px; display: flex; align-items: center; gap: 8px; padding: 0 14px; border-bottom: 1px solid var(--line-2); flex: none; }
+.ed-preview .pb { flex: 1; overflow-y: auto; padding: 16px; }
+.ed-preview .pf { padding: 10px 14px 14px; }
+.ed-preview .composer { border-radius: 14px; padding: 8px 8px 8px 12px; }
+.ed-preview .composer textarea { min-height: 36px; font-size: 14px; }
+.ed-preview .m-ai .prose { font-size: 14px; }
+
+/* 文档上传步骤 */
+.drop { border: 1.5px dashed #cdd2de; border-radius: 12px; padding: 28px; text-align: center; color: var(--ink-3); background: var(--surface-2); }
+.steps-line { display: flex; gap: 8px; margin-bottom: 18px; }
+.steps-line .s { flex: 1; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-4); }
+.steps-line .s b { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: var(--line-2); font-size: 12px; }
+.steps-line .s.on { color: var(--ink); font-weight: 600; }
+.steps-line .s.on b { background: var(--primary); color: #fff; }
+.bar-score { height: 6px; border-radius: 3px; background: var(--line-2); overflow: hidden; width: 80px; }
+.bar-score i { display: block; height: 100%; background: var(--primary-2); }
+
+/* ---------- 本机 CLI 新增 ---------- */
+.ddot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
+.ddot.on { background: var(--success); box-shadow: 0 0 0 3px var(--success-weak); }
+.ddot.off { background: #cbd5e1; }
+.ddot.warn { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-weak); }
+.devchip { white-space: nowrap; flex: none; display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 10px; border-radius: 13px; border: 1px solid var(--line); background: var(--surface-2); font-size: 12.5px; color: var(--ink-2); cursor: pointer; max-width: 360px; }
+.devchip:hover { background: var(--hover); }
+.devchip .path { font-family: var(--mono); font-size: 12px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pill.warn { border-color: #f5d38b; background: var(--warning-weak); color: var(--warning); }
+.pill .path { font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+.banner { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: 10px; font-size: 13.5px; line-height: 1.6; }
+.banner svg.i { margin-top: 2px; }
+.banner.warn { background: var(--warning-weak); border: 1px solid #f5d38b; color: #92400e; }
+.banner.err { background: var(--danger-weak); border: 1px solid #f5c2c2; color: #991b1b; }
+.banner.info { background: var(--secondary-weak); border: 1px solid #bae6fd; color: #075985; }
+.banner.gray { background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-2); }
+.dcard { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; display: flex; gap: 14px; align-items: flex-start; }
+.dcard .dic { width: 44px; height: 44px; border-radius: 12px; background: var(--primary-weak); color: var(--primary); display: grid; place-items: center; flex: none; }
+.dcard .dic svg { width: 22px; height: 22px; }
+.dcard.off .dic { background: var(--line-2); color: var(--ink-4); }
+.meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12.5px; color: var(--ink-3); }
+.mchip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border-radius: 6px; background: var(--line-2); font-size: 12px; color: var(--ink-2); }
+.mchip.mono { font-family: var(--mono); font-size: 11.5px; }
+.notes .demo { margin-top: 12px; padding-top: 10px; border-top: 1px dashed #f3e3a6; }
+.notes .demo .seg { flex-wrap: wrap; }
+.notes .demo .seg a { font-size: 12px; padding: 3px 8px; }
+
+/* ---------- 定时任务新增 ---------- */
+.bellbtn { position: relative; }
+.bellbtn { color: var(--ink-2); }
+.bellbtn .badge { position: absolute; top: -1px; right: -5px; min-width: 14px; height: 14px; font-size: 10px; padding: 0 3px; border: 2px solid var(--surface); box-sizing: content-box; }
+.crumb { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--ink-3); margin-bottom: 4px; }
+.crumb svg { width: 14px; height: 14px; }
+.chav { display: inline-grid; place-items: center; border-radius: 6px; color: #fff; font-size: 11px; font-weight: 700; flex: none; }
+.chav svg { width: 12px; height: 12px; }
+.chs { display: inline-flex; gap: 4px; align-items: center; }
+.sumgrid { display: grid; grid-template-columns: 1.1fr 1.1fr .9fr 1.5fr; gap: 12px; margin-bottom: 22px; }
+.sumgrid .card { padding: 14px 16px; }
+.sumgrid .k { font-size: 12px; color: var(--ink-3); margin-bottom: 7px; display: flex; align-items: center; gap: 6px; }
+.nums { display: flex; gap: 18px; }
+.nums b { font-size: 18px; font-weight: 650; display: block; line-height: 1.3; }
+.nums span { font-size: 12px; color: var(--ink-3); }
+.tl-day { font-size: 12.5px; color: var(--ink-3); font-weight: 600; padding: 16px 2px 8px; }
+.tl-row { display: grid; grid-template-columns: 52px 92px minmax(0, 1fr) 86px 90px 16px; gap: 12px; align-items: center; padding: 11px 16px; border-bottom: 1px solid var(--line-2); font-size: 13.5px; }
+.tl-row:last-child { border-bottom: none; }
+.tl-row.click { cursor: pointer; }
+.tl-row.click:hover { background: var(--surface-2); }
+.tl-row.fold { color: var(--ink-3); background: var(--surface-2); cursor: pointer; }
+.tl-row.fold:hover { background: var(--hover); }
+.tl-row.sub { color: var(--ink-3); font-size: 13px; padding: 7px 16px; background: #fcfcfd; }
+.tl-row .tm { font-family: var(--mono); font-size: 12.5px; color: var(--ink-2); }
+.tl-row .xtra { font-size: 12px; color: var(--ink-3); margin-top: 2px; }
+.ncard { display: flex; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line-2); }
+.ncard:last-child { border-bottom: none; }
+.ncard.unread { background: #fafaff; }
+.nic { width: 34px; height: 34px; border-radius: 10px; display: grid; place-items: center; flex: none; }
+.nic.result { background: var(--primary-weak); color: var(--primary); }
+.nic.pending { background: var(--warning-weak); color: var(--warning); }
+.nic.failed { background: var(--danger-weak); color: var(--danger); }
+.nic.done { background: var(--success-weak); color: var(--success); }
+.nic.sm { width: 28px; height: 28px; border-radius: 8px; }
+.nic.sm svg { width: 14px; height: 14px; }
+.udot { width: 8px; height: 8px; border-radius: 50%; background: var(--primary); flex: none; display: inline-block; }
+.nitem { border-left: 3px solid #dfe2fb; padding: 2px 0 2px 10px; margin: 8px 0; font-size: 13.5px; }
+.nitem b { font-weight: 600; }
+.nitem .tip { color: var(--ink-3); font-size: 13px; margin-top: 2px; }
+.deliv { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--ink-3); margin-top: 8px; align-items: center; }
+.deliv .d { display: inline-flex; align-items: center; gap: 4px; }
+.deliv .ok { color: var(--success); }
+.deliv .fail { color: var(--danger); }
+.deliv svg { width: 13px; height: 13px; }
+.runbanner { display: flex; align-items: center; gap: 10px; padding: 9px 14px; border-radius: 10px; background: var(--primary-weak); color: var(--primary-ink); font-size: 13.5px; margin-bottom: 18px; }
+.m-user .b.instr { white-space: normal; background: #f6f7fb; border: 1px dashed #d5d9e4; font-size: 13.5px; color: var(--ink-2); border-radius: 14px 14px 4px 14px; }
+.instr .lb { font-size: 12px; color: var(--ink-3); display: flex; gap: 6px; align-items: center; margin-bottom: 4px; font-weight: 600; white-space: normal; }
+.clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.nblock { border: 1px solid var(--line); border-left: 3px solid var(--primary); border-radius: 10px; padding: 12px 14px; margin: 8px 0 14px; background: var(--surface); }
+.nblock .h { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13.5px; }
+.draft { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 8px 0; background: #fff; }
+.draft .q { font-size: 13px; color: var(--ink-3); margin: 4px 0 6px 26px; }
+.draft textarea { width: calc(100% - 26px); margin-left: 26px; border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; font-size: 13.5px; resize: vertical; min-height: 40px; outline: none; display: block; }
+.draft.off { background: var(--surface-2); }
+.draft.off textarea { color: var(--ink-4); }
+.cbx { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid #c5cad6; display: inline-grid; place-items: center; flex: none; cursor: pointer; background: #fff; }
+.cbx.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.cbx.dis { background: var(--line-2); border-color: var(--line); cursor: default; }
+.cbx svg { width: 11px; height: 11px; stroke-width: 3; }
+.screen { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 10px 0; }
+.screen .sbar { height: 30px; background: #f1f3f7; display: flex; align-items: center; gap: 8px; padding: 0 10px; font-size: 12px; color: var(--ink-3); font-family: var(--mono); }
+.screen .vp { height: 220px; background: linear-gradient(180deg, #e6f7f6, #f7fbfb); display: grid; place-items: center; }
+.zplogin { width: 240px; background: #fff; border-radius: 10px; box-shadow: var(--shadow-md); padding: 14px 16px; font-size: 12.5px; }
+.zplogin .f { height: 30px; border: 1px solid var(--line); border-radius: 6px; margin: 8px 0; padding: 0 8px; display: flex; align-items: center; color: var(--ink-4); }
+.zplogin .b { height: 32px; border-radius: 6px; background: #00bebd; color: #fff; display: grid; place-items: center; font-weight: 600; }
+.proposal { border: 1px solid #c7cbf6; border-radius: 12px; background: #fafaff; padding: 14px 16px; margin: 8px 0 12px; }
+.proposal .kv { grid-template-columns: 72px 1fr; font-size: 13.5px; gap: 8px 12px; margin: 10px 0 12px; }
+.tplgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 6px; }
+.tpl { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; cursor: pointer; display: flex; flex-direction: column; gap: 6px; background: var(--surface); }
+.tpl:hover { border-color: #cfd3dd; box-shadow: var(--shadow-md); }
+.tpl.on { border-color: var(--primary-2); box-shadow: 0 0 0 3px var(--primary-weak); }
+.tpl .ti { width: 30px; height: 30px; border-radius: 9px; background: var(--primary-weak); color: var(--primary); display: grid; place-items: center; }
+.tpl .d { font-size: 12.5px; color: var(--ink-3); line-height: 1.5; }
+.fires { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.fires span { font-size: 12px; background: var(--line-2); border-radius: 6px; padding: 2px 8px; color: var(--ink-2); font-family: var(--mono); }
+.frow { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.frow .input, .frow .select { width: auto; }
+.wdp { display: inline-flex; gap: 4px; }
+.wdp a { width: 30px; height: 30px; border-radius: 8px; border: 1px solid var(--line); display: grid; place-items: center; color: var(--ink-2); font-size: 13px; }
+.wdp a.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.tchip { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 13px; background: var(--primary-weak); color: var(--primary-ink); font-size: 12.5px; font-weight: 550; }
+.tchip svg { width: 13px; height: 13px; }
+.chtog { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 12px 0 6px; border: 1px solid var(--line); border-radius: 16px; cursor: pointer; font-size: 13px; background: var(--surface); }
+.chtog.on { border-color: var(--primary-2); background: #f8f8ff; box-shadow: 0 0 0 2px var(--primary-weak); }
+.chtog.dis { opacity: .55; }
+.check { display: flex; gap: 10px; align-items: flex-start; padding: 7px 0; cursor: pointer; }
+.check.fixed { cursor: default; }
+.check .cbx { margin-top: 3px; }
+.chcard { display: flex; align-items: center; gap: 14px; padding: 14px 18px; border-bottom: 1px solid var(--line-2); }
+.chcard:last-child { border-bottom: none; }
+.ed-preview .nblock { margin: 6px 0; }
+.waitpill { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--warning); white-space: nowrap; }
+.waitpill svg { width: 13px; height: 13px; }
+
+/* ---------- 手机示意 ---------- */
+.phones { display: flex; gap: 32px; flex-wrap: wrap; justify-content: center; padding-top: 6px; }
+.phone { width: 300px; height: 620px; border-radius: 42px; background: #0b1020; padding: 10px; box-shadow: var(--shadow-lg); flex: none; }
+.phone .scr { width: 100%; height: 100%; border-radius: 33px; overflow: hidden; background: #fff; position: relative; display: flex; flex-direction: column; font-size: 13px; }
+.scr.lock { background: linear-gradient(160deg, #1e293b, #4338ca 58%, #0ea5e9); color: #fff; padding: 46px 12px 12px; }
+.lk-time { font-size: 58px; font-weight: 300; text-align: center; line-height: 1.1; }
+.lk-date { text-align: center; font-size: 13px; opacity: .85; margin-bottom: 26px; }
+.push { background: rgba(255, 255, 255, .9); color: var(--ink); border-radius: 16px; padding: 10px 12px; margin-bottom: 8px; font-size: 12.5px; line-height: 1.5; }
+.push .ph { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-3); margin-bottom: 3px; }
+.appic { width: 18px; height: 18px; border-radius: 5px; color: #fff; display: grid; place-items: center; font-size: 10.5px; font-weight: 700; flex: none; }
+.phcap { text-align: center; margin-top: 12px; font-size: 13px; color: var(--ink-2); font-weight: 600; }
+.mhead { height: 70px; padding: 26px 14px 0; display: flex; align-items: center; gap: 8px; border-bottom: 1px solid var(--line-2); font-weight: 650; flex: none; background: #fff; }
+.mbody { flex: 1; overflow-y: auto; padding: 12px; background: #f3f4f7; }
+.mtab { height: 56px; border-top: 1px solid var(--line-2); display: flex; flex: none; background: #fff; }
+.mtab a { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-size: 10.5px; color: var(--ink-3); position: relative; }
+.mtab a.on { color: var(--primary); }
+.mtab .badge { position: absolute; top: 6px; left: calc(50% + 4px); min-width: 15px; height: 15px; font-size: 10px; }
+.mcard { background: #fff; border-radius: 12px; padding: 12px; margin-bottom: 10px; font-size: 12.5px; }
+.mcard .draft { padding: 8px 10px; margin: 6px 0; }
+.mcard .draft .q { margin-left: 24px; font-size: 12px; }
+.mcard .draft textarea { font-size: 12.5px; min-height: 34px; padding: 5px 7px; width: calc(100% - 24px); margin-left: 24px; }
+.fsmsg { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 12px; }
+.fscard { background: #fff; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); flex: 1; min-width: 0; }
+.fscard .fh { background: #3370ff; color: #fff; padding: 8px 12px; font-weight: 600; font-size: 12.5px; }
+.fscard .fb { padding: 8px 12px; font-size: 12px; line-height: 1.6; }
+.fscard .fb .it { padding: 4px 0; border-bottom: 1px dashed var(--line); }
+.fscard .fb .it:last-child { border-bottom: none; }
+.fscard .fbtn { display: flex; gap: 6px; padding: 0 12px 10px; }
+.fscard .fbtn span { flex: 1; text-align: center; border: 1px solid var(--line); border-radius: 6px; height: 28px; line-height: 28px; font-size: 12px; color: #3370ff; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* =====================================================================
+ * 图标（lucide 风格，内联 SVG）
+ * ===================================================================== */
+const ICONS = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  bot: '<rect x="3" y="8" width="18" height="12" rx="3"/><path d="M12 8V4M8.5 14h.01M15.5 14h.01"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  users: '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 3.1a4 4 0 0 1 0 7.8M22 21a7 7 0 0 0-5-6.7"/>',
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>',
+  spark: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 17l.6 1.6L21 19l-1.4.5L19 21l-.6-1.5L17 19l1.4-.4z"/>',
+  plug: '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  left: '<path d="m15 18-6-6 6-6"/>',
+  right: '<path d="m9 18 6-6-6-6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  up: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  clip: '<path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
+  like: '<path d="M7 10v11H4V10zM7 10l4-8a3 3 0 0 1 3 3v4h5.5a2 2 0 0 1 2 2.3l-1.4 8A2 2 0 0 1 18 21H7"/>',
+  dislike: '<path d="M17 14V3h3v11zM17 14l-4 8a3 3 0 0 1-3-3v-4H4.5a2 2 0 0 1-2-2.3l1.4-8A2 2 0 0 1 6 3h11"/>',
+  terminal: '<path d="m4 17 6-5-6-5M12 19h8"/>',
+  pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
+  archive: '<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4"/>',
+  bulb: '<path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14 9l2 2"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
+  panel: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  play: '<path d="M7 4l13 8-13 8z"/>',
+  list: '<path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+  bookmark: '<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
+  zap: '<path d="M13 2 3 14h8l-1 8 10-12h-8z"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+};
+const ic = (n, cls = '') => `<svg class="i ${n === 'more' ? 'fill' : ''} ${cls}" viewBox="0 0 24 24">${ICONS[n] || ''}</svg>`;
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const COLORS = ['#6366f1', '#0ea5e9', '#f59e0b', '#10b981', '#ec4899', '#8b5cf6', '#14b8a6', '#ef4444'];
+const av = (name, color, size = 30, sq = true) =>
+  `<span class="avatar ${sq ? 'sq' : ''}" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px;background:${color}">${esc((name || '?').slice(0, 1))}</span>`;
+
+
+Object.assign(ICONS, {
+  laptop: '<rect x="4" y="4" width="16" height="11" rx="2"/><path d="M2 19h20"/>',
+  monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  wifioff: '<path d="M2 2l20 20M8.5 16.4a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.8M19 12.9a10 10 0 0 0-2.3-1.7M2 8.8a15 15 0 0 1 4.2-2.6M22 8.8A15 15 0 0 0 11 5M12 20h.01"/>',
+  git: '<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="9" r="2.5"/><path d="M6 8.5v7M18 11.5c0 4-6 3-10 5"/>',
+  dl: '<path d="M12 4v12M6 10l6 6 6-6M4 20h16"/>',
+  cog: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+});
+
+Object.assign(ICONS, {
+  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+  send: '<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
+  mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/>',
+  phone: '<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/>',
+  moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
+  skip: '<path d="m5 4 10 8-10 8z"/><path d="M19 5v14"/>',
+  hand: '<path d="M18 11V6a2 2 0 0 0-4 0M14 10V4a2 2 0 0 0-4 0v2M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-6-2.4l-3.6-3.6a2 2 0 0 1 2.8-2.8L7 15"/>',
+  mouse: '<rect x="6" y="3" width="12" height="18" rx="6"/><path d="M12 7v4"/>',
+  ext: '<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  pause: '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
+  history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/>',
+});
+
+/* =====================================================================
+ * 演示数据（内存态，刷新后重置）。「现在」固定为 2026-11-16 周一 14:37
+ * ===================================================================== */
+const ME = { name: '周景行', color: '#6366f1' };
+const NOW = new Date(2026, 10, 16, 14, 37);
+const AGENTS = [
+  { id: 'local', name: '本机 Claude Code', color: '#14b8a6', kind: 'device', model: 'MiniMax-M3', mode: 0, note: '在你的电脑上运行 · 带浏览器' },
+  { id: 'general', name: '通用助手', color: '#6366f1', kind: 'native', model: 'MiniMax-M3.1-Flash', mode: 0, note: '在平台沙箱里运行 · 带浏览器' },
+  { id: 'coder', name: '本机编程助手', color: '#0ea5e9', kind: 'device', model: 'MiniMax-M3', mode: 1, note: '在你的电脑上运行' },
+];
+const DEVICES = [
+  { id: 'vps', name: '大阪云主机', online: true },
+  { id: 'desk', name: '公司台式机', online: false },
+];
+const MODES = [['自动', '常规操作直接做，有风险的会拒绝。没人盯着时一般选这个'], ['接受编辑', '改文件不用问，运行命令前先问你'], ['手动', '每次操作前都先问你：没人盯着时每一步都会停下来等你']];
+const CH = {
+  site: { name: '站内通知', icon: 'bell', color: '#4f46e5' },
+  app: { name: 'Atlas App', icon: 'phone', color: '#0ea5e9' },
+  mail: { name: '邮件', icon: 'mail', color: '#64748b' },
+  feishu: { name: '飞书', letter: '飞', color: '#3370ff' },
+  wecom: { name: '企业微信', letter: '企', color: '#0b8f5d' },
+  dingtalk: { name: '钉钉', letter: '钉', color: '#1677ff' },
+};
+const BIND = {
+  site: { on: true, desc: '顶栏铃铛和通知页，总是开着', def: true },
+  app: { on: true, desc: 'Xiaomi 14 · 已允许通知 · 最近登录 今天 09:12', def: true },
+  mail: { on: true, desc: 'zhoujx@techstz.com（来自用户中心）', def: false },
+  feishu: { on: true, desc: '群机器人「我的 Atlas 通知」· Webhook …a3f9 · 已开签名校验', def: true },
+  wecom: { on: false },
+  dingtalk: { on: false },
+};
+const WD = ['日', '一', '二', '三', '四', '五', '六'];
+
+const P_NOTIFY = `打开 BOSS 直聘的消息页 https://www.zhipin.com/web/geek/chat ，看左侧会话列表里有没有未读消息（头像右上角带红色数字的）。
+
+有未读时，每个有未读的会话发一条「通知我」：
+- 标题：对方名字 · 公司 · 职位
+- 正文：对方说了什么（原话），你建议怎么回
+- 标识：对方名字 + 最后一条消息的时间（提醒过的不会重复发）
+先看列表里的预览，看不全再点开会话。点开后 BOSS 直聘会把它标成已读，所以正文要写全。
+
+没有未读：不发通知，直接结束。
+页面要求登录：用「请我接管」，等我登录好再继续。
+不要替我回复任何消息，也不要点「不感兴趣」。`;
+const P_DRAFT = `打开 BOSS 直聘的消息页 https://www.zhipin.com/web/geek/chat ，找出有未读消息的会话，逐个读完最新消息，按下面的规则起草回复：
+- 约面试、约电话：回复我方便的时间——工作日 14:00–18:00；
+- 问期望薪资：回复「期望 45–55k，具体可以聊」；
+- 其他：起草一条礼貌、简短的回复。
+
+起草完用「问我」把所有草稿一次给我确认（每条可以发送、改了再发、不回复）。
+我确认后再逐条发出去，最后用「通知我」告诉我发了哪几条。
+
+没有未读：直接结束，不通知。
+页面要求登录：用「请我接管」。`;
+const P_AUTO = `打开 BOSS 直聘的消息页 https://www.zhipin.com/web/geek/chat ，找出有未读消息的会话，逐个读完最新消息。
+
+下面几种直接回复，不用问我：
+- 约面试、约电话：回复我方便的时间——工作日 14:00–18:00；
+- 问期望薪资：回复「期望 45–55k，具体可以聊」；
+- 问是否还在看机会：回复「在看的，方便发下职位详情吗」。
+
+规则以外的（发了附件、问到具体项目、要我做题、语气不对的）不要回复，用「通知我」转给我。
+每回复一个会话，用「通知我」告诉我：回了谁、对方说了什么、我回了什么；标识用「对方名字 + 最后一条消息的时间」。
+
+页面要求登录：用「请我接管」。`;
+const P_WATCH = `打开下面 3 个页面，看价格和促销信息有没有变化：
+- https://example.com/pricing
+- https://example.org/plans
+- https://example.net/enterprise
+
+和工作目录里的 last.json（上次看到的结果）比较：
+- 有变化：用「通知我」告诉我哪个页面、什么变了（变化前 → 变化后），标识用「页面 + 变化后的价格」；
+- 没变化：不通知。
+最后把这次看到的结果写回 last.json。`;
+const P_DAILY = `整理一份「平台告警日报」：
+1. 用知识库「运维值班记录」和告警 MCP 查昨天 00:00–24:00 的告警；
+2. 按级别统计，P1、P2 逐条写清：什么服务、什么现象、谁处理的、是否恢复；
+3. 用「通知我」发出来，标题「平台告警日报 · 日期」，正文用 Markdown。`;
+
+const TPLS = [
+  { id: 'zp-notify', group: 'BOSS 直聘', name: '新消息提醒', icon: 'bell', agent: 'local', dev: 'vps', task: 'BOSS 直聘新消息提醒',
+    desc: '定时看消息列表，有未读就整理好发给你；不替你回复', prompt: P_NOTIFY, ch: ['site', 'app', 'feishu'],
+    sched: { sk: 'interval', every: 15, from: '09:00', to: '21:00', days: 'work', wd: [1, 2, 3, 4, 5], times: ['10:00'], dom: 1, date: '11-20' } },
+  { id: 'zp-draft', group: 'BOSS 直聘', name: '起草回复，发送前问我', icon: 'pencil', agent: 'local', dev: 'vps', task: 'BOSS 直聘起草回复',
+    desc: '按你的规则起草回复，一次给你确认，你点了才发', prompt: P_DRAFT, ch: ['site', 'app'],
+    sched: { sk: 'daily', every: 15, from: '09:00', to: '21:00', days: 'work', wd: [1, 2, 3, 4, 5], times: ['10:00', '14:00', '18:00'], dom: 1, date: '11-20' } },
+  { id: 'zp-auto', group: 'BOSS 直聘', name: '按规则自动回复', icon: 'send', agent: 'local', dev: 'vps', task: 'BOSS 直聘自动回复',
+    desc: '规则内的直接以你的名义回复，规则外的转给你', prompt: P_AUTO, ch: ['site', 'app', 'feishu'],
+    warn: '会以你的名义发消息。建议先用「起草回复，发送前问我」跑几天，规则写稳了再换成这个。',
+    sched: { sk: 'interval', every: 30, from: '09:00', to: '21:00', days: 'work', wd: [1, 2, 3, 4, 5], times: ['10:00'], dom: 1, date: '11-20' } },
+  { id: 'web-watch', group: '通用', name: '网页变化监控', icon: 'eye', agent: 'general', task: '竞品价格监控',
+    desc: '盯几个网页（价格、公告、库存），有变化才通知你', prompt: P_WATCH, ch: ['site', 'feishu'],
+    sched: { sk: 'daily', every: 15, from: '09:00', to: '21:00', days: 'all', wd: [1, 2, 3, 4, 5], times: ['10:00', '16:00'], dom: 1, date: '11-20' } },
+  { id: 'daily', group: '通用', name: '每日简报', icon: 'calendar', agent: 'general', task: '平台告警日报',
+    desc: '每天定时查资料、整理成简报发给你', prompt: P_DAILY, ch: ['site', 'mail'], every: true,
+    sched: { sk: 'daily', every: 15, from: '09:00', to: '21:00', days: 'all', wd: [1, 2, 3, 4, 5], times: ['08:30'], dom: 1, date: '11-20' } },
+  { id: 'blank', group: '通用', name: '空白任务', icon: 'plus', agent: 'general', task: '',
+    desc: '自己写指令、选时间', prompt: '', ch: ['site'],
+    sched: { sk: 'daily', every: 15, from: '09:00', to: '21:00', days: 'all', wd: [1, 2, 3, 4, 5], times: ['09:00'], dom: 1, date: '11-20' } },
+];
+const tplOf = (id) => TPLS.find((t) => t.id === id) || TPLS[TPLS.length - 1];
+const clone = (o) => JSON.parse(JSON.stringify(o));
+
+const TASKS = [
+  { id: 't1', name: 'BOSS 直聘新消息提醒', tpl: 'zp-notify', agent: 'local', dev: 'vps', on: true, mode: 0, ch: ['site', 'app', 'feishu'], every: false,
+    sched: clone(tplOf('zp-notify').sched), last: { st: 'notified', at: '今天 14:30', text: '2 个会话有未读，已通知你', go: 'r1' },
+    week: { runs: 214, notified: 11, skipped: 3, failed: 1, tokens: '1.9M' }, created: '11-16 08:56 · 从对话「BOSS 直聘看看有没有新消息」创建' },
+  { id: 't2', name: 'BOSS 直聘起草回复', tpl: 'zp-draft', agent: 'local', dev: 'vps', on: true, mode: 0, ch: ['site', 'app'], every: false,
+    sched: clone(tplOf('zp-draft').sched), last: { st: 'waiting', at: '今天 14:00', text: '起草了 3 条回复，等你确认', go: 'r2' },
+    week: { runs: 9, notified: 4, skipped: 0, failed: 0, tokens: '0.6M' }, created: '11-13 10:20' },
+  { id: 't3', name: '平台告警日报', tpl: 'daily', agent: 'general', on: true, mode: 0, ch: ['site', 'mail'], every: true,
+    sched: clone(tplOf('daily').sched), last: { st: 'notified', at: '今天 08:30', text: '日报已发送：昨天 P1 告警 2 条，都已恢复' },
+    week: { runs: 7, notified: 7, skipped: 0, failed: 0, tokens: '0.4M' }, created: '11-02 09:00' },
+  { id: 't4', name: '竞品价格监控', tpl: 'web-watch', agent: 'general', on: true, mode: 0, ch: ['site', 'feishu'], every: false,
+    sched: clone(tplOf('web-watch').sched), last: { st: 'quiet', at: '今天 10:00', text: '3 个页面都没有变化' },
+    week: { runs: 14, notified: 1, skipped: 0, failed: 0, tokens: '0.3M' }, created: '11-05 15:40' },
+  { id: 't5', name: 'shop-web 夜间测试', tpl: 'blank', agent: 'coder', dev: 'desk', on: true, mode: 1, ch: ['site', 'mail'], every: false,
+    sched: { sk: 'daily', every: 15, from: '09:00', to: '21:00', days: 'all', wd: [1, 2, 3, 4, 5], times: ['23:00'], dom: 1, date: '11-20' },
+    prompt: '在 ~/code/shop-web 里拉最新的 main，跑一遍 pnpm test。\n全部通过就不用通知；有失败的，用「通知我」告诉我哪些用例失败、看起来是什么原因。',
+    last: { st: 'failed', at: '昨天 23:00', text: '公司台式机不在线，没能开始（连续 2 次）' },
+    week: { runs: 7, notified: 1, skipped: 0, failed: 2, tokens: '0.2M' }, created: '11-09 21:30' },
+  { id: 't6', name: '周报草稿', tpl: 'blank', agent: 'general', on: false, mode: 0, ch: ['site', 'mail'], every: false,
+    sched: { sk: 'weekly', every: 15, from: '09:00', to: '21:00', days: 'all', wd: [5], times: ['17:00'], dom: 1, date: '11-20' },
+    prompt: '根据我这周的对话和工作空间里的文件，起草本周周报，放到工作空间「周报/」下，然后用「通知我」告诉我文件在哪。',
+    last: { st: 'notified', at: '11-07 17:00', text: '周报草稿已放到工作空间「周报/2026-W45.md」' },
+    week: { runs: 0, notified: 0, skipped: 0, failed: 0, tokens: '0' }, created: '10-24 18:00' },
+];
+const taskOf = (id) => TASKS.find((t) => t.id === id) || TASKS[0];
+const agentOf = (id) => AGENTS.find((a) => a.id === id) || AGENTS[0];
+const devOf = (id) => DEVICES.find((d) => d.id === id);
+const promptOf = (t) => t.prompt ?? tplOf(t.tpl).prompt;
+
+/* 运行记录 */
+const RUNS = {
+  t1: [
+    { day: '今天 · 11-16 周一', sum: '23 次 · 通知 2 次', items: [
+      { at: '14:30', st: 'notified', text: '2 个会话有未读（张三、王五），已通知你', dur: '1 分 48 秒', tok: '46k', go: 'r1' },
+      { fold: 'f1', from: '10:15', to: '14:15', n: 17, st: 'quiet', text: '没有未读' },
+      { at: '10:00', st: 'notified', text: '李四有新消息，已通知你', xtra: '王五 09:12 的消息已经提醒过，没再发', dur: '2 分 05 秒', tok: '52k', go: 'r1' },
+      { at: '09:45', st: 'skipped', text: '上次运行还在等你接管登录' },
+      { at: '09:30', st: 'quiet', text: '没有未读', xtra: '中途 BOSS 直聘要求重新登录：09:31 请你接管，你 09:52 交还后接着跑完', dur: '23 分 10 秒', tok: '38k', go: 'r3' },
+      { at: '09:15', st: 'failed', text: '模型返回 429（MiniMax 额度用完），这次没完成', xtra: '已通知你；09:30 那次恢复正常', dur: '12 秒', tok: '3k', go: 'r1' },
+      { at: '09:00', st: 'quiet', text: '没有未读', dur: '58 秒', tok: '21k', go: 'r1' },
+    ] },
+    { day: '上周五 · 11-13', sum: '49 次 · 通知 3 次', items: [
+      { fold: 'f2', from: '09:00', to: '21:00', n: 49, st: 'mixed', text: '通知 3 次 · 跳过 1 次 · 失败 0 次' },
+    ] },
+  ],
+  t2: [
+    { day: '今天 · 11-16 周一', items: [
+      { at: '14:00', st: 'waiting', text: '起草了 3 条回复，等你确认', xtra: '已等 37 分钟；确认之前，到点的运行会跳过', dur: '运行中', tok: '31k', go: 'r2' },
+      { at: '10:00', st: 'notified', text: '回复了 1 条（李四：已发简历），已通知你', dur: '19 分 30 秒', tok: '44k', go: 'r2' },
+    ] },
+    { day: '上周五 · 11-13', items: [
+      { at: '18:00', st: 'quiet', text: '没有未读', dur: '1 分 02 秒', tok: '19k', go: 'r2' },
+      { at: '14:00', st: 'notified', text: '回复了 2 条，已通知你', dur: '26 分 11 秒', tok: '58k', go: 'r2' },
+      { at: '10:00', st: 'quiet', text: '没有未读', dur: '55 秒', tok: '18k', go: 'r2' },
+    ] },
+  ],
+};
+function runsOf(t) {
+  if (RUNS[t.id]) return RUNS[t.id];
+  const [day, at] = t.last.at.split(' ');
+  return [{ day, items: [{ at, st: t.last.st, text: t.last.text, dur: t.last.st === 'failed' ? '—' : '3 分 12 秒', tok: t.last.st === 'failed' ? '' : '27k' }] }];
+}
+const ST = {
+  notified: ['已通知', 'primary'], quiet: ['无通知', ''], waiting: ['等你处理', 'warning'],
+  skipped: ['跳过', ''], failed: ['失败', 'danger'], mixed: ['折叠', ''],
+};
+const stTag = (st) => `<span class="tag ${ST[st][1]}">${ST[st][0]}</span>`;
+
+/* 通知 */
+const NOTIFS = [
+  { id: 'n2', kind: 'pending', task: 't2', day: '今天', at: '14:03', unread: true, go: '#/ai/c/r2', title: '起草了 3 条回复，等你确认',
+    body: '张三 · 字节跳动、王五 · 锐仕方达、赵六 · 星图智能。确认之前，18:00 那次运行会跳过；没有期限。', acts: [['去确认', '#/ai/c/r2', 'primary']], ch: { site: 'ok', app: 'ok' } },
+  { id: 'n1', kind: 'result', task: 't1', day: '今天', at: '14:31', unread: true, go: '#/ai/c/r1', items: [
+      { title: '张三 · 字节跳动 · HRBP', body: '「您好，看了您的简历，和我们 AI 平台后端岗位很匹配，周三下午方便电话聊聊吗？」（14:21）', tip: '建议：回复周三 15:00 后都可以，请对方定具体时间。' },
+      { title: '王五 · 锐仕方达 · 猎头顾问', body: '「有个 AI 平台架构师的机会，base 上海，60–80k·15 薪，有兴趣吗？」（14:26）', tip: '建议：先问清是哪家公司、团队多大。' }],
+    acts: [['打开这次运行', '#/ai/c/r1', ''], ['让它帮我回复', '#/ai/c/r1', '']], ch: { site: 'ok', app: 'ok', feishu: 'ok' } },
+  { id: 'n3', kind: 'result', task: 't1', day: '今天', at: '10:01', go: '#/ai/c/r1', items: [
+      { title: '李四 · 米哈游 · 技术招聘', body: '「方便发一份最新的简历吗？」（09:57）', tip: '建议：直接发附件简历。' }],
+    note: '王五 09:12 的消息已经提醒过，这次没再发', acts: [['打开这次运行', '#/ai/c/r1', '']],
+    ch: { site: 'ok', app: 'ok', feishu: 'fail' }, fail: '飞书返回 19021「签名校验失败」，重试 3 次后放弃。去「通知方式」里检查签名密钥' },
+  { id: 'n4', kind: 'pending', task: 't1', day: '今天', at: '09:31', done: '你 09:52 已交还，这次运行接着跑完了', go: '#/ai/c/r3', title: 'BOSS 直聘要重新登录，请你接管浏览器',
+    body: '登录页开在「大阪云主机」的浏览器里，接管后用短信验证码登录即可。登录好之前，到点的运行会跳过。', acts: [['查看这次运行', '#/ai/c/r3', '']], ch: { site: 'ok', app: 'ok', feishu: 'ok' } },
+  { id: 'n5', kind: 'failed', task: 't1', day: '今天', at: '09:15', done: '09:30 那次已恢复正常', go: '#/ai/c/r1', title: '这次没完成：模型额度用完',
+    body: 'MiniMax 返回 429（额度用完）。下次到点照常运行；想避开可以在任务里换一个模型。', acts: [['查看这次运行', '#/ai/c/r1', '']], ch: { site: 'ok', app: 'ok', feishu: 'ok' } },
+  { id: 'n6', kind: 'result', task: 't3', day: '今天', at: '08:31', items: [
+      { title: '平台告警日报 · 11-16', body: '昨天共 7 条告警。P1 2 条：atlas-app 内存超限重启（02:14，已恢复）、knowledge 入库队列堆积（10:40，已恢复）；P2 5 条，详见正文。', tip: '' }],
+    acts: [['打开这次运行', 'toast:日报那次运行（本原型没画）', '']], ch: { site: 'ok', mail: 'ok' } },
+  { id: 'n7', kind: 'failed', task: 't5', day: '昨天', at: '23:00', title: '没能开始：公司台式机不在线',
+    body: '已经连续 2 次。恢复之前不再重复提醒；电脑连上、下一次运行正常时，这条会标成「已恢复」。', acts: [['查看任务', '#/ai/tasks/t5', '']], ch: { site: 'ok', mail: 'ok' } },
+];
+const NKIND = { result: ['bell', '结果'], pending: ['hand', '等你处理'], failed: ['alert', '失败'] };
+const unreadCount = () => NOTIFS.filter((n) => n.unread).length;
+const waitingTasks = () => TASKS.filter((t) => t.last.st === 'waiting');
+
+/* =====================================================================
+ * 运行时间：文案与「接下来几次」（与真正触发用同一段计算）
+ * ===================================================================== */
+const hm = (t) => { const [h, m] = String(t).split(':').map(Number); return h * 60 + m; };
+const pad = (n) => String(n).padStart(2, '0');
+function daysLabel(s) {
+  if (s.days === 'custom') return '每周' + s.wd.map((d) => WD[d]).join('、');
+  return s.days === 'work' ? '工作日' : '每天';
+}
+function schedText(s) {
+  if (s.sk === 'interval') return `${daysLabel(s)} ${s.from}–${s.to} · 每 ${s.every} 分钟`;
+  if (s.sk === 'daily') return `${daysLabel(s)} ${s.times.join('、')}`;
+  if (s.sk === 'weekly') return `每周${s.wd.map((d) => WD[d]).join('、')} ${s.times.join('、')}`;
+  if (s.sk === 'monthly') return `每月 ${s.dom} 日 ${s.times.join('、')}`;
+  if (s.sk === 'once') return `${s.date} ${s.times[0]}（只运行一次）`;
+  return `Cron ${s.cron || '0 */2 * * 1-5'}`;
+}
+function dayOk(s, d) {
+  const w = d.getDay();
+  if (s.days === 'work') return w >= 1 && w <= 5;
+  if (s.days === 'custom') return s.wd.includes(w);
+  return true;
+}
+function fmtWhen(d) {
+  const day0 = new Date(NOW); day0.setHours(0, 0, 0, 0);
+  const diff = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - day0) / 864e5);
+  const t = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  if (diff === 0) return `今天 ${t}`;
+  if (diff === 1) return `明天 ${t}`;
+  return `${d.getMonth() + 1}-${d.getDate()} 周${WD[d.getDay()]} ${t}`;
+}
+function fires(s, n = 5) {
+  if (s.sk === 'cron') return ['今天 16:00', '今天 18:00', '今天 20:00', '今天 22:00', '明天 00:00'].slice(0, n); // 示意：0 */2 * * 1-5
+  const out = [];
+  const d = new Date(NOW); d.setSeconds(0, 0);
+  const every = Math.max(1, +s.every || 1);
+  const days = s.sk === 'monthly' ? 160 : 45;
+  for (let i = 0; i < 60 * 24 * days && out.length < n; i++) {
+    d.setMinutes(d.getMinutes() + 1);
+    const m = d.getHours() * 60 + d.getMinutes();
+    let ok = false;
+    if (s.sk === 'interval') ok = dayOk(s, d) && m >= hm(s.from) && m <= hm(s.to) && (m - hm(s.from)) % every === 0;
+    else if (s.sk === 'daily') ok = dayOk(s, d) && s.times.some((t) => hm(t) === m);
+    else if (s.sk === 'weekly') ok = s.wd.includes(d.getDay()) && s.times.some((t) => hm(t) === m);
+    else if (s.sk === 'monthly') ok = d.getDate() === +s.dom && s.times.some((t) => hm(t) === m);
+    else if (s.sk === 'once') { const [mo, da] = s.date.split('-').map(Number); ok = d.getMonth() + 1 === mo && d.getDate() === da && hm(s.times[0]) === m; }
+    if (ok) out.push(fmtWhen(d));
+  }
+  return out;
+}
+const MIN_EVERY = 5;
+
+/* =====================================================================
+ * 状态与路由
+ * ===================================================================== */
+const S = {
+  notes: true, pop: null, modal: null, toast: null,
+  filter: 'all', q: '', dtab: 'runs', rfilter: 'all', unfold: {}, nfilter: 'all',
+  edit: null, secOpen: { what: true, when: true, how: true, notify: true }, instrOpen: false,
+  r2: 'wait', r2pick: { a: true, b: true, c: false }, r3: 'done', z0: 'propose',
+};
+function parseRoute() {
+  const h = (location.hash || '#/ai/tasks').slice(2).split('/');
+  return { p: h[0] || 'ai', a: h[1] || '', b: h[2] || '', c: h[3] || '' };
+}
+const go = (h) => { S.pop = null; location.hash = h; };
+/* 目标就是当前页时 hashchange 不触发，手动重画 */
+const nav = (h) => { S.pop = null; if (location.hash === h) render(); else location.hash = h; };
+window.addEventListener('hashchange', () => { S.modal = null; S.pop = null; S.instrOpen = false; render(); document.querySelector('.main')?.scrollTo(0, 0); });
+
+const PLATFORMS = [['ai', '智能平台', 'zap'], ['kb', '知识库', 'book'], ['skills', '技能', 'spark'], ['mcp', 'MCP', 'plug'], ['models', '模型', 'layers']];
+function topbar(r) {
+  const n = unreadCount();
+  return `<header class="top">
+    <div class="brand" data-go="#/ai/tasks"><span class="logo">A</span>Atlas</div>
+    <nav class="pnav">${PLATFORMS.map(([id, nm, icn]) => `<a ${id === 'ai' ? 'href="#/ai/tasks"' : 'data-act="toast" data-msg="原型只画了智能平台"'} class="${r.p === id ? 'on' : ''}">${ic(icn)}${nm}</a>`).join('')}</nav>
+    <div class="top-right">
+      <button class="btn sm ${S.notes ? '' : 'ghost'}" data-act="toggleNotes">${ic('bulb')}设计说明</button>
+      <button class="ibtn bellbtn ${r.a === 'notify' ? 'on' : ''}" data-pop="bell" title="通知">${ic('bell')}${n ? `<span class="badge">${n}</span>` : ''}</button>
+      ${av(ME.name, ME.color, 30, false)}
+    </div></header>`;
+}
+const HIST = [
+  { id: 'z0', title: 'BOSS 直聘看看有没有新消息', group: '今天', dev: true },
+  { id: 'x1', title: '整理 Q4 平台路线图', group: '昨天' },
+  { id: 'x2', title: '客户退款政策怎么回复', group: '近 7 天' },
+];
+function sider(r) {
+  const w = waitingTasks().length;
+  const items = [
+    ['#/ai/agents', 'bot', '智能体', false, ''],
+    ['#/ai/tasks', 'clock', '定时任务', r.a === 'tasks', w ? `<span class="badge" title="${w} 个在等你处理">${w}</span>` : ''],
+    ['#/ai/devices', 'laptop', '我的设备', false, ''],
+    ['#/ai/me', 'user', '个性化', r.a === 'me', ''],
+  ];
+  const groups = [...new Set(HIST.map((t) => t.group))];
+  return `<aside class="sider"><div class="sider-top">
+    <div class="new-chat" data-act="toast" data-msg="新对话（本原型未改动）">${ic('plus')}<span>新对话</span></div>
+    ${items.map(([h, icn, t, on, extra]) => `<a class="snav ${on ? 'on' : ''}" ${['#/ai/agents', '#/ai/devices'].includes(h) ? `data-act="toast" data-msg="${t}（本原型未改动）"` : `href="${h === '#/ai/me' ? '#/ai/me/notify' : h}"`}>${ic(icn)}<span>${t}</span>${extra}</a>`).join('')}</div>
+    <div class="hist"><div class="hist-head"><span class="xs muted" style="font-weight:600">最近对话</span></div>
+    ${groups.map((g) => `<div class="hist-group">${g}</div>${HIST.filter((t) => t.group === g).map((t) => `
+      <div class="hist-item ${r.a === 'c' && r.b === t.id ? 'on' : ''}" ${t.id === 'z0' ? 'data-go="#/ai/c/z0"' : 'data-act="toast" data-msg="普通对话（本原型未改动）"'}>
+        <span class="t">${esc(t.title)}</span>${t.dev ? `<span class="faint" title="在大阪云主机上运行">${ic('laptop')}</span>` : ''}</div>`).join('')}`).join('')}
+    <div class="xs faint" style="padding:12px 8px 0;line-height:1.6">定时运行的对话不在这里，从<a href="#/ai/tasks">定时任务</a>和<a href="#/ai/notify">通知</a>进去看</div>
+    </div></aside>`;
+}
+
+/* =====================================================================
+ * 渲染
+ * ===================================================================== */
+function render() {
+  const r = parseRoute();
+  const white = r.a === 'c' || (r.a === 'tasks' && r.b === 'edit');
+  document.getElementById('app').innerHTML = topbar(r) +
+    `<div class="body">${sider(r)}<main class="main ${white ? 'white' : ''}">${page(r)}</main>${S.notes ? notesPanel(r) : ''}</div>` +
+    modal() + (S.toast ? `<div class="toast">${esc(S.toast)}</div>` : '') + pop();
+}
+function page(r) {
+  if (r.a === 'tasks' && r.b === 'edit') return taskEditor();
+  if (r.a === 'tasks' && r.b) return taskDetail(r.b);
+  if (r.a === 'c') return chatPage(r.b);
+  if (r.a === 'notify') return notifyPage();
+  if (r.a === 'me') return channelsPage();
+  if (r.a === 'mobile') return mobilePage();
+  return taskList();
+}
+function toast(msg) { S.toast = msg; render(); clearTimeout(toast.t); toast.t = setTimeout(() => { S.toast = null; render(); }, 2200); }
+const chIcon = (id, size = 20) => { const c = CH[id]; return `<span class="chav" style="width:${size}px;height:${size}px;background:${c.color}" title="${c.name}">${c.letter || ic(c.icon)}</span>`; };
+const chList = (ids) => `<span class="chs">${ids.map((i) => chIcon(i)).join('')}</span>`;
+const devDot = (d) => `<span class="ddot ${d.online ? 'on' : 'off'}" title="${d.online ? '在线' : '离线'}"></span>`;
+const cbx = (on, extra = '') => `<span class="cbx ${on ? 'on' : ''} ${extra}">${on ? ic('check') : ''}</span>`;
+function nextText(t) {
+  if (!t.on) return '<span class="muted">已暂停</span>';
+  const nx = fires(t.sched, 1)[0] || '—';
+  const d = t.dev && devOf(t.dev);
+  let warn = '';
+  if (t.last.st === 'waiting') warn = `<div class="waitpill">${ic('hand')}在等你，到点跳过</div>`;
+  else if (d && !d.online) warn = `<div class="waitpill">${ic('wifioff')}电脑不在线</div>`;
+  return `<span>${nx}</span>${warn}`;
+}
+
+/* =====================================================================
+ * 定时任务列表
+ * ===================================================================== */
+function taskList() {
+  const w = waitingTasks();
+  const abnormal = (t) => ['waiting', 'failed'].includes(t.last.st);
+  const counts = { all: TASKS.length, on: TASKS.filter((t) => t.on).length, off: TASKS.filter((t) => !t.on).length, bad: TASKS.filter(abnormal).length };
+  const list = TASKS.filter((t) => S.filter === 'all' || (S.filter === 'on' && t.on) || (S.filter === 'off' && !t.on) || (S.filter === 'bad' && abnormal(t)))
+    .filter((t) => !S.q || t.name.includes(S.q));
+  return `<div class="page">
+    <div class="page-head"><h1>定时任务</h1><span class="sp"></span>
+      <button class="btn" data-go="#/ai/notify">${ic('bell')}通知</button>
+      <button class="btn primary" data-act="newTask">${ic('plus')}新建定时任务</button></div>
+    ${w.map((t) => `<div class="banner warn" style="margin-bottom:14px">${ic('hand')}<div class="grow"><b>「${esc(t.name)}」在等你处理</b><div class="sm">${esc(t.last.at)} 那次运行${esc(t.last.text.replace('，等你确认', ''))}，等你确认后才发。确认之前，到点的运行会跳过。</div></div><button class="btn sm" data-go="#/ai/c/${t.last.go}">去处理</button></div>`).join('')}
+    <div class="toolbar">
+      <div class="seg">${[['all', '全部'], ['on', '启用中'], ['off', '已暂停'], ['bad', '需要关注']].map(([k, n]) => `<a class="${S.filter === k ? 'on' : ''}" data-act="setS" data-k="filter" data-v="${k}">${n} ${counts[k]}</a>`).join('')}</div>
+      <span class="sp"></span>
+      <div class="search" style="width:240px">${ic('search')}<input class="input" placeholder="搜索任务名" data-bind="q" data-live value="${esc(S.q)}"></div>
+    </div>
+    <table class="table"><thead><tr><th style="width:23%">任务</th><th style="width:15%">运行时间</th><th style="width:12%">下次运行</th><th>最近一次</th><th style="width:96px">通知到</th><th style="width:56px">启用</th><th style="width:40px"></th></tr></thead><tbody>
+    ${list.map((t) => { const a = agentOf(t.agent); const d = t.dev && devOf(t.dev); return `<tr class="click" data-go="#/ai/tasks/${t.id}">
+      <td><div style="font-weight:600">${esc(t.name)}</div><div class="row xs muted" style="margin-top:4px;gap:6px;white-space:nowrap;overflow:hidden">${av(a.name, a.color, 16)}${esc(a.name)}${d ? `<span class="faint">·</span>${devDot(d)}${esc(d.name)}` : ''}</div></td>
+      <td class="sm">${esc(schedText(t.sched))}</td>
+      <td class="sm">${nextText(t)}</td>
+      <td class="sm"><div class="row" style="gap:6px;align-items:flex-start">${stTag(t.last.st)}<span class="grow">${esc(t.last.text)}<div class="xs faint">${esc(t.last.at)}</div></span></div></td>
+      <td>${chList(t.ch)}</td>
+      <td><span class="switch ${t.on ? 'on' : ''}" data-act="toggleTask" data-id="${t.id}"></span></td>
+      <td><button class="ibtn sm" data-pop="taskMore:${t.id}">${ic('more')}</button></td></tr>`; }).join('')}
+    ${list.length ? '' : '<tr><td colspan="7"><div class="empty">没有符合条件的任务</div></td></tr>'}
+    </tbody></table>
+    <div class="xs faint" style="margin-top:10px">时间按你的时区（中国标准时间 UTC+8）。每次到点都以你的身份新开一个对话运行。</div>
+  </div>`;
+}
+
+/* =====================================================================
+ * 定时任务详情
+ * ===================================================================== */
+function taskDetail(id) {
+  const t = taskOf(id); const a = agentOf(t.agent); const d = t.dev && devOf(t.dev);
+  const tab = S.dtab;
+  const banner = t.last.st === 'waiting'
+    ? `<div class="banner warn" style="margin-bottom:16px">${ic('hand')}<div class="grow"><b>今天 14:00 那次运行在等你确认 3 条回复草稿</b><div class="sm">确认之前，到点的运行会跳过；没有期限。不想处理了可以取消这次运行，之后照常到点运行。</div></div><button class="btn sm primary" data-go="#/ai/c/r2">去确认</button><button class="btn sm" data-act="cancelRun">取消这次运行</button></div>`
+    : d && !d.online ? `<div class="banner err" style="margin-bottom:16px">${ic('wifioff')}<div class="grow"><b>${d.name}不在线</b><div class="sm">最近两次（昨天 23:00、前天 23:00）都没能开始。电脑连上后到点照常运行；失败通知已发过一次，恢复前不再重复。</div></div><button class="btn sm" data-act="toast" data-msg="我的设备（本原型没画）">查看设备</button></div>` : '';
+  return `<div class="page">
+    <div class="crumb"><a href="#/ai/tasks">定时任务</a>${ic('right')}<span>${esc(t.name)}</span></div>
+    <div class="page-head"><h1>${esc(t.name)}</h1>${t.on ? '<span class="tag success">启用中</span>' : '<span class="tag">已暂停</span>'}<span class="sp"></span>
+      <span class="row sm muted" style="gap:8px;margin-right:6px">启用<span class="switch ${t.on ? 'on' : ''}" data-act="toggleTask" data-id="${t.id}"></span></span>
+      <button class="btn" data-act="runNow" data-id="${t.id}">${ic('play')}立即运行</button>
+      <button class="btn" data-act="editTask" data-id="${t.id}">${ic('pencil')}编辑</button>
+      <button class="ibtn" data-pop="taskMore:${t.id}">${ic('more')}</button></div>
+    ${banner}
+    <div class="sumgrid">
+      <div class="card"><div class="k">${ic('clock')}运行时间</div><div style="font-weight:600">${esc(schedText(t.sched))}</div><div class="sm muted" style="margin-top:4px">下次：${nextText(t)}</div></div>
+      <div class="card"><div class="k">${ic('bot')}智能体</div><div class="row" style="gap:8px">${av(a.name, a.color, 22)}<b style="font-weight:600">${esc(a.name)}</b></div><div class="sm muted row" style="margin-top:6px;gap:6px">${d ? `${devDot(d)}在 ${esc(d.name)} 上运行` : '在平台沙箱里运行'}</div></div>
+      <div class="card"><div class="k">${ic('bell')}通知到</div><div class="row" style="gap:6px;flex-wrap:wrap">${t.ch.map((c) => `<span class="row xs" style="gap:4px">${chIcon(c, 18)}${CH[c].name}</span>`).join('')}</div></div>
+      <div class="card"><div class="k">${ic('history')}近 7 天</div><div class="nums">
+        <div><b>${t.week.runs}</b><span>运行</span></div><div><b>${t.week.notified}</b><span>通知</span></div><div><b>${t.week.skipped}</b><span>跳过</span></div><div><b style="${t.week.failed ? 'color:var(--danger)' : ''}">${t.week.failed}</b><span>失败</span></div><div><b>${t.week.tokens}</b><span>Token</span></div></div></div>
+    </div>
+    <div class="tabs">${[['runs', '运行记录'], ['notifs', '通知记录'], ['conf', '指令与设置']].map(([k, n]) => `<a class="${tab === k ? 'on' : ''}" data-act="setS" data-k="dtab" data-v="${k}">${n}</a>`).join('')}</div>
+    ${tab === 'runs' ? runsTab(t) : tab === 'notifs' ? notifsTab(t) : confTab(t)}
+  </div>`;
+}
+function runsTab(t) {
+  const f = S.rfilter;
+  const keep = (x) => f === 'all' || (f === 'notified' && x.st === 'notified') || (f === 'bad' && ['waiting', 'failed', 'skipped'].includes(x.st));
+  const groups = runsOf(t).map((g) => ({ ...g, items: g.items.filter((x) => (x.fold ? f === 'all' : keep(x))) })).filter((g) => g.items.length);
+  return `<div class="row" style="margin-bottom:4px"><div class="seg">${[['all', '全部'], ['notified', '有通知'], ['bad', '等你处理 / 跳过 / 失败']].map(([k, n]) => `<a class="${f === k ? 'on' : ''}" data-act="setS" data-k="rfilter" data-v="${k}">${n}</a>`).join('')}</div>
+    <span class="sp"></span><span class="xs muted">点一条看那次运行的完整过程</span></div>
+    ${groups.map((g) => `<div class="tl-day">${g.day}${g.sum ? ` <span class="faint" style="font-weight:400">· ${g.sum}</span>` : ''}</div><div class="card">${g.items.map(runRow).join('')}</div>`).join('') || '<div class="empty">没有符合条件的记录</div>'}`;
+}
+function runRow(x) {
+  if (x.fold) {
+    const open = S.unfold[x.fold];
+    let sub = '';
+    if (open) {
+      const rows = [];
+      for (let m = hm(x.to); m >= hm(x.from) && rows.length < 8; m -= 15) rows.push(`<div class="tl-row sub click" data-go="#/ai/c/r1"><span class="tm">${pad(Math.floor(m / 60))}:${pad(m % 60)}</span><span>${stTag('quiet')}</span><span>没有未读</span><span class="xs">${50 + (m % 40)} 秒</span><span class="xs">${18 + (m % 7)}k tokens</span><span>${ic('right')}</span></div>`);
+      sub = rows.join('') + (x.n > 8 ? `<div class="tl-row sub"><span></span><span></span><span>… 还有 ${x.n - 8} 次</span><span></span><span></span><span></span></div>` : '');
+    }
+    return `<div class="tl-row fold" data-act="unfold" data-k="${x.fold}"><span class="tm">${x.to}</span><span class="xs">${x.from}–${x.to}</span><span>${x.n} 次运行，${esc(x.text)}</span><span></span><span></span><span>${ic(open ? 'down' : 'right')}</span></div>${sub}`;
+  }
+  return `<div class="tl-row ${x.go ? 'click' : ''}" ${x.go ? `data-go="#/ai/c/${x.go}"` : ''}>
+    <span class="tm">${x.at}</span><span>${stTag(x.st)}</span>
+    <span>${esc(x.text)}${x.xtra ? `<div class="xtra">${esc(x.xtra)}</div>` : ''}</span>
+    <span class="xs muted">${x.dur || ''}</span><span class="xs muted">${x.tok ? x.tok + ' tokens' : ''}</span><span class="faint">${x.go ? ic('right') : ''}</span></div>`;
+}
+function delivRow(ch) {
+  return `<div class="deliv">${Object.entries(ch).map(([c, s]) => `<span class="d">${chIcon(c, 16)}${CH[c].name}<span class="${s}">${s === 'ok' ? ic('check') : ic('x')}</span></span>`).join('')}</div>`;
+}
+function notifsTab(t) {
+  const list = NOTIFS.filter((n) => n.task === t.id);
+  if (!list.length) return '<div class="empty">这个任务还没发过通知</div>';
+  return `<table class="table"><thead><tr><th style="width:110px">时间</th><th>内容</th><th style="width:260px">送达</th><th style="width:90px">状态</th></tr></thead><tbody>
+    ${list.map((n) => `<tr class="click" ${n.go ? `data-go="${n.go}"` : ''}><td class="sm">${n.day} ${n.at}</td>
+      <td><div class="row" style="gap:6px">${kindTag(n)}<b style="font-weight:600">${esc(n.title || n.items.map((i) => i.title).join('；'))}</b></div>${n.fail ? `<div class="xs" style="color:var(--danger);margin-top:4px">${esc(n.fail)}</div>` : ''}${n.note ? `<div class="xs muted" style="margin-top:4px">${esc(n.note)}</div>` : ''}</td>
+      <td>${delivRow(n.ch)}</td><td class="sm">${n.done ? '<span class="tag success">已处理</span>' : n.unread ? '<span class="tag primary">未读</span>' : '<span class="muted">已读</span>'}</td></tr>`).join('')}
+  </tbody></table>`;
+}
+const kindTag = (n) => `<span class="tag ${n.kind === 'pending' ? 'warning' : n.kind === 'failed' ? 'danger' : 'primary'}">${NKIND[n.kind][1]}</span>`;
+function confTab(t) {
+  const a = agentOf(t.agent); const d = t.dev && devOf(t.dev);
+  const occ = ['有结果时（智能体调用「通知我」）', '需要你处理时', '失败时', ...(t.every ? ['每次运行完都发摘要'] : [])];
+  return `<div class="card pad"><dl class="kv">
+    <dt>智能体</dt><dd>${esc(a.name)}${d ? ` · 在 ${esc(d.name)} 上运行` : ''}</dd>
+    <dt>模型</dt><dd>跟随智能体（${esc(a.model)}）</dd>
+    <dt>指令</dt><dd><pre class="codebox" style="margin:0;padding:12px 14px;white-space:pre-wrap;font-family:var(--font);font-size:13.5px;line-height:1.7">${esc(promptOf(t)) || '<span class="muted">（空）</span>'}</pre></dd>
+    <dt>运行时间</dt><dd>${esc(schedText(t.sched))} · 中国标准时间</dd>
+    <dt>执行方式</dt><dd>${MODES[t.mode][0]}</dd>
+    <dt>工作目录</dt><dd><code>${d ? `~/atlas-projects/定时任务/${esc(t.name)}` : `定时任务/${esc(t.name)}`}</code> <span class="xs muted">每次运行共用</span></dd>
+    <dt>通知时机</dt><dd>${occ.join('、')}</dd>
+    <dt>通知到</dt><dd>${t.ch.map((c) => CH[c].name).join('、')}</dd>
+    <dt>创建</dt><dd class="muted">${esc(t.created)}</dd>
+  </dl><div class="divider"></div><div class="row"><span class="sp"></span><button class="btn" data-act="editTask" data-id="${t.id}">${ic('pencil')}编辑</button></div></div>`;
+}
+
+/* =====================================================================
+ * 新建 / 编辑
+ * ===================================================================== */
+function editFromTpl(tplId) {
+  const p = tplOf(tplId);
+  S.edit = { id: null, tpl: p.id, name: p.task, agent: p.agent, dev: p.dev || 'vps', prompt: p.prompt, sched: clone(p.sched),
+    mode: 0, ch: [...p.ch], every: !!p.every, fail: true, test: null, warn: p.warn };
+}
+function editFromTask(t) {
+  S.edit = { id: t.id, tpl: t.tpl, name: t.name, agent: t.agent, dev: t.dev || 'vps', prompt: promptOf(t), sched: clone(t.sched),
+    mode: t.mode, ch: [...t.ch], every: t.every, fail: true, test: null };
+}
+function sec(key, title, sum, body) {
+  const open = S.secOpen[key];
+  return `<div class="sec ${open ? 'open' : ''}"><div class="sec-h" data-act="secToggle" data-k="${key}">${ic('right', 'chev')}<h3>${title}</h3><span class="sum">${open ? '' : sum}</span></div><div class="sec-b">${body}</div></div>`;
+}
+const rc = (on, t, d, act) => `<div class="radio-card ${on ? 'on' : ''}" ${act}><span class="r"></span><div><div style="font-weight:600">${t}</div><div class="sm muted">${d}</div></div></div>`;
+function schedEditor(s) {
+  const kinds = [['interval', '每隔一段时间'], ['daily', '每天'], ['weekly', '每周'], ['monthly', '每月'], ['once', '只运行一次'], ['cron', 'Cron']];
+  const timeSel = (k, v) => `<select class="select" data-bind="sched.${k}" data-rerender>${Array.from({ length: 24 }, (_, h) => [`${pad(h)}:00`, `${pad(h)}:30`]).flat().map((x) => `<option ${x === v ? 'selected' : ''}>${x}</option>`).join('')}</select>`;
+  const daysSel = `<select class="select" data-bind="sched.days" data-rerender>${[['all', '每天'], ['work', '工作日（周一到周五）'], ['custom', '自选星期']].map(([v, n]) => `<option value="${v}" ${s.days === v ? 'selected' : ''}>${n}</option>`).join('')}</select>`;
+  const wdPick = `<span class="wdp">${[1, 2, 3, 4, 5, 6, 0].map((w) => `<a class="${s.wd.includes(w) ? 'on' : ''}" data-act="wd" data-v="${w}">${WD[w]}</a>`).join('')}</span>`;
+  const timesEd = `<span class="row" style="gap:6px;flex-wrap:wrap">${s.times.map((x, i) => `<span class="chip">${x}<span class="x" data-act="rmTime" data-v="${i}">${ic('x')}</span></span>`).join('')}
+    <select class="select" data-act-change="addTime" style="width:110px"><option value="">+ 加时间</option>${Array.from({ length: 48 }, (_, i) => `${pad(Math.floor(i / 2))}:${i % 2 ? '30' : '00'}`).map((x) => `<option>${x}</option>`).join('')}</select></span>`;
+  let body = '';
+  if (s.sk === 'interval') {
+    const bad = +s.every < MIN_EVERY;
+    body = `<div class="frow">每 <input class="input" style="width:70px" type="number" min="${MIN_EVERY}" value="${esc(s.every)}" data-bind="sched.every" data-rerender> 分钟，从 ${timeSel('from', s.from)} 到 ${timeSel('to', s.to)}</div>
+      <div class="frow">${daysSel}${s.days === 'custom' ? wdPick : ''}</div>
+      ${bad ? `<div class="help" style="color:var(--danger)">最短每 ${MIN_EVERY} 分钟一次（管理员在运行期配置里设的）</div>` : ''}`;
+  } else if (s.sk === 'daily') body = `<div class="frow">${daysSel}${s.days === 'custom' ? wdPick : ''}</div><div class="frow">在 ${timesEd}</div>`;
+  else if (s.sk === 'weekly') body = `<div class="frow">每周 ${wdPick}</div><div class="frow">在 ${timesEd}</div>`;
+  else if (s.sk === 'monthly') body = `<div class="frow">每月 <select class="select" data-bind="sched.dom" data-rerender>${Array.from({ length: 28 }, (_, i) => `<option ${+s.dom === i + 1 ? 'selected' : ''}>${i + 1}</option>`).join('')}</select> 日，在 ${timesEd}</div><div class="help">只能选 1–28 日，避免小月没有这一天</div>`;
+  else if (s.sk === 'once') body = `<div class="frow">在 <input class="input" style="width:110px" value="${esc(s.date)}" data-bind="sched.date" data-rerender> ${timeSel('t0', s.times[0])} 运行一次，之后任务自动暂停</div>`;
+  else body = `<div class="frow"><input class="input mono" style="width:220px" value="${esc(s.cron || '0 */2 * * 1-5')}" data-bind="sched.cron"> <span class="sm muted">分 时 日 月 星期</span></div><div class="help">给熟悉 Cron 的人用；保存前会检查格式和最短间隔</div>`;
+  const nx = fires(s);
+  return `<div class="seg" style="flex-wrap:wrap">${kinds.map(([k, n]) => `<a class="${s.sk === k ? 'on' : ''}" data-act="sk" data-v="${k}">${n}</a>`).join('')}</div>
+    ${body}
+    <div class="divider"></div>
+    <div class="sm muted row" style="gap:6px">${ic('globe')}按你的时区：中国标准时间（UTC+8）</div>
+    <div class="sm" style="margin-top:8px">接下来 ${nx.length} 次：</div><div class="fires">${nx.map((x) => `<span>${x}</span>`).join('') || '<span>时间已过，不会再运行</span>'}</div>`;
+}
+function taskEditor() {
+  if (!S.edit) editFromTpl('zp-notify');
+  const e = S.edit; const a = agentOf(e.agent); const devAgent = a.kind === 'device';
+  const back = e.id ? `#/ai/tasks/${e.id}` : '#/ai/tasks';
+  const what = `<div class="col" style="gap:14px">
+      <div><label class="label">名称</label><input class="input" value="${esc(e.name)}" data-bind="name" placeholder="例如：BOSS 直聘新消息提醒"></div>
+      <div class="row" style="gap:12px;align-items:flex-start">
+        <div class="grow"><label class="label">智能体</label><select class="select" data-bind="agent" data-rerender>${AGENTS.map((x) => `<option value="${x.id}" ${x.id === e.agent ? 'selected' : ''}>${x.name}（${x.note}）</option>`).join('')}</select></div>
+        ${devAgent ? `<div style="width:190px"><label class="label">在哪台电脑上</label><select class="select" data-bind="dev" data-rerender>${DEVICES.map((d) => `<option value="${d.id}" ${d.id === e.dev ? 'selected' : ''}>${d.name}${d.online ? '' : '（不在线）'}</option>`).join('')}</select></div>` : ''}
+      </div>
+      <div><label class="label">模型</label><select class="select" style="width:280px"><option>跟随智能体（${a.model}）</option><option>MiniMax-M3.1-Flash</option><option>gemini-2.5-flash</option></select>
+        <div class="help">只在这个任务里换；跑得频繁的巡检可以选便宜一点的模型</div></div>
+      ${devAgent && !devOf(e.dev).online ? `<div class="banner warn">${ic('wifioff')}<div>${devOf(e.dev).name}现在不在线。可以先保存；到点时如果还不在线，这次不会运行，按「失败时」通知你。</div></div>` : ''}
+      <div><label class="label">让它做什么</label>
+        <textarea class="input" rows="13" data-bind="prompt" placeholder="写清楚：去哪里看什么、什么情况下通知你、通知里写什么、哪些事不要做">${esc(e.prompt)}</textarea>
+        <div class="row" style="margin-top:8px;gap:6px;flex-wrap:wrap"><span class="xs muted">定时运行时它还能用：</span>
+          <span class="tchip" title="发一条通知给你：标题、正文、这件事的标识。同一个标识只通知一次">${ic('bell')}通知我</span>
+          <span class="tchip" title="停下来问你，等你回答再继续；没有期限">${ic('help')}问我</span>
+          <span class="tchip" title="网页要登录或验证时，请你接管浏览器，交还后继续">${ic('hand')}请我接管</span></div>
+        ${e.warn ? `<div class="banner warn" style="margin-top:10px">${ic('alert')}<div>${esc(e.warn)}</div></div>` : ''}
+      </div></div>`;
+  const how = `<div class="col" style="gap:8px">${MODES.map(([t, d], i) => rc(e.mode === i, t + (i === a.mode ? ' <span class="tag" style="margin-left:6px">智能体默认</span>' : ''), d, `data-act="mode" data-v="${i}"`)).join('')}</div>
+    <div class="divider"></div>
+    <dl class="kv" style="grid-template-columns:120px 1fr">
+      <dt>每次运行</dt><dd>新开一个对话，上下文互不影响</dd>
+      <dt>工作目录</dt><dd><code>${devAgent ? `~/atlas-projects/定时任务/${esc(e.name || '未命名')}` : `定时任务/${esc(e.name || '未命名')}`}</code><div class="help">每次运行共用，智能体可以把「上次看到的结果」存在这里</div></dd>
+      <dt>上次还没结束</dt><dd>这次跳过，记在运行记录里（包括上次在等你确认、等你接管）</dd>
+    </dl>`;
+  const occ = [
+    ['有结果时', '智能体调用「通知我」时。同一个标识只通知一次', true, true],
+    ['需要你处理时', '运行停下来等你确认、回答或接管登录时', true, true],
+    ['失败时', '没完成或没能开始。连续失败只通知一次，恢复后把那条标成「已恢复」', e.fail, false, 'fail'],
+    ['每次运行完都发摘要', '不管有没有事都发；适合日报类任务', e.every, false, 'every'],
+  ];
+  const notify = `<label class="label">什么时候通知你</label>
+    ${occ.map(([t, d, on, fixed, k]) => `<div class="check ${fixed ? 'fixed' : ''}" ${fixed ? '' : `data-act="occ" data-k="${k}"`}>${cbx(on, fixed ? 'dis' : '')}<div><div style="font-weight:550">${t}${fixed ? '<span class="xs faint" style="margin-left:6px">总是</span>' : ''}</div><div class="sm muted">${d}</div></div></div>`).join('')}
+    <div class="divider"></div>
+    <label class="label">发到哪里</label>
+    <div class="row" style="gap:8px;flex-wrap:wrap">${Object.keys(CH).map((c) => {
+      const b = BIND[c]; const on = e.ch.includes(c);
+      if (!b.on) return `<span class="chtog dis" data-go="#/ai/me/notify" title="还没绑定，点一下去绑定">${chIcon(c)}${CH[c].name}<span class="xs faint">去绑定</span></span>`;
+      return `<span class="chtog ${on ? 'on' : ''}" ${c === 'site' ? 'title="站内通知总是开着"' : `data-act="ch" data-v="${c}"`}>${chIcon(c)}${CH[c].name}${on ? ic('check') : ''}</span>`;
+    }).join('')}</div>
+    <div class="help" style="margin-top:8px">${ic('moon')} 免打扰 22:00–08:00（跟随<a href="#/ai/me/notify">个人设置</a>）：期间只进站内通知，结束后推一条汇总</div>`;
+  const s = e.sched;
+  return `<div class="ed">
+    <div class="ed-head"><a class="ibtn" href="${back}">${ic('left')}</a><h2>${e.id ? `编辑：${esc(e.name)}` : '新建定时任务'}</h2>
+      ${e.id ? '' : `<span class="tag">模板：${esc(tplOf(e.tpl).group === '通用' ? tplOf(e.tpl).name : tplOf(e.tpl).group + ' · ' + tplOf(e.tpl).name)}</span><a class="sm" data-act="newTask">换模板</a>`}
+      <span class="sp"></span><a class="btn" href="${back}">取消</a><button class="btn primary" data-act="saveTask">${e.id ? '保存' : '保存并启用'}</button></div>
+    <div class="ed-body"><div class="ed-left"><div class="ed-left-in">
+      ${sec('what', '做什么', esc(e.name), what)}
+      ${sec('when', '什么时候运行', esc(schedText(s)), schedEditor(s))}
+      ${sec('how', '运行方式', MODES[e.mode][0], how)}
+      ${sec('notify', '通知', e.ch.map((c) => CH[c].name).join('、'), notify)}
+    </div></div>
+    ${testPanel(e)}</div></div>`;
+}
+function testPanel(e) {
+  const a = agentOf(e.agent); const kind = e.tpl;
+  const sends = kind === 'zp-auto';
+  let body;
+  if (!e.test) {
+    body = `<div class="empty" style="padding:40px 10px"><div class="ill">${ic('play')}</div><h3>试跑一次</h3><div class="sm">现在就按上面的设置真的跑一次，看看它会做什么、会发出什么通知。<br>试跑的通知只显示在这里，不会真的发出，也不算「已提醒过」。</div>
+      ${sends ? `<div class="banner warn" style="margin-top:14px;text-align:left">${ic('alert')}<div>试跑也是真的运行：这个任务会以你的名义回复 BOSS 直聘上的消息，试跑时同样会发出去。</div></div>` : ''}
+      <button class="btn primary" style="margin-top:16px" data-act="test">${ic('play')}试跑一次</button></div>`;
+  } else if (e.test === 'run') {
+    body = `<div class="steps"><div class="steps-b">
+      <div class="step"><span class="ic">${ic('globe')}</span>打开 BOSS 直聘消息页<span class="tm">2s</span></div>
+      <div class="step"><span class="ic">${ic('eye')}</span>看屏幕：消息列表<span class="tm">4s</span></div>
+      <div class="step"><span class="spin"></span>正在读「张三 · 字节跳动」的会话…</div></div></div>`;
+  } else {
+    const preview = (title, text, tip, key) => `<div class="nblock"><div class="h">${ic('bell')}${title}</div><div class="sm" style="margin-top:4px">${text}${tip ? `<div class="muted">${tip}</div>` : ''}</div>${key ? `<div class="xs faint" style="margin-top:6px">标识：${key}</div>` : ''}</div>`;
+    const again = `<div class="row" style="margin-top:14px;gap:8px"><a class="btn sm" data-act="toast" data-msg="打开试跑对话（本原型没画）">${ic('ext')}打开试跑对话</a><button class="btn sm" data-act="test">${ic('refresh')}再试一次</button></div>`;
+    const where = `<div class="xs muted" style="margin-top:8px">真正运行时，会合成一条推送发到：${e.ch.map((c) => CH[c].name).join('、')}</div>`;
+    if (kind === 'zp-notify') body = `<div class="steps"><div class="steps-h">${ic('check')}用了 7 步 · 1 分 36 秒 · 41k tokens</div></div>
+      <div class="m-ai"><div class="prose" style="font-size:14px"><p>有 2 个会话有未读，已经各发了一条通知。两个会话都点开读过，BOSS 直聘那边已显示为已读。</p></div></div>
+      <div class="sm" style="font-weight:600;margin-bottom:4px">会发出的通知（试跑，没有真的发）</div>
+      ${preview('张三 · 字节跳动 · HRBP', '「您好，看了您的简历…周三下午方便电话聊聊吗？」（14:21）', '建议：回复周三 15:00 后都可以。', '张三@14:21')}
+      ${preview('王五 · 锐仕方达 · 猎头顾问', '「有个 AI 平台架构师的机会…有兴趣吗？」（14:26）', '建议：先问清公司和团队规模。', '王五@14:26')}${where}${again}`;
+    else if (kind === 'zp-draft') body = `<div class="steps"><div class="steps-h">${ic('check')}用了 9 步 · 3 分 50 秒 · 37k tokens</div></div>
+      <div class="ask" style="margin-top:6px"><b>${ic('help')} 这 3 条回复要发吗？</b><div class="sm muted" style="margin-top:4px">试跑也会停在「问我」这一步，在这里回答。</div>
+        <div class="sm" style="margin-top:8px;line-height:1.8">张三：「您好，周三 15:00 以后都方便，您看几点合适？」<br>王五：「感谢推荐！方便说下是哪家公司、团队多大吗？」<br>赵六：「感谢邀请，可以先发我一份公司介绍吗？」</div>
+        <div class="banner warn" style="margin-top:10px">${ic('alert')}<div>在这里点「发送」会真的发到 BOSS 直聘；只想看效果就点「都不回复」。</div></div>
+        <div class="row" style="margin-top:10px;gap:8px"><span class="sp"></span><button class="btn sm" data-act="toast" data-msg="试跑结束：都不回复">都不回复</button><button class="btn sm primary" data-act="toast" data-msg="（原型）真的发送 3 条">${ic('send')}发送</button></div></div>${again}`;
+    else if (kind === 'zp-auto') body = `<div class="steps"><div class="steps-h">${ic('check')}用了 12 步 · 2 分 41 秒 · 49k tokens</div></div>
+      <div class="m-ai"><div class="prose" style="font-size:14px"><p>3 个会话有未读：按规则回复了 2 条（已真的发出），1 条规则以外的转给你。</p></div></div>
+      <div class="sm" style="font-weight:600;margin-bottom:4px">会发出的通知（试跑，没有真的发）</div>
+      ${preview('已回复：张三 · 字节跳动', '对方：「周三下午方便电话聊聊吗？」<br>我回：「您好，工作日 14:00–18:00 都方便，您看哪个时间合适？」', '', '张三@14:21')}
+      ${preview('已回复：王五 · 锐仕方达', '对方：「期望薪资多少？」<br>我回：「期望 45–55k，具体可以聊」', '', '王五@14:26')}
+      ${preview('转给你：赵六 · 星图智能', '「我们在做 Agent 平台，想约您聊聊技术合伙人的机会。」', '规则里没有这一类，没有回复。', '赵六@14:30')}${where}${again}`;
+    else body = `<div class="steps"><div class="steps-h">${ic('check')}用了 5 步 · 48 秒 · 18k tokens</div></div>
+      <div class="m-ai"><div class="prose" style="font-size:14px"><p>跑完了，这次没有要通知你的。</p></div></div>
+      <div class="banner gray">${ic('bell')}<div>这次不会发通知。${e.every ? '你勾了「每次运行完都发摘要」，真正运行时会发一条摘要。' : ''}</div></div>${again}`;
+  }
+  return `<div class="ed-preview"><div class="ph">${ic('play')}<b>试跑</b><span class="sp"></span>${av(a.name, a.color, 18)}<span class="xs muted">${esc(a.name)}</span></div><div class="pb">${body}</div></div>`;
+}
+
+/* =====================================================================
+ * 对话页：定时运行 + 从对话建任务
+ * ===================================================================== */
+function stepsBox(head, steps, open) {
+  return `<div class="steps"><div class="steps-h">${ic(open ? 'down' : 'right')}${head}</div>${open ? `<div class="steps-b">${steps.map(([i, t, tm]) => `<div class="step"><span class="ic">${ic(i)}</span>${t}<span class="tm">${tm || ''}</span></div>`).join('')}</div>` : ''}</div>`;
+}
+function instrMsg(t) {
+  const p = promptOf(t);
+  return `<div class="m-user"><div class="b instr"><div class="lb">${ic('clock')}定时任务的指令</div><div class="${S.instrOpen ? '' : 'clamp'}" style="white-space:pre-wrap">${esc(p)}</div>
+    <a class="xs" data-act="instr">${S.instrOpen ? '收起' : '展开全部'}</a></div></div>`;
+}
+const aiWho = (a) => `<div class="who">${av(a.name, a.color, 22)}${esc(a.name)}</div>`;
+function composer(ph, note) {
+  return `<div class="composer"><textarea rows="1" placeholder="${esc(ph)}" style="min-height:40px"></textarea><div class="bar"><span class="xs muted">${note || ''}</span><button class="send" data-act="toast" data-msg="（原型）接着这次运行继续对话">${ic('up')}</button></div></div>`;
+}
+const RUNPAGES = {
+  r1: { task: 't1', when: '今天 14:30', title: 'BOSS 直聘新消息提醒 · 11-16 14:30' },
+  r2: { task: 't2', when: '今天 14:00', title: 'BOSS 直聘起草回复 · 11-16 14:00' },
+  r3: { task: 't1', when: '今天 09:30', title: 'BOSS 直聘新消息提醒 · 11-16 09:30' },
+};
+function chatPage(id) {
+  if (id === 'z0') return manualChat();
+  const R = RUNPAGES[id] || RUNPAGES.r1; const t = taskOf(R.task); const a = agentOf(t.agent); const d = devOf(t.dev);
+  const body = id === 'r2' ? r2Body(t, a) : id === 'r3' ? r3Body(t, a) : r1Body(t, a);
+  return `<div class="chat">
+    <div class="chat-head"><b class="ellipsis">${esc(R.title)}</b><span class="tag primary">${ic('clock')}定时运行</span><span class="sp"></span>
+      ${d ? `<span class="devchip">${devDot(d)}<b style="font-weight:550">${esc(d.name)}</b></span>` : ''}
+      <button class="btn sm ghost" data-act="toast" data-msg="文件抽屉：工作目录 ~/atlas-projects/定时任务/${esc(t.name)}">${ic('folder')}文件</button></div>
+    <div class="chat-scroll"><div class="chat-col">
+      <div class="runbanner">${ic('clock')}<div class="grow">由定时任务 <a href="#/ai/tasks/${t.id}"><b>${esc(t.name)}</b></a> 在 ${R.when} 自动运行，以你的身份</div><a class="sm" href="#/ai/tasks/${t.id}">查看任务${ic('right')}</a></div>
+      ${instrMsg(t)}
+      <div class="m-ai">${aiWho(a)}${body}</div>
+    </div></div>
+    <div class="chat-foot">${composer(id === 'r2' && S.r2 === 'wait' ? '也可以直接告诉它怎么改，比如「赵六那条别回」' : id === 'r3' ? '接着让它做' : '接着让它做，例如：回复张三，周三 15:00 后都可以', `在 ${d ? d.name : '平台沙箱'} 上运行`)}</div></div>`;
+}
+function r1Body(t, a) {
+  return `${stepsBox('用了 8 步 · 1 分 48 秒', [
+      ['globe', '打开 https://www.zhipin.com/web/geek/chat', '2s'], ['eye', '看屏幕：消息列表，2 个会话带未读', '4s'],
+      ['mouse', '点开「张三 · 字节跳动」', '1s'], ['copy', '读取会话内容', '3s'], ['bell', '通知我：张三 · 字节跳动 · HRBP', ''],
+      ['mouse', '点开「王五 · 锐仕方达」', '1s'], ['copy', '读取会话内容', '3s'], ['bell', '通知我：王五 · 锐仕方达 · 猎头顾问', '']], true)}
+    <div class="nblock"><div class="h">${ic('bell')}这次发出的通知 · 2 条<span class="sp"></span><span class="xs muted" style="font-weight:400">合成一条推送 · 14:31</span></div>
+      ${NOTIFS.find((n) => n.id === 'n1').items.map((i) => `<div class="nitem"><b>${esc(i.title)}</b><div>${esc(i.body)}</div><div class="tip">${esc(i.tip)}</div></div>`).join('')}
+      ${delivRow({ site: 'ok', app: 'ok', feishu: 'ok' })}</div>
+    <div class="prose"><p>2 个会话有未读，都已通知你：张三（字节跳动）约周三下午电话；王五（猎头）推荐了一个 AI 平台架构师职位。</p><p>两个会话我都点开读过，BOSS 直聘那边已显示为已读。需要的话可以直接让我回复。</p></div>`;
+}
+function r2Body(t, a) {
+  const drafts = [
+    ['a', '张三 · 字节跳动 · HRBP', '周三下午方便电话聊聊吗？', '您好，周三 15:00 以后都方便，您看几点合适？'],
+    ['b', '王五 · 锐仕方达 · 猎头顾问', '有个 AI 平台架构师的机会，base 上海，60–80k·15 薪，有兴趣吗？', '感谢推荐！方便说下是哪家公司、团队多大吗？'],
+    ['c', '赵六 · 星图智能 · CEO', '我们在做 Agent 平台，想约您聊聊技术合伙人的机会。', '感谢邀请，可以先发我一份公司介绍和融资情况吗？'],
+  ];
+  const head = stepsBox('用了 9 步 · 4 分 12 秒', [], false);
+  if (S.r2 === 'wait') {
+    const n = Object.values(S.r2pick).filter(Boolean).length;
+    return `${head}<div class="prose"><p>有 3 个会话有未读，我按你的规则起草了回复，确认后我再发：</p></div>
+      <div class="ask"><div class="row" style="gap:8px"><b>${ic('help')} 这 3 条回复要发吗？</b><span class="sp"></span><span class="xs muted">已等 37 分钟 · 没有期限</span></div>
+      ${drafts.map(([k, who, q, dr]) => `<div class="draft ${S.r2pick[k] ? '' : 'off'}"><div class="row" style="gap:10px;cursor:pointer" data-act="pick" data-k="${k}">${cbx(S.r2pick[k])}<b style="font-weight:600">${who}</b></div>
+        <div class="q">对方：「${esc(q)}」</div><textarea rows="2">${esc(dr)}</textarea></div>`).join('')}
+      <div class="row" style="margin-top:10px;gap:8px"><span class="xs muted">可以直接改草稿再发；不勾的不回复</span><span class="sp"></span>
+        <button class="btn sm" data-act="r2none">都不回复</button><button class="btn sm primary" data-act="r2send" ${n ? '' : 'disabled'}>${ic('send')}发送选中的 ${n} 条</button></div></div>`;
+  }
+  const sent = drafts.filter(([k]) => S.r2pick[k]);
+  if (S.r2 === 'none') return `${head}<div class="ask" style="background:var(--surface-2);border-color:var(--line)"><b>你选择都不回复</b>（14:41）</div><div class="prose"><p>好的，这次都不回复，结束。</p></div>`;
+  return `${head}<div class="ask" style="background:var(--surface-2);border-color:var(--line)"><b>你确认发送 ${sent.length} 条</b>（14:41）：${sent.map(([, w]) => esc(w.split(' · ')[0])).join('、')}；${drafts.filter(([k]) => !S.r2pick[k]).map(([, w]) => esc(w.split(' · ')[0])).join('、') || '无'} 不回复</div>
+    ${stepsBox(`又用了 ${sent.length * 3 + 1} 步 · 1 分 05 秒`, sent.flatMap(([, w]) => [['mouse', `点开「${w.split(' · ').slice(0, 2).join(' · ')}」`, '1s'], ['copy', '粘贴回复', '1s'], ['send', '发送', '1s']]).concat([['bell', `通知我：已回复 ${sent.length} 条`, '']]), true)}
+    <div class="nblock"><div class="h">${ic('bell')}这次发出的通知 · 1 条<span class="sp"></span><span class="xs muted" style="font-weight:400">14:42</span></div>
+      <div class="nitem"><b>已回复 ${sent.length} 条</b>${sent.map(([, w, , dr]) => `<div>${esc(w.split(' · ')[0])}：「${esc(dr)}」</div>`).join('')}</div>${delivRow({ site: 'ok', app: 'ok' })}</div>
+    <div class="prose"><p>已按你确认的发出去了。下次到点（18:00）照常运行。</p></div>`;
+}
+function r3Body(t, a) {
+  const head = stepsBox('用了 2 步', [['globe', '打开 https://www.zhipin.com/web/geek/chat', '2s'], ['eye', '看屏幕：跳到了登录页', '3s']], true);
+  if (S.r3 === 'wait') {
+    return `${head}<div class="prose"><p>BOSS 直聘要求重新登录，我登录不了，请你接管一下浏览器。</p></div>
+      <div class="ask"><div class="row" style="gap:8px"><b>${ic('hand')} 请你接管浏览器：BOSS 直聘要登录</b><span class="sp"></span><span class="xs muted">09:31 起 · 没有期限</span></div>
+        <div class="screen"><div class="sbar">${ic('lock')}zhipin.com/web/user/?ka=header-login<span class="sp"></span>大阪云主机</div><div class="vp"><div class="zplogin"><b>短信登录</b><div class="f">手机号</div><div class="f">验证码<span class="sp"></span><span style="color:#00bebd">发送验证码</span></div><div class="b">登录</div></div></div></div>
+        <div class="row" style="gap:8px"><span class="xs muted">接管时智能体不动浏览器；交还后它接着做。登录好之前，到点的运行会跳过。</span><span class="sp"></span>
+          <button class="btn sm" data-act="toast" data-msg="（原型）全屏打开远程画面">${ic('ext')}接管</button><button class="btn sm primary" data-act="r3done">我登录好了，交还</button></div></div>`;
+  }
+  return `${head}<div class="ask" style="background:var(--surface-2);border-color:var(--line)"><b>${ic('hand')} 你接管了浏览器</b>（09:31–09:52），登录好后交还</div>
+    ${stepsBox('又用了 2 步 · 38 秒', [['eye', '看屏幕：消息列表', '4s'], ['check', '没有带未读的会话', '']], true)}
+    <div class="prose"><p>登录好了。消息列表里没有未读，这次不通知你。</p><p>这次等你登录用了 21 分钟，期间 09:45 那次运行跳过了。</p></div>`;
+}
+function manualChat() {
+  const a = agentOf('local'); const d = devOf('vps');
+  const tpl = tplOf('zp-notify');
+  const card = S.z0 === 'created'
+    ? `<div class="proposal" style="background:var(--success-weak);border-color:#bfe5cb"><div class="row" style="gap:8px">${ic('check')}<b>已创建定时任务「BOSS 直聘新消息提醒」</b></div><div class="sm" style="margin-top:6px">下次运行 ${fires(tpl.sched, 1)[0]}。之后的运行结果在任务详情和通知里看，不会出现在这个对话里。</div><div class="row" style="margin-top:10px"><a class="btn sm" href="#/ai/tasks/t1">查看任务${ic('right')}</a></div></div>`
+    : S.z0 === 'dropped' ? '<div class="proposal" style="background:var(--surface-2);border-color:var(--line)"><span class="muted">你没有创建这个定时任务</span></div>'
+    : `<div class="proposal"><div class="row" style="gap:8px">${ic('clock')}<b>拟建定时任务</b><span class="tag warning">等你确认</span></div>
+      <dl class="kv">
+        <dt>名称</dt><dd>BOSS 直聘新消息提醒</dd>
+        <dt>运行时间</dt><dd>${esc(schedText(tpl.sched))}<div class="xs muted">你没说时段，我先按 09:00–21:00；下次运行 ${fires(tpl.sched, 1)[0]}</div></dd>
+        <dt>做什么</dt><dd>看消息列表，有未读就把对方说了什么、建议怎么回发给你；不替你回复，不点「不感兴趣」</dd>
+        <dt>在哪里</dt><dd>${esc(a.name)} · ${esc(d.name)}（和这个对话一样）</dd>
+        <dt>通知到</dt><dd class="row" style="gap:6px">${tpl.ch.map((c) => `<span class="row xs" style="gap:4px">${chIcon(c, 18)}${CH[c].name}</span>`).join('')}</dd>
+      </dl>
+      <div class="row" style="gap:8px"><button class="btn sm primary" data-act="z0create">${ic('check')}创建</button><button class="btn sm" data-act="fromChat">在编辑页里改</button><button class="btn sm ghost" data-act="z0drop">不用了</button></div></div>`;
+  return `<div class="chat">
+    <div class="chat-head"><b class="ellipsis">BOSS 直聘看看有没有新消息</b><span class="sp"></span>
+      <span class="devchip">${devDot(d)}<b style="font-weight:550">${esc(d.name)}</b></span>
+      <button class="btn sm" data-act="fromChat">${ic('clock')}设为定时任务</button></div>
+    <div class="chat-scroll"><div class="chat-col">
+      <div class="m-user"><div class="b">帮我看看 BOSS 直聘有没有新消息</div></div>
+      <div class="m-ai">${aiWho(a)}${stepsBox('用了 5 步 · 1 分 02 秒', [], false)}<div class="prose"><p>有 1 个会话有未读：<b>王五（锐仕方达 · 猎头顾问）</b> 09:12 发来「有个 AI 平台架构师的机会，base 上海，60–80k·15 薪，有兴趣吗？」</p><p>要我帮你回复吗？</p></div></div>
+      <div class="m-user"><div class="b">先不用回。以后工作日每 15 分钟帮我看一次，有新消息就告诉我，先别替我回</div></div>
+      <div class="m-ai">${aiWho(a)}<div class="prose"><p>好的，我拟了一个定时任务，你确认后才会创建：</p></div>${card}</div>
+    </div></div>
+    <div class="chat-foot">${composer('继续对话', `在 ${d.name} 上运行`)}</div></div>`;
+}
+
+/* =====================================================================
+ * 通知
+ * ===================================================================== */
+function nCard(n, compact) {
+  const t = taskOf(n.task);
+  const icon = n.done ? 'done' : n.kind;
+  const items = n.items ? n.items.map((i) => `<div class="nitem"><b>${esc(i.title)}</b><div>${esc(i.body)}</div>${i.tip ? `<div class="tip">${esc(i.tip)}</div>` : ''}</div>`).join('') : `<div class="sm" style="margin-top:4px;color:var(--ink-2)">${esc(n.body)}</div>`;
+  return `<div class="ncard ${n.unread ? 'unread' : ''}">
+    <span class="nic ${icon}">${ic(n.done ? 'check' : NKIND[n.kind][0])}</span>
+    <div class="grow">
+      <div class="row xs muted" style="gap:6px">${n.unread ? '<span class="udot"></span>' : ''}${kindTag(n)}<a href="#/ai/tasks/${t.id}">${esc(t.name)}</a><span>·</span><span>${n.day} ${n.at}</span>${n.items && n.items.length > 1 ? `<span>· ${n.items.length} 条，合成一条推送</span>` : ''}</div>
+      ${n.title ? `<div style="font-weight:600;margin-top:6px">${esc(n.title)}</div>` : ''}
+      ${items}
+      ${n.note ? `<div class="xs muted" style="margin-top:4px">${esc(n.note)}</div>` : ''}
+      ${n.done ? `<div class="sm" style="color:var(--success);margin-top:6px">${ic('check')} ${esc(n.done)}</div>` : ''}
+      ${compact ? '' : delivRow(n.ch)}
+      ${compact ? '' : n.fail ? `<div class="xs" style="color:var(--danger);margin-top:4px">${esc(n.fail)}</div>` : ''}
+      ${compact ? '' : `<div class="row" style="gap:8px;margin-top:10px">${(n.acts || []).map(([txt, h, cls]) => h.startsWith('toast:') ? `<button class="btn sm ${cls}" data-act="toast" data-msg="${esc(h.slice(6))}">${txt}</button>` : `<button class="btn sm ${cls}" data-go="${h}">${txt}</button>`).join('')}
+        ${n.unread ? `<button class="btn sm ghost" data-act="read" data-id="${n.id}">标为已读</button>` : ''}</div>`}
+    </div></div>`;
+}
+function sortedNotifs() {
+  const pin = NOTIFS.filter((n) => n.kind === 'pending' && !n.done);
+  return [...pin, ...NOTIFS.filter((n) => !pin.includes(n))];
+}
+function notifyPage() {
+  const f = S.nfilter;
+  const keep = (n) => f === 'all' || (f === 'unread' && n.unread) || (f === 'pending' && n.kind === 'pending') || (f === 'failed' && n.kind === 'failed');
+  const list = sortedNotifs().filter(keep);
+  const pinned = list.filter((n) => n.kind === 'pending' && !n.done);
+  const rest = list.filter((n) => !pinned.includes(n));
+  const days = [...new Set(rest.map((n) => n.day))];
+  return `<div class="page" style="max-width:900px">
+    <div class="page-head"><h1>通知</h1><span class="sp"></span><button class="btn" data-act="readAll">${ic('check')}全部标为已读</button><button class="btn" data-go="#/ai/me/notify">${ic('sliders')}通知方式</button></div>
+    <div class="toolbar"><div class="seg">${[['all', '全部'], ['unread', `未读 ${unreadCount()}`], ['pending', '等你处理'], ['failed', '失败']].map(([k, n]) => `<a class="${f === k ? 'on' : ''}" data-act="setS" data-k="nfilter" data-v="${k}">${n}</a>`).join('')}</div>
+      <span class="sp"></span><a class="sm" href="#/ai/mobile">${ic('phone')} 手机上收到的样子</a></div>
+    ${pinned.length ? `<div class="tl-day">等你处理</div><div class="card">${pinned.map((n) => nCard(n)).join('')}</div>` : ''}
+    ${days.map((dy) => `<div class="tl-day">${dy}</div><div class="card">${rest.filter((n) => n.day === dy).map((n) => nCard(n)).join('')}</div>`).join('')}
+    ${list.length ? '' : '<div class="empty">没有通知</div>'}
+  </div>`;
+}
+
+/* =====================================================================
+ * 个性化 › 通知方式
+ * ===================================================================== */
+function channelsPage() {
+  return `<div class="page" style="max-width:900px">
+    <div class="page-head"><h1>个性化</h1></div>
+    <div class="tabs"><a data-act="toast" data-msg="记忆（本原型未改动）">记忆</a><a data-act="toast" data-msg="自定义指令（本原型未改动）">自定义指令</a><a class="on">通知方式</a></div>
+    <h3 style="margin-bottom:4px">通知渠道</h3><div class="sm muted" style="margin-bottom:12px">绑定后可以在每个定时任务里选；勾了「新任务默认」的，新建任务时预先选上。</div>
+    <div class="card">${Object.keys(CH).map((c) => { const b = BIND[c]; return `<div class="chcard">${chIcon(c, 34)}
+      <div class="grow"><div class="row" style="gap:8px"><b style="font-weight:600">${CH[c].name}</b>${b.on ? '<span class="tag success">已绑定</span>' : '<span class="tag">未绑定</span>'}</div>
+        <div class="sm muted" style="margin-top:2px">${b.on ? esc(b.desc) : c === 'wecom' ? '企业微信群机器人：建一个只有自己的群，添加群机器人，把 Webhook 地址填进来' : '钉钉自定义机器人：建一个只有自己的群，添加机器人（加签），把 Webhook 和密钥填进来'}</div></div>
+      ${b.on && c !== 'site' ? `<label class="row xs muted" style="gap:6px;cursor:pointer" data-act="defCh" data-v="${c}">${cbx(b.def)}新任务默认</label>` : ''}
+      ${c === 'site' ? '<span class="xs muted">总是开着</span>' : c === 'mail' ? `<button class="btn sm" data-act="toast" data-msg="已发一封测试邮件到 zhoujx@techstz.com">发测试</button>` : c === 'app' ? `<button class="btn sm" data-act="toast" data-msg="已推送一条测试通知到 Xiaomi 14">发测试</button>` : b.on ? `<button class="btn sm" data-act="toast" data-msg="已发一条测试消息到飞书群「我的 Atlas 通知」">发测试</button><button class="ibtn sm" data-act="toast" data-msg="修改 / 解绑">${ic('more')}</button>` : `<button class="btn sm primary" data-act="bind" data-v="${c}">绑定</button>`}
+    </div>`; }).join('')}</div>
+    <h3 style="margin:26px 0 4px">免打扰</h3><div class="sm muted" style="margin-bottom:12px">免打扰期间只进站内通知，不推到手机和 IM；结束时推一条汇总。</div>
+    <div class="card pad"><div class="row" style="gap:12px"><span class="switch on"></span><b style="font-weight:600">每天</b>
+      <select class="select" style="width:100px"><option>22:00</option></select> 到 <select class="select" style="width:100px"><option>08:00</option></select>
+      <span class="sp"></span><label class="row sm" style="gap:6px">${cbx(false)}「等你处理」的也不推送</label></div></div>
+  </div>`;
+}
+
+/* =====================================================================
+ * 手机上收到的样子
+ * ===================================================================== */
+function mobilePage() {
+  const n1 = NOTIFS.find((n) => n.id === 'n1');
+  const lock = `<div class="phone"><div class="scr lock">
+    <div class="lk-time">14:31</div><div class="lk-date">11月16日 星期一</div>
+    <div class="push"><div class="ph"><span class="appic" style="background:#4f46e5">A</span>Atlas<span class="sp"></span>现在</div><b>BOSS 直聘新消息提醒 · 2 条</b><div>张三 · 字节跳动：周三下午方便电话聊聊吗？<br>王五 · 锐仕方达：AI 平台架构师的机会…</div></div>
+    <div class="push"><div class="ph"><span class="appic" style="background:#3370ff">飞</span>飞书<span class="sp"></span>现在</div><b>我的 Atlas 通知</b><div>Atlas 通知：BOSS 直聘新消息提醒 · 2 条</div></div>
+    <div class="push"><div class="ph"><span class="appic" style="background:#4f46e5">A</span>Atlas<span class="sp"></span>14:03</div><b>BOSS 直聘起草回复 · 等你确认</b><div>起草了 3 条回复，点开直接确认</div></div>
+  </div></div>`;
+  const feishu = `<div class="phone"><div class="scr"><div class="mhead">${ic('left')}我的 Atlas 通知<span class="xs muted" style="font-weight:400">（2）</span></div><div class="mbody">
+    <div class="fsmsg"><span class="appic" style="width:30px;height:30px;border-radius:8px;background:#4f46e5;font-size:13px">A</span><div class="fscard">
+      <div class="fh">BOSS 直聘新消息提醒 · 14:30</div>
+      <div class="fb">${n1.items.map((i) => `<div class="it"><b>${esc(i.title)}</b><br>${esc(i.body)}<br><span style="color:var(--ink-3)">${esc(i.tip)}</span></div>`).join('')}</div>
+      <div class="fbtn"><span>打开这次运行</span><span>让它帮我回复</span></div></div></div>
+    <div class="xs muted" style="text-align:center">群机器人消息的按钮是链接，点开回 Atlas 网页处理</div>
+  </div></div></div>`;
+  const drafts = [['张三 · 字节跳动', '您好，周三 15:00 以后都方便，您看几点合适？', true], ['王五 · 锐仕方达', '感谢推荐！方便说下是哪家公司、团队多大吗？', true], ['赵六 · 星图智能', '感谢邀请，可以先发我一份公司介绍和融资情况吗？', false]];
+  const app = `<div class="phone"><div class="scr"><div class="mhead">通知<span class="sp"></span><span class="xs" style="color:var(--primary);font-weight:500">全部已读</span></div><div class="mbody">
+    <div class="xs muted" style="margin:0 2px 6px;font-weight:600">等你处理</div>
+    <div class="mcard"><div class="row xs muted" style="gap:6px"><span class="tag warning">等你处理</span>BOSS 直聘起草回复 · 14:03</div>
+      <div style="font-weight:600;margin:6px 0 2px">这 3 条回复要发吗？</div>
+      ${drafts.map(([w, dr, on]) => `<div class="draft ${on ? '' : 'off'}"><div class="row" style="gap:8px">${cbx(on)}<b style="font-weight:600">${w}</b></div><textarea rows="2">${dr}</textarea></div>`).join('')}
+      <div class="row" style="gap:6px;margin-top:8px"><span class="btn sm" style="flex:1">都不回复</span><span class="btn sm primary" style="flex:1">发送 2 条</span></div></div>
+    <div class="xs muted" style="margin:10px 2px 6px;font-weight:600">今天</div>
+    <div class="mcard"><div class="row xs muted" style="gap:6px"><span class="udot"></span>BOSS 直聘新消息提醒 · 14:31</div><div style="font-weight:600;margin-top:4px">张三 · 字节跳动 · HRBP 等 2 条</div><div class="muted" style="margin-top:2px">周三下午方便电话聊聊吗？…</div></div>
+    <div class="mcard"><div class="row xs muted" style="gap:6px">平台告警日报 · 08:31</div><div style="font-weight:600;margin-top:4px">平台告警日报 · 11-16</div></div>
+  </div><div class="mtab"><a>${ic('chat')}对话</a><a class="on">${ic('bell')}通知<span class="badge">2</span></a><a>${ic('folder')}文件</a><a>${ic('user')}我的</a></div></div></div>`;
+  return `<div class="page"><div class="crumb"><a href="#/ai/notify">通知</a>${ic('right')}<span>手机上收到的样子</span></div>
+    <div class="page-head"><h1>手机上收到的样子</h1></div>
+    <div class="phones"><div>${lock}<div class="phcap">锁屏：App 推送 + 飞书消息</div></div><div>${feishu}<div class="phcap">飞书群机器人消息</div></div><div>${app}<div class="phcap">Atlas App「通知」页：直接确认</div></div></div></div>`;
+}
+
+/* =====================================================================
+ * 浮层 / 弹窗
+ * ===================================================================== */
+function pop() {
+  if (!S.pop) return '';
+  const { id, x, y } = S.pop;
+  if (id === 'bell') {
+    const list = sortedNotifs().slice(0, 5);
+    return `<div class="pop" style="left:${Math.max(12, window.innerWidth - 440)}px;top:${y}px;width:400px;padding:0" data-stop>
+      <div class="row" style="padding:12px 14px 8px"><b>通知</b><span class="sp"></span><a class="xs" data-act="readAll">全部标为已读</a></div>
+      <div style="max-height:440px;overflow-y:auto">${list.map((n) => `<div class="row" style="gap:10px;padding:10px 14px;cursor:pointer;align-items:flex-start;border-top:1px solid var(--line-2);${n.unread ? 'background:#fafaff' : ''}" ${n.go ? `data-go="${n.go}"` : `data-go="#/ai/notify"`}>
+        <span class="nic sm ${n.done ? 'done' : n.kind}">${ic(n.done ? 'check' : NKIND[n.kind][0])}</span>
+        <div class="grow"><div class="sm" style="font-weight:600">${esc(n.title || n.items[0].title + (n.items.length > 1 ? ` 等 ${n.items.length} 条` : ''))}</div>
+        <div class="xs muted">${esc(taskOf(n.task).name)} · ${n.day} ${n.at}${n.done ? ' · 已处理' : ''}</div></div>${n.unread ? '<span class="udot" style="margin-top:6px"></span>' : ''}</div>`).join('')}</div>
+      <a class="mi" href="#/ai/notify" style="justify-content:center;border-top:1px solid var(--line-2);border-radius:0 0 10px 10px">查看全部通知</a></div>`;
+  }
+  if (id.startsWith('taskMore:')) {
+    const t = taskOf(id.split(':')[1]);
+    return `<div class="pop" style="left:${Math.min(x, window.innerWidth - 220)}px;top:${y}px" data-stop>
+      <div class="mi" data-act="runNow" data-id="${t.id}">${ic('play')}立即运行</div>
+      <div class="mi" data-act="editTask" data-id="${t.id}">${ic('pencil')}编辑</div>
+      <div class="mi" data-act="toast" data-msg="已复制为「${esc(t.name)}（副本）」，默认暂停">${ic('copy')}复制</div>
+      <div class="sep"></div><div class="mi danger" data-act="delTask" data-id="${t.id}">${ic('trash')}删除</div></div>`;
+  }
+  return '';
+}
+function modal() {
+  const m = S.modal;
+  if (!m) return '';
+  if (m.type === 'tpl') {
+    const groups = [...new Set(TPLS.map((t) => t.group))];
+    return `<div class="mask" data-act="closeModal"><div class="modal wide" data-stop>
+      <div class="modal-h"><h2 class="grow">新建定时任务</h2><button class="ibtn" data-act="closeModal">${ic('x')}</button></div>
+      <div class="modal-b">${groups.map((g) => `<div class="sm muted" style="font-weight:600;margin:4px 0 8px">${g}</div><div class="tplgrid">${TPLS.filter((t) => t.group === g).map((t) => `
+        <div class="tpl ${m.sel === t.id ? 'on' : ''}" data-act="tplSel" data-v="${t.id}"><div class="row" style="gap:8px"><span class="ti">${ic(t.icon)}</span><b style="font-weight:600">${t.name}</b></div>
+        <div class="d">${t.desc}</div><div class="xs faint">${esc(schedText(t.sched))} · ${esc(agentOf(t.agent).name)}</div></div>`).join('')}</div>`).join('<div style="height:12px"></div>')}
+        <div class="banner info" style="margin-top:14px">${ic('bulb')}<div>也可以在对话里直接说「以后每天 9 点帮我…」，智能体会拟好任务给你确认；或者在一段对话顶部点「设为定时任务」。</div></div></div>
+      <div class="modal-f"><button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="tplGo">下一步</button></div></div></div>`;
+  }
+  if (m.type === 'del') {
+    const t = taskOf(m.id);
+    return `<div class="mask" data-act="closeModal"><div class="modal" data-stop><div class="modal-h"><h2 class="grow">删除「${esc(t.name)}」？</h2></div>
+      <div class="modal-b sm">之后不再到点运行。已经跑过的对话和通知保留，从通知里还能点进去看；工作目录里的文件不删。${t.last.st === 'waiting' ? '<br><br><b>正在等你处理的那次运行会被取消。</b>' : ''}</div>
+      <div class="modal-f"><button class="btn" data-act="closeModal">取消</button><button class="btn danger solid" data-act="toastGo" data-msg="已删除" data-h="#/ai/tasks">删除</button></div></div></div>`;
+  }
+  if (m.type === 'cancelRun') {
+    return `<div class="mask" data-act="closeModal"><div class="modal" data-stop><div class="modal-h"><h2 class="grow">取消这次运行？</h2></div>
+      <div class="modal-b sm">3 条草稿都不发，这次运行结束。之后到点（今天 18:00）照常运行，那时还没回的会重新起草。</div>
+      <div class="modal-f"><button class="btn" data-act="closeModal">再想想</button><button class="btn danger solid" data-act="toastGo" data-msg="已取消这次运行" data-h="#/ai/tasks/t2">取消这次运行</button></div></div></div>`;
+  }
+  if (m.type === 'bind') {
+    const c = CH[m.ch];
+    return `<div class="mask" data-act="closeModal"><div class="modal" data-stop>
+      <div class="modal-h">${chIcon(m.ch, 26)}<h2 class="grow" style="margin-left:10px">绑定${c.name}</h2><button class="ibtn" data-act="closeModal">${ic('x')}</button></div>
+      <div class="modal-b"><ol class="sm" style="padding-left:18px;margin:0 0 14px;line-height:1.9;color:var(--ink-2)">
+        <li>在${c.name}里建一个只有你自己的群（也可以用已有的群，群里的人都能看到通知）</li>
+        <li>群设置 › 机器人 › 添加${m.ch === 'dingtalk' ? '自定义机器人，安全设置选「加签」' : '群机器人'}</li><li>把 Webhook 地址${m.ch === 'dingtalk' ? '和加签密钥' : ''}填到下面</li></ol>
+        <label class="label">Webhook 地址</label><input class="input" placeholder="https://${m.ch === 'wecom' ? 'qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…' : 'oapi.dingtalk.com/robot/send?access_token=…'}">
+        ${m.ch === 'dingtalk' ? '<label class="label" style="margin-top:12px">加签密钥</label><input class="input" placeholder="SEC…">' : ''}
+        <div class="help">按密钥保存，保存后只显示末尾 4 位。点「绑定」会先发一条测试消息，你收到了才算绑定成功。</div></div>
+      <div class="modal-f"><button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="bindOk">发测试消息并绑定</button></div></div></div>`;
+  }
+  return '';
+}
+
+/* =====================================================================
+ * 设计说明（评审用，非产品界面）
+ * ===================================================================== */
+function N(title, items, be = [], demo = '') { return { title, items, be, demo }; }
+const demoSeg = (k, opts) => `<div class="seg" style="margin-top:6px">${opts.map(([v, t]) => `<a class="${S[k] === v ? 'on' : ''}" data-act="setS" data-k="${k}" data-v="${v}">${t}</a>`).join('')}</div>`;
+function notesFor(r) {
+  if (r.a === 'tasks' && r.b === 'edit') return N('新建 / 编辑定时任务', [
+    '从模板开始：模板只是预填好的指令和推荐设置；存下来就是普通任务，之后和模板无关',
+    'BOSS 直聘三个模板对应三种「智能回复」程度：只提醒 → 起草后问我再发 → 按规则直接回。平台不认识 BOSS 直聘，三者的区别只在指令里',
+    '定时运行时智能体多一个工具「通知我」（标题、正文、这件事的标识）。同一任务里同一个标识只通知一次，所以未读消息一直挂着，也不会每 15 分钟提醒一遍',
+    '同一次运行里的多条「通知我」合成一条推送（锁屏上一条，点开看每一项）',
+    '「问我」「请我接管」就是对话里已有的提问和接管登录：没人盯着时也会停下来通知你，等多久都行',
+    '运行时间：每隔一段时间（可限定时段和星期）/ 每天 / 每周 / 每月 / 只运行一次 / Cron；按你的时区；间隔最短 5 分钟；下方列出接下来 5 次',
+    '每次运行都新开对话，上下文干净、互不影响；同一任务的每次运行共用一个工作目录，可以在里面存「上次看到的结果」（见「网页变化监控」模板）',
+    '执行方式默认取智能体的设置，可以改。没人盯着时选「手动」会每一步都停下来等你，一般选「自动」，把要先问你的事写进指令',
+    '通知时机：「有结果」和「需要你处理」总是开着；「失败时」默认开；「每次运行完都发摘要」默认关（日报模板默认开）',
+    '渠道只能选在「个性化 › 通知方式」里绑定过的，没绑定的点一下去绑定',
+    '右侧「试跑」真的跑一次（会真的操作网页，包括发消息），只是通知只显示在这里、不真的发出，也不算「已提醒过」；会替你发消息的模板，试跑前先提示',
+  ], ['「通知我」：原生智能体加一个平台工具；CLI 智能体经 bridge 的平台 MCP 提供（和请我接管走同一条路）', 'CLI 智能体的「问我」现在没有接到平台，也要经平台 MCP 提供', '试跑：建一个带「试跑」标记的调试对话，通知只写进对话，不投递、不记标识', '运行期配置：最短间隔、每人最多几个启用的任务', '「接下来 5 次」和真正触发用同一段时间计算'],
+  `<b>演示</b><div class="sm" style="margin-top:4px"><a data-act="newTask">换个模板看看</a> · 改「每隔」为 3 看校验 · 点右侧「试跑一次」</div>`);
+  if (r.a === 'tasks' && r.b) return N('定时任务详情', [
+    '顶部四块：运行时间和下次运行、智能体和设备、通知到哪里、近 7 天的次数和 Token 用量（定时任务跑得多，用量要看得见）',
+    '运行记录按天分组；连续「无通知」的折叠成一行，点开再看，免得刷屏',
+    '每条记录点开就是那次运行的对话，过程、结果、发出的通知都在里面',
+    '跳过、没能开始也记下来，写清原因：上次还在等你、电脑不在线……',
+    '有一次在等你处理时，顶部提示；可以去处理，也可以取消这次运行，之后照常到点运行',
+    '「立即运行」真的跑一次（会发通知），不影响原来的到点时间',
+    '通知记录：每条通知发到了哪些渠道、是否送达；没送达的写原因（比如飞书签名校验失败）',
+    '删除任务不删已经跑过的对话和通知，从通知里还能点进去看',
+  ], ['触发记录表：每次到点一条（运行了 / 跳过 / 没能开始 + 原因 + 对应的对话和 run）', '近 7 天统计：按任务汇总触发记录和 run 的用量', '投递记录：每条通知 × 每个渠道一条，带状态和错误'],
+  `<b>演示：换个任务</b><div class="sm" style="margin-top:4px"><a href="#/ai/tasks/t1">BOSS 直聘新消息提醒</a> · <a href="#/ai/tasks/t2">在等你处理的</a> · <a href="#/ai/tasks/t5">电脑不在线的</a></div>`);
+  if (r.a === 'c' && r.b === 'z0') return N('从对话里建定时任务', [
+    '两个入口：对话顶部「设为定时任务」（拿这段对话里的请求当指令，进编辑页）；或者直接跟智能体说「以后每 15 分钟帮我看一次」',
+    '智能体用平台工具「拟定时任务」把它理解的名称、时间、做什么、通知方式写成卡片；你点「创建」才真的建，智能体自己建不了',
+    '它补上的默认值（比如你没说时段）要在卡片里写出来',
+    '「在编辑页里改」带着卡片里的内容进编辑页',
+    '建好之后的运行不出现在这个对话里，各自是新对话',
+  ], ['平台工具「拟定时任务」：只产出草稿卡片；确认由前端调建任务接口，以用户身份建'],
+  `<b>演示状态</b>${demoSeg('z0', [['propose', '等你确认'], ['created', '已创建'], ['dropped', '不用了']])}`);
+  if (r.a === 'c') return N('定时运行的对话', [
+    '定时运行的对话不进「最近对话」（不然一天几十条），从任务详情和通知点进来',
+    '顶部标明来自哪个定时任务、几点运行；任务的指令作为第一条消息，默认折叠',
+    '「通知我」在过程里显示为「这次发出的通知」，带每个渠道的送达状态',
+    '跑完可以接着聊，比如「回复张三：周三 15:00 后都可以」。这就是普通对话，不影响下次定时运行',
+    '等你处理的卡片（提问、审批、接管登录）和手动对话里的一样；处理完，这次运行接着跑',
+    '等你的时候没有期限；期间到点的运行跳过，记在运行记录里',
+  ], ['对话加来源：哪个定时任务、哪次触发；最近对话列表排除定时运行的', '原生智能体挂起、CLI 智能体在线等人时，平台自动发「等你处理」通知；处理后把通知标成已处理'],
+  r.b === 'r2' ? `<b>演示状态</b>${demoSeg('r2', [['wait', '等你确认'], ['sent', '已发送'], ['none', '都不回复']])}`
+    : r.b === 'r3' ? `<b>演示状态</b>${demoSeg('r3', [['wait', '等你接管'], ['done', '已交还']])}`
+    : '<b>其他运行</b><div class="sm"><a href="#/ai/c/r2">等你确认回复草稿</a> · <a href="#/ai/c/r3">中途请你接管登录</a></div>');
+  if (r.a === 'notify') return N('通知', [
+    '顶栏铃铛显示未读数，下拉看最近 5 条；这里是全部',
+    '三类：结果（智能体发的）、等你处理（运行停下来等人时平台发的）、失败（平台发的）',
+    '等你处理的置顶，处理完变成「已处理」；失败的在恢复后标「已恢复」，不另发一条',
+    '同一次运行的几条通知放在一起，推送也合成一条',
+    '正文是智能体写的，平台只加来源、时间、送达情况和按钮',
+    '同一个失败连续发生只通知一次，免得电脑关机一晚上收到十几条',
+    '免打扰时段（个性化里设）只进站内，不推到手机和 IM，结束后推一条汇总',
+    '通知只有本人能看',
+  ], ['通知表 + 投递表；投递走发件箱异步发，失败重试 3 次', '铃铛先每 30 秒查一次未读数，不新开用户级事件流']);
+  if (r.a === 'me') return N('个性化 › 通知方式', [
+    '站内通知总是开着；其他渠道绑定后在每个任务里勾选，「新任务默认」决定新建任务时预先选哪些',
+    '邮件用用户中心里的邮箱，这里不能改',
+    '飞书 / 企业微信 / 钉钉用群机器人：建一个只有自己的群，加机器人，把 Webhook 填进来；消息里的按钮是链接，回到 Atlas 处理',
+    'Webhook 地址和签名密钥按密钥保存，界面只显示末尾几位',
+    '绑定时先发一条测试消息，收到了才算绑定成功',
+    'Atlas App：在 App 里登录并允许通知的手机自动出现在这里',
+  ], ['渠道配置表（用户、类型、加密保存的地址和密钥、状态、是否默认）', 'App 推送：国内安卓手机收不到谷歌推送，要接各厂商推送通道（或极光、个推这类聚合服务）。首版建议先不做，手机上靠飞书 / 企业微信']);
+  if (r.a === 'mobile') return N('手机上收到的样子', [
+    '手机上两条路：Atlas App 推送，或飞书 / 企业微信 / 钉钉的群机器人消息',
+    'App 推送：标题是任务名，正文是通知的标题；点开进 App 的「通知」页',
+    '等你处理的（比如确认回复草稿）在 App 里可以直接处理，卡片和网页对话里的一样',
+    '群机器人消息只能带链接按钮，点开回网页处理，所以对话页在手机浏览器里也要能用',
+    '接管登录要看远程画面：手机上能看能点，但屏幕小、不好操作；短信验证码登录在手机上能完成',
+  ], ['App 新增「通知」页签，注册推送设备', '网页对话页适配手机浏览器（从飞书点进来时用）']);
+  return N('定时任务列表', [
+    '定时任务 = 智能体 + 指令 + 运行时间 + 通知方式。到点后平台以你的身份新开一个对话、把指令发给智能体，跑完按设置通知你',
+    '放在「智能平台」左侧菜单，和智能体、我的设备并列；只看得到自己的任务',
+    '「最近一次」直接给出结果摘要（已通知 / 无通知 / 等你处理 / 跳过 / 失败），不用点进去',
+    '有任务在等你处理时，顶部提示并给出入口，左侧菜单「定时任务」上显示数字',
+    '上次运行还没结束（包括在等你确认、等你接管登录）时，到点直接跳过并记一笔；不排队，同一任务不并发',
+    '暂停后不再到点运行；智能体被归档、不再共享给你，或设备被吊销时，任务自动暂停并通知你',
+    '系统里原来的「定时任务」（平台后台任务）建议改名「后台任务」，免得重名',
+  ], ['定时任务表：主人、智能体、设备、模型、指令、运行时间和时区、执行方式、通知设置、启用、下次运行时间',
+    '触发：每个实例都跑的实例任务，每几秒抢一批到期任务（行锁、跳过已被锁的），同一事务里建对话和 run、算下一次时间；停机期间错过的多次合并成一次',
+    '每次到点都记一条触发记录（运行了 / 跳过 / 没能开始 + 原因），列表和详情从这里读']);
+}
+function notesPanel(r) {
+  const n = notesFor(r);
+  return `<div class="notes"><div class="row"><b style="color:#92400e">${ic('bulb')} ${n.title}</b><span class="sp"></span><button class="ibtn sm" data-act="toggleNotes">${ic('x')}</button></div>
+    <h4>设计要点</h4><ul>${n.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>
+    ${n.be.length ? `<h4>需要后端配合</h4><ul>${n.be.map((i) => `<li><span class="be">后端</span>${esc(i)}</li>`).join('')}</ul>` : ''}
+    ${n.demo ? `<div class="demo">${n.demo}</div>` : ''}
+    <h4>本原型的页面</h4><ul>
+      <li><a href="#/ai/tasks">定时任务列表</a> · <a data-act="newTask">新建（选模板）</a></li>
+      <li><a data-act="editTask" data-id="t1">编辑任务、试跑</a></li>
+      <li><a href="#/ai/tasks/t1">任务详情、运行记录</a></li>
+      <li><a href="#/ai/c/r1">一次定时运行（发了通知）</a></li>
+      <li><a href="#/ai/c/r2">等你确认回复草稿</a> · <a href="#/ai/c/r3">请你接管登录</a></li>
+      <li><a href="#/ai/c/z0">从对话里建定时任务</a></li>
+      <li><a href="#/ai/notify">通知</a> · <a href="#/ai/me/notify">通知方式</a> · <a href="#/ai/mobile">手机上</a></li></ul></div>`;
+}
+
+/* =====================================================================
+ * 交互
+ * ===================================================================== */
+const ACT = {
+  toggleNotes: () => { S.notes = !S.notes; },
+  toast: (el) => { toast(el.dataset.msg || '（原型）'); return false; },
+  toastGo: (el) => { S.modal = null; go(el.dataset.h); toast(el.dataset.msg); return false; },
+  setS: (el) => { const v = el.dataset.v; S[el.dataset.k] = v === 'true' ? true : v === 'false' ? false : v; },
+  closeModal: () => { S.modal = null; },
+  newTask: () => { S.pop = null; S.modal = { type: 'tpl', sel: 'zp-notify' }; },
+  tplSel: (el) => { S.modal.sel = el.dataset.v; },
+  tplGo: () => { editFromTpl(S.modal.sel); S.modal = null; nav('#/ai/tasks/edit'); return false; },
+  editTask: (el, e) => { e.stopPropagation(); editFromTask(taskOf(el.dataset.id)); nav('#/ai/tasks/edit'); return false; },
+  fromChat: () => { editFromTpl('zp-notify'); nav('#/ai/tasks/edit'); toast('已带上对话里的请求和智能体、电脑'); return false; },
+  toggleTask: (el, e) => { e.stopPropagation(); const t = taskOf(el.dataset.id); t.on = !t.on; toast(t.on ? `已启用，下次运行 ${fires(t.sched, 1)[0]}` : '已暂停，不再到点运行'); return false; },
+  runNow: (el, e) => { e.stopPropagation(); S.pop = null; const t = taskOf(el.dataset.id); toast(t.last.st === 'waiting' ? '上次运行还在等你处理，先处理或取消它' : `已开始运行「${t.name}」（记为手动）`); return false; },
+  delTask: (el) => { S.pop = null; S.modal = { type: 'del', id: el.dataset.id }; },
+  cancelRun: () => { S.modal = { type: 'cancelRun' }; },
+  unfold: (el) => { S.unfold[el.dataset.k] = !S.unfold[el.dataset.k]; },
+  secToggle: (el) => { S.secOpen[el.dataset.k] = !S.secOpen[el.dataset.k]; },
+  sk: (el) => { S.edit.sched.sk = el.dataset.v; if (el.dataset.v === 'weekly' && !S.edit.sched.wd.length) S.edit.sched.wd = [1]; },
+  wd: (el) => { const w = +el.dataset.v; const s = S.edit.sched; s.wd = s.wd.includes(w) ? s.wd.filter((x) => x !== w) : [...s.wd, w].sort(); },
+  rmTime: (el) => { const s = S.edit.sched; if (s.times.length > 1) s.times.splice(+el.dataset.v, 1); else toast('至少留一个时间'); },
+  mode: (el) => { S.edit.mode = +el.dataset.v; },
+  occ: (el) => { S.edit[el.dataset.k] = !S.edit[el.dataset.k]; },
+  ch: (el) => { const c = el.dataset.v; const e = S.edit; e.ch = e.ch.includes(c) ? e.ch.filter((x) => x !== c) : [...e.ch, c]; },
+  test: () => { S.edit.test = 'run'; setTimeout(() => { if (S.edit) { S.edit.test = 'done'; render(); } }, 1600); },
+  saveTask: () => {
+    const e = S.edit;
+    if (e.sched.sk === 'interval' && +e.sched.every < MIN_EVERY) { toast(`间隔最短 ${MIN_EVERY} 分钟`); return false; }
+    if (!e.name.trim() || !e.prompt.trim()) { toast('名称和「让它做什么」都要填'); return false; }
+    const nx = fires(e.sched, 1)[0];
+    go(e.id ? `#/ai/tasks/${e.id}` : '#/ai/tasks/t1');
+    toast(`已保存${e.id ? '' : '并启用'}，下次运行 ${nx || '—'}`); return false;
+  },
+  instr: () => { S.instrOpen = !S.instrOpen; },
+  pick: (el) => { S.r2pick[el.dataset.k] = !S.r2pick[el.dataset.k]; },
+  r2send: () => { S.r2 = 'sent'; taskOf('t2').last = { st: 'notified', at: '今天 14:00', text: '回复了 2 条，已通知你', go: 'r2' }; NOTIFS.find((n) => n.id === 'n2').done = '你 14:41 确认发送 2 条'; NOTIFS.find((n) => n.id === 'n2').unread = false; },
+  r2none: () => { S.r2 = 'none'; taskOf('t2').last = { st: 'quiet', at: '今天 14:00', text: '你选择都不回复', go: 'r2' }; NOTIFS.find((n) => n.id === 'n2').done = '你 14:41 选择都不回复'; NOTIFS.find((n) => n.id === 'n2').unread = false; },
+  r3done: () => { S.r3 = 'done'; },
+  z0create: () => { S.z0 = 'created'; toast('已创建「BOSS 直聘新消息提醒」'); return false; },
+  z0drop: () => { S.z0 = 'dropped'; },
+  read: (el, e) => { e.stopPropagation(); NOTIFS.find((n) => n.id === el.dataset.id).unread = false; },
+  readAll: () => { NOTIFS.forEach((n) => { n.unread = false; }); S.pop = null; },
+  defCh: (el) => { BIND[el.dataset.v].def = !BIND[el.dataset.v].def; },
+  bind: (el) => { S.modal = { type: 'bind', ch: el.dataset.v }; },
+  bindOk: () => { S.modal = null; toast('测试消息已发出，在群里收到后点消息里的「确认绑定」'); return false; },
+};
+function setPath(obj, path, v) { const ks = path.split('.'); let o = obj; ks.slice(0, -1).forEach((k) => { o = o[k]; }); const last = ks[ks.length - 1]; if (last === 't0') o.times[0] = v; else o[last] = v; }
+document.addEventListener('input', (e) => {
+  const k = e.target.dataset.bind;
+  if (!k) return;
+  if (k === 'q') { S.q = e.target.value; const pos = e.target.selectionStart; render(); const inp = document.querySelector('[data-bind="q"]'); inp.focus(); inp.setSelectionRange(pos, pos); return; }
+  if (S.edit) setPath(S.edit, k, e.target.value);
+});
+document.addEventListener('change', (e) => {
+  if (e.target.dataset.actChange === 'addTime' && e.target.value) {
+    const s = S.edit.sched; if (!s.times.includes(e.target.value)) s.times = [...s.times, e.target.value].sort(); return render();
+  }
+  const k = e.target.dataset.bind;
+  if (k && S.edit) { setPath(S.edit, k, e.target.value); if (k === 'agent' && agentOf(e.target.value).kind === 'device' && !S.edit.dev) S.edit.dev = 'vps'; if ('rerender' in e.target.dataset) render(); }
+});
+document.addEventListener('click', (e) => {
+  if (e.target.matches('input:not([type=checkbox]),select,textarea')) return;
+  const el = e.target.closest('[data-go],[data-act],[data-pop]');
+  if (!el) { if (S.pop && !e.target.closest('[data-stop]')) { S.pop = null; render(); } return; }
+  if (el.dataset.act === 'closeModal' && el.classList.contains('mask') && e.target !== el) return;
+  e.preventDefault();
+  if (el.dataset.pop) {
+    e.stopPropagation();
+    const rc = el.getBoundingClientRect();
+    S.pop = S.pop?.id === el.dataset.pop ? null : { id: el.dataset.pop, x: Math.max(12, Math.min(rc.left, window.innerWidth - 340)), y: rc.bottom + 6 };
+    return render();
+  }
+  if (el.dataset.go) { S.modal = null; S.pop = null; if (location.hash === el.dataset.go) return render(); return go(el.dataset.go); }
+  const fn = ACT[el.dataset.act];
+  if (fn) { if (fn(el, e) !== false) render(); }
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && (S.modal || S.pop)) { S.modal = null; S.pop = null; render(); } });
+render();
+</script>
+</body>
+</html>

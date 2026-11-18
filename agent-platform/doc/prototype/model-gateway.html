@@ -1,0 +1,1431 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Atlas · 模型平台（账号 · 模型 · Key）— 原型</title>
+<style>
+/* 视觉与用户中心、TeamFlow、模型平台原型一致（同一套浅色设计 token） */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --surface-2: #fbfbfd; --hover: #f2f4f8;
+  --ink: #0f172a; --ink-2: #334155; --ink-3: #64748b; --ink-4: #94a3b8;
+  --line: #e6e8ee; --line-2: #eef0f4;
+  --primary: #4f46e5; --primary-2: #6366f1; --primary-weak: #eef0ff; --primary-ink: #4338ca;
+  --secondary: #0ea5e9; --secondary-weak: #e6f6fe;
+  --success: #16a34a; --success-weak: #e7f6ec;
+  --warning: #d97706; --warning-weak: #fef3e2;
+  --danger: #dc2626; --danger-weak: #fdeaea;
+  --radius: 12px; --radius-sm: 8px; --radius-xs: 6px;
+  --shadow-xs: 0 1px 2px rgba(16,24,40,.05);
+  --shadow-md: 0 6px 18px rgba(16,24,40,.08), 0 2px 6px rgba(16,24,40,.05);
+  --shadow-lg: 0 20px 48px rgba(16,24,40,.16);
+  --font: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --top-h: 52px; --sider-w: 248px; --sider-w-min: 60px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { font-family: var(--font); background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+a { color: var(--primary); text-decoration: none; cursor: pointer; }
+button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+h1, h2, h3, h4 { margin: 0; color: var(--ink); }
+h1 { font-size: 20px; font-weight: 650; }
+h2 { font-size: 16px; font-weight: 650; }
+h3 { font-size: 14px; font-weight: 650; }
+p { margin: 0; }
+code, .mono { font-family: var(--mono); font-size: 12px; }
+code { background: var(--line-2); padding: 1px 5px; border-radius: 5px; }
+svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+svg.i.fill { fill: currentColor; stroke: none; }
+.muted { color: var(--ink-3); }
+.faint { color: var(--ink-4); }
+.sm { font-size: 12.5px; }
+.xs { font-size: 12px; }
+.row { display: flex; align-items: center; gap: 8px; }
+.col { display: flex; flex-direction: column; gap: 8px; }
+.grow { flex: 1; min-width: 0; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp { flex: 1; }
+.hide { display: none !important; }
+
+/* ---------- 顶栏：一级菜单（平台） ---------- */
+.top { height: var(--top-h); background: var(--surface); border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 16px 0 14px; gap: 20px; position: relative; z-index: 20; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px; letter-spacing: .01em; cursor: pointer; }
+.brand .logo { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, #6366f1, #0ea5e9); color: #fff; display: grid; place-items: center; font-size: 14px; }
+.pnav { display: flex; gap: 2px; height: 100%; }
+.pnav a { display: flex; align-items: center; gap: 7px; padding: 0 14px; color: var(--ink-2); font-weight: 550; position: relative; }
+.pnav a:hover { color: var(--ink); background: var(--hover); }
+.pnav a.on { color: var(--primary-ink); }
+.pnav a.on::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; background: var(--primary); border-radius: 2px; }
+.top-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 12.5px; font-weight: 650; flex: none; }
+.avatar.sq { border-radius: 8px; }
+
+/* ---------- 左侧：二级菜单（可收缩） ---------- */
+.body { display: flex; height: calc(100vh - var(--top-h)); }
+.sider { width: var(--sider-w); flex: none; background: var(--surface-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; transition: width .18s ease; overflow: hidden; }
+.sider.min { width: var(--sider-w-min); }
+.sider-top { padding: 12px 10px 6px; display: flex; flex-direction: column; gap: 2px; }
+.snav { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: var(--radius-sm); color: var(--ink-2); font-weight: 520; white-space: nowrap; cursor: pointer; position: relative; }
+.snav:hover { background: var(--hover); color: var(--ink); }
+.snav.on { background: var(--primary-weak); color: var(--primary-ink); font-weight: 600; }
+.snav .badge { margin-left: auto; }
+.sider.min .snav { justify-content: center; padding: 0; }
+.sider.min .snav span, .sider.min .snav .badge, .sider.min .hist, .sider.min .new-chat span, .sider.min .sider-foot span { display: none; }
+.new-chat { display: flex; align-items: center; justify-content: center; gap: 8px; height: 38px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); font-weight: 600; color: var(--ink); cursor: pointer; margin-bottom: 8px; box-shadow: var(--shadow-xs); white-space: nowrap; }
+.new-chat:hover { border-color: #cfd3dd; background: var(--hover); }
+.hist { flex: 1; overflow-y: auto; padding: 4px 10px 10px; border-top: 1px solid var(--line-2); margin-top: 6px; }
+.hist-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 6px 4px; }
+.hist-group { font-size: 11.5px; color: var(--ink-4); padding: 10px 8px 4px; }
+.hist-item { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 6px 0 10px; border-radius: var(--radius-sm); color: var(--ink-2); cursor: pointer; }
+.hist-item:hover { background: var(--hover); }
+.hist-item.on { background: #e9ebf3; color: var(--ink); font-weight: 550; }
+.hist-item .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.hist-item .more { opacity: 0; }
+.hist-item:hover .more { opacity: 1; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.dot.run { background: var(--success); box-shadow: 0 0 0 3px var(--success-weak); }
+.dot.wait { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-weak); }
+.sider-foot { border-top: 1px solid var(--line-2); padding: 8px 10px; }
+.main { flex: 1; min-width: 0; overflow-y: auto; position: relative; }
+.main.white { background: var(--surface); }
+.page { padding: 24px 32px 60px; max-width: 1280px; margin: 0 auto; }
+.page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; min-height: 36px; }
+
+/* ---------- 通用组件 ---------- */
+.btn { height: 34px; padding: 0 14px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface); display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; font-weight: 550; white-space: nowrap; color: var(--ink); }
+.btn:hover { border-color: #cfd3dd; background: var(--hover); }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn.primary:hover { background: var(--primary-2); }
+.btn.danger { color: var(--danger); }
+.btn.danger.solid { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.ghost:hover { background: var(--hover); }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 13px; }
+.btn[disabled] { opacity: .5; cursor: not-allowed; }
+.ibtn { width: 32px; height: 32px; border-radius: var(--radius-sm); border: none; background: transparent; display: inline-grid; place-items: center; cursor: pointer; color: var(--ink-3); flex: none; }
+.ibtn:hover { background: var(--hover); color: var(--ink); }
+.ibtn.sm { width: 26px; height: 26px; }
+.ibtn.on { background: var(--primary-weak); color: var(--primary-ink); }
+.input, .select, textarea.input { height: 34px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 11px; background: var(--surface); outline: none; width: 100%; }
+textarea.input { height: auto; padding: 9px 11px; resize: vertical; line-height: 1.6; }
+.input:focus, .select:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px var(--primary-weak); }
+.search { position: relative; }
+.search svg { position: absolute; left: 10px; top: 9px; color: var(--ink-4); }
+.search .input { padding-left: 32px; }
+.tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 550; background: var(--line-2); color: var(--ink-2); white-space: nowrap; }
+.tag.primary { background: var(--primary-weak); color: var(--primary-ink); }
+.tag.success { background: var(--success-weak); color: var(--success); }
+.tag.warning { background: var(--warning-weak); color: var(--warning); }
+.tag.danger { background: var(--danger-weak); color: var(--danger); }
+.tag.blue { background: var(--secondary-weak); color: #0369a1; }
+.badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: #fff; font-size: 11px; font-weight: 650; display: inline-grid; place-items: center; }
+.badge.gray { background: var(--line); color: var(--ink-2); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.card.pad { padding: 16px 18px; }
+.tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+.tabs a { padding: 10px 0; color: var(--ink-3); font-weight: 550; position: relative; }
+.tabs a:hover { color: var(--ink); }
+.tabs a.on { color: var(--ink); }
+.tabs a.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--primary); border-radius: 2px; }
+.seg { display: inline-flex; background: var(--line-2); border-radius: 9px; padding: 3px; gap: 2px; }
+.seg a { padding: 4px 12px; border-radius: 7px; color: var(--ink-3); font-weight: 550; font-size: 13px; }
+.seg a.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-xs); }
+.switch { display: inline-block; vertical-align: middle; width: 36px; height: 20px; border-radius: 10px; background: #d5d9e2; position: relative; cursor: pointer; flex: none; transition: background .15s; }
+.switch::after { content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%; background: #fff; top: 2px; left: 2px; transition: left .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.switch.on { background: var(--primary); }
+.switch.on::after { left: 18px; }
+.switch.dis { opacity: .45; cursor: not-allowed; }
+.table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.table th { text-align: left; font-weight: 600; font-size: 12.5px; color: var(--ink-3); background: var(--surface-2); padding: 10px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.table td { padding: 12px 14px; border-bottom: 1px solid var(--line-2); vertical-align: middle; }
+.table tr:last-child td { border-bottom: none; }
+.table tr.click:hover td { background: var(--surface-2); cursor: pointer; }
+.empty { text-align: center; padding: 56px 20px; color: var(--ink-3); }
+.empty .ill { width: 56px; height: 56px; border-radius: 16px; background: var(--primary-weak); color: var(--primary); display: grid; place-items: center; margin: 0 auto 14px; }
+.empty .ill svg { width: 26px; height: 26px; }
+.empty h3 { margin-bottom: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-size: 13px; }
+.chip .x { color: var(--ink-4); cursor: pointer; }
+.chip .x:hover { color: var(--danger); }
+.kv { display: grid; grid-template-columns: 110px 1fr; gap: 10px 14px; font-size: 13.5px; }
+.kv dt { color: var(--ink-3); }
+.kv dd { margin: 0; }
+.divider { height: 1px; background: var(--line-2); margin: 14px 0; }
+.label { font-size: 13px; font-weight: 600; color: var(--ink-2); margin-bottom: 6px; display: block; }
+.help { font-size: 12.5px; color: var(--ink-3); margin-top: 4px; }
+.radio-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; cursor: pointer; display: flex; gap: 10px; align-items: flex-start; background: var(--surface); }
+.radio-card:hover { border-color: #cfd3dd; }
+.radio-card.on { border-color: var(--primary-2); background: #f8f8ff; box-shadow: 0 0 0 3px var(--primary-weak); }
+.radio-card .r { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid #c5cad6; flex: none; margin-top: 2px; }
+.radio-card.on .r { border: 5px solid var(--primary); }
+
+/* 下拉菜单 / 浮层 */
+.pop { position: absolute; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 6px; z-index: 60; min-width: 200px; }
+.pop .mi { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 7px; cursor: pointer; color: var(--ink-2); }
+.pop .mi:hover { background: var(--hover); color: var(--ink); }
+.pop .mi.on { color: var(--primary-ink); }
+.pop .mi.danger { color: var(--danger); }
+.pop .sep { height: 1px; background: var(--line-2); margin: 5px 4px; }
+.pop .ph { font-size: 11.5px; color: var(--ink-4); padding: 6px 10px 2px; }
+.mask { position: fixed; inset: 0; background: rgba(15,23,42,.36); z-index: 80; display: grid; place-items: center; }
+.modal { background: var(--surface); border-radius: 14px; width: 560px; max-width: calc(100vw - 40px); max-height: calc(100vh - 60px); display: flex; flex-direction: column; box-shadow: var(--shadow-lg); }
+.modal.wide { width: 760px; }
+.modal-h { display: flex; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--line-2); }
+.modal-b { padding: 18px 20px; overflow-y: auto; }
+.modal-f { padding: 12px 20px; border-top: 1px solid var(--line-2); display: flex; justify-content: flex-end; gap: 8px; }
+.drawer-mask { position: fixed; inset: 0; background: rgba(15,23,42,.2); z-index: 70; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 520px; max-width: 92vw; background: var(--surface); z-index: 71; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; }
+.toast { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 10px; font-size: 13.5px; z-index: 100; box-shadow: var(--shadow-md); }
+
+/* ---------- 设计说明（评审用，非产品界面） ---------- */
+.notes { width: 300px; flex: none; overflow-y: auto; background: #fffdf3; border-left: 1px solid #f3e3a6; padding: 14px 16px; font-size: 13px; }
+.notes h4 { font-size: 13px; margin: 10px 0 4px; color: #92400e; }
+.notes ul { margin: 0; padding-left: 18px; }
+.notes li { margin: 3px 0; color: #57534e; }
+.notes .be { display: inline-block; font-size: 11px; background: #fde68a; color: #92400e; border-radius: 4px; padding: 0 5px; margin-right: 4px; }
+
+
+/* ---------- 模型平台新增 ---------- */
+.toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+.crumb { display: flex; align-items: center; gap: 4px; font-size: 13px; color: var(--ink-3); margin-bottom: 6px; }
+.crumb svg { width: 14px; height: 14px; }
+.ddot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
+.ddot.on { background: var(--success); box-shadow: 0 0 0 3px var(--success-weak); }
+.ddot.off { background: #cbd5e1; }
+.ddot.warn { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-weak); }
+.ddot.bad { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-weak); }
+.banner { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: 10px; font-size: 13.5px; line-height: 1.6; }
+.banner svg.i { margin-top: 3px; }
+.banner.warn { background: var(--warning-weak); border: 1px solid #f5d38b; color: #92400e; }
+.banner.err { background: var(--danger-weak); border: 1px solid #f5c2c2; color: #991b1b; }
+.banner.info { background: var(--secondary-weak); border: 1px solid #bae6fd; color: #075985; }
+.banner.gray { background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-2); }
+.banner a { font-weight: 600; }
+.mchip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px; border-radius: 6px; background: var(--line-2); font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.mchip.bad { background: var(--danger-weak); color: var(--danger); }
+.mchip.bad s { text-decoration-thickness: 1px; }
+.mchips { display: flex; flex-wrap: wrap; gap: 4px; max-width: 340px; }
+.notes .demo { margin-top: 12px; padding-top: 10px; border-top: 1px dashed #f3e3a6; }
+.notes .demo .seg a { font-size: 12px; padding: 3px 8px; }
+.cbx { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid #c5cad6; display: inline-grid; place-items: center; flex: none; cursor: pointer; background: #fff; }
+.cbx.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.cbx.dis { background: var(--line-2); border-color: var(--line); cursor: default; }
+.cbx svg { width: 11px; height: 11px; stroke-width: 3; }
+.spin { width: 14px; height: 14px; border: 2px solid #c7cbf6; border-top-color: var(--primary); border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.step { display: flex; align-items: center; gap: 10px; padding: 7px 0; font-size: 13.5px; color: var(--ink-2); }
+.step .ic { width: 24px; height: 24px; border-radius: 7px; background: var(--line-2); display: grid; place-items: center; color: var(--ink-3); flex: none; }
+.step .ic svg { width: 14px; height: 14px; }
+.step .ic.ok { background: var(--success-weak); color: var(--success); }
+.step .ic.err { background: var(--danger-weak); color: var(--danger); }
+.step .ic.skip { background: var(--warning-weak); color: var(--warning); }
+.step .tm { margin-left: auto; color: var(--ink-3); font-size: 12.5px; white-space: nowrap; }
+
+.sgroup { font-size: 11.5px; color: var(--ink-4); padding: 14px 10px 4px; font-weight: 600; letter-spacing: .02em; }
+.page-sub { font-size: 13px; color: var(--ink-3); margin-top: 3px; }
+.pv { display: inline-grid; place-items: center; border-radius: 6px; color: #fff; font-weight: 700; flex: none; line-height: 1; }
+.pv svg { width: 13px; height: 13px; }
+.pvw { position: relative; display: inline-flex; }
+.pvw.dim .pv { opacity: .4; }
+.pvx { position: absolute; right: -3px; bottom: -3px; width: 9px; height: 9px; border-radius: 50%; border: 2px solid #fff; }
+.pvx.bad { background: var(--danger); }
+.pvx.warn { background: var(--warning); }
+.pvx.off { background: #94a3b8; }
+.chs { display: inline-flex; gap: 6px; align-items: center; }
+.kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+.kpis .card { padding: 14px 16px; }
+.kpis .k { font-size: 12px; color: var(--ink-3); margin-bottom: 6px; }
+.kpis .v { font-size: 18px; font-weight: 650; line-height: 1.35; }
+.kpis .v .sm { font-weight: 500; }
+.mic { width: 44px; height: 44px; border-radius: 12px; background: var(--primary-weak); color: var(--primary); display: grid; place-items: center; flex: none; }
+.mic svg { width: 22px; height: 22px; }
+.mic.sm { width: 36px; height: 36px; border-radius: 10px; }
+.mic.sm svg { width: 18px; height: 18px; }
+.prib { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; background: var(--primary-weak); color: var(--primary-ink); font-weight: 700; font-size: 12.5px; }
+.prib.b2 { background: var(--line-2); color: var(--ink-2); }
+.meter { height: 5px; border-radius: 3px; background: var(--line-2); overflow: hidden; width: 110px; margin-top: 5px; }
+.meter i { display: block; height: 100%; background: var(--primary-2); border-radius: 3px; }
+.meter.warn i { background: var(--warning); }
+.meter.full i { background: var(--danger); }
+pre.code { background: #0f172a; color: #e2e8f0; border-radius: 10px; padding: 12px 14px; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; white-space: pre; overflow-x: auto; margin: 10px 0 6px; }
+.secret { display: flex; align-items: center; gap: 8px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-family: var(--mono); font-size: 13px; word-break: break-all; }
+.fgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 16px; }
+.fgrid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px 16px; }
+.unit { position: relative; }
+.unit .input { padding-right: 46px; }
+.unit > span { position: absolute; right: 10px; top: 8px; font-size: 12px; color: var(--ink-4); pointer-events: none; }
+.unit.pre .input { padding-left: 24px; padding-right: 11px; }
+.unit.pre > span { left: 10px; right: auto; }
+.rrow { display: grid; grid-template-columns: 210px 1fr 118px 84px 32px; gap: 8px; align-items: center; margin-bottom: 8px; }
+.rrow.rhead { font-size: 12px; color: var(--ink-3); font-weight: 600; margin: 14px 0 6px; }
+.field { display: grid; grid-template-columns: 112px 1fr; gap: 14px; align-items: flex-start; }
+.field > .label { margin: 8px 0 0; }
+.rcs { display: flex; gap: 10px; flex-wrap: wrap; }
+.rcs .radio-card { flex: 1; min-width: 200px; }
+.pgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.pcard { border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; display: flex; gap: 10px; align-items: center; cursor: pointer; background: var(--surface); }
+.pcard:hover { border-color: var(--primary-2); background: #f8f8ff; }
+.mlist { border: 1px solid var(--line); border-radius: 10px; max-height: 300px; overflow-y: auto; }
+.mlist .gh { font-size: 12px; color: var(--ink-3); font-weight: 600; padding: 7px 12px; background: var(--surface-2); border-bottom: 1px solid var(--line-2); position: sticky; top: 0; }
+.mlist .it { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-bottom: 1px solid var(--line-2); cursor: pointer; }
+.mlist .it:hover { background: var(--hover); }
+.mlist .it:last-child { border-bottom: none; }
+.td-acts { text-align: right; white-space: nowrap; }
+.table td.vtop { vertical-align: top; }
+.doc .card { margin-bottom: 16px; }
+.doc h2 { margin-bottom: 12px; }
+.doc ol, .doc ul { margin: 0; padding-left: 20px; }
+.doc li { margin: 6px 0; color: var(--ink-2); }
+.doc .table td { vertical-align: top; font-size: 13.5px; line-height: 1.6; }
+.doc .table td:first-child { white-space: nowrap; font-weight: 600; }
+.diagram { width: 100%; display: block; }
+.diagram text { font-family: var(--font); text-anchor: middle; }
+.diagram .t { font-size: 14px; font-weight: 650; fill: var(--ink); }
+.diagram .s { font-size: 11.5px; fill: var(--ink-3); }
+.diagram .lbl { font-size: 11.5px; fill: var(--ink-2); }
+.diagram .b-gray { fill: #f8fafc; stroke: #cbd5e1; }
+.diagram .b-pri { fill: var(--primary-weak); stroke: #a5b4fc; }
+.diagram .b-ok { fill: var(--success-weak); stroke: #86d3a0; }
+.diagram .b-bad { fill: var(--danger-weak); stroke: #f5a3a3; }
+.diagram .b-sec { fill: var(--secondary-weak); stroke: #7dd3fc; }
+.diagram line, .diagram path.ln { stroke: #94a3b8; stroke-width: 1.4; fill: none; }
+.diagram .dash { stroke-dasharray: 4 4; stroke: #f87171; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* =====================================================================
+ * 图标（lucide 风格，内联 SVG）
+ * ===================================================================== */
+const ICONS = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  bot: '<rect x="3" y="8" width="18" height="12" rx="3"/><path d="M12 8V4M8.5 14h.01M15.5 14h.01"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  users: '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 3.1a4 4 0 0 1 0 7.8M22 21a7 7 0 0 0-5-6.7"/>',
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>',
+  spark: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 17l.6 1.6L21 19l-1.4.5L19 21l-.6-1.5L17 19l1.4-.4z"/>',
+  plug: '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  left: '<path d="m15 18-6-6 6-6"/>',
+  right: '<path d="m9 18 6-6-6-6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  up: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  clip: '<path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
+  like: '<path d="M7 10v11H4V10zM7 10l4-8a3 3 0 0 1 3 3v4h5.5a2 2 0 0 1 2 2.3l-1.4 8A2 2 0 0 1 18 21H7"/>',
+  dislike: '<path d="M17 14V3h3v11zM17 14l-4 8a3 3 0 0 1-3-3v-4H4.5a2 2 0 0 1-2-2.3l1.4-8A2 2 0 0 1 6 3h11"/>',
+  terminal: '<path d="m4 17 6-5-6-5M12 19h8"/>',
+  pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
+  archive: '<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4"/>',
+  bulb: '<path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14 9l2 2"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
+  panel: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  play: '<path d="M7 4l13 8-13 8z"/>',
+  list: '<path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+  bookmark: '<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
+  zap: '<path d="M13 2 3 14h8l-1 8 10-12h-8z"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+};
+const ic = (n, cls = '') => `<svg class="i ${n === 'more' ? 'fill' : ''} ${cls}" viewBox="0 0 24 24">${ICONS[n] || ''}</svg>`;
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const COLORS = ['#6366f1', '#0ea5e9', '#f59e0b', '#10b981', '#ec4899', '#8b5cf6', '#14b8a6', '#ef4444'];
+const av = (name, color, size = 30, sq = true) =>
+  `<span class="avatar ${sq ? 'sq' : ''}" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px;background:${color}">${esc((name || '?').slice(0, 1))}</span>`;
+
+Object.assign(ICONS, {
+  server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+  route: '<circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M8.5 19H15a3.5 3.5 0 0 0 0-7H9a3.5 3.5 0 0 1 0-7h6.5"/>',
+  skip: '<path d="m5 4 10 8-10 8z"/><path d="M19 5v14"/>',
+  wallet: '<path d="M20 7H5a2 2 0 0 1 0-4h13v4"/><path d="M3 5v14a2 2 0 0 0 2 2h15V7"/><path d="M16 14h.01"/>',
+  activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  pause: '<rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/>',
+});
+
+/* =====================================================================
+ * 演示数据（内存态，刷新后重置）。「现在」= 2026-11-16 周一 14:37
+ * ===================================================================== */
+const GW = 'https://atlas.techstz.com/llm';
+const PEOPLE = {
+  admin: { name: '周景行', color: '#6366f1', dept: '平台研发部', role: '模型管理员' },
+  user: { name: '王芳', color: '#10b981', dept: '研发中心 / 研发二部', role: '普通用户' },
+};
+/* 王芳本人和所在部门（含上级）：判断私有模型的授权 */
+const WANG_SUBJECTS = ['王芳', '研发二部', '研发中心'];
+
+/* 供应商预置：默认地址、可选的接口协议、能不能查余额、能不能拉模型列表 */
+const PROV = {
+  deepseek: { name: 'DeepSeek', letter: 'D', color: '#4d6bfe', base: 'https://api.deepseek.com', protos: ['anthropic', 'openai'], balance: true, list: true,
+    baseOf: { anthropic: 'https://api.deepseek.com/anthropic', openai: 'https://api.deepseek.com' } },
+  anthropic: { name: 'Anthropic', letter: 'A', color: '#d97757', base: 'https://api.anthropic.com', protos: ['anthropic'], list: true, proxy: true },
+  openai: { name: 'OpenAI', letter: 'O', color: '#111827', base: 'https://api.openai.com/v1', protos: ['openai'], list: true, proxy: true },
+  gemini: { name: 'Google Gemini', letter: 'G', color: '#1a73e8', base: 'https://generativelanguage.googleapis.com', protos: ['gemini'], list: true, proxy: true },
+  azure: { name: 'Azure OpenAI', letter: 'Az', color: '#0078d4', base: '', protos: ['openai'], needBase: true, extra: 'API 版本', list: true },
+  dashscope: { name: '通义千问（百炼）', letter: '通', color: '#615ced', base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', protos: ['openai'], list: true },
+  volcengine: { name: '火山方舟', letter: '火', color: '#1664ff', base: 'https://ark.cn-beijing.volces.com/api/v3', protos: ['openai'], hint: '火山方舟按接入点调用：上游模型名填接入点 ID（ep-…）' },
+  moonshot: { name: 'Moonshot（Kimi）', letter: 'K', color: '#334155', base: 'https://api.moonshot.cn/v1', protos: ['openai', 'anthropic'], balance: true, list: true,
+    baseOf: { openai: 'https://api.moonshot.cn/v1', anthropic: 'https://api.moonshot.cn/anthropic' } },
+  minimax: { name: 'MiniMax', letter: 'M', color: '#e2335f', base: 'https://api.minimax.cn/anthropic', protos: ['anthropic', 'openai'],
+    baseOf: { anthropic: 'https://api.minimax.cn/anthropic', openai: 'https://api.minimax.cn/v1' }, baseHelp: '国内站；国际站是 https://api.minimax.io/anthropic' },
+  zhipu: { name: '智谱 GLM', letter: '智', color: '#3859ff', base: 'https://open.bigmodel.cn/api/paas/v4', protos: ['openai', 'anthropic'], list: true,
+    baseOf: { openai: 'https://open.bigmodel.cn/api/paas/v4', anthropic: 'https://open.bigmodel.cn/api/anthropic' } },
+  siliconflow: { name: '硅基流动', letter: '硅', color: '#7c3aed', base: 'https://api.siliconflow.cn/v1', protos: ['openai'], balance: true, list: true },
+  vllm: { name: 'vLLM 自部署', letter: 'v', color: '#0d9488', base: '', protos: ['openai'], needBase: true, keyOptional: true, list: true },
+  custom_openai: { name: '其他（OpenAI 兼容）', letter: '+', color: '#64748b', base: '', protos: ['openai'], needBase: true, list: true },
+  custom_anthropic: { name: '其他（Anthropic 兼容）', letter: '+', color: '#64748b', base: '', protos: ['anthropic'], needBase: true },
+};
+const PROTO = {
+  anthropic: ['Anthropic Messages', 'Atlas 和 Claude Code 用的就是这种格式：网关原样转发，thinking、缓存标记都不会丢'],
+  openai: ['OpenAI Chat Completions', 'Cursor、OpenAI SDK 用这种格式；Anthropic 格式的请求要经网关转换'],
+  gemini: ['Gemini', 'Google 原生接口；两种格式的请求都要经网关转换'],
+};
+/* 新建账号后「拉取」到的模型（演示） */
+const UPSTREAM_DEMO = {
+  deepseek: ['deepseek-v4-pro', 'deepseek-v4-flash'],
+  anthropic: ['claude-opus-5-5', 'claude-sonnet-5', 'claude-haiku-4-5'],
+  openai: ['gpt-5.1', 'gpt-5.1-mini', 'text-embedding-3-large'],
+  gemini: ['gemini-2.5-flash', 'gemini-2.5-pro'],
+  azure: ['gpt-5.1'],
+  dashscope: ['qwen3-max', 'qwen3-coder-plus', 'qwen3-vl-plus', 'text-embedding-v4'],
+  moonshot: ['kimi-k2.5', 'kimi-k2.5-thinking'],
+  zhipu: ['glm-5', 'glm-5-air', 'glm-4.6v'],
+  siliconflow: ['deepseek-ai/DeepSeek-V4-Flash', 'Qwen/Qwen3-Coder-480B-A35B-Instruct'],
+  vllm: ['served-model'],
+  custom_openai: ['model-a', 'model-b'],
+};
+const nonChat = (u) => /embed|bge|rerank/i.test(u);
+
+const ACCOUNTS = [
+  { id: 'ds1', name: 'DeepSeek 公司账号', prov: 'deepseek', proto: 'anthropic', base: 'https://api.deepseek.com/anthropic', tail: 'a91c', egress: 'direct',
+    st: 'bad', why: '余额不足（402）', since: '今天 13:58', bal: 0, alert: 50, note: '财务每月 1 日充值',
+    lastErr: '今天 14:31 · 402 Insufficient Balance', pulled: '今天 09:12', created: '周景行 · 10-28',
+    upstream: ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner'] },
+  { id: 'ds2', name: 'DeepSeek 备用账号', prov: 'deepseek', proto: 'openai', base: 'https://api.deepseek.com', tail: '7e02', egress: 'direct',
+    st: 'ok', bal: 486.2, alert: 50, note: '公司账号出问题时兜底',
+    lastErr: '11-14 22:05 · 429 Rate limit reached', pulled: '今天 09:12', created: '周景行 · 11-02',
+    upstream: ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner'] },
+  { id: 'mm', name: 'MiniMax Token Plan', prov: 'minimax', proto: 'anthropic', base: 'https://api.minimax.cn/anthropic', tail: 'c3d8', egress: 'direct',
+    st: 'cool', why: '限流（429）', cool: 38, note: 'Token Plan 按 5 小时窗口给额度',
+    lastErr: '今天 14:36 · 429 Token Plan 额度已用完', created: '周景行 · 11-11', upstream: null },
+  { id: 'gm', name: 'Gemini（免费档）', prov: 'gemini', proto: 'gemini', base: 'https://generativelanguage.googleapis.com', tail: 'Qx4k', egress: 'proxy',
+    st: 'ok', note: '免费档每天 20 次，只给浏览器智能体用', lastErr: '今天 11:20 · 429 免费档当日次数用完', pulled: '11-10 16:02', created: '周景行 · 11-10',
+    upstream: ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-3-pro-preview', 'text-embedding-004'] },
+  { id: 'an', name: 'Anthropic 官方', prov: 'anthropic', proto: 'anthropic', base: 'https://api.anthropic.com', tail: 'Hk2w', egress: 'proxy',
+    st: 'ok', note: '', lastErr: '', pulled: '10-29 10:40', created: '周景行 · 10-29',
+    upstream: ['claude-opus-5-5', 'claude-sonnet-5', 'claude-haiku-4-5'] },
+  { id: 'sf', name: '硅基流动', prov: 'siliconflow', proto: 'openai', base: 'https://api.siliconflow.cn/v1', tail: 'p0aa', egress: 'direct',
+    st: 'ok', bal: 1203.55, alert: 100, note: '', lastErr: '', pulled: '11-06 15:20', created: '周景行 · 11-06',
+    upstream: ['deepseek-ai/DeepSeek-V4-Flash', 'deepseek-ai/DeepSeek-V4-Pro', 'Qwen/Qwen3-Coder-480B-A35B-Instruct', 'BAAI/bge-m3', 'BAAI/bge-reranker-v2-m3'] },
+  { id: 'ark', name: '火山方舟', prov: 'volcengine', proto: 'openai', base: 'https://ark.cn-beijing.volces.com/api/v3', tail: 'e81f', egress: 'direct',
+    st: 'off', offWhy: '合同续签中（11-12 周景行停用）', note: '', lastErr: '', created: '周景行 · 11-05', upstream: null },
+  { id: 'vl', name: 'GPU 集群 vLLM', prov: 'vllm', proto: 'openai', base: 'http://vllm.ai-infra.svc:8000/v1', tail: '', egress: 'direct',
+    st: 'ok', note: '内网，不需要密钥', lastErr: '', pulled: '11-02 11:05', created: '周景行 · 11-02', upstream: ['qwen3-coder'] },
+];
+
+const MODELS = [
+  { id: 'm1', name: 'deepseek-v4-pro', disp: 'DeepSeek V4 Pro', desc: '综合能力强，大多数智能体的默认选择', vis: 'public', vision: false, ctx: 128, out: 32, price: [2, 8, 0.5], on: true, calls: 12840, cost: 1284.6, by: '周景行 · 10-28',
+    routes: [{ acc: 'ds1', up: 'deepseek-v4-pro', pri: 1, w: 100 }, { acc: 'ds2', up: 'deepseek-v4-pro', pri: 2, w: 100 }] },
+  { id: 'm2', name: 'deepseek-flash', disp: 'DeepSeek Flash', desc: '便宜、快，适合会话标题、摘要、批量处理', vis: 'public', vision: false, ctx: 128, out: 8, price: [0.5, 2, 0.1], on: true, calls: 30215, cost: 402.3, by: '周景行 · 10-28',
+    routes: [{ acc: 'ds1', up: 'deepseek-v4-flash', pri: 1, w: 70 }, { acc: 'sf', up: 'deepseek-ai/DeepSeek-V4-Flash', pri: 1, w: 30 }, { acc: 'ds2', up: 'deepseek-v4-flash', pri: 2, w: 100 }] },
+  { id: 'm3', name: 'MiniMax-M3.1-Flash', disp: 'MiniMax M3.1 Flash', desc: '长上下文，CLI 智能体常用', vis: 'public', vision: false, ctx: 200, out: 16, price: [1, 4, 0.2], on: true, calls: 3120, cost: 88, by: '周景行 · 11-11',
+    routes: [{ acc: 'mm', up: 'MiniMax-M3.1-Flash', pri: 1, w: 100 }] },
+  { id: 'm4', name: 'gemini-2.5-flash', disp: 'Gemini 2.5 Flash', desc: '能看图：开了浏览器的智能体用它看截图操作网页', vis: 'public', vision: true, ctx: 1000, out: 64, price: [2.16, 18, 0.54], on: true, calls: 860, cost: 21.5, by: '周景行 · 11-10',
+    routes: [{ acc: 'gm', up: 'gemini-2.5-flash', pri: 1, w: 100 }] },
+  { id: 'm5', name: 'claude-sonnet-5', disp: 'Claude Sonnet 5', desc: '写代码最强，价格高，只开给研发', vis: 'private', vision: true, ctx: 1000, out: 64, price: [21.6, 108, 2.16], on: true, calls: 2104, cost: 1960.2, by: '周景行 · 10-29',
+    grants: [{ t: 'dept', who: '研发中心', sub: true, at: '10-29' }, { t: 'user', who: '李工', at: '11-03' }],
+    routes: [{ acc: 'an', up: 'claude-sonnet-5', pri: 1, w: 100 }] },
+  { id: 'm6', name: 'qwen3-coder', disp: 'Qwen3 Coder（自部署）', desc: '公司 GPU 集群上跑的，数据不出内网、不计费', vis: 'private', vision: false, ctx: 256, out: 32, price: null, on: true, calls: 540, cost: 0, by: '周景行 · 11-02',
+    grants: [{ t: 'dept', who: '研发一部', sub: false, at: '11-02' }],
+    routes: [{ acc: 'vl', up: 'qwen3-coder', pri: 1, w: 100 }] },
+  { id: 'm7', name: 'doubao-seed-2', disp: '豆包 Seed 2', desc: '火山方舟合同续签中，先停用', vis: 'public', vision: false, ctx: 256, out: 32, price: [0.8, 8, 0.16], on: false, calls: 0, cost: 0, by: '周景行 · 11-05',
+    routes: [{ acc: 'ark', up: 'ep-20261105153012-x7k2p', pri: 1, w: 100 }] },
+];
+
+const KEYS = [
+  { id: 'k1', type: 'user', owner: '周景行', name: 'Claude Code（笔记本）', tail: '3f9a', models: ['claude-sonnet-5', 'deepseek-v4-pro'], budget: 300, used: 126.4, rpm: 60, exp: null, last: '3 分钟前', st: 'ok', created: '10-29' },
+  { id: 'k2', type: 'user', owner: '周景行', name: 'Cursor', tail: 'b72e', models: ['deepseek-v4-pro', 'deepseek-flash', 'gemini-2.5-flash'], budget: null, used: 18.2, rpm: null, exp: '2027-02-14', last: '昨天 18:20', st: 'ok', created: '11-14' },
+  { id: 'k3', type: 'user', owner: '周景行', name: '周报脚本', tail: '09d1', models: ['deepseek-flash'], budget: 20, used: 20, rpm: 10, exp: null, last: '11-15 09:00', st: 'over', created: '11-01' },
+  { id: 'k4', type: 'user', owner: '张明', name: 'Cursor', tail: '71c0', models: ['claude-sonnet-5', 'qwen3-coder'], budget: 500, used: 412.8, rpm: null, exp: null, last: '10 分钟前', st: 'ok', created: '10-30' },
+  { id: 'k5', type: 'user', owner: '张明', name: '数据清洗脚本', tail: 'e5a2', models: ['deepseek-flash'], budget: null, used: 3.6, rpm: 30, exp: null, last: '11-13 02:00', st: 'ok', created: '11-06' },
+  { id: 'k6', type: 'user', owner: '李工', name: '客服质检', tail: 'a4e3', models: ['deepseek-v4-pro', 'qwen3-coder'], revoked: ['qwen3-coder'], budget: 100, used: 0, rpm: null, exp: '2026-11-10', last: '11-09 17:42', st: 'expired', created: '10-10' },
+  { id: 'k7', type: 'user', owner: '赵磊', name: '测试', tail: '5d1b', models: ['deepseek-v4-pro'], budget: null, used: 57.3, rpm: null, exp: null, last: '11-12 03:15', st: 'blocked', why: '周景行停用：Key 出现在公开的 GitHub 仓库里', created: '11-02' },
+  { id: 'c1', type: 'client', ct: 'Agent', code: 'agt_7f3a', name: '通用助手', color: '#6366f1', models: ['deepseek-v4-pro', 'deepseek-flash', 'gemini-2.5-flash', 'MiniMax-M3.1-Flash'], budget: null, used: 842.6, rpm: null, last: '刚刚', st: 'ok', created: '11-11' },
+  { id: 'c2', type: 'client', ct: 'Agent', code: 'agt_19bd', name: '编程助手', color: '#0ea5e9', models: ['claude-sonnet-5', 'deepseek-v4-pro', 'qwen3-coder'], budget: 2000, used: 1288.3, rpm: null, last: '2 分钟前', st: 'ok', created: '10-29' },
+  { id: 'c3', type: 'client', ct: 'Agent', code: 'agt_a204', name: '数据分析师', color: '#f59e0b', models: ['deepseek-v4-pro'], budget: null, used: 96.1, rpm: null, last: '1 小时前', st: 'ok', created: '11-03' },
+  { id: 'c4', type: 'client', ct: 'Agent', code: 'agt_c851', name: 'zhipin 招聘助手', color: '#10b981', models: ['gemini-2.5-flash', 'MiniMax-M3.1-Flash'], budget: 200, used: 31.9, rpm: null, last: '今天 14:00', st: 'ok', created: '11-15' },
+  { id: 'c5', type: 'client', ct: 'Agent', code: 'agt_d02e', name: '合同审查', color: '#ec4899', models: ['deepseek-v4-pro', 'deepseek-flash', 'MiniMax-M3.1-Flash', 'gemini-2.5-flash'], auto: true, budget: null, used: 0.4, rpm: null, last: '今天 11:32', st: 'ok', created: '今天 11:20' },
+  { id: 'c6', type: 'client', ct: 'Service', code: 'atlas-title', name: 'Atlas · 会话标题', models: ['deepseek-flash'], budget: null, used: 12.4, rpm: null, last: '刚刚', st: 'ok', created: '10-28' },
+  { id: 'c7', type: 'client', ct: 'Service', code: 'knowledge-chat', name: '知识库 · 问答', models: ['deepseek-flash'], budget: null, used: 64, rpm: null, last: '5 分钟前', st: 'ok', created: '10-28' },
+  { id: 'c8', type: 'client', ct: 'Service', code: 'knowledge-embedding', name: '知识库 · 向量', models: [], budget: null, used: 0, rpm: null, last: '—', st: 'pending', created: '10-28', note: '向量模型这期还不能登记' },
+];
+const KST = { ok: ['正常', 'success'], pending: ['待分配模型', 'warning'], blocked: ['已停用', ''], expired: ['已过期', 'danger'], over: ['本月预算已用完', 'warning'] };
+
+/* =====================================================================
+ * 状态与路由
+ * ===================================================================== */
+const S = {
+  role: 'admin', notes: true, pop: null, modal: null, toast: null, q: '',
+  mfilter: 'all', mtab: 'routes', atab: 'conn', ktab: 'user', kfilter: 'all', sim: '',
+  agentDefault: 'public', form: null, utab: 'cc',
+};
+const me = () => PEOPLE[S.role];
+const isAdmin = () => S.role === 'admin';
+const clone = (o) => JSON.parse(JSON.stringify(o));
+function parseRoute() {
+  const h = (location.hash || '#/models').slice(2).split('/');
+  return { p: h[0] || 'models', a: h[1] || '', b: h[2] || '', c: h[3] || '' };
+}
+const go = (h) => { S.pop = null; location.hash = h; };
+const nav = (h) => { S.pop = null; if (location.hash === h) render(); else location.hash = h; };
+window.addEventListener('hashchange', () => { S.modal = null; S.pop = null; S.sim = ''; S.q = ''; render(); document.querySelector('.main')?.scrollTo(0, 0); });
+
+/* =====================================================================
+ * 推导：账号、线路、模型的状态
+ * ===================================================================== */
+const accOf = (id) => ACCOUNTS.find((a) => a.id === id);
+const modelOf = (id) => MODELS.find((m) => m.id === id);
+const modelByName = (n) => MODELS.find((m) => m.name === n);
+const lowBal = (a) => PROV[a.prov].balance && a.bal != null && a.bal < a.alert;
+function accState(a) {
+  if (a.st === 'off') return { k: 'off', t: '已停用' };
+  if (a.st === 'bad') return { k: 'bad', t: `异常：${a.why}` };
+  if (a.st === 'cool') return { k: 'warn', t: `冷却中，还剩 ${a.cool} 秒` };
+  if (lowBal(a)) return { k: 'warn', t: '正常 · 余额低' };
+  return { k: 'ok', t: '正常' };
+}
+/* 线路可不可用只看账号：停用、异常、冷却中都不可用（余额低仍可用） */
+function routeState(r) {
+  const a = accOf(r.acc);
+  if (a.st === 'off') return { k: 'off', t: '账号已停用' };
+  if (a.st === 'bad') return { k: 'bad', t: `账号${a.why}` };
+  if (a.st === 'cool') return { k: 'warn', t: `冷却中，还剩 ${a.cool} 秒` };
+  return { k: 'ok', t: '正常' };
+}
+function modelState(m) {
+  if (!m.on) return { k: 'off', t: '已停用' };
+  const ss = m.routes.map(routeState);
+  const ok = ss.filter((s) => s.k === 'ok').length;
+  if (!ok) return { k: 'bad', t: ss.some((s) => s.k === 'warn') ? '暂不可用' : '不可用' };
+  const top = Math.min(...m.routes.map((r) => +r.pri));
+  const topOk = m.routes.some((r, i) => +r.pri === top && ss[i].k === 'ok');
+  if (ok < ss.length) return { k: 'warn', t: topOk ? '部分线路不可用' : '已切到备用线路' };
+  return { k: 'ok', t: '可用' };
+}
+const DOT = { ok: 'on', warn: 'warn', bad: 'bad', off: 'off' };
+const dot = (s) => `<span class="row sm" style="gap:8px;white-space:nowrap"><span class="ddot ${DOT[s.k]}"></span>${s.t}</span>`;
+const canUse = (m) => isAdmin() || m.vis === 'public' || (m.grants || []).some((g) => WANG_SUBJECTS.includes(g.who));
+const keyHolders = (name) => KEYS.filter((k) => k.models.includes(name));
+/* 账号停掉（或已经不可用）时，用到它的模型会怎样 */
+function impactOf(id) {
+  return MODELS.filter((m) => m.on && m.routes.some((r) => r.acc === id)).map((m) => {
+    const alt = m.routes.filter((r) => r.acc !== id && routeState(r).k === 'ok').sort((a, b) => a.pri - b.pri)[0];
+    return { m, alt: alt ? accOf(alt.acc) : null };
+  });
+}
+const impactText = (id) => impactOf(id).map(({ m, alt }) => alt ? `${esc(m.disp)} 改走「${esc(alt.name)}」` : `<b>${esc(m.disp)} 没有别的线路，暂时不可用</b>`).join('；');
+
+/* =====================================================================
+ * 小组件
+ * ===================================================================== */
+const pv = (prov, size = 22) => { const p = PROV[prov]; return `<span class="pv" style="width:${size}px;height:${size}px;background:${p.color};font-size:${Math.round(size * (p.letter.length > 1 ? 0.38 : 0.5))}px" title="${esc(p.name)}">${p.letter}</span>`; };
+const money = (v) => v == null ? '—' : '¥' + Number(v).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtK = (v) => v == null || v === '' ? '—' : +v >= 1000 ? `${+v / 1000}M` : `${v}K`;
+const priceText = (p) => p ? `¥${p[0]} / ¥${p[1]}` : '<span class="faint">不计费</span>';
+const searchBox = (ph) => `<div class="search" style="width:260px">${ic('search')}<input class="input" data-bind="q" value="${esc(S.q)}" placeholder="${ph}"></div>`;
+const segOf = (k, opts) => `<div class="seg">${opts.map(([v, t]) => `<a class="${S[k] === v ? 'on' : ''}" data-act="setS" data-k="${k}" data-v="${v}">${t}</a>`).join('')}</div>`;
+const tabsOf = (k, opts) => `<div class="tabs">${opts.map(([v, t]) => `<a class="${S[k] === v ? 'on' : ''}" data-act="setS" data-k="${k}" data-v="${v}">${t}</a>`).join('')}</div>`;
+const cbx = (on, extra = '') => `<span class="cbx ${on ? 'on' : ''} ${extra}">${on ? ic('check') : ''}</span>`;
+const kstTag = (k) => `<span class="tag ${KST[k.st][1]}">${KST[k.st][0]}</span>`;
+const kpi = (k, v, sub = '') => `<div class="card"><div class="k">${k}</div><div class="v">${v}</div>${sub ? `<div style="margin-top:2px">${sub}</div>` : ''}</div>`;
+const field = (label, body) => `<div class="field"><label class="label">${label}</label><div>${body}</div></div>`;
+const rc = (on, t, d, act) => `<div class="radio-card ${on ? 'on' : ''}" ${act}><span class="r"></span><div><div style="font-weight:600">${t}</div><div class="sm muted">${d}</div></div></div>`;
+const copyBtn = (msg = '已复制') => `<a class="ibtn sm" data-act="toast" data-msg="${msg}" title="复制">${ic('copy')}</a>`;
+const mname = (m) => `<div class="row" style="gap:6px"><b>${esc(m.disp)}</b>${m.vision ? '<span class="tag blue">看图</span>' : ''}</div><div class="xs muted mono">${esc(m.name)}</div>`;
+function keyModelState(k, n) {
+  const m = modelByName(n);
+  if (!m) return '模型已删除';
+  if (!m.on) return '模型已停用';
+  if ((k.revoked || []).includes(n)) return '授权已收回';
+  return '';
+}
+function modelChips(k) {
+  if (!k.models.length) return `<span class="sm" style="color:var(--warning)">还没分配</span>${k.note ? `<div class="xs muted">${esc(k.note)}</div>` : ''}`;
+  return `<div class="mchips">${k.models.map((n) => { const m = modelByName(n); const bad = keyModelState(k, n); return bad ? `<span class="mchip bad" title="${bad}，下次保存时移除"><s>${esc(m ? m.disp : n)}</s></span>` : `<span class="mchip">${esc(m.disp)}</span>`; }).join('')}</div>`;
+}
+function usageCell(k) {
+  if (!k.budget) return `${money(k.used)}<div class="xs faint">不限预算</div>`;
+  const pct = Math.min(100, Math.round(k.used * 100 / k.budget));
+  return `${money(k.used)}<span class="xs muted"> / ${money(k.budget)}</span><div class="meter ${pct >= 100 ? 'full' : pct >= 80 ? 'warn' : ''}"><i style="width:${pct}%"></i></div>`;
+}
+const limitText = (k) => [k.budget ? `月预算 ${money(k.budget)}` : '', k.rpm ? `${k.rpm} 次/分钟` : ''].filter(Boolean).join('<br>') || '<span class="faint">不限</span>';
+const expText = (k) => k.st === 'expired' ? `<span style="color:var(--danger)">${k.exp} 已过期</span>` : k.exp ? `${k.exp} 到期` : '<span class="muted">永久</span>';
+
+/* =====================================================================
+ * 骨架
+ * ===================================================================== */
+const PLATFORMS = [['ai', '智能平台', 'zap'], ['kb', '知识库', 'book'], ['skills', '技能', 'spark'], ['mcp', 'MCP', 'plug'], ['models', '模型', 'layers']];
+function topbar() {
+  return `<header class="top">
+    <div class="brand" data-go="#/models"><span class="logo">A</span>Atlas</div>
+    <nav class="pnav">${PLATFORMS.map(([id, nm, icn]) => `<a ${id === 'models' ? 'href="#/models"' : 'data-act="toast" data-msg="原型只画了模型"'} class="${id === 'models' ? 'on' : ''}">${ic(icn)}${nm}</a>`).join('')}</nav>
+    <div class="top-right">
+      <button class="btn sm ${S.notes ? '' : 'ghost'}" data-act="toggleNotes">${ic('bulb')}设计说明</button>
+      <span style="cursor:pointer" data-pop="me" title="切换演示身份">${av(me().name, me().color, 30, false)}</span>
+    </div></header>`;
+}
+function sider(r) {
+  const issues = ACCOUNTS.filter((a) => a.st === 'bad' || a.st === 'cool').length;
+  const pend = KEYS.filter((k) => k.type === 'client' && k.st === 'pending').length;
+  const it = (h, icn, t, on, badge = '') => `<a class="snav ${on ? 'on' : ''}" href="${h}" title="${t}">${ic(icn)}<span>${t}</span>${badge}</a>`;
+  return `<aside class="sider"><div class="sider-top">
+    ${it('#/models', 'layers', '模型', ['', 'm', 'edit'].includes(r.a))}
+    ${it('#/models/keys', 'key', '我的 Key', r.a === 'keys')}
+    ${isAdmin() ? `<div class="sgroup">管理</div>
+      ${it('#/models/accounts', 'server', '账号', r.a === 'accounts', issues ? `<b class="badge" title="${issues} 个账号不可用">${issues}</b>` : '')}
+      ${it('#/models/all-keys', 'shield', 'Key 管理', r.a === 'all-keys', pend ? `<b class="badge gray" title="${pend} 把待分配模型">${pend}</b>` : '')}` : ''}
+    </div><div class="sp"></div>
+    <div class="sider-foot">${it('#/models/about', 'bulb', '方案说明', r.a === 'about')}</div></aside>`;
+}
+function render() {
+  const r = parseRoute();
+  document.getElementById('app').innerHTML = topbar() +
+    `<div class="body">${sider(r)}<main class="main">${page(r)}</main>${S.notes ? notesPanel(r) : ''}</div>` +
+    modal() + pop() + (S.toast ? `<div class="toast">${esc(S.toast)}</div>` : '');
+}
+function page(r) {
+  if (['m', 'edit', 'accounts', 'all-keys'].includes(r.a) && !isAdmin()) {
+    return `<div class="page"><div class="empty"><div class="ill">${ic('lock')}</div><h3>只有模型管理员能看</h3><p>右上角头像可以切回管理员</p></div></div>`;
+  }
+  switch (r.a) {
+    case 'm': return modelOf(r.b) ? modelDetail(modelOf(r.b)) : modelList();
+    case 'edit': return modelEditor();
+    case 'keys': return myKeys();
+    case 'accounts': return r.b && accOf(r.b) ? accountDetail(accOf(r.b)) : accountList();
+    case 'all-keys': return allKeys();
+    case 'about': return aboutPage();
+  }
+  return modelList();
+}
+function toast(msg) { S.toast = msg; render(); clearTimeout(toast.t); toast.t = setTimeout(() => { S.toast = null; render(); }, 2400); }
+
+/* =====================================================================
+ * 模型列表
+ * ===================================================================== */
+function routeChips(m) {
+  const ids = [...new Set(m.routes.map((r) => r.acc))];
+  return `<span class="chs">${ids.map((id) => { const a = accOf(id); const s = routeState({ acc: id }); return `<span class="pvw ${s.k !== 'ok' ? 'dim' : ''}" title="${esc(a.name)}：${s.t}">${pv(a.prov, 22)}${s.k !== 'ok' ? `<i class="pvx ${DOT[s.k] === 'on' ? '' : DOT[s.k]}"></i>` : ''}</span>`; }).join('')}<span class="xs muted" style="margin-left:2px">${m.routes.length} 条</span></span>`;
+}
+const whoText = (m) => m.vis === 'public' ? '所有人' : `<span class="tag warning">私有</span> ${m.grants.map((g) => esc(g.who)).join('、')}`;
+function modelList() {
+  const A = isAdmin();
+  let list = MODELS.filter((m) => A || (m.on && canUse(m)));
+  if (A && S.mfilter !== 'all') list = list.filter((m) => S.mfilter === 'off' ? !m.on : m.on && m.vis === S.mfilter);
+  const q = S.q.trim().toLowerCase();
+  if (q) list = list.filter((m) => (m.name + m.disp).toLowerCase().includes(q));
+  const issues = MODELS.filter((m) => m.on && ['warn', 'bad'].includes(modelState(m).k));
+  const warn = A && issues.length ? `<div class="banner warn" style="margin-bottom:14px">${ic('alert')}<div class="grow">${issues.map((m) => `<a data-go="#/models/m/${m.id}">${esc(m.disp)}</a> ${modelState(m).t}`).join('；')}。原因在账号上：${ACCOUNTS.filter((a) => a.st === 'bad' || a.st === 'cool').map((a) => `${esc(a.name)}${a.st === 'cool' ? '被限流' : a.why}`).join('，')}</div><a data-go="#/models/accounts" style="white-space:nowrap">查看账号</a></div>` : '';
+  const head = `<div class="page-head"><div class="grow"><h1>模型</h1><div class="page-sub">${A ? '平台对外提供的模型。调用方只传模型名，网关按线路转给对应的账号' : '你能用的模型。在「我的 Key」里选用，智能体也从这些里面选'}</div></div>
+    ${A ? `<button class="btn primary" data-act="newModel">${ic('plus')}添加模型</button>` : ''}</div>`;
+  const tb = `<div class="toolbar">${searchBox('搜索模型名、显示名称')}${A ? segOf('mfilter', [['all', '全部'], ['public', '公有'], ['private', '私有'], ['off', '已停用']]) : ''}</div>`;
+  if (!list.length) return `<div class="page">${head}${tb}<div class="card"><div class="empty"><h3>没有符合条件的模型</h3></div></div></div>`;
+  const myKeys = KEYS.filter((k) => k.type === 'user' && k.owner === me().name);
+  const table = A
+    ? `<table class="table"><tr><th>模型</th><th>线路</th><th>上下文</th><th>价格（输入 / 输出，每百万 token）</th><th>谁能用</th><th>状态</th></tr>
+      ${list.map((m) => `<tr class="click" data-go="#/models/m/${m.id}"><td>${mname(m)}</td><td>${routeChips(m)}</td><td>${fmtK(m.ctx)}</td>
+        <td class="mono" style="font-size:12.5px">${priceText(m.price)}</td><td class="sm">${whoText(m)}</td><td>${dot(modelState(m))}</td></tr>`).join('')}</table>`
+    : `<table class="table"><tr><th>模型</th><th>上下文</th><th>最大输出</th><th>价格（输入 / 输出，每百万 token）</th><th>为什么能用</th><th>我的 Key</th></tr>
+      ${list.map((m) => { const n = myKeys.filter((k) => k.models.includes(m.name)).length; return `<tr class="click" data-act="modelInfo" data-id="${m.id}"><td>${mname(m)}</td><td>${fmtK(m.ctx)}</td><td>${fmtK(m.out)}</td>
+        <td class="mono" style="font-size:12.5px">${priceText(m.price)}</td><td class="sm">${m.vis === 'public' ? '<span class="muted">公有</span>' : '<span class="tag primary">授权给了研发中心</span>'}</td>
+        <td class="sm">${n ? `${n} 把 Key 里有` : '<span class="faint">—</span>'}</td></tr>`; }).join('')}</table>`;
+  return `<div class="page">${head}${warn}${tb}${table}</div>`;
+}
+
+/* =====================================================================
+ * 模型详情（管理员）
+ * ===================================================================== */
+function modelDetail(m) {
+  const st = modelState(m);
+  const badN = m.routes.filter((r) => routeState(r).k !== 'ok').length;
+  const holders = keyHolders(m.name);
+  const head = `<div class="crumb"><a data-go="#/models">模型</a>${ic('right')}<span>${esc(m.disp)}</span></div>
+    <div class="page-head" style="align-items:flex-start"><div class="mic">${ic('layers')}</div>
+      <div class="grow"><div class="row" style="gap:8px"><h1>${esc(m.disp)}</h1>${m.vis === 'public' ? '<span class="tag">公有</span>' : '<span class="tag warning">私有</span>'}${m.vision ? '<span class="tag blue">看图</span>' : ''}</div>
+        <div class="row sm muted" style="margin-top:2px;gap:6px"><span class="mono">${esc(m.name)}</span>${copyBtn('已复制模型名')}<span>·</span><span>${esc(m.desc)}</span></div></div>
+      <div class="row" style="gap:10px"><span class="sm muted">${m.on ? '已启用' : '已停用'}</span><span class="switch ${m.on ? 'on' : ''}" data-act="toggleModel" data-id="${m.id}"></span>
+        <button class="btn" data-act="editModel" data-id="${m.id}">${ic('pencil')}编辑</button><button class="ibtn" data-pop="modelMore:${m.id}">${ic('more')}</button></div></div>`;
+  const kp = `<div class="kpis">
+    ${kpi('状态', dot(st), m.on && st.k !== 'ok' ? `<span class="xs muted">${st.k === 'bad' ? '调用会报错，见下方线路' : '调用正常，走的是其他线路'}</span>` : '')}
+    ${kpi('线路', `${m.routes.length} 条`, badN ? `<span class="sm" style="color:var(--warning)">${badN} 条不可用</span>` : '<span class="sm muted">全部可用</span>')}
+    ${kpi('本月调用', `${m.calls.toLocaleString()} 次`, `<span class="sm muted">费用 ${money(m.cost)}</span>`)}
+    ${kpi('在用的 Key', `${holders.length} 把`, `<span class="sm muted">个人 ${holders.filter((k) => k.type === 'user').length} · 客户端 ${holders.filter((k) => k.type === 'client').length}</span>`)}</div>`;
+  const tab = S.mtab;
+  const body = tab === 'access' ? accessTab(m) : tab === 'spec' ? specTab(m) : tab === 'code' ? codeTab(m) : routesTab(m);
+  return `<div class="page">${head}${!m.on ? `<div class="banner gray" style="margin-bottom:14px">${ic('pause')}<div>已停用：调用会返回「模型已停用」。Key 里还留着它，重新启用后不用重新分配</div></div>` : ''}${kp}
+    ${tabsOf('mtab', [['routes', `线路 ${m.routes.length}`], ['access', '谁能用'], ['spec', '规格与价格'], ['code', '调用示例']])}${body}</div>`;
+}
+function routesTab(m) {
+  const pris = [...new Set(m.routes.map((r) => +r.pri))].sort((a, b) => a - b);
+  const rows = pris.map((p) => {
+    const rs = m.routes.filter((r) => +r.pri === p);
+    const sum = rs.reduce((s, r) => s + +r.w, 0);
+    return rs.map((r, j) => {
+      const a = accOf(r.acc);
+      return `<tr>${j === 0 ? `<td rowspan="${rs.length}" class="vtop"><span class="prib ${p === pris[0] ? '' : 'b2'}">${p}</span><div class="xs muted" style="margin-top:4px">${p === pris[0] ? '首选' : '备用'}</div></td>` : ''}
+        <td><div class="row">${pv(a.prov, 22)}<a data-go="#/models/accounts/${a.id}">${esc(a.name)}</a></div><div class="xs muted" style="margin-left:30px">${PROTO[a.proto][0]}${a.egress === 'proxy' ? ' · 经出网代理' : ''}</div></td>
+        <td class="mono" style="font-size:12.5px">${esc(r.up)}${r.up !== m.name ? ' <span class="tag" title="和模型名不同，网关转发时换成它">≠ 模型名</span>' : ''}</td>
+        <td>${rs.length > 1 ? `${r.w} <span class="xs muted">（${Math.round(r.w * 100 / sum)}%）</span>` : '<span class="faint">—</span>'}</td>
+        <td>${dot(routeState(r))}</td>
+        <td class="td-acts"><button class="btn sm ghost" data-act="testAcc" data-id="${a.id}" data-up="${esc(r.up)}">测试</button></td></tr>`;
+    }).join('');
+  }).join('');
+  return `<div class="banner gray" style="margin-bottom:12px">${ic('route')}<div>先用优先级数字小的线路，同一优先级按权重分流。遇到限流、余额不足、密钥失效、超时、5xx 自动换下一条；回答已经开始输出后不再换。</div></div>
+    <table class="table"><tr><th style="width:80px">优先级</th><th>账号</th><th>上游模型名</th><th>权重</th><th>状态</th><th></th></tr>${rows}</table>
+    <div class="row" style="margin-top:12px"><button class="btn" data-act="editModel" data-id="${m.id}">${ic('pencil')}调整线路</button><button class="btn" data-act="sim" data-id="${m.id}">${ic('play')}模拟一次调用</button><span class="sm muted">按各账号现在的状态推演，不真的调用</span></div>
+    ${S.sim === m.id ? simCard(m) : ''}`;
+}
+function simulate(m) {
+  const steps = [];
+  const pris = [...new Set(m.routes.map((r) => +r.pri))].sort((a, b) => a - b);
+  for (const p of pris) {
+    const rs = m.routes.filter((r) => +r.pri === p).sort((a, b) => b.w - a.w);
+    for (let i = 0; i < rs.length; i++) {
+      const r = rs[i]; const a = accOf(r.acc); const s = routeState(r);
+      const who = `优先级 ${p} · ${esc(a.name)}${rs.length > 1 ? (i === 0 ? '（按权重抽中）' : '（同优先级的下一条）') : ''}`;
+      if (s.k === 'ok') {
+        steps.push({ c: 'ok', who, t: `200 · 首字 ${a.egress === 'proxy' ? 1180 : 640}ms · 共 ${a.egress === 'proxy' ? '4.1' : '3.2'}s` });
+        return { steps, ok: true, via: a.name };
+      }
+      steps.push({ c: 'skip', who, t: s.k === 'off' ? '跳过：账号已停用' : s.k === 'bad' ? `跳过：账号异常（${a.why}）` : `跳过：冷却中，还剩 ${a.cool} 秒` });
+    }
+  }
+  const cool = m.routes.map((r) => accOf(r.acc)).filter((a) => a.st === 'cool').sort((x, y) => x.cool - y.cool)[0];
+  if (cool) {
+    steps.push({ c: 'err', who: `全部线路都不可用，仍试冷却最早结束的 ${esc(cool.name)}`, t: '429 Token Plan 额度已用完' });
+    return { steps, ok: false, err: '返回 429 给调用方：「模型繁忙，请稍后重试或换个模型」。这条线路重新冷却 1 分钟' };
+  }
+  return { steps, ok: false, err: '返回 503 给调用方：「这个模型现在没有可用线路」，不打到供应商' };
+}
+function simCard(m) {
+  const res = simulate(m);
+  return `<div class="card pad" style="margin-top:12px;max-width:820px"><div class="row" style="margin-bottom:4px"><b>模拟：一次 model=${esc(m.name)} 的调用</b><span class="sp"></span><a class="sm" data-act="setS" data-k="sim" data-v="">收起</a></div>
+    <div class="step"><span class="ic ok">${ic('key')}</span><span class="grow">认 Key、查限额、模型在这把 Key 里且已启用</span><span class="tm">通过</span></div>
+    ${res.steps.map((s) => `<div class="step"><span class="ic ${s.c}">${ic(s.c === 'ok' ? 'check' : s.c === 'skip' ? 'skip' : 'x')}</span><span class="grow">${s.who}</span><span class="tm">${s.t}</span></div>`).join('')}
+    <div class="divider" style="margin:8px 0"></div>
+    <div class="sm">${res.ok ? `结果：经 <b>${esc(res.via)}</b> 返回；按 ${esc(m.name)} 的价格把费用记到这把 Key 上` : `<span style="color:var(--danger)">${res.err}</span>`}</div></div>`;
+}
+function accessTab(m) {
+  const clients = keyHolders(m.name).filter((k) => k.type === 'client');
+  const ind = `<div class="banner gray" style="margin-top:14px">${ic('bot')}<div>客户端 Key（智能体、平台服务）由管理员在「Key 管理」里分配，不看这里的授权。现在有 <b>${clients.length}</b> 把分配了它${clients.length ? '：' + clients.map((k) => esc(k.name)).join('、') : ''}</div></div>`;
+  if (m.vis === 'public') {
+    return `<div class="card pad row" style="gap:14px"><span class="mic sm">${ic('globe')}</span><div class="grow"><b>公有</b><div class="sm muted">所有人都能在自己的 Key 里选它，不用授权</div></div><button class="btn" data-act="toPrivate" data-id="${m.id}">改为私有</button></div>${ind}`;
+  }
+  return `<div class="row" style="margin-bottom:10px"><div class="grow"><b>私有</b><span class="sm muted" style="margin-left:8px">授权给下面的人和部门后，他们才能在自己的 Key 里选它</span></div>
+      <button class="btn" data-act="toPublic" data-id="${m.id}">改为公有</button><button class="btn primary" data-act="toast" data-msg="选人员或部门（用户中心的选择器）；部门可选是否包含下级">${ic('plus')}添加授权</button></div>
+    <table class="table"><tr><th>授权给</th><th>含下级部门</th><th>授权时间</th><th></th></tr>
+    ${m.grants.map((g, i) => `<tr><td><div class="row">${g.t === 'dept' ? `<span class="pv" style="width:24px;height:24px;background:#94a3b8">${ic('users')}</span>` : av(g.who, '#10b981', 24, false)}${esc(g.who)}<span class="tag">${g.t === 'dept' ? '部门' : '人员'}</span></div></td>
+      <td>${g.t === 'dept' ? (g.sub ? '是' : '否') : '<span class="faint">—</span>'}</td><td class="muted">${g.at}</td>
+      <td class="td-acts"><button class="btn sm ghost danger" data-act="revoke" data-id="${m.id}" data-i="${i}">收回</button></td></tr>`).join('')}</table>
+    <div class="help" style="margin-top:8px">收回后，这些人的个人 Key 自动去掉这个模型，页面上标「授权已收回」</div>${ind}`;
+}
+function specTab(m) {
+  return `<div class="card pad" style="max-width:760px"><dl class="kv">
+    <dt>模型名</dt><dd class="mono">${esc(m.name)}</dd><dt>显示名称</dt><dd>${esc(m.disp)}</dd><dt>说明</dt><dd>${esc(m.desc) || '—'}</dd>
+    <dt>上下文长度</dt><dd>${fmtK(m.ctx)} token</dd><dt>最大输出</dt><dd>${fmtK(m.out)} token</dd><dt>能看图</dt><dd>${m.vision ? '是' : '否'}</dd>
+    <dt>价格</dt><dd>${m.price ? `输入 ¥${m.price[0]} · 输出 ¥${m.price[1]} · 缓存命中 ¥${m.price[2]}<span class="muted">（每百万 token）</span>` : '不计费'}</dd>
+    <dt>登记</dt><dd class="muted">${m.by}</dd></dl>
+    <div class="divider"></div><div class="row"><span class="help" style="margin:0">价格是对内结算价：不管走哪条线路都按它记费用、扣 Key 的预算</span><span class="sp"></span><button class="btn" data-act="editModel" data-id="${m.id}">${ic('pencil')}编辑</button></div></div>`;
+}
+function codeTab(m) { return `<div class="card pad" style="max-width:820px">${usageBlock('$ATLAS_API_KEY', m.name)}</div>`; }
+function usageBlock(secret, model) {
+  const code = {
+    cc: `export ANTHROPIC_BASE_URL=${GW}\nexport ANTHROPIC_AUTH_TOKEN=${secret}\nexport ANTHROPIC_MODEL=${model}\nclaude`,
+    oai: `from openai import OpenAI\n\nclient = OpenAI(base_url="${GW}/v1", api_key="${secret}")\nresp = client.chat.completions.create(\n    model="${model}",\n    messages=[{"role": "user", "content": "你好"}],\n)\nprint(resp.choices[0].message.content)`,
+    curl: `curl ${GW}/v1/messages \\\n  -H "x-api-key: ${secret}" \\\n  -H "anthropic-version: 2023-06-01" \\\n  -H "content-type: application/json" \\\n  -d '{"model": "${model}", "max_tokens": 1024,\n       "messages": [{"role": "user", "content": "你好"}]}'`,
+  };
+  return `${segOf('utab', [['cc', 'Claude Code'], ['oai', 'OpenAI SDK / Cursor'], ['curl', 'curl']])}<pre class="code">${esc(code[S.utab])}</pre>
+    <div class="help">平台上的任何模型都能用两种格式调，格式转换由网关做：OpenAI 格式的地址是 <code>${GW}/v1</code>，Anthropic 格式是 <code>${GW}</code></div>`;
+}
+
+/* =====================================================================
+ * 添加 / 编辑模型
+ * ===================================================================== */
+function blankForm() { return { id: null, name: '', disp: '', desc: '', vision: false, ctx: '128', out: '8', price: ['', '', ''], vis: 'public', grants: [], routes: [{ acc: 'ds2', up: '', pri: 1, w: 100 }] }; }
+function formFromModel(m) {
+  return { id: m.id, name: m.name, disp: m.disp, desc: m.desc, vision: !!m.vision, ctx: String(m.ctx ?? ''), out: String(m.out ?? ''),
+    price: m.price ? m.price.map(String) : ['', '', ''], vis: m.vis, grants: clone(m.grants || []), routes: clone(m.routes) };
+}
+function modelEditor() {
+  const f = S.form || (S.form = blankForm());
+  const isNew = !f.id;
+  const accOpts = (sel) => ACCOUNTS.map((a) => `<option value="${a.id}" ${a.id === sel ? 'selected' : ''}>${esc(a.name)}${a.st === 'off' ? '（已停用）' : a.st === 'bad' ? '（异常）' : a.st === 'cool' ? '（冷却中）' : ''}</option>`).join('');
+  const routes = f.routes.map((r, i) => {
+    const a = accOf(r.acc); const p = PROV[a.prov];
+    return `<div class="rrow"><select class="select" data-bind="f.routes.${i}.acc" data-rerender>${accOpts(r.acc)}</select>
+      <div><input class="input mono" style="font-size:12.5px" list="up-${i}" data-bind="f.routes.${i}.up" value="${esc(r.up)}" placeholder="${esc(f.name || '不填 = 和模型名一样')}"><datalist id="up-${i}">${(a.upstream || []).filter((u) => !nonChat(u)).map((u) => `<option value="${esc(u)}">`).join('')}</datalist></div>
+      <select class="select" data-bind="f.routes.${i}.pri" data-rerender>${[1, 2, 3].map((p) => `<option value="${p}" ${+r.pri === p ? 'selected' : ''}>${p}${p === 1 ? '（首选）' : '（备用）'}</option>`).join('')}</select>
+      <input class="input" type="number" min="1" data-bind="f.routes.${i}.w" value="${r.w}">
+      <button class="ibtn sm" data-act="rmRoute" data-i="${i}" title="移除">${ic('trash')}</button></div>
+      ${p.hint ? `<div class="help" style="margin:-4px 0 8px">${p.hint}</div>` : !a.upstream ? `<div class="help" style="margin:-4px 0 8px">${esc(p.name)} 拉不到模型列表，上游模型名要手填</div>` : ''}`;
+  }).join('');
+  const unit = (bind, val, u, ph = '') => `<div class="unit"><input class="input" type="number" min="0" data-bind="${bind}" value="${esc(val)}" placeholder="${ph}"><span>${u}</span></div>`;
+  const cur = (bind, val) => `<div class="unit pre"><input class="input" type="number" min="0" step="0.01" data-bind="${bind}" value="${esc(val)}" placeholder="不计费"><span>¥</span></div>`;
+  return `<div class="page" style="max-width:920px"><div class="crumb"><a data-go="#/models">模型</a>${ic('right')}<span>${isNew ? '添加模型' : esc(f.disp || f.name)}</span></div>
+    <div class="page-head"><h1>${isNew ? '添加模型' : '编辑模型'}</h1><span class="sp"></span><button class="btn" data-act="cancelEdit">取消</button><button class="btn primary" data-act="saveModel">保存</button></div>
+    <div class="col" style="gap:14px">
+    <div class="card pad"><h3>基本信息</h3><div class="fgrid" style="margin-top:12px">
+      <div><label class="label">模型名</label><input class="input mono" data-bind="f.name" value="${esc(f.name)}" ${isNew ? '' : 'disabled'} placeholder="例：deepseek-v4-pro">
+        <div class="help">${isNew ? '调用时传的 model。Key、授权、用量都按它记，创建后不能改' : '创建后不能改'}</div></div>
+      <div><label class="label">显示名称</label><input class="input" data-bind="f.disp" value="${esc(f.disp)}" placeholder="例：DeepSeek V4 Pro"></div>
+      <div style="grid-column:1/-1"><label class="label">说明</label><input class="input" data-bind="f.desc" value="${esc(f.desc)}" placeholder="适合做什么，给选模型的人看"></div>
+      <div style="grid-column:1/-1" class="row"><span class="switch ${f.vision ? 'on' : ''}" data-act="fToggle" data-k="vision"></span><span>能看图</span><span class="help" style="margin:0 0 0 6px">开了浏览器的智能体用它时，才能看截图操作网页（computer use）</span></div>
+    </div></div>
+    <div class="card pad"><div class="row"><h3>线路</h3><span class="sm muted">用哪个账号的哪个上游模型；至少一条</span></div>
+      <div class="rrow rhead"><span>账号</span><span>上游模型名</span><span>优先级</span><span>权重</span><span></span></div>${routes}
+      <a class="sm row" style="gap:4px;display:inline-flex" data-act="addRoute">${ic('plus')}添加线路</a>
+      <div class="help" style="margin-top:8px">上游模型名不填就和模型名一样，不一样时才填（如硅基流动的 deepseek-ai/…、火山方舟的接入点 ID）。优先级数字小的先用；同一优先级按权重分流；出错自动换下一条</div></div>
+    <div class="card pad"><h3>规格与价格</h3><div class="fgrid3" style="margin-top:12px">
+      <div><label class="label">上下文长度</label>${unit('f.ctx', f.ctx, 'K', '128')}</div>
+      <div><label class="label">最大输出</label>${unit('f.out', f.out, 'K', '8')}</div><div></div>
+      <div><label class="label">输入价格</label>${cur('f.price.0', f.price[0])}</div>
+      <div><label class="label">输出价格</label>${cur('f.price.1', f.price[1])}</div>
+      <div><label class="label">缓存命中价格</label>${cur('f.price.2', f.price[2])}</div></div>
+      <div class="help" style="margin-top:8px">每百万 token、人民币。这是对内结算价：不管走哪条线路都按它记费用、扣 Key 的预算。都不填 = 不计费（如自部署）；美元计价的按汇率换算后填</div></div>
+    <div class="card pad"><h3>谁能用</h3><div class="rcs" style="margin-top:12px">
+      ${rc(f.vis === 'public', '公有', '所有人都能在自己的 Key 里选它', 'data-act="fVis" data-v="public"')}
+      ${rc(f.vis === 'private', '私有', '授权给人或部门后才能选；客户端 Key 由管理员分配，不受影响', 'data-act="fVis" data-v="private"')}</div>
+      ${f.vis === 'private' ? `<div class="row" style="flex-wrap:wrap;margin-top:12px">${f.grants.map((g, i) => `<span class="chip">${g.t === 'dept' ? ic('users') : ic('user')}${esc(g.who)}${g.sub ? '<span class="xs muted">含下级</span>' : ''}<span class="x" data-act="fRmGrant" data-i="${i}">${ic('x')}</span></span>`).join('')}
+        <button class="btn sm" data-act="fAddGrant">${ic('plus')}添加授权</button></div>` : ''}</div>
+    </div></div>`;
+}
+
+/* =====================================================================
+ * 账号
+ * ===================================================================== */
+function accBanners(list) {
+  return list.map((a) => {
+    if (a.st === 'bad') return `<div class="banner err">${ic('alert')}<div class="grow"><a data-go="#/models/accounts/${a.id}">${esc(a.name)}</a> ${a.why}，${a.since} 起。${impactText(a.id)}。充值或修好后自动恢复（每 5 分钟检查一次），也可以在账号里点「测试连接」立即恢复</div></div>`;
+    if (a.st === 'cool') return `<div class="banner warn">${ic('clock')}<div class="grow"><a data-go="#/models/accounts/${a.id}">${esc(a.name)}</a> 被供应商限流，冷却中，还剩 ${a.cool} 秒。${impactText(a.id)}</div></div>`;
+    return `<div class="banner warn">${ic('wallet')}<div class="grow"><a data-go="#/models/accounts/${a.id}">${esc(a.name)}</a> 余额 ${money(a.bal)}，低于提醒线 ${money(a.alert)}</div></div>`;
+  }).join('');
+}
+function accountList() {
+  const issues = ACCOUNTS.filter((a) => a.st === 'bad' || a.st === 'cool' || (a.st === 'ok' && lowBal(a)));
+  const q = S.q.trim().toLowerCase();
+  const list = ACCOUNTS.filter((a) => !q || (a.name + PROV[a.prov].name).toLowerCase().includes(q));
+  return `<div class="page"><div class="page-head"><div class="grow"><h1>账号</h1><div class="page-sub">对接的供应商 API：地址、密钥、接口协议、出网方式。一个供应商可以有多个账号，在模型的线路里组合使用</div></div>
+      <button class="btn primary" data-act="addAcc">${ic('plus')}添加账号</button></div>
+    ${issues.length ? `<div class="col" style="gap:8px;margin-bottom:14px">${accBanners(issues)}</div>` : ''}
+    <div class="toolbar">${searchBox('搜索账号、供应商')}</div>
+    <table class="table"><tr><th>账号</th><th>接口</th><th>出网</th><th>余额</th><th>线路</th><th>状态</th></tr>
+    ${list.map((a) => { const p = PROV[a.prov]; const n = MODELS.reduce((s, m) => s + m.routes.filter((r) => r.acc === a.id).length, 0); return `<tr class="click" data-go="#/models/accounts/${a.id}">
+      <td><div class="row">${pv(a.prov, 30)}<div><b>${esc(a.name)}</b><div class="xs muted">${esc(p.name)}</div></div></div></td>
+      <td><div class="sm">${PROTO[a.proto][0]}</div><div class="xs muted mono ellipsis" style="max-width:250px">${esc(a.base)}</div></td>
+      <td class="sm">${a.egress === 'proxy' ? '经出网代理' : '直连'}</td>
+      <td>${p.balance ? `<span style="${lowBal(a) ? 'color:var(--danger);font-weight:600' : ''}">${money(a.bal)}</span>` : '<span class="xs faint">不支持查询</span>'}</td>
+      <td class="sm">${n ? `${n} 条` : '<span class="faint">没在用</span>'}</td><td>${dot(accState(a))}</td></tr>`; }).join('')}</table></div>`;
+}
+function accountDetail(a) {
+  const p = PROV[a.prov];
+  const uses = MODELS.flatMap((m) => m.routes.filter((r) => r.acc === a.id).map((r) => ({ m, r })));
+  const head = `<div class="crumb"><a data-go="#/models/accounts">账号</a>${ic('right')}<span>${esc(a.name)}</span></div>
+    <div class="page-head" style="align-items:flex-start">${pv(a.prov, 44)}
+      <div class="grow"><div class="row" style="gap:8px"><h1>${esc(a.name)}</h1><span class="tag">${esc(p.name)}</span></div><div class="sm muted" style="margin-top:2px">${esc(a.note) || '　'}</div></div>
+      <div class="row" style="gap:10px"><button class="btn" data-act="testAcc" data-id="${a.id}">${ic('activity')}测试连接</button>
+        <span class="sm muted">${a.st === 'off' ? '已停用' : '已启用'}</span><span class="switch ${a.st === 'off' ? '' : 'on'}" data-act="toggleAcc" data-id="${a.id}"></span>
+        <button class="ibtn" data-pop="accMore:${a.id}">${ic('more')}</button></div></div>`;
+  const bn = a.st === 'bad' || a.st === 'cool' || lowBal(a) ? `<div style="margin-bottom:14px">${accBanners([a])}</div>`
+    : a.st === 'off' ? `<div class="banner gray" style="margin-bottom:14px">${ic('pause')}<div>${esc(a.offWhy || '已停用')}。用到它的线路都跳过：${impactText(a.id) || '没有模型用它'}</div></div>` : '';
+  const kp = `<div class="kpis">
+    ${kpi('状态', dot(accState(a)))}
+    ${kpi('余额', p.balance ? `<span style="${lowBal(a) ? 'color:var(--danger)' : ''}">${money(a.bal)}</span>` : '<span class="sm muted">供应商不提供查询</span>', p.balance ? `<span class="sm muted">提醒线 ${money(a.alert)} · <a data-act="toast" data-msg="已查询：余额 ${money(a.bal)}（每 30 分钟自动查一次）">刷新</a></span>` : '')}
+    ${kpi('线路', `${uses.length} 条`, `<span class="sm muted">${new Set(uses.map((u) => u.m.id)).size} 个模型在用</span>`)}
+    ${kpi('最近一次报错', `<span class="sm" style="font-weight:500">${esc(a.lastErr) || '<span class="muted">没有</span>'}</span>`)}</div>`;
+  const tab = S.atab;
+  const body = tab === 'models' ? upstreamTab(a) : tab === 'routes' ? accRoutesTab(a, uses) : connTab(a);
+  return `<div class="page">${head}${bn}${kp}${tabsOf('atab', [['conn', '连接设置'], ['models', '供应商模型'], ['routes', `线路 ${uses.length}`]])}${body}</div>`;
+}
+function connTab(a) {
+  const p = PROV[a.prov];
+  return `<div class="card pad" style="max-width:780px"><div class="col" style="gap:16px">
+    ${field('名称', `<input class="input" data-bind="acc.name" value="${esc(a.name)}">`)}
+    ${field('供应商', `<div class="row" style="height:34px">${pv(a.prov, 22)}${esc(p.name)}<span class="help" style="margin:0 0 0 8px">建好后不能改，换供应商请新建账号</span></div>`)}
+    ${field('接口协议', p.protos.length > 1 ? `<div class="rcs">${p.protos.map((x) => rc(a.proto === x, PROTO[x][0], PROTO[x][1], `data-act="accSet" data-id="${a.id}" data-k="proto" data-v="${x}"`)).join('')}</div>` : `<div style="padding-top:7px">${PROTO[a.proto][0]}<div class="help">${PROTO[a.proto][1]}</div></div>`)}
+    ${field('API 地址', `<input class="input mono" style="font-size:12.5px" data-bind="acc.base" value="${esc(a.base)}"><div class="help">${p.baseHelp || (p.base ? `默认 ${esc((p.baseOf && p.baseOf[a.proto]) || p.base)}` : '必填')}</div>`)}
+    ${field('API Key', p.keyOptional && !a.tail ? '<div style="padding-top:7px" class="muted">不需要（内网服务）<a style="margin-left:8px" data-act="toast" data-msg="填上后按 Bearer 发给上游">设置</a></div>'
+      : `<div class="row"><code style="flex:1;padding:7px 10px;font-size:13px">sk-••••••••••••••••${esc(a.tail)}</code><button class="btn sm" data-act="toast" data-msg="输入新的完整 Key，保存后旧的不再使用">更换</button></div><div class="help">只写不读：保存后只显示末 4 位</div>`)}
+    ${p.extra ? field(p.extra, '<input class="input" value="2025-04-01-preview">') : ''}
+    ${field('出网', `<div class="rcs">${rc(a.egress === 'direct', '直连', '国内供应商、内网服务', `data-act="accSet" data-id="${a.id}" data-k="egress" data-v="direct"`)}${rc(a.egress === 'proxy', '经出网代理', '海外供应商（Anthropic、OpenAI、Gemini）；代理地址在系统配置里统一设', `data-act="accSet" data-id="${a.id}" data-k="egress" data-v="proxy"`)}</div>`)}
+    ${p.balance ? field('余额提醒线', `<div class="unit pre" style="width:200px"><input class="input" type="number" data-bind="acc.alert" value="${a.alert}"><span>¥</span></div><div class="help">低于它时在账号列表顶部标出来，并通知模型管理员</div>`) : ''}
+    ${field('备注', `<input class="input" data-bind="acc.note" value="${esc(a.note)}" placeholder="例：财务每月 1 日充值">`)}
+    </div><div class="divider"></div><div class="row"><span class="help" style="margin:0">添加：${esc(a.created)}</span><span class="sp"></span><button class="btn primary" data-act="toast" data-msg="已保存；网关下一次请求就用新配置">保存</button></div></div>`;
+}
+function upstreamTab(a) {
+  const p = PROV[a.prov];
+  if (!a.upstream) {
+    return `<div class="banner gray" style="max-width:780px">${ic('alert')}<div class="grow">${esc(p.name)} 不提供模型列表接口${a.prov === 'volcengine' ? '（按接入点调用）' : ''}，登记模型时在线路里手填上游模型名。
+      <div style="margin-top:10px"><button class="btn sm" data-act="regUp" data-id="${a.id}" data-up="">${ic('plus')}用这个账号登记模型</button></div></div></div>`;
+  }
+  return `<div class="row" style="margin-bottom:10px"><span class="sm muted">从供应商拉取 · ${esc(a.pulled || '刚刚')} · 共 ${a.upstream.length} 个</span><span class="sp"></span><button class="btn sm" data-act="toast" data-msg="已重新拉取，没有新模型">${ic('refresh')}重新拉取</button></div>
+    <table class="table"><tr><th>上游模型名</th><th>平台里</th><th></th></tr>
+    ${a.upstream.map((u) => {
+      const hits = MODELS.filter((m) => m.routes.some((r) => r.acc === a.id && r.up === u));
+      const nc = nonChat(u);
+      return `<tr><td class="mono" style="font-size:12.5px">${esc(u)}${nc ? ' <span class="tag">向量 / 重排</span>' : ''}</td>
+        <td class="sm">${hits.length ? hits.map((m) => `<a data-go="#/models/m/${m.id}">${esc(m.disp)}</a> 的线路`).join('、') : '<span class="faint">没在用</span>'}</td>
+        <td class="td-acts">${nc ? '<span class="xs faint">这期只支持对话模型</span>' : hits.length ? '' : `<button class="btn sm" data-act="regUp" data-id="${a.id}" data-up="${esc(u)}">登记为新模型</button> <button class="btn sm ghost" data-act="toast" data-msg="选一个已有模型，把它加成那个模型的线路（例如给 deepseek-v4-pro 加一条备用）">加到已有模型</button>`}</td></tr>`;
+    }).join('')}</table>
+    <div class="help" style="margin-top:8px">「登记为新模型」会带上这个账号作为第一条线路；同一个上游模型也可以给已有模型当备用线路</div>`;
+}
+function accRoutesTab(a, uses) {
+  if (!uses.length) return '<div class="card"><div class="empty"><h3>还没有模型用这个账号</h3><p>在「供应商模型」里登记，或在模型的线路里选它</p></div></div>';
+  const imp = Object.fromEntries(impactOf(a.id).map((x) => [x.m.id, x.alt]));
+  return `<table class="table"><tr><th>模型</th><th>上游模型名</th><th>优先级</th><th>权重</th><th>这个账号不可用时</th></tr>
+    ${uses.map(({ m, r }) => `<tr class="click" data-go="#/models/m/${m.id}"><td>${mname(m)}</td><td class="mono" style="font-size:12.5px">${esc(r.up)}</td><td><span class="prib ${r.pri > 1 ? 'b2' : ''}">${r.pri}</span></td><td>${r.w}</td>
+      <td class="sm">${!m.on ? '<span class="muted">模型已停用</span>' : imp[m.id] ? `改走「${esc(imp[m.id].name)}」` : '<span style="color:var(--danger)">模型不可用</span>'}</td></tr>`).join('')}</table>`;
+}
+
+/* =====================================================================
+ * 我的 Key
+ * ===================================================================== */
+function myKeys() {
+  const mine = KEYS.filter((k) => k.type === 'user' && k.owner === me().name);
+  const head = `<div class="page-head"><div class="grow"><h1>我的 Key</h1><div class="page-sub">在 Claude Code、Cursor、脚本里调平台上的模型。每把 Key 单独选模型、设限额，丢了一把不影响别的</div></div>
+    ${mine.length ? `<button class="btn primary" data-act="newKey">${ic('plus')}创建 Key</button>` : ''}</div>`;
+  const addr = `<div class="card pad" style="margin-bottom:16px"><div class="row" style="gap:28px;flex-wrap:wrap">
+    <div><div class="xs muted">OpenAI 格式（Cursor、OpenAI SDK）</div><div class="row" style="gap:4px"><code>${GW}/v1</code>${copyBtn()}</div></div>
+    <div><div class="xs muted">Anthropic 格式（Claude Code）</div><div class="row" style="gap:4px"><code>${GW}</code>${copyBtn()}</div></div>
+    <span class="sp"></span><button class="btn sm" data-act="usage">${ic('help')}使用说明</button></div></div>`;
+  if (!mine.length) {
+    return `<div class="page">${head}${addr}<div class="card"><div class="empty"><div class="ill">${ic('key')}</div><h3>还没有 Key</h3><p style="margin-bottom:14px">建一把，选好要用的模型，就能在自己的工具里调用</p><button class="btn primary" data-act="newKey">${ic('plus')}创建 Key</button></div></div></div>`;
+  }
+  return `<div class="page">${head}${addr}
+    <table class="table"><tr><th>名称</th><th>能用的模型</th><th>本月用量</th><th>限额</th><th>有效期</th><th>最近使用</th><th>状态</th><th></th></tr>
+    ${mine.map((k) => `<tr><td style="min-width:170px"><b>${esc(k.name)}</b><div class="xs muted mono" style="white-space:nowrap">sk-atlas-••••${k.tail}</div></td><td>${modelChips(k)}</td><td>${usageCell(k)}</td>
+      <td class="sm">${limitText(k)}</td><td class="sm">${expText(k)}</td><td class="sm muted">${k.last}</td><td>${kstTag(k)}</td>
+      <td class="td-acts"><button class="ibtn sm" data-pop="key:${k.id}">${ic('more')}</button></td></tr>`).join('')}</table>
+    ${mine.some((k) => k.st === 'over') ? `<div class="help" style="margin-top:8px">「本月预算已用完」的 Key 调用会返回 429，下月 1 日自动恢复；急用可以在「编辑」里调高预算</div>` : ''}</div>`;
+}
+
+/* =====================================================================
+ * Key 管理（管理员）
+ * ===================================================================== */
+function allKeys() {
+  const users = KEYS.filter((k) => k.type === 'user');
+  const clients = KEYS.filter((k) => k.type === 'client');
+  const isC = S.ktab === 'client';
+  const pool = isC ? clients : users;
+  const q = S.q.trim().toLowerCase();
+  let list = pool.filter((k) => S.kfilter === 'all' || (S.kfilter === 'ok' ? k.st === 'ok' : k.st !== 'ok'));
+  if (q) list = list.filter((k) => `${k.owner || ''}${k.name}${k.code || ''}`.toLowerCase().includes(q));
+  const head = `<div class="page-head"><div class="grow"><h1>Key 管理</h1><div class="page-sub">个人 Key 由本人建，这里能停用、删除；客户端 Key 给智能体和平台服务用，由管理员分配模型和限额</div></div>
+    ${isC ? `<button class="btn" data-act="toast" data-msg="新建服务 Key：填客户端类型 Service 和编码（如 approval-judge），给平台自己的服务用">${ic('plus')}新建服务 Key</button>` : ''}</div>`;
+  const tabs = tabsOf('ktab', [['user', `个人 Key ${users.length}`], ['client', `客户端 Key ${clients.length}`]]);
+  const tb = `<div class="toolbar">${searchBox(isC ? '搜索智能体、服务' : '搜索持有人、名称')}${segOf('kfilter', [['all', '全部'], ['ok', '正常'], ['bad', '有问题']])}</div>`;
+  if (!isC) {
+    return `<div class="page">${head}${tabs}${tb}<table class="table"><tr><th>持有人</th><th>名称</th><th>能用的模型</th><th>本月用量</th><th>最近使用</th><th>状态</th><th></th></tr>
+      ${list.map((k) => `<tr><td><div class="row">${av(k.owner, '#64748b', 24, false)}${esc(k.owner)}</div></td><td><b>${esc(k.name)}</b><div class="xs muted mono" style="white-space:nowrap">sk-atlas-••••${k.tail}</div></td>
+        <td>${modelChips(k)}</td><td>${usageCell(k)}</td><td class="sm muted">${k.last}</td>
+        <td>${kstTag(k)}${k.why ? `<div class="xs muted" style="max-width:200px;margin-top:3px">${esc(k.why)}</div>` : ''}${k.st === 'expired' ? `<div class="xs muted">${k.exp} 到期</div>` : ''}</td>
+        <td class="td-acts">${k.st === 'blocked' ? `<button class="btn sm" data-act="unblockKey" data-id="${k.id}">启用</button>` : `<button class="btn sm ghost" data-act="blockKey" data-id="${k.id}">停用</button>`}<button class="btn sm ghost danger" data-act="delKey" data-id="${k.id}">删除</button></td></tr>`).join('')}</table>
+      <div class="help" style="margin-top:8px">管理员看不到个人 Key 的原文，也不能重置（重置会把新原文交给管理员）。持有人在用户中心被停用时，他的 Key 全部自动停用</div></div>`;
+  }
+  const pend = clients.filter((k) => k.st === 'pending');
+  return `<div class="page">${head}${tabs}
+    <div class="card pad row" style="gap:14px;margin-bottom:14px"><span class="mic sm">${ic('bot')}</span><div class="grow"><b>新智能体的 Key</b><div class="sm muted">建智能体时平台自动给它建 Key；这里决定一开始能用哪些模型${S.agentDefault === 'pending' ? '。<span style="color:var(--warning)">选「等管理员分配」时，分配前智能体不能运行</span>' : ''}</div></div>
+      ${segOf('agentDefault', [['public', '全部公有模型'], ['pending', '等管理员分配']])}</div>
+    ${pend.length ? `<div class="banner warn" style="margin-bottom:14px">${ic('alert')}<div>${pend.map((k) => esc(k.name)).join('、')} 的 Key 还没分配模型，调用会被拒绝</div></div>` : ''}
+    ${tb}<table class="table"><tr><th>客户端</th><th>能用的模型</th><th>本月用量</th><th>最近使用</th><th>状态</th><th></th></tr>
+    ${list.map((k) => `<tr><td><div class="row">${k.ct === 'Agent' ? av(k.name, k.color, 26) : `<span class="pv" style="width:26px;height:26px;background:#475569">${ic('server')}</span>`}<div><b>${esc(k.name)}</b><div class="xs muted"><span class="mono">${k.ct} · ${k.code}</span>${k.auto ? ' · 建时自动分配' : ''}</div></div></div></td>
+      <td>${modelChips(k)}</td><td>${usageCell(k)}</td><td class="sm muted">${k.last}</td><td>${kstTag(k)}</td>
+      <td class="td-acts"><button class="btn sm ${k.st === 'pending' ? 'primary' : ''}" data-act="assign" data-id="${k.id}">分配模型</button><button class="ibtn sm" data-pop="ckey:${k.id}">${ic('more')}</button></td></tr>`).join('')}</table>
+    <div class="help" style="margin-top:8px">客户端 Key 由管理员直接分配，可以分配私有模型，不看授权。智能体的 Key 跟着智能体建、删；重置后应用下次取 Key 时拿到新的，旧的再保留 10 分钟</div></div>`;
+}
+
+/* =====================================================================
+ * 方案说明
+ * ===================================================================== */
+function aboutPage() {
+  const svg = `<svg class="diagram" viewBox="0 0 1000 270" role="img" aria-label="一次调用经过 Key、模型、线路到账号">
+    <defs><marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L8,4 L0,8 z" fill="#94a3b8"/></marker></defs>
+    <rect x="10" y="100" width="170" height="70" rx="10" class="b-gray"/><text x="95" y="128" class="t">调用方</text><text x="95" y="148" class="s">智能体 · Claude Code</text>
+    <rect x="220" y="100" width="160" height="70" rx="10" class="b-pri"/><text x="300" y="128" class="t">Key</text><text x="300" y="148" class="s">模型 · 预算 · 频率</text>
+    <rect x="420" y="100" width="180" height="70" rx="10" class="b-pri"/><text x="510" y="128" class="t">模型</text><text x="510" y="148" class="s">deepseek-v4-pro</text>
+    <rect x="660" y="20" width="190" height="64" rx="10" class="b-bad"/><text x="755" y="46" class="t">DeepSeek 公司账号</text><text x="755" y="66" class="s">优先级 1 · 余额不足，跳过</text>
+    <rect x="660" y="186" width="190" height="64" rx="10" class="b-ok"/><text x="755" y="212" class="t">DeepSeek 备用账号</text><text x="755" y="232" class="s">优先级 2 · 转发</text>
+    <rect x="890" y="100" width="100" height="70" rx="10" class="b-sec"/><text x="940" y="128" class="t">供应商</text><text x="940" y="148" class="s">DeepSeek API</text>
+    <line x1="180" y1="135" x2="217" y2="135" marker-end="url(#ar)"/><text x="199" y="125" class="lbl">sk-…</text>
+    <line x1="380" y1="135" x2="417" y2="135" marker-end="url(#ar)"/><text x="399" y="125" class="lbl">model</text>
+    <path class="ln" d="M600 125 C 630 125, 630 52, 657 52" marker-end="url(#ar)"/><path class="ln" d="M600 145 C 630 145, 630 218, 657 218" marker-end="url(#ar)"/>
+    <text x="616" y="96" class="lbl">线路</text>
+    <path class="ln dash" d="M850 52 C 870 52, 870 118, 887 118"/><path class="ln" d="M850 218 C 870 218, 870 152, 887 152" marker-end="url(#ar)"/>
+  </svg>`;
+  return `<div class="page doc" style="max-width:1000px"><div class="page-head"><div class="grow"><h1>方案说明</h1><div class="page-sub">模型平台从「只管 Key」扩成完整的模型管理：账号、模型（含线路）、Key。最终由自研网关替换 LiteLLM；这一版先定管理功能</div></div></div>
+    <div class="card pad"><h2>一次调用怎么走</h2>${svg}</div>
+    <div class="card pad"><h2>四个概念</h2><table class="table"><tr><th>概念</th><th>是什么</th><th>谁管</th><th>例子</th></tr>
+      <tr><td>账号</td><td>对接一个供应商 API 的凭据：地址、密钥、接口协议、出网方式。同一供应商可以有多个</td><td>管理员</td><td>DeepSeek 公司账号、Anthropic 官方</td></tr>
+      <tr><td>模型</td><td>对外的名字和规格、价格。调用方只认模型名，不知道背后是哪个账号</td><td>管理员登记；公有的谁都能选，私有的要授权</td><td>deepseek-v4-pro</td></tr>
+      <tr><td>线路</td><td>模型 → 某个账号的某个上游模型，带优先级和权重。属于模型，在模型里配</td><td>管理员</td><td>deepseek-v4-pro 首选公司账号，备用账号兜底</td></tr>
+      <tr><td>Key</td><td>调用凭据：能用哪些模型、限额、有效期。个人 Key 本人建；客户端 Key 跟着智能体 / 平台服务，管理员分配</td><td>本人 / 管理员</td><td>周景行的「Cursor」、编程助手的 Key</td></tr></table></div>
+    <div class="card pad"><h2>网关处理一次调用</h2><ol>
+      <li>认 Key：存在、没停用、没过期</li><li>查限额：每分钟请求数、本月预算</li><li>查模型：在这把 Key 里、模型已启用</li>
+      <li>选线路：优先级数字小的先用，同一优先级按权重抽；跳过停用、异常、冷却中的账号</li>
+      <li>转发：按账号的接口协议转换格式（相同就原样转发），直连或经出网代理</li>
+      <li>出错换线路：429、402、401、5xx、超时换下一条；429 / 5xx / 超时让线路冷却 1 分钟，401 / 402 把账号标成异常、修好后自动恢复。回答已经开始输出就不换</li>
+      <li>记用量：按模型价格算费用，记到 Key 上</li></ol></div>
+    <div class="card pad"><h2>替换 LiteLLM 分三步</h2><table class="table"><tr><th>步骤</th><th>做什么</th><th>调用方的变化</th></tr>
+      <tr><td>① 平台接管配置</td><td>本原型的页面上线。账号、模型、线路、Key 的限额都在平台上管，平台把它们同步成 LiteLLM 的部署和 Key（LiteLLM 支持部署的 order、weight 和 Key 的预算、RPM），LiteLLM 只负责转发</td><td>没有</td></tr>
+      <tr><td>② 自研网关灰度</td><td>网关读平台的配置，自己认 Key、选线路、转协议、记用量。先让一两个智能体的 Key 走新网关，对比结果</td><td>没有：平台存着现有 Key 的原文，导入网关即可，不用换 Key</td></tr>
+      <tr><td>③ 全部切换</td><td>Atlas、知识库、个人 Key 都切到新网关，下线 LiteLLM</td><td>个人 Key 第一次能在集群外用（现在 LiteLLM 只在集群内）</td></tr></table></div>
+    <div class="card pad"><h2>这期不做</h2><ul>
+      <li><b>调用日志页</b>：按 Key、模型、账号查每次调用和失败原因。第 ③ 步之前必须有，出问题时靠它查</li>
+      <li><b>用量看板</b>：按人、部门、智能体、模型汇总费用</li>
+      <li><b>向量、重排模型</b>：知识库的 knowledge-embedding Key 一直待分配；要支持得加「模型类型」，网关多开 /v1/embeddings、/v1/rerank</li>
+      <li><b>账号级限流</b>：按供应商给的 RPM / TPM 主动排队；现在只靠收到 429 后冷却</li>
+      <li><b>按人、按部门的额度</b>：现在只有 Key 级预算，本人设，防脚本跑飞</li></ul></div>
+    <div class="card pad"><h2>待确认</h2><table class="table"><tr><th>问题</th><th>原型里的做法</th><th>备选 / 现状</th></tr>
+      <tr><td>个人 Key 数量</td><td>每人多把（建议上限 10）</td><td>现状一人一把</td></tr>
+      <tr><td>新智能体的 Key</td><td>建时自动分配全部公有模型，马上能运行</td><td>现状「待分配」，管理员分配前智能体不能运行</td></tr>
+      <tr><td>价格挂在哪</td><td>挂模型上，人民币，对内统一价</td><td>挂线路上：各账号成本不同、费用更准，但同一模型的价格会随线路变</td></tr>
+      <tr><td>Key 原文</td><td>个人 Key 只存哈希，只显示一次；客户端 Key 加密存（应用要取原文）</td><td>现状都明文存</td></tr>
+      <tr><td>Key 限额</td><td>每月预算 + 每分钟请求数</td><td>再加每日预算、TPM</td></tr>
+      <tr><td>全部线路都在冷却</td><td>仍试冷却最早结束的那条</td><td>直接返回 429</td></tr>
+      <tr><td>网关对外地址</td><td>挂在 Atlas 同域名 /llm 下，只开放调用接口</td><td>单独域名</td></tr></table></div></div>`;
+}
+
+/* =====================================================================
+ * 弹窗
+ * ===================================================================== */
+function shell(title, body, foot, cls = '') {
+  return `<div class="mask" data-act="closeModal"><div class="modal ${cls}" data-stop><div class="modal-h"><h2>${title}</h2><span class="sp"></span><button class="ibtn" data-act="closeModal">${ic('x')}</button></div>
+    <div class="modal-b">${body}</div>${foot ? `<div class="modal-f">${foot}</div>` : ''}</div></div>`;
+}
+function modal() {
+  const M = S.modal;
+  if (!M) return '';
+  const cancel = '<button class="btn" data-act="closeModal">取消</button>';
+  switch (M.type) {
+    case 'confirm': return shell(M.title, `<div class="sm" style="line-height:1.75">${M.body}</div>`, `${cancel}<button class="btn ${M.danger ? 'danger solid' : 'primary'}" data-act="confirmOk">${M.ok}</button>`);
+    case 'modelInfo': { const m = modelOf(M.id); return shell(esc(m.disp), `<dl class="kv"><dt>模型名</dt><dd class="row" style="gap:4px"><span class="mono">${esc(m.name)}</span>${copyBtn('已复制模型名')}</dd><dt>说明</dt><dd>${esc(m.desc)}</dd>
+        <dt>上下文 / 最大输出</dt><dd>${fmtK(m.ctx)} / ${fmtK(m.out)} token</dd><dt>能看图</dt><dd>${m.vision ? '是' : '否'}</dd>
+        <dt>价格</dt><dd>${m.price ? `输入 ¥${m.price[0]} · 输出 ¥${m.price[1]} · 缓存命中 ¥${m.price[2]}<div class="xs muted">每百万 token，费用记到你的 Key 上</div>` : '不计费'}</dd></dl>
+        <div class="divider"></div><b class="sm">调用示例</b>${usageBlock('$ATLAS_API_KEY', m.name)}`, `${cancel}<button class="btn primary" data-act="newKey" data-model="${esc(m.name)}">用它创建 Key</button>`, 'wide'); }
+    case 'usage': return shell('使用说明', `<div class="sm muted" style="margin-bottom:4px">把下面的 <code>$ATLAS_API_KEY</code> 换成你的 Key，<code>model</code> 换成 Key 里有的模型名</div>${usageBlock('$ATLAS_API_KEY', 'deepseek-v4-pro')}`, '<button class="btn" data-act="closeModal">知道了</button>', 'wide');
+    case 'secret': return shell(M.reset ? 'Key 已重置' : 'Key 已创建', `<div class="banner warn" style="margin-bottom:12px">${ic('alert')}<div>只显示这一次。关掉后平台也查不到原文，丢了只能重置</div></div>
+        <div class="secret"><span class="grow">${M.secret}</span>${copyBtn('已复制 Key')}</div>
+        <div class="divider"></div><b class="sm">怎么用</b>${usageBlock(M.secret, M.model || 'deepseek-v4-pro')}`, '<button class="btn primary" data-act="closeModal">我已保存</button>', 'wide');
+    case 'keyForm': return keyFormModal(M);
+    case 'block': return shell(`停用「${esc(M.k.name)}」`, `<div class="sm muted" style="margin-bottom:10px">${esc(M.k.owner)} 的 Key，停用后调用立即返回 401。原因会显示给持有人</div>
+        <label class="label">原因</label><input class="input" data-bind="m.why" placeholder="例：Key 出现在公开仓库里">`, `${cancel}<button class="btn danger solid" data-act="blockOk">停用</button>`);
+    case 'testAcc': return shell(`测试连接 · ${esc(accOf(M.id).name)}`, testAccBody(M), M.st === 'run' ? '' : '<button class="btn" data-act="closeModal">关闭</button>');
+    case 'addAcc': return addAccModal(M);
+  }
+  return '';
+}
+function testAccBody(M) {
+  const a = accOf(M.id); const p = PROV[a.prov];
+  if (M.st === 'run') return '<div class="row" style="padding:14px 0"><span class="spin"></span><span>正在测试…</span></div>';
+  const up = M.up || (MODELS.flatMap((m) => m.routes).find((r) => r.acc === a.id) || {}).up || (a.upstream || [])[0] || '—';
+  const fail = a.st === 'bad' ? '402 Insufficient Balance' : a.st === 'cool' ? '429 Token Plan 额度已用完' : '';
+  const steps = [
+    ['ok', `连上 ${esc(a.base)}${a.egress === 'proxy' ? '（经出网代理）' : ''}`, a.egress === 'proxy' ? '310ms' : '42ms'],
+    ['ok', p.list ? '列出模型（验证密钥）' : '验证密钥', a.upstream ? `${a.upstream.length} 个模型` : '通过'],
+    [fail ? 'err' : 'ok', `用 <span class="mono">${esc(up)}</span> 发一个 1 token 的请求`, fail || '200 · 410ms'],
+  ];
+  return steps.map(([c, t, tm]) => `<div class="step"><span class="ic ${c}">${ic(c === 'ok' ? 'check' : 'x')}</span><span class="grow">${t}</span><span class="tm">${tm}</span></div>`).join('') +
+    `<div class="divider"></div><div class="sm">${a.st === 'bad' ? '<span style="color:var(--danger)">密钥有效，但余额不足。充值后再测一次，通过了账号自动恢复</span>'
+      : a.st === 'cool' ? '<span style="color:var(--warning)">被供应商限流，冷却结束后自动恢复</span>'
+      : a.st === 'off' ? '连接正常。账号是停用状态，启用后线路才会用它' : '<span style="color:var(--success)">连接正常</span>'}</div>`;
+}
+function addAccModal(M) {
+  if (M.step === 'prov') {
+    return shell('添加账号 · 选供应商', `<div class="pgrid">${Object.entries(PROV).map(([k, p]) => `<div class="pcard" data-act="pickProv" data-v="${k}">${pv(k, 30)}<div class="grow"><div style="font-weight:600">${esc(p.name)}</div>
+      <div class="xs muted">${p.protos.map((x) => PROTO[x][0].split(' ')[0]).join(' / ')}${p.balance ? ' · 可查余额' : ''}</div></div></div>`).join('')}</div>`, cancel(), 'wide');
+  }
+  const p = PROV[M.prov]; const f = M.f;
+  const testLine = M.test === 'run' ? '<span class="row sm"><span class="spin"></span>测试中…</span>'
+    : M.test === 'ok' ? `<span class="sm" style="color:var(--success)">${ic('check')} 连接正常${p.list ? ` · 拉到 ${(UPSTREAM_DEMO[M.prov] || []).length} 个模型` : ''} · 410ms</span>` : '';
+  return shell(`添加账号 · ${esc(p.name)}`, `<div class="col" style="gap:14px">
+    ${field('名称', `<input class="input" data-bind="m.name" value="${esc(f.name)}">`)}
+    ${field('接口协议', p.protos.length > 1 ? `<div class="rcs">${p.protos.map((x) => rc(f.proto === x, PROTO[x][0], PROTO[x][1], `data-act="mSet" data-k="proto" data-v="${x}"`)).join('')}</div>` : `<div style="padding-top:7px">${PROTO[f.proto][0]}</div>`)}
+    ${field('API 地址', `<input class="input mono" style="font-size:12.5px" data-bind="m.base" value="${esc(f.base)}" placeholder="${p.needBase ? '必填，例：http://vllm.ai-infra.svc:8000/v1' : ''}">${p.baseHelp ? `<div class="help">${p.baseHelp}</div>` : ''}`)}
+    ${field('API Key', `<input class="input mono" type="password" data-bind="m.key" placeholder="${p.keyOptional ? '内网服务可以不填' : 'sk-…'}"><div class="help">保存后只显示末 4 位</div>`)}
+    ${p.extra ? field(p.extra, '<input class="input" value="2025-04-01-preview">') : ''}
+    ${field('出网', `<div class="rcs">${rc(f.egress === 'direct', '直连', '国内供应商、内网服务', 'data-act="mSet" data-k="egress" data-v="direct"')}${rc(f.egress === 'proxy', '经出网代理', '海外供应商', 'data-act="mSet" data-k="egress" data-v="proxy"')}</div>`)}
+    ${p.balance ? field('余额提醒线', `<div class="unit pre" style="width:200px"><input class="input" type="number" data-bind="m.alert" value="${esc(f.alert)}"><span>¥</span></div>`) : ''}
+    </div>`, `<button class="btn ghost" data-act="accBack">${ic('left')}换供应商</button><span class="sp"></span>${testLine}<button class="btn" data-act="testNew">测试连接</button><button class="btn primary" data-act="saveAcc">保存</button>`, 'wide');
+}
+function keyFormModal(M) {
+  const f = M.f; const client = f.type === 'client';
+  const pool = MODELS.filter((m) => m.on && (client || canUse(m)));
+  const groups = client ? [['全部已启用的模型（客户端 Key 不看授权）', pool]]
+    : [['公有', pool.filter((m) => m.vis === 'public')], [isAdmin() ? '私有（你是管理员，全部可选）' : '授权给你的', pool.filter((m) => m.vis === 'private')]];
+  const list = `<div class="mlist">${groups.filter(([, ms]) => ms.length).map(([g, ms]) => `<div class="gh">${g}</div>${ms.map((m) => `<div class="it" data-act="kfModel" data-n="${esc(m.name)}">${cbx(f.models.includes(m.name))}
+      <div class="grow"><div class="row" style="gap:6px"><span style="font-weight:550">${esc(m.disp)}</span>${m.vision ? '<span class="tag blue">看图</span>' : ''}${modelState(m).k !== 'ok' ? `<span class="tag warning">${modelState(m).t}</span>` : ''}</div><div class="xs muted mono">${esc(m.name)}</div></div>
+      <span class="xs muted mono">${priceText(m.price)}</span></div>`).join('')}`).join('')}</div>`;
+  const title = client ? `分配模型 · ${esc(f.cname)}` : f.id ? '编辑 Key' : '创建 Key';
+  const exp = client ? '' : `<div><label class="label">有效期</label><div class="seg">${[['never', '永久'], ['30', '30 天'], ['90', '90 天'], ['date', '指定日期']].map(([v, t]) => `<a class="${f.exp === v ? 'on' : ''}" data-act="kfExp" data-v="${v}">${t}</a>`).join('')}</div>${f.exp === 'date' ? '<input class="input" type="date" style="width:180px;margin-left:8px" value="2027-02-14">' : ''}</div>`;
+  return shell(title, `<div class="col" style="gap:16px">
+    ${client ? '' : `<div><label class="label">名称</label><input class="input" data-bind="m.name" value="${esc(f.name)}" placeholder="用在哪儿，例：Cursor、Claude Code（笔记本）"></div>`}
+    <div><label class="label">能用的模型 <span class="xs muted" style="font-weight:400">已选 ${f.models.length} 个</span></label>${list}
+      <div class="help">只能用勾选的模型；以后新登记的模型不会自动加进来</div></div>
+    ${exp}
+    <div><label class="label">限额 <span class="xs muted" style="font-weight:400">可选，不填 = 不限</span></label><div class="fgrid">
+      <div><div class="unit pre"><input class="input" type="number" min="0" data-bind="m.budget" value="${esc(f.budget)}" placeholder="每月预算"><span>¥</span></div><div class="help">按模型价格算，超了返回 429，每月 1 日清零</div></div>
+      <div><div class="unit"><input class="input" type="number" min="1" data-bind="m.rpm" value="${esc(f.rpm)}" placeholder="每分钟请求数"><span>次/分</span></div><div class="help">防脚本跑飞</div></div></div></div>
+    </div>`, `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="saveKey">${client || f.id ? '保存' : '创建'}</button>`, 'wide');
+}
+function cancel() { return '<button class="btn" data-act="closeModal">取消</button>'; }
+
+/* =====================================================================
+ * 浮层菜单
+ * ===================================================================== */
+function pop() {
+  if (!S.pop) return '';
+  const { id, x, y } = S.pop;
+  const [kind, ref] = id.split(':');
+  let body = '';
+  if (kind === 'me') {
+    body = `<div class="ph">演示身份</div>${Object.entries(PEOPLE).map(([k, p]) => `<div class="mi ${S.role === k ? 'on' : ''}" data-act="role" data-v="${k}">${av(p.name, p.color, 24, false)}<div class="grow"><div>${p.name}</div><div class="xs muted">${p.role} · ${p.dept}</div></div>${S.role === k ? ic('check') : ''}</div>`).join('')}`;
+  } else if (kind === 'modelMore') {
+    body = `<div class="mi" data-act="editModel" data-id="${ref}">${ic('pencil')}编辑</div><div class="sep"></div><div class="mi danger" data-act="delModel" data-id="${ref}">${ic('trash')}删除模型</div>`;
+  } else if (kind === 'accMore') {
+    body = `<div class="mi" data-act="testAcc" data-id="${ref}">${ic('activity')}测试连接</div><div class="sep"></div><div class="mi danger" data-act="delAcc" data-id="${ref}">${ic('trash')}删除账号</div>`;
+  } else if (kind === 'key') {
+    const k = KEYS.find((x) => x.id === ref);
+    body = `<div class="mi" data-act="editKey" data-id="${ref}">${ic('pencil')}编辑（模型、限额、有效期）</div><div class="mi" data-act="resetKey" data-id="${ref}">${ic('refresh')}重置</div>
+      ${k.st === 'blocked' ? `<div class="mi" data-act="unblockKey" data-id="${ref}">${ic('play')}启用</div>` : `<div class="mi" data-act="selfBlock" data-id="${ref}">${ic('pause')}停用</div>`}
+      <div class="sep"></div><div class="mi danger" data-act="delKey" data-id="${ref}">${ic('trash')}删除</div>`;
+  } else if (kind === 'ckey') {
+    const k = KEYS.find((x) => x.id === ref);
+    body = `<div class="mi" data-act="assign" data-id="${ref}">${ic('sliders')}模型与限额</div><div class="mi" data-act="resetClient" data-id="${ref}">${ic('refresh')}重置</div>
+      ${k.st === 'blocked' ? `<div class="mi" data-act="unblockKey" data-id="${ref}">${ic('play')}启用</div>` : `<div class="mi" data-act="selfBlock" data-id="${ref}">${ic('pause')}停用</div>`}
+      ${k.ct === 'Service' ? `<div class="sep"></div><div class="mi danger" data-act="delKey" data-id="${ref}">${ic('trash')}删除</div>` : '<div class="sep"></div><div class="ph">智能体的 Key 跟着智能体删除</div>'}`;
+  }
+  return `<div class="pop" data-stop style="left:${x}px;top:${y}px">${body}</div>`;
+}
+
+/* =====================================================================
+ * 设计说明
+ * ===================================================================== */
+function notesFor(r) {
+  const N = (title, items, be = []) => ({ title, items, be });
+  if (r.a === 'm') return N('模型详情', [
+    '线路 = 用哪个账号的哪个上游模型。优先级数字小的先用，同一优先级按权重分流，出错换下一条',
+    '换线路的情况：429 限流、402 余额不足、401 密钥失效、5xx、连接超时；400 这类调用方自己的错不换，原样返回',
+    '429 / 5xx / 超时让这条线路冷却 1 分钟；401 / 402 把整个账号标成异常，平台每 5 分钟检查一次，修好后自动恢复',
+    '流式回答一旦开始输出就不再换线路：已经发给调用方的内容收不回来',
+    '所有线路都在冷却时不直接拒绝，试冷却最早结束的那条',
+    '「模拟一次调用」按当前状态推演给管理员看；真的调用用每行的「测试」',
+    '停用模型：调用立即报「模型已停用」，Key 里保留，重新启用后恢复；删除模型：从所有 Key 里去掉、授权一起删，要二次确认',
+    '「谁能用」沿用现有规则：公有不用授权，私有授权给人或部门；客户端 Key 由管理员分配、不看授权',
+  ], ['新增线路表：模型、账号、上游模型名、优先级、权重', '账号的运行状态（冷却到期时间、异常原因）放 Redis，网关和管理平台共用', '按模型汇总本月调用次数、费用']);
+  if (r.a === 'edit') return N('添加 / 编辑模型', [
+    '模型名就是调用时传的 model，Key、授权、用量都按它记，创建后不能改（沿用现状）',
+    '上游模型名默认和模型名一样，不一样才填：硅基流动的 deepseek-ai/…、火山方舟的接入点 ID',
+    '账号下拉里标出停用、异常、冷却中的；能拉模型列表的账号，上游模型名有候选',
+    '至少一条线路；同一账号同一上游模型不能出现两次',
+    '价格挂在模型上（对内统一价、人民币）：不管走哪条线路都按它记费用。留空 = 不计费',
+    '能力只留「能看图」（现有字段，决定给不给 computer use）；工具调用、深度思考等不加',
+  ], ['模型表去掉 provider（挪到账号上）和 litellm_model_id，加启用、上下文、最大输出、三档价格', '保存后网关下一次请求就生效（网关按版本号或短 TTL 缓存配置）']);
+  if (r.a === 'accounts' && r.b) return N('账号详情', [
+    '接口协议：供应商同时提供 OpenAI 和 Anthropic 两种时，建议选 Anthropic——Atlas 和 Claude Code 都用它，网关原样转发，thinking、缓存标记不会在转换中丢',
+    '出网只选「直连 / 经出网代理」，代理地址在系统配置里统一设',
+    '密钥只写不读：界面只显示末 4 位，更换要重新填完整的',
+    '供应商模型：从供应商的模型列表接口拉；拉不到的（MiniMax、火山方舟）登记时手填上游模型名。向量、重排模型标出来，这期不能登记',
+    '「这个账号不可用时」：每个模型会改走哪条线路，还是变成不可用',
+    '停用前列出影响；还有线路在用的账号不能删',
+  ], ['测试连接：连通 → 列模型（验证密钥）→ 用一个上游模型发 1 token 请求', '密钥加密存储（主密钥走 K8s Secret）', '能查余额的供应商每 30 分钟查一次']);
+  if (r.a === 'accounts') return N('账号', [
+    '账号 = 对接一个供应商 API 的凭据：地址 + 密钥 + 接口协议 + 出网方式。原来这些填在每个模型上（存在 LiteLLM 里），同一把密钥要填好几遍；挪到账号上后，一个账号给多个模型用',
+    '一个供应商可以有多个账号（公司账号、备用账号），在模型线路里做主备、分流',
+    '状态：正常 / 冷却中（被限流，自动恢复）/ 异常（余额不足、密钥失效，要人处理，修好后自动恢复）/ 已停用（手动）',
+    '能查余额的供应商（DeepSeek、Moonshot、硅基流动）显示余额，低于提醒线标红并通知管理员；其余显示「不支持查询」',
+    '有问题的账号在顶部列出来，并说清对模型的影响（哪些已切到备用、哪些不可用）',
+  ], ['账号表：名称、供应商、接口协议、地址、加密的密钥、出网方式、余额提醒线、备注、启用', '异常、余额低的提醒发给模型管理员（渠道沿用通知方式，待定）']);
+  if (r.a === 'keys') return N('我的 Key', [
+    '每人可以建多把 Key（Cursor、Claude Code、脚本各一把），分别选模型、设限额、停用；丢了一把不影响别的（现在一人一把）',
+    '能选的模型：公有的 + 授权给你或你所在部门的私有模型；只能用勾选的，新模型不会自动加进来（沿用现状）',
+    '原文只在创建、重置时显示一次，平台只存哈希',
+    '限额可选：每月预算（按模型价格算）、每分钟请求数；超了返回 429 并说明是哪个限额',
+    '有效期可选；过期后调用返回 401，可以在编辑里续期',
+    '授权被收回、模型被停用或删除时，Key 里的这个模型划掉显示，下次保存时移除',
+    '接入地址固定两个：OpenAI 格式 /llm/v1、Anthropic 格式 /llm；任何模型两种格式都能调',
+  ], ['Key 表改为存哈希 + 前缀 + 末 4 位；加名称、有效期、月预算、每分钟请求数', '按 Key 记用量（本月费用、最近使用时间）']);
+  if (r.a === 'all-keys') return N('Key 管理', [
+    '个人 Key：管理员能看全部、能停用和删除；看不到原文、不能重置（重置会把新原文交到管理员手上）',
+    '停用要填原因，持有人在「我的 Key」里能看到',
+    '持有人在用户中心被停用时，他的 Key 全部自动停用（沿用现有设计）',
+    '客户端 Key：给智能体和平台服务用；智能体的跟着智能体建、删，管理员分配模型和限额，不看授权（沿用现状）',
+    '新智能体的 Key 默认分配全部公有模型（建时那一刻的快照），马上能运行；选「等管理员分配」就是现状',
+    '重置客户端 Key：应用下次取 Key 拿到新的，旧的再保留 10 分钟，免得正在跑的会话断掉',
+    '客户端 Key 原文加密保存（应用要取原文），这点和个人 Key 不同',
+  ], ['平台配置 new_agent_key_models（public / pending）', '客户端 Key 加密存储、重置时旧 Key 的宽限期']);
+  if (r.a === 'about') return N('方案说明', [
+    '给评审看的：概念、一次调用怎么走、替换 LiteLLM 的步骤、这期不做的、待确认的',
+    '替换走三步，第一步只换管理面，LiteLLM 跟随平台的配置，风险最小',
+  ]);
+  return N('模型', [
+    '模型 = 对外的名字。调用方只认模型名，背后走哪个账号由线路决定；换账号、加备用，调用方无感',
+    '管理员看全部，多「线路」「状态」两列。状态从线路算：都正常 = 可用；首选坏了有备用 = 已切到备用线路；都不可用 = 不可用 / 暂不可用（冷却中）',
+    '有问题的模型在顶部列出来，原因在账号上',
+    '普通用户只看到自己能用的（公有 + 授权给本人或所在部门的私有），停用的不显示；点开看规格、价格、调用示例',
+    '价格单位统一：人民币 / 每百万 token',
+  ], ['GET /models 返回线路摘要和状态（状态来自 Redis 里的账号运行状态）']);
+}
+function notesPanel(r) {
+  const n = notesFor(r);
+  return `<div class="notes"><div class="row"><b style="color:#92400e">${ic('bulb')} ${n.title}</b><span class="sp"></span><button class="ibtn sm" data-act="toggleNotes">${ic('x')}</button></div>
+    <h4>设计要点</h4><ul>${n.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>
+    ${n.be.length ? `<h4>需要后端配合</h4><ul>${n.be.map((i) => `<li><span class="be">后端</span>${esc(i)}</li>`).join('')}</ul>` : ''}
+    <div class="demo"><b>演示身份</b><div style="margin-top:6px">${segOf('role', [['admin', '管理员 周景行'], ['user', '普通用户 王芳']])}</div></div>
+    <h4>本原型的页面</h4><ul>
+      <li><a href="#/models/about">方案说明</a></li>
+      <li><a href="#/models">模型列表</a> · <a href="#/models/m/m1">模型详情（已切到备用）</a> · <a href="#/models/m/m3">全部冷却</a> · <a data-act="newModel">添加模型</a></li>
+      <li><a href="#/models/accounts">账号</a> · <a href="#/models/accounts/ds1">账号详情（余额不足）</a> · <a data-act="addAcc">添加账号</a></li>
+      <li><a href="#/models/keys">我的 Key</a> · <a data-act="newKey">创建 Key</a></li>
+      <li><a href="#/models/all-keys">Key 管理</a></li></ul></div>`;
+}
+
+/* =====================================================================
+ * 交互
+ * ===================================================================== */
+const rnd = (n) => Array.from({ length: n }, () => 'abcdefghijkmnpqrstuvwxyz23456789'[Math.floor(Math.random() * 32)]).join('');
+const confirmBox = (title, body, ok, fn, danger = false) => { S.pop = null; S.modal = { type: 'confirm', title, body, ok, fn, danger }; };
+const ACT = {
+  toggleNotes: () => { S.notes = !S.notes; },
+  toast: (el) => { S.pop = null; toast(el.dataset.msg || '（原型）'); return false; },
+  setS: (el) => {
+    const v = el.dataset.v; const k = el.dataset.k;
+    S[k] = v;
+    if (k === 'role') { S.pop = null; const a = parseRoute().a; if (v === 'user' && ['m', 'edit', 'accounts', 'all-keys'].includes(a)) { go('#/models'); return false; } }
+    if (k === 'ktab') { S.kfilter = 'all'; S.q = ''; }
+    if (k === 'agentDefault') toast(v === 'public' ? '新智能体的 Key 建时自动分配全部公有模型' : '新智能体的 Key 建好后待分配，分配前智能体不能运行');
+  },
+  role: (el) => ACT.setS({ dataset: { k: 'role', v: el.dataset.v } }),
+  closeModal: () => { S.modal = null; },
+  confirmOk: () => { const f = S.modal.fn; S.modal = null; if (f) f(); },
+  modelInfo: (el) => { S.modal = { type: 'modelInfo', id: el.dataset.id }; },
+  usage: () => { S.modal = { type: 'usage' }; },
+
+  // 模型
+  newModel: () => { S.form = blankForm(); S.modal = null; nav('#/models/edit'); return false; },
+  editModel: (el) => { S.form = formFromModel(modelOf(el.dataset.id)); S.modal = null; nav('#/models/edit'); return false; },
+  cancelEdit: () => { const id = S.form && S.form.id; S.form = null; go(id ? `#/models/m/${id}` : '#/models'); return false; },
+  fToggle: (el) => { S.form[el.dataset.k] = !S.form[el.dataset.k]; },
+  fVis: (el) => { S.form.vis = el.dataset.v; },
+  fAddGrant: () => { if (!S.form.grants.some((g) => g.who === '研发中心')) S.form.grants.push({ t: 'dept', who: '研发中心', sub: true, at: '11-16' }); else toast('选人员或部门（用户中心的选择器）'); },
+  fRmGrant: (el) => { S.form.grants.splice(+el.dataset.i, 1); },
+  addRoute: () => { const used = S.form.routes.map((r) => r.acc); const a = ACCOUNTS.find((x) => x.st !== 'off' && !used.includes(x.id)) || ACCOUNTS[0]; S.form.routes.push({ acc: a.id, up: '', pri: 2, w: 100 }); },
+  rmRoute: (el) => { if (S.form.routes.length <= 1) { toast('至少留一条线路'); return false; } S.form.routes.splice(+el.dataset.i, 1); },
+  saveModel: () => {
+    const f = S.form; const name = f.name.trim();
+    if (!name) { toast('模型名要填'); return false; }
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(name)) { toast('模型名只能用字母、数字和 . _ : / -'); return false; }
+    if (!f.id && MODELS.some((m) => m.name === name)) { toast('已经有同名的模型了'); return false; }
+    const routes = f.routes.map((r) => ({ acc: r.acc, up: (r.up || '').trim() || name, pri: +r.pri, w: +r.w || 100 }));
+    const keys = routes.map((r) => r.acc + '|' + r.up);
+    if (new Set(keys).size !== keys.length) { toast('同一账号的同一上游模型出现了两次'); return false; }
+    if (f.vis === 'private' && !f.grants.length && !f.id) toast('私有模型还没授权给任何人：只有客户端 Key 能用');
+    const price = f.price.every((x) => String(x).trim() === '') ? null : f.price.map((x) => +x || 0);
+    const data = { name, disp: f.disp.trim() || name, desc: f.desc.trim(), vision: f.vision, ctx: f.ctx === '' ? null : +f.ctx, out: f.out === '' ? null : +f.out, price, vis: f.vis, grants: f.grants, routes };
+    let id = f.id;
+    if (id) Object.assign(modelOf(id), data);
+    else { id = 'n' + Date.now(); MODELS.push({ id, on: true, calls: 0, cost: 0, by: `${me().name} · 11-16`, ...data }); }
+    S.form = null; S.mtab = 'routes'; go(`#/models/m/${id}`);
+    setTimeout(() => toast(f.id ? '已保存，网关下一次请求就用新配置' : '已添加。公有模型现在就能在 Key 里选了'), 0);
+    return false;
+  },
+  toggleModel: (el) => {
+    const m = modelOf(el.dataset.id);
+    if (!m.on) { m.on = true; toast('已启用'); return false; }
+    confirmBox(`停用「${esc(m.disp)}」`, `调用会立即返回「模型已停用」。<br>${keyHolders(m.name).length} 把 Key 里有它，Key 里先保留，重新启用后恢复，不用重新分配。`, '停用', () => { m.on = false; }, true);
+  },
+  delModel: (el) => {
+    const m = modelOf(el.dataset.id); const n = keyHolders(m.name).length;
+    confirmBox(`删除「${esc(m.disp)}」`, `删除后：<br>· ${n} 把 Key 里去掉它（客户端 Key 去掉后没有模型的，会变成「待分配模型」）<br>· 授权一起删除<br>· 历史用量保留<br>不想删可以先停用。`, '删除', () => { MODELS.splice(MODELS.indexOf(m), 1); go('#/models'); }, true);
+  },
+  sim: (el) => { S.sim = el.dataset.id; },
+  toPrivate: (el) => {
+    const m = modelOf(el.dataset.id); const n = keyHolders(m.name).filter((k) => k.type === 'user').length;
+    confirmBox(`把「${esc(m.disp)}」改为私有`, `改为私有后要授权才能选。现在 ${n} 把个人 Key 里有它，没被授权的会自动去掉；客户端 Key 不受影响。<br>接下来在这里添加授权。`, '改为私有', () => { m.vis = 'private'; m.grants = m.grants || []; });
+  },
+  toPublic: (el) => { const m = modelOf(el.dataset.id); m.vis = 'public'; toast('已改为公有：所有人都能选。授权记录保留，再改回私有时恢复'); return false; },
+  revoke: (el) => {
+    const m = modelOf(el.dataset.id); const g = m.grants[+el.dataset.i];
+    confirmBox(`收回对「${esc(g.who)}」的授权`, `${esc(g.who)}${g.t === 'dept' ? (g.sub ? '（含下级部门）' : '') + '的人' : ''}不能再选 ${esc(m.disp)}；他们个人 Key 里的这个模型会划掉，调用返回 403。`, '收回', () => { m.grants.splice(+el.dataset.i, 1); }, true);
+  },
+
+  // 账号
+  addAcc: () => { S.pop = null; S.modal = { type: 'addAcc', step: 'prov' }; },
+  pickProv: (el) => {
+    const k = el.dataset.v; const p = PROV[k]; const proto = p.protos[0];
+    S.modal = { type: 'addAcc', step: 'form', prov: k, test: null, f: { name: `${p.name} 账号`, proto, base: (p.baseOf && p.baseOf[proto]) || p.base, key: '', egress: p.proxy ? 'proxy' : 'direct', alert: p.balance ? '50' : '' } };
+  },
+  accBack: () => { S.modal = { type: 'addAcc', step: 'prov' }; },
+  mSet: (el) => {
+    const f = S.modal.f; f[el.dataset.k] = el.dataset.v;
+    if (el.dataset.k === 'proto') { const p = PROV[S.modal.prov]; if (p.baseOf) f.base = p.baseOf[el.dataset.v]; }
+  },
+  testNew: () => {
+    const f = S.modal.f; const p = PROV[S.modal.prov];
+    if (p.needBase && !f.base.trim()) { toast('先填 API 地址'); return false; }
+    S.modal.test = 'run'; setTimeout(() => { if (S.modal && S.modal.type === 'addAcc') { S.modal.test = 'ok'; render(); } }, 1000);
+  },
+  saveAcc: () => {
+    const M = S.modal; const f = M.f; const p = PROV[M.prov];
+    if (!f.name.trim()) { toast('名称要填'); return false; }
+    if (p.needBase && !f.base.trim()) { toast('API 地址要填'); return false; }
+    if (!p.keyOptional && !f.key.trim()) { toast('API Key 要填'); return false; }
+    const id = 'a' + Date.now();
+    ACCOUNTS.push({ id, name: f.name.trim(), prov: M.prov, proto: f.proto, base: f.base.trim(), tail: f.key.trim().slice(-4), egress: f.egress, st: 'ok', bal: p.balance ? 200 : null, alert: +f.alert || 0, note: '', lastErr: '', pulled: '刚刚', created: `${me().name} · 11-16`, upstream: p.list ? (UPSTREAM_DEMO[M.prov] || []) : null });
+    S.modal = null; S.atab = 'models'; go(`#/models/accounts/${id}`);
+    setTimeout(() => toast('已添加。下一步把要用的模型登记进来'), 0);
+    return false;
+  },
+  accSet: (el) => {
+    const a = accOf(el.dataset.id); a[el.dataset.k] = el.dataset.v;
+    if (el.dataset.k === 'proto') { const p = PROV[a.prov]; if (p.baseOf) a.base = p.baseOf[el.dataset.v]; }
+  },
+  testAcc: (el) => {
+    S.pop = null; const id = el.dataset.id;
+    S.modal = { type: 'testAcc', id, up: el.dataset.up || '', st: 'run' };
+    setTimeout(() => { if (S.modal && S.modal.type === 'testAcc') { S.modal.st = 'done'; render(); } }, 1100);
+  },
+  toggleAcc: (el) => {
+    const a = accOf(el.dataset.id);
+    if (a.st === 'off') { a.st = 'ok'; a.offWhy = ''; toast('已启用，线路马上会用它'); return false; }
+    const imp = impactText(a.id);
+    confirmBox(`停用「${esc(a.name)}」`, `用到它的线路都会跳过。${imp ? `<br><br>${imp}` : '<br>现在没有模型用它。'}`, '停用', () => { a.st = 'off'; a.offWhy = `${me().name} 11-16 停用`; }, true);
+  },
+  delAcc: (el) => {
+    const a = accOf(el.dataset.id);
+    const n = MODELS.reduce((s, m) => s + m.routes.filter((r) => r.acc === a.id).length, 0);
+    if (n) { S.pop = null; S.modal = { type: 'confirm', title: '还不能删除', body: `还有 ${n} 条线路用着「${esc(a.name)}」。先在这些模型里移除线路（「线路」页签里能看到是哪些），再删除账号。<br>只是暂时不用的话，停用就行。`, ok: '去看线路', fn: () => { S.atab = 'routes'; } }; return; }
+    confirmBox(`删除「${esc(a.name)}」`, '密钥一起删除，不能恢复。', '删除', () => { ACCOUNTS.splice(ACCOUNTS.indexOf(a), 1); go('#/models/accounts'); }, true);
+  },
+  regUp: (el) => {
+    const up = el.dataset.up; const f = blankForm();
+    f.name = up ? up.split('/').pop().toLowerCase() : ''; f.routes = [{ acc: el.dataset.id, up, pri: 1, w: 100 }];
+    S.form = f; nav('#/models/edit'); return false;
+  },
+
+  // Key
+  newKey: (el) => {
+    S.pop = null;
+    const pre = el && el.dataset && el.dataset.model ? [el.dataset.model] : [];
+    S.modal = { type: 'keyForm', f: { type: 'user', name: '', models: pre, exp: 'never', budget: '', rpm: '' } };
+  },
+  editKey: (el) => {
+    S.pop = null; const k = KEYS.find((x) => x.id === el.dataset.id);
+    S.modal = { type: 'keyForm', f: { type: 'user', id: k.id, name: k.name, models: k.models.filter((n) => !keyModelState(k, n)), exp: k.exp ? 'date' : 'never', budget: k.budget ?? '', rpm: k.rpm ?? '' } };
+  },
+  assign: (el) => {
+    S.pop = null; const k = KEYS.find((x) => x.id === el.dataset.id);
+    S.modal = { type: 'keyForm', f: { type: 'client', id: k.id, cname: k.name, models: [...k.models], budget: k.budget ?? '', rpm: k.rpm ?? '' } };
+  },
+  kfModel: (el) => { const f = S.modal.f; const n = el.dataset.n; f.models = f.models.includes(n) ? f.models.filter((x) => x !== n) : [...f.models, n]; },
+  kfExp: (el) => { S.modal.f.exp = el.dataset.v; },
+  saveKey: () => {
+    const f = S.modal.f;
+    if (f.type === 'user' && !f.name.trim()) { toast('起个名字，方便以后认出它'); return false; }
+    if (!f.models.length) { toast('至少选一个模型'); return false; }
+    const lim = { models: f.models, budget: +f.budget || null, rpm: +f.rpm || null };
+    if (f.id) {
+      const k = KEYS.find((x) => x.id === f.id);
+      Object.assign(k, lim, f.type === 'user' ? { name: f.name.trim(), revoked: [] } : {});
+      if (k.st === 'pending') k.st = 'ok';
+      if (k.st === 'over' && (!k.budget || k.used < k.budget)) k.st = 'ok';
+      S.modal = null; toast(f.type === 'client' ? '已保存，应用下一次调用就生效' : '已保存'); return false;
+    }
+    const secret = `sk-atlas-${rnd(40)}`;
+    const exp = f.exp === 'never' ? null : f.exp === '30' ? '2026-12-16' : f.exp === '90' ? '2027-02-14' : '2027-02-14';
+    KEYS.push({ id: 'k' + Date.now(), type: 'user', owner: me().name, name: f.name.trim(), tail: secret.slice(-4), ...lim, used: 0, exp, last: '还没用过', st: 'ok', created: '11-16' });
+    S.modal = { type: 'secret', secret, model: f.models[0] };
+  },
+  resetKey: (el) => {
+    const k = KEYS.find((x) => x.id === el.dataset.id);
+    confirmBox(`重置「${esc(k.name)}」`, '会生成新的 Key，旧的立即失效：用着它的工具要换成新的。', '重置', () => {
+      const secret = `sk-atlas-${rnd(40)}`; k.tail = secret.slice(-4); S.modal = { type: 'secret', secret, model: k.models[0], reset: true }; return false;
+    }, true);
+  },
+  resetClient: (el) => {
+    const k = KEYS.find((x) => x.id === el.dataset.id);
+    confirmBox(`重置「${esc(k.name)}」的 Key`, '应用下次取 Key 时拿到新的；旧 Key 再保留 10 分钟，正在跑的会话不受影响。<br>原文不在这里显示（应用自己取）。', '重置', () => { toast('已重置，旧 Key 10 分钟后失效'); return false; });
+  },
+  selfBlock: (el) => {
+    const k = KEYS.find((x) => x.id === el.dataset.id);
+    confirmBox(`停用「${esc(k.name)}」`, k.type === 'client' ? `${esc(k.name)}的调用会立即失败。` : '用着它的工具会立即报 401；随时可以再启用。', '停用', () => { k.st = 'blocked'; k.why = k.type === 'user' ? '本人停用' : `${me().name} 停用`; }, true);
+  },
+  blockKey: (el) => { const k = KEYS.find((x) => x.id === el.dataset.id); S.modal = { type: 'block', k, f: { why: '' } }; },
+  blockOk: () => { const M = S.modal; M.k.st = 'blocked'; M.k.why = `${me().name}停用${M.f.why.trim() ? '：' + M.f.why.trim() : ''}`; S.modal = null; toast('已停用；持有人在「我的 Key」里能看到原因'); return false; },
+  unblockKey: (el) => { S.pop = null; const k = KEYS.find((x) => x.id === el.dataset.id); k.st = k.models.length ? 'ok' : 'pending'; k.why = ''; toast('已启用'); return false; },
+  delKey: (el) => {
+    const k = KEYS.find((x) => x.id === el.dataset.id);
+    confirmBox(`删除「${esc(k.name)}」`, `${k.type === 'user' && k.owner !== me().name ? `${esc(k.owner)} 的 Key，` : ''}删除后立即失效、不能恢复。历史用量保留。`, '删除', () => { KEYS.splice(KEYS.indexOf(k), 1); }, true);
+  },
+};
+function setPath(obj, path, v) { const ks = path.split('.'); let o = obj; ks.slice(0, -1).forEach((k) => { o = o[k]; }); o[ks[ks.length - 1]] = v; }
+function bindTarget(k) {
+  if (k.startsWith('f.')) return [S.form, k.slice(2)];
+  if (k.startsWith('m.')) return [S.modal && S.modal.f, k.slice(2)];
+  if (k.startsWith('acc.')) return [accOf(parseRoute().b), k.slice(4)];
+  return [null, null];
+}
+document.addEventListener('input', (e) => {
+  const k = e.target.dataset.bind;
+  if (!k) return;
+  if (k === 'q') { S.q = e.target.value; const pos = e.target.selectionStart; render(); const inp = document.querySelector('[data-bind="q"]'); if (inp) { inp.focus(); inp.setSelectionRange(pos, pos); } return; }
+  const [obj, path] = bindTarget(k);
+  if (obj) setPath(obj, path, e.target.value);
+});
+document.addEventListener('change', (e) => {
+  const k = e.target.dataset.bind;
+  if (!k || k === 'q') return;
+  const [obj, path] = bindTarget(k);
+  if (obj) setPath(obj, path, e.target.value);
+  if ('rerender' in e.target.dataset) render();
+});
+document.addEventListener('click', (e) => {
+  if (e.target.matches('input,select,textarea')) return;
+  const el = e.target.closest('[data-go],[data-act],[data-pop]');
+  if (!el) { if (S.pop && !e.target.closest('[data-stop]')) { S.pop = null; render(); } return; }
+  if (el.dataset.act === 'closeModal' && el.classList.contains('mask') && e.target !== el) return;
+  e.preventDefault();
+  if (el.dataset.pop) {
+    e.stopPropagation();
+    const rc = el.getBoundingClientRect();
+    S.pop = S.pop?.id === el.dataset.pop ? null : { id: el.dataset.pop, x: Math.max(12, Math.min(rc.left, window.innerWidth - 300)), y: rc.bottom + 6 };
+    return render();
+  }
+  if (el.dataset.go) { S.modal = null; S.pop = null; if (location.hash === el.dataset.go) return render(); return go(el.dataset.go); }
+  const fn = ACT[el.dataset.act];
+  if (fn) { if (fn(el, e) !== false) render(); }
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && (S.modal || S.pop)) { S.modal = null; S.pop = null; render(); } });
+render();
+</script>
+</body>
+</html>
