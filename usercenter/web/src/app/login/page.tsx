@@ -3,7 +3,7 @@
 /**
  * 统一登录：Atlas、TeamFlow 未登录都跳到 /uc/login?next=<原页面>，登录后回去。
  *
- * - 企业代码：单租户部署不显示；多租户记住上次的企业（显示企业名，可「更换」），只有第一次要输入。
+ * - 企业：单租户部署不用填企业代码，只展示企业名；多租户记住上次的企业（显示企业名，可「更换」），只有第一次要输入。
  * - 须改密（首次登录、管理员重置后）：同一张卡片进入第二步设置新密码；刚输过的临时密码在内存里带过去。
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -50,7 +50,8 @@ export default function LoginPage() {
   }, []);
   const needTenant = useQuery({
     queryKey: ["tenant-required"],
-    queryFn: () => api.get<{ required: boolean }>("/auth/tenant-required"),
+    // tenant：单租户时是那家企业（只给名称），多租户时为空
+    queryFn: () => api.get<{ required: boolean; tenant: { name: string } | null }>("/auth/tenant-required"),
   });
   // 已登录但须先改密（各应用经网关拿到 401 跳来的）：直接去改密，改完回原页面
   const me = useMe();
@@ -101,6 +102,8 @@ export default function LoginPage() {
     );
 
   const showTenantInput = needTenant.data?.required && !tenant;
+  // 单租户：只展示企业名，不能更换
+  const soleTenant = needTenant.data?.required ? null : needTenant.data?.tenant;
   return (
     <AuthCard>
       {hasNext && (
@@ -122,6 +125,14 @@ export default function LoginPage() {
                 <div className="uc-sub uc-mono">{tenant.code}</div>
               </div>
               <a onClick={() => setTenant(null)}>更换</a>
+            </div>
+          </Form.Item>
+        )}
+        {soleTenant && (
+          <Form.Item label="企业">
+            <div className={styles.tenant}>
+              <SquareIcon icon="building" size={32} />
+              <b className="uc-grow">{soleTenant.name}</b>
             </div>
           </Form.Item>
         )}

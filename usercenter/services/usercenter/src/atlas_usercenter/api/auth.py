@@ -235,13 +235,17 @@ async def directory_depts(principal: PrincipalDep, session: SessionDep) -> list[
 
 
 @router.get("/auth/tenant-required")
-async def tenant_required(session: SessionDep) -> dict[str, bool]:
-    """登录页是否要显示企业代码：只有一个租户的部署不显示。"""
+async def tenant_required(session: SessionDep) -> dict[str, Any]:
+    """登录页是否要显示企业代码：只有一个租户的部署不显示，改为展示这家企业的名称。
+
+    ★ 多租户时 tenant 为空：不在登录前透露有哪些企业。
+    """
     from ..db.tenancy import platform_scope
     from ..tenant.service import sole_tenant
 
     with platform_scope(session):
-        return {"required": await sole_tenant(session) is None}
+        sole = await sole_tenant(session)
+        return {"required": sole is None, "tenant": {"name": sole.name} if sole else None}
 
 
 @router.get("/me/apps")

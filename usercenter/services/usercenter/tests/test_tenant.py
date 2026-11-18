@@ -96,6 +96,10 @@ async def test_platform_abilities_never_reach_a_customer_tenant() -> None:
 
 async def test_login_needs_the_company_code_once_there_are_tenants() -> None:
     plat = await admin_client()
+    # 只有平台租户：不要企业代码，登录页展示企业名
+    sole = (await plat.get("/api/v1/auth/tenant-required")).json()
+    plat_name = (await plat.get("/api/v1/auth/me")).json()["tenant"]["name"]
+    assert sole == {"required": False, "tenant": {"name": plat_name}}
     await _tenant(plat, "acme")
     c = Client()
     r = await c.login("admin", STRONG)
@@ -107,7 +111,9 @@ async def test_login_needs_the_company_code_once_there_are_tenants() -> None:
     # 账号在别的租户：等同不存在
     assert (await c.login("boss", STRONG, tenant="default")).json()["code"] == "LOGIN_FAILED"
     assert (await c.login("admin", STRONG, tenant="default")).status_code == 200
-    assert (await c.get("/api/v1/auth/tenant-required")).json() == {"required": True}
+    # 多租户：不透露有哪些企业
+    multi = (await c.get("/api/v1/auth/tenant-required")).json()
+    assert multi == {"required": True, "tenant": None}
     await plat.close()
     await c.close()
 

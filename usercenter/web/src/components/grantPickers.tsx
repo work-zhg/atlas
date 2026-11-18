@@ -1,7 +1,8 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Checkbox, Empty, Spin } from "antd";
+import { Checkbox, Empty, Spin, Tag } from "antd";
+import type { ReactNode } from "react";
 
 import { AppIcon } from "@/components/common";
 import { api } from "@/lib/api";
@@ -39,16 +40,46 @@ export function RoleChecks({ value, onChange, disabled = [] }: { value: string[]
             {g.app.name}
           </div>
           {g.roles.map((r) => (
-            <div key={r.id} style={{ padding: "7px 12px" }}>
-              <Checkbox checked={value.includes(r.id) || disabled.includes(r.id)} disabled={disabled.includes(r.id)} onChange={(e) => toggle(r.id, e.target.checked)}>
-                <b>{r.name}</b> <span className="uc-mono uc-muted">{r.code}</span>
-                {disabled.includes(r.id) && <span className="uc-sub">（已授予）</span>}
-                {r.description && <div className="uc-sub">{r.description}</div>}
-              </Checkbox>
-            </div>
+            <CheckOption
+              key={r.id}
+              checked={value.includes(r.id)}
+              granted={disabled.includes(r.id)}
+              onChange={(on) => toggle(r.id, on)}
+              name={r.name}
+              code={r.code}
+              desc={r.description}
+            />
           ))}
         </div>
       ))}
     </div>
+  );
+}
+
+/** 一个勾选项：名称、编码、说明；已授予的勾上且不可改。样式见 globals.css 的 .uc-opt */
+export function CheckOption({
+  checked,
+  granted,
+  onChange,
+  name,
+  code,
+  desc,
+}: {
+  checked: boolean;
+  granted: boolean;
+  onChange: (on: boolean) => void;
+  name: string;
+  code?: string;
+  desc?: ReactNode;
+}) {
+  return (
+    <Checkbox className="uc-opt" checked={checked || granted} disabled={granted} onChange={(e) => onChange(e.target.checked)}>
+      <span className="uc-row" style={{ gap: 6, flexWrap: "wrap" }}>
+        <b>{name}</b>
+        {code && <span className="uc-mono uc-muted">{code}</span>}
+        {granted && <Tag style={{ marginInlineEnd: 0 }}>已授予</Tag>}
+      </span>
+      {desc && <div className="uc-sub">{desc}</div>}
+    </Checkbox>
   );
 }

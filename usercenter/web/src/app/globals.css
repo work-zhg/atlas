@@ -194,6 +194,35 @@ body {
   padding: 10px 10px 4px;
 }
 
+/*
+ * 勾选项（授予角色 / 岗位、岗位的默认角色）：整行可点、悬停有底色。
+ * ★ antd 的复选框是 align-self: center，说明一换行就对着整块居中、跟名称错开 —— 改为对齐第一行。
+ * ★ 已授予的项禁用，但文字不置灰（antd 默认置灰），靠「已授予」标签区分。
+ */
+.uc-opt.ant-checkbox-wrapper {
+  display: flex;
+  align-items: flex-start;
+  padding: 8px 12px;
+}
+
+.uc-opt.ant-checkbox-wrapper:hover {
+  background: var(--bg-2);
+}
+
+.uc-opt .ant-checkbox {
+  align-self: flex-start;
+  margin-top: 3px;
+}
+
+.uc-opt .ant-checkbox + span {
+  flex: 1;
+  min-width: 0;
+}
+
+.uc-opt .ant-checkbox-disabled + span {
+  color: inherit;
+}
+
 /* 三格摘要（部门信息） */
 .uc-stats {
   display: grid;

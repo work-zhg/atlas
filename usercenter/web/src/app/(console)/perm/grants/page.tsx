@@ -6,14 +6,14 @@
  * ?subject=dept:<id> | user:<id> 直接定位（组织架构、人员详情的「授权」按钮带）。
  */
 import { useQuery } from "@tanstack/react-query";
-import { Alert, App, Button, Card, Checkbox, Empty, Modal, Segmented, Space, Switch, Table, Tree } from "antd";
+import { Alert, App, Button, Card, Empty, Modal, Segmented, Space, Switch, Table, Tree } from "antd";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useMemo, useState } from "react";
 
 import { buildDeptTree, PageHead, PersonAvatar, SquareIcon, StatusTag, useDirectoryDepts, UserSelect } from "@/components/common";
 import { useGrantMutations } from "@/components/grantActions";
-import { RoleChecks, usePositions } from "@/components/grantPickers";
+import { CheckOption, RoleChecks, usePositions } from "@/components/grantPickers";
 import { Icon } from "@/components/Icon";
 import { api, errorText } from "@/lib/api";
 import { fmtTime } from "@/lib/format";
@@ -325,16 +325,14 @@ function GrantItemsModal({
       ) : (
         <div style={{ maxHeight: 360, overflow: "auto" }}>
           {(positions.data ?? []).map((p) => (
-            <div key={p.id} style={{ padding: "4px 0" }}>
-              <Checkbox
-                checked={ids.includes(p.id) || granted.includes(p.id)}
-                disabled={granted.includes(p.id)}
-                onChange={(e) => setIds(e.target.checked ? [...ids, p.id] : ids.filter((x) => x !== p.id))}
-              >
-                <b>{p.name}</b> <span className="uc-sub">默认角色：{p.roles.map((r) => `${r.app} · ${r.name}`).join("、") || "无"}</span>
-                {granted.includes(p.id) && <span className="uc-sub">（已授予）</span>}
-              </Checkbox>
-            </div>
+            <CheckOption
+              key={p.id}
+              checked={ids.includes(p.id)}
+              granted={granted.includes(p.id)}
+              onChange={(on) => setIds(on ? [...ids, p.id] : ids.filter((x) => x !== p.id))}
+              name={p.name}
+              desc={`默认角色：${p.roles.map((r) => `${r.app} · ${r.name}`).join("、") || "无"}`}
+            />
           ))}
           {!positions.data?.length && <Empty description="还没有岗位" />}
         </div>
