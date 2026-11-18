@@ -37,6 +37,7 @@ from langgraph.types import Command
 from pydantic import BaseModel, Field
 
 from atlas_engine.contracts import ApprovalGate, ApprovalMode, ToolEffect
+from atlas_engine.contracts.tool_names import INSPECT_SCREENSHOT
 from atlas_engine.kernel.middleware.approval import (
     EXPIRED_RESULT,
     GATE_FAILED_RESULT,
@@ -102,6 +103,7 @@ MATRIX: dict[str, dict[ToolEffect, Verdict]] = {
 #: kernel 自己提供的工具，类别由 kernel 声明（调用方给的映射里可以没有它们）
 _KERNEL_TOOLS: dict[str, ToolEffect] = {
     TOOL_SEARCH: ToolEffect.READ,  # 按需加载 MCP 工具的定义
+    INSPECT_SCREENSHOT: ToolEffect.READ,  # 看截图：只读工作区里的图、问一次模型
     EXIT_PLAN_MODE: ToolEffect.PLAN,
 }
 

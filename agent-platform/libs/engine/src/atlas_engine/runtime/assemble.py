@@ -28,6 +28,7 @@ from atlas_engine.kernel.middleware.auto_judge import AutoJudge, JudgeSetup
 from atlas_engine.kernel.middleware.filesystem import FilesystemMiddleware
 from atlas_engine.kernel.middleware.limits import StepLimitMiddleware, ToolGovernorMiddleware
 from atlas_engine.kernel.middleware.permission import PermissionMiddleware
+from atlas_engine.kernel.middleware.screen import ScreenMiddleware
 from atlas_engine.kernel.middleware.skills import SkillsMiddleware
 from atlas_engine.kernel.middleware.subagents import SubAgentMiddleware
 from atlas_engine.kernel.middleware.suspension import SuspensionMiddleware
@@ -81,6 +82,9 @@ class Capabilities:
 
     #: 主模型（runtime.models.build_chat_model 造的，server 只当它是个不透明的对象）
     model: Any
+    #: 看浏览器截图用的模型（inspect_screenshot）。None = 不装这个工具；server 在开了浏览器、
+    #: 主模型能看图时交主模型
+    vision_model: Any = None
     tools: Sequence[ToolSpec] = ()
     #: MCP 工具多时改成按需加载：模型平时只看到名字，用 tool_search 加载定义
     deferred_tools: Sequence[ToolSpec] = ()
@@ -122,6 +126,7 @@ def assemble(spec: AgentSpec, caps: Capabilities) -> Any:
         deferred_tools=caps.deferred_tools,
         prompt_cache_ttl=caps.prompt_cache_ttl,
         workdir=caps.workdir,
+        vision_model=caps.vision_model,
     )
 
 
@@ -184,6 +189,7 @@ def build_graph(
     deferred_tools: Sequence[ToolSpec] = (),
     prompt_cache_ttl: Literal["5m", "1h"] | None = None,
     workdir: str = DEFAULT_WORKDIR,
+    vision_model: BaseChatModel | None = None,
 ) -> Any:
     """按 spec 组装 agent 图。返回编译好的图，交给 runner.run 驱动。
 
@@ -197,6 +203,8 @@ def build_graph(
 
     extra_tools / deferred_tools：server 实现的工具（MCP、知识库、记忆），在这里转成框架的工具；
     后者只给名字，模型用 tool_search 按需加载定义（上下文管理 §13）。
+
+    vision_model 是看浏览器截图用的模型（inspect_screenshot）；None = 不装这个工具。
     """
     tools = [to_langchain(t) for t in extra_tools]
     deferred = [to_langchain(t) for t in deferred_tools]
@@ -295,6 +303,10 @@ def build_graph(
         from atlas_engine.kernel.middleware.sandbox import SandboxMiddleware
 
         stack.add(Slot.TOOLS, SandboxMiddleware(sandbox=sandbox))
+    if spec.browser and sandbox is not None and filesystem is not None and vision_model is not None:
+        # 看截图（inspect_screenshot）：截图在工作区里，单独问一次看图模型，图不进主上下文。
+        # 浏览器在沙箱里，没有沙箱就没有截图（同请人接管）
+        stack.add(Slot.TOOLS, ScreenMiddleware(filesystem=filesystem, model=vision_model))
     # 延迟工具（上下文管理 §13）：MCP 工具多时只给名字，模型用 tool_search 按需加载定义
     if deferred:
         from atlas_engine.kernel.middleware.tool_search import ToolSearchMiddleware

@@ -25,6 +25,7 @@ const KNOWN: Record<string, [IconName, string, string[]]> = {
   glob: ["search", "查找文件", ["pattern"]],
   grep: ["search", "搜索", ["pattern"]],
   execute: ["terminal", "运行命令", ["command"]],
+  inspect_screenshot: ["eye", "看截图", ["question"]],
   write_todos: ["todo", "更新计划", []],
   load_memory: ["bookmark", "查看记忆", ["topic"]],
   save_memory: ["bookmark", "记住", ["content"]],

@@ -167,6 +167,9 @@ class CapabilityAssembly:
         )
         caps = Capabilities(
             model=chat,
+            # 看截图复用主模型（同一把 Key）：主模型能看图才交；装不装 engine 再按开没开浏览器、
+            # 有没有沙箱判
+            vision_model=chat if segment.sees_images else None,
             tools=tools.extra_tools,
             deferred_tools=tools.deferred_tools,
             filesystem=workspace,
@@ -269,7 +272,7 @@ class CapabilityAssembly:
             sandbox=plan.sandbox(spec.sandbox),
             skills=plan.skills(spec.skills, vision=vision),
         )
-        return dataclasses.replace(segment, spec=spec)
+        return dataclasses.replace(segment, spec=spec, sees_images=vision)
 
     async def with_knowledge(
         self,
