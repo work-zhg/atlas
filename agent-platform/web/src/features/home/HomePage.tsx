@@ -57,13 +57,14 @@ export function HomePage() {
   const [devicePick, setDevicePick] = useState<DevicePick>({});
 
   const dir = params.get("dir") ?? "";
-  // 只改地址栏、不走路由跳转：输入框里已经打的字不丢（Next 会把 replaceState 同步给 useSearchParams）
+  // 只改地址栏、不走路由跳转：输入框里已经打的字不丢（Next 会把 replaceState 同步给 useSearchParams）。
+  // ★ 路径沿用当前的：replaceState 不会像 router 那样补 basePath（部署在 /atlas 下）
   const pickDir = (next: string) => {
     const sp = new URLSearchParams(params.toString());
     if (next) sp.set("dir", next);
     else sp.delete("dir");
     const qs = sp.toString();
-    window.history.replaceState(null, "", qs ? `/?${qs}` : "/");
+    window.history.replaceState(null, "", window.location.pathname + (qs ? `?${qs}` : ""));
   };
 
   const agents = agentsQ.data?.data ?? [];
