@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>多租户隔离设计</title>
+<style>
+  body { margin: 0; background: #fff; color: #333; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { max-width: 1280px; padding: 24px 32px 64px; }
+  h1 { margin: 8px 0 12px; font-size: 22px; font-weight: 600; color: #222; }
+  h2 { margin: 40px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #e3e3e3; font-size: 17px; font-weight: 600; color: #222; }
+  h3 { margin: 28px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  p { max-width: 1100px; margin: 0 0 8px; font-size: 14px; line-height: 1.8; }
+  p.lead { padding: 10px 14px; border-left: 3px solid #1168bd; background: #f4f8fc; }
+  code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  a { color: #1168bd; }
+  table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  th, td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; }
+  ol.steps { margin: 8px 0 0; padding: 0; list-style: none; }
+  ol.steps li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  ol.steps li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  svg { display: block; max-width: 100%; height: auto; margin: 8px 0 4px; }
+  svg text { font-size: 13px; fill: #444; }
+  svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  svg .t-key { font-size: 12px; fill: #888; }
+  svg .t-lab { font-size: 12px; fill: #666; }
+  svg .t-hot { font-size: 12px; fill: #d9480f; }
+  svg .t-mute { font-size: 12px; fill: #aaa; }
+  svg .hot { fill: #d9480f; }
+  svg .mid { text-anchor: middle; }
+  svg .end { text-anchor: end; }
+  svg .b { font-weight: 700; }
+  svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  svg .node-hot { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.6; }
+  svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  svg .band-a { fill: #eef4fb; stroke: #1168bd; stroke-width: 1.2; }
+  svg .band-b { fill: #fff3ea; stroke: #d9480f; stroke-width: 1.2; }
+  svg .cell { fill: #fff; stroke: #bbb; stroke-width: 1.2; }
+  svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  svg .e-dash { fill: none; stroke: #444; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.2; }
+  svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .tick { stroke: #444; stroke-width: 1.2; }
+  svg .dot { fill: #fff; stroke: #888; stroke-width: 1.4; }
+  svg .dot-hot { fill: #d9480f; stroke: #d9480f; stroke-width: 1.4; }
+  svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
+</style>
+<body>
+<main>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <marker id="a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+      <marker id="h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+      <marker id="m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+    </defs>
+  </svg>
+
+  <h1>多租户隔离设计：数据只属于租户，平台的事归运营中心</h1>
+  <p class="lead">一句话：<b>每条业务数据都记着租户，各服务的数据访问层按「这一次替哪个租户做」自动过滤，漏写条件会报错而不会串数据；所有租户一律平等，没有平台租户；平台的事交给独立的运营中心，它用自己的运营账号，只经各系统的运营接口做事，看不到租户的业务内容。</b></p>
+  <p>这份设计回答四个问题：一次读写怎么知道是哪个租户的、漏写了怎么办；租户上下文从哪来、哪些来源可信；平台的事（开通、停用、关闭租户，运行环境，容量）谁来管、怎么管才看不到租户内容；共用的设施怎么按租户分。方案正文（什么归租户、什么归运营中心，以及过渡办法）见<a href="../../agent-platform/doc/design/tenant-isolation-design.html" target="_blank" rel="noopener">方案设计</a>；下面只讲原理，具体的类、表和交互见文末各图。</p>
+
+  <h2>先认识几个词</h2>
+  <table>
+    <thead><tr><th style="width: 12%">词</th><th style="width: 46%">意思</th><th>例子</th></tr></thead>
+    <tbody>
+      <tr><td>租户</td><td>一个使用平台的组织。人和数据都只属于一个租户；所有租户地位相同。</td><td>星河科技、远山律所。原来的「平台租户」现在也只是其中一个。</td></tr>
+      <tr><td>租户上下文</td><td>「这一次读写是替哪个租户做的」，放在协程的上下文里（contextvar）：一处设定，同一个请求或 run 里开的数据库会话、发的下游请求都看得到。</td><td>张三在网页上发消息：这个请求的上下文是星河科技；这条消息的 run 在后台跑时，上下文也是星河科技。</td></tr>
+      <tr><td>自动过滤</td><td>数据访问层给每个涉及租户表的查询自动加「租户 = 当前上下文」，给新行自动填租户。业务代码不写租户条件。</td><td><code>SELECT … FROM agent</code> 实际执行的是 <code>… WHERE tenant_uuid = 星河科技</code>。</td></tr>
+      <tr><td>系统范围</td><td>显式声明「这一次不过滤」，是唯一能跨租户的口子。只有两种用途：巡检取待办、运营接口。</td><td>兜底任务找出所有该续跑的 run 和它们的租户，再一条条进入各自的租户去跑。</td></tr>
+      <tr><td>运营中心</td><td>管平台本身的独立系统：开通、停用、关闭租户，运行环境，容量，系统参数，系统任务。有自己的运营账号，不属于任何租户。</td><td>运营人员小周用运营账号加双因素登录，给星河科技把份额从 20 调到 40。</td></tr>
+      <tr><td>运营接口</td><td>各业务系统专门开给运营中心的一组接口：挂在 <code>/ops/v1</code>，网关不转发，每个请求验运营中心的签名。里面没有读租户内容的功能。</td><td>Atlas 的 <code>POST /ops/v1/tenants/{id}/suspend</code>。</td></tr>
+      <tr><td>份额</td><td>一个租户最多同时占多少共用设施：同时运行的 run、同时存在的沙箱、存储。运营中心定，租户管理员在份额内再定每人上限。</td><td>星河科技同时最多 20 个 run，张三最多 3 个。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>原理 1　每条数据都记着租户，读写自动过滤</h2>
+  <p>每张业务表（包括运行事件、分段这样的子表）都多一列租户，建的时候就填上、之后不变。各服务引用同一个租户隔离库，由它在数据访问层统一加条件，业务代码不写也不应该写租户条件：</p>
+  <svg width="1240" viewBox="0 0 1240 300" role="img" aria-label="自动过滤">
+    <rect class="node" x="20" y="40" width="220" height="56" rx="4"/>
+    <text class="t-name" x="130" y="64">列智能体</text>
+    <text class="t-sub" x="130" y="84">张三 · 星河科技</text>
+    <path class="e" d="M240 68 H298" marker-end="url(#a)"/>
+    <rect class="node" x="300" y="40" width="230" height="56" rx="4"/>
+    <text class="t-name" x="415" y="64">租户上下文</text>
+    <text class="t-sub" x="415" y="84">= 星河科技（请求结束时退出）</text>
+    <path class="e" d="M530 68 H588" marker-end="url(#a)"/>
+    <rect class="node" x="590" y="40" width="250" height="56" rx="4"/>
+    <text class="t-name" x="715" y="64">业务代码</text>
+    <text class="t-sub" x="715" y="84">SELECT … FROM agent（没写租户）</text>
+    <path class="e-hot" d="M840 68 H898" marker-end="url(#h)"/>
+    <rect class="node-hot" x="900" y="40" width="320" height="56" rx="4"/>
+    <text class="t-name" x="1060" y="64">数据访问层自动补上</text>
+    <text class="t-sub" x="1060" y="84">AND tenant_uuid = 星河科技</text>
+    <rect class="cell" x="900" y="116" width="320" height="28"/>
+    <text class="t-lab" x="914" y="135">通用助手 · 星河科技　　✓ 返回</text>
+    <rect class="cell" x="900" y="144" width="320" height="28"/>
+    <text class="t-mute" x="914" y="163">合同审查 · 远山律所　　✗ 查不到</text>
+    <rect class="cell" x="900" y="172" width="320" height="28"/>
+    <text class="t-lab" x="914" y="191">周报助手 · 星河科技　　✓ 返回</text>
+    <rect class="node" x="20" y="226" width="220" height="56" rx="4"/>
+    <text class="t-name" x="130" y="250">后台代码</text>
+    <text class="t-sub" x="130" y="270">忘了进入租户就去查</text>
+    <path class="e-hot" d="M240 254 H298" marker-end="url(#h)"/>
+    <rect class="node-hot" x="300" y="226" width="230" height="56" rx="4"/>
+    <text class="t-name" x="415" y="250">直接报错</text>
+    <text class="t-sub" x="415" y="270">不会返回所有租户的数据</text>
+    <text class="t-lab" x="560" y="250">写入：新行自动填上当前租户；</text>
+    <text class="t-lab" x="560" y="270">在星河科技的上下文里写远山律所的行 → 拒绝</text>
+    <g class="badge"><circle cx="415" cy="40" r="10"/><text x="415" y="44">1</text></g>
+    <g class="badge"><circle cx="1060" cy="40" r="10"/><text x="1060" y="44">2</text></g>
+    <g class="badge"><circle cx="415" cy="226" r="10"/><text x="415" y="230">3</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>请求进来、后台任务开始时，先进入一个租户的上下文（从哪来见原理 2）。它放在协程的上下文里，这个请求里开的每个数据库会话、发的每个下游请求、拼的每个对象存储路径都看得到；并行的工具调用、子智能体这类子任务自动继承。</li>
+    <li><span class="n">2</span>数据访问层挂在 SQLAlchemy 的事件上：查询、ORM 更新和删除里出现的每张租户表（连表、子查询也算）都自动加上租户条件。所以「全部智能体 · 所有者」这样的授权、标成「公有」的知识库，到这一步已经只剩本租户的了，不用另外处理。</li>
+    <li><span class="n">3</span>没有上下文时碰租户表直接报错，漏设上下文的代码在测试里第一次运行就会暴露。需要跨租户必须显式进入系统范围，而且要说明原因，只有「巡检取待办」「运营接口」两种。这套规则和用户中心现在用的一样。</li>
+  </ol>
+
+  <h2>原理 2　租户上下文从哪来</h2>
+  <p>租户上下文的来源不同，可信程度也不同。只有网关写上的租户直接采用，而且要经用户中心核对；其余的都从已经记下的数据里取，不认任何人自己报的租户：</p>
+  <svg width="1240" viewBox="0 0 1240 380" role="img" aria-label="租户上下文的五个来源">
+    <rect class="node" x="20" y="20" width="220" height="56" rx="4"/>
+    <text class="t-name" x="130" y="54">网页请求</text>
+    <rect class="cell" x="270" y="20" width="590" height="56"/>
+    <text class="t-lab" x="286" y="44">网关按登录状态写上租户（浏览器自己写的进不来）</text>
+    <text class="t-lab" x="286" y="64">服务向用户中心取授权快照：用户中心只在这个租户里找人，找不到 → 401</text>
+    <rect class="node" x="20" y="90" width="220" height="56" rx="4"/>
+    <text class="t-name" x="130" y="124">后台的 run</text>
+    <rect class="cell" x="270" y="90" width="590" height="56"/>
+    <text class="t-lab" x="286" y="114">从 run 这一行本身取：建会话时就记下了租户</text>
+    <text class="t-lab" x="286" y="134">不从请求继承（可能换了实例），也不拿人去反查；开始前查这个租户没被停用</text>
+    <rect class="node" x="20" y="160" width="220" height="56" rx="4"/>
+    <text class="t-name" x="130" y="194">巡检、兜底任务</text>
+    <rect class="cell" x="270" y="160" width="590" height="56"/>
+    <text class="t-lab" x="286" y="184">先在系统范围里只取待办的 (id, 租户)</text>
+    <text class="t-lab" x="286" y="204">再一条条进入各自的租户去处理——处理阶段照样自动过滤</text>
+    <rect class="node-hot" x="20" y="230" width="220" height="56" rx="4"/>
+    <text class="t-name" x="130" y="254">沙箱、Pod、本机设备</text>
+    <text class="t-sub" x="130" y="274">发来的请求</text>
+    <rect class="cell" x="270" y="230" width="590" height="56"/>
+    <text class="t-lab" x="286" y="254">里面跑着租户自己的代码：自称的身份、租户一律去掉</text>
+    <text class="t-lab" x="286" y="274">按登记时记下的人和租户填上</text>
+    <rect class="band-a" x="900" y="20" width="320" height="266" rx="6"/>
+    <text class="t-head" x="1060" y="146" text-anchor="middle">进入这个租户</text>
+    <text class="t-sub" x="1060" y="168">之后的读写、下游调用都带着它</text>
+    <path class="e" d="M860 48 H898" marker-end="url(#a)"/>
+    <path class="e" d="M860 118 H898" marker-end="url(#a)"/>
+    <path class="e" d="M860 188 H898" marker-end="url(#a)"/>
+    <path class="e" d="M860 258 H898" marker-end="url(#a)"/>
+    <rect class="node" x="20" y="310" width="220" height="56" rx="4"/>
+    <text class="t-name" x="130" y="344">运营中心的调用</text>
+    <rect class="cell" x="270" y="310" width="590" height="56"/>
+    <text class="t-lab" x="286" y="334">不属于任何租户：只碰系统级的东西（模板、参数），</text>
+    <text class="t-lab" x="286" y="354">或者写明目标租户、只碰它的名字、状态、份额、用量</text>
+    <rect class="band-b" x="900" y="310" width="320" height="56" rx="6"/>
+    <text class="t-head" x="1060" y="334" text-anchor="middle" style="fill:#d9480f">系统范围（OPS）</text>
+    <text class="t-sub" x="1060" y="354">只碰元数据</text>
+    <path class="e-hot" d="M860 338 H898" marker-end="url(#h)"/>
+  </svg>
+  <p>为什么用户中心核对一下就够了：用户中心按请求上写的租户建立自己的租户上下文，只在这个租户里找人。请求上的租户写错了、或者被冒用了，在身份解析这一步就过不去。服务之间调用时原样带上租户，被调的服务按同一套规则再核对一次。</p>
+
+  <h2>原理 3　运营中心只经运营接口做事</h2>
+  <p>没有平台租户之后，平台的事由独立的运营中心来管。它碰业务系统只有一条路：各系统实现的运营接口契约。契约按能力分组，系统在登记里声明自己实现哪几组；运营中心能做的就只有这些：</p>
+  <svg width="1240" viewBox="0 0 1240 330" role="img" aria-label="运营接口契约">
+    <rect class="node" x="20" y="120" width="200" height="80" rx="4"/>
+    <text class="t-name" x="120" y="152">运营中心</text>
+    <text class="t-sub" x="120" y="174">运营账号 · 双因素</text>
+    <rect class="node" x="300" y="20" width="340" height="40" rx="4"/>
+    <text class="t-lab" x="316" y="45">租户生命周期：挂起 · 恢复 · 删除（必选）</text>
+    <rect class="node" x="300" y="70" width="340" height="40" rx="4"/>
+    <text class="t-lab" x="316" y="95">租户与应用目录（只有用户中心）</text>
+    <rect class="node" x="300" y="120" width="340" height="40" rx="4"/>
+    <text class="t-lab" x="316" y="145">容量：份额 · 用量（Atlas、知识库）</text>
+    <rect class="node" x="300" y="170" width="340" height="40" rx="4"/>
+    <text class="t-lab" x="316" y="195">系统设置：系统参数 · 系统任务（每个系统）</text>
+    <rect class="node" x="300" y="220" width="340" height="40" rx="4"/>
+    <text class="t-lab" x="316" y="245">运行环境：沙箱模板（只有 Atlas）</text>
+    <rect class="gap" x="300" y="276" width="340" height="40" rx="4"/>
+    <text class="t-hot" x="316" y="301">读租户的会话、文件、知识库、凭据：契约里没有</text>
+    <path class="e" d="M220 140 L298 40" marker-end="url(#a)"/>
+    <path class="e" d="M220 150 L298 90" marker-end="url(#a)"/>
+    <path class="e" d="M220 160 H298" marker-end="url(#a)"/>
+    <path class="e" d="M220 170 L298 190" marker-end="url(#a)"/>
+    <path class="e" d="M220 180 L298 240" marker-end="url(#a)"/>
+    <path class="e-mute" d="M220 190 L298 296" marker-end="url(#m)"/>
+    <path class="e" d="M640 140 H718" marker-end="url(#a)"/>
+    <rect class="band-a" x="720" y="20" width="240" height="240" rx="6"/>
+    <rect class="node" x="740" y="36" width="200" height="40" rx="4"/>
+    <text class="t-name" x="840" y="61">用户中心</text>
+    <rect class="node" x="740" y="86" width="200" height="40" rx="4"/>
+    <text class="t-name" x="840" y="111">Atlas</text>
+    <rect class="node" x="740" y="136" width="200" height="40" rx="4"/>
+    <text class="t-name" x="840" y="161">知识库</text>
+    <rect class="node" x="740" y="186" width="200" height="56" rx="4"/>
+    <text class="t-sub" x="840" y="208">技能 · MCP 网关</text>
+    <text class="t-sub" x="840" y="228">模型平台 · 记忆服务</text>
+    <text class="t-lab" x="990" y="60">各系统用运营接口库实现：</text>
+    <text class="t-lab" x="990" y="90">· 挂在 /ops/v1，网关不转发</text>
+    <text class="t-lab" x="990" y="120">· 验签名（每个系统一把密钥）</text>
+    <text class="t-lab" x="990" y="150">· 在系统范围里执行</text>
+    <text class="t-lab" x="990" y="180">· 按幂等键去重、记运营请求</text>
+    <text class="t-lab" x="990" y="210">· 数据留在自己库里</text>
+  </svg>
+  <ul>
+    <li><b>看不到是结构保证的，不是权限挡的。</b>契约里根本没有读租户内容的方法，就算运营账号被盗、运营中心有漏洞，也只能做这几类事。</li>
+    <li><b>运营权限和租户权限彻底分开。</b>运营账号不在用户中心的任何租户里；业务系统和用户中心里不再有平台级的操作码和「是不是平台租户」的判断，原来的平台管理接口（沙箱模板、配置项、定时任务、租户管理、应用接入）都移成运营接口。</li>
+    <li><b>数据留在用它的系统里。</b>租户名单在用户中心，份额、沙箱模板、系统参数在 Atlas 等各自的系统里；运营中心只存运营账号、运营审计和租户操作的进度。</li>
+  </ul>
+
+  <h2>原理 4　租户操作：拆成步骤、记进度、失败一直重试</h2>
+  <p>开通、停用、恢复、关闭都要按固定顺序调好几个系统，任何一步都可能超时。运营中心把一次操作记成按系统排好的步骤，由后台任务一步步推进，每做完一步记一次进度。以停用为例：</p>
+  <svg width="1240" viewBox="0 0 1240 240" role="img" aria-label="停用租户的步骤">
+    <rect class="node" x="20" y="50" width="150" height="56" rx="4"/>
+    <text class="t-name" x="95" y="74">① 用户中心</text>
+    <text class="t-sub" x="95" y="94">挡住入口 ✓</text>
+    <path class="e" d="M170 78 H188" marker-end="url(#a)"/>
+    <rect class="node" x="190" y="50" width="150" height="56" rx="4"/>
+    <text class="t-name" x="265" y="74">② Atlas</text>
+    <text class="t-sub" x="265" y="94">挂起 run、回收沙箱 ✓</text>
+    <path class="e" d="M340 78 H358" marker-end="url(#a)"/>
+    <rect class="node-hot" x="360" y="50" width="150" height="56" rx="4"/>
+    <text class="t-name" x="435" y="74">③ 知识库</text>
+    <text class="t-sub" x="435" y="94">超时 ✗</text>
+    <path class="e-hot" d="M510 78 H598" marker-end="url(#h)"/>
+    <text class="t-hot mid" x="554" y="68">退避 10 秒</text>
+    <rect class="node" x="600" y="50" width="170" height="56" rx="4"/>
+    <text class="t-name" x="685" y="74">③ 知识库</text>
+    <text class="t-sub" x="685" y="94">同一个幂等键重做 ✓</text>
+    <path class="e" d="M770 78 H788" marker-end="url(#a)"/>
+    <rect class="node" x="790" y="50" width="170" height="56" rx="4"/>
+    <text class="t-name" x="875" y="74">④–⑦ 其余系统</text>
+    <text class="t-sub" x="875" y="94">挂起 ✓</text>
+    <path class="e" d="M960 78 H1008" marker-end="url(#a)"/>
+    <rect class="node" x="1010" y="50" width="200" height="56" rx="4"/>
+    <text class="t-name" x="1110" y="74">操作结束</text>
+    <text class="t-sub" x="1110" y="94">补记审计结果</text>
+    <path class="tick" d="M95 106 V166"/><path class="tick" d="M265 106 V166"/><path class="tick" d="M435 106 V166"/>
+    <path class="tick" d="M685 106 V166"/><path class="tick" d="M875 106 V166"/><path class="tick" d="M1110 106 V166"/>
+    <rect class="band-a" x="20" y="166" width="1190" height="40" rx="6"/>
+    <text class="t-lab" x="36" y="191">运营库：每做完一步记一次（成功、失败、下次重做的时间）——运营服务崩在半路，从下一步接着做</text>
+    <g class="badge"><circle cx="20" cy="50" r="10"/><text x="20" y="54">1</text></g>
+    <g class="badge"><circle cx="510" cy="50" r="10"/><text x="510" y="54">2</text></g>
+    <g class="badge"><circle cx="1010" cy="50" r="10"/><text x="1010" y="54">3</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>顺序固定：停用先让用户中心挡住入口（新请求一个也进不来），再通知各系统挂起；恢复反过来，各系统先准备好再放人进来；关闭最后才删用户中心里的租户。同一个租户同一时间只能有一个进行中的操作，关闭只能对已停用的租户做。</li>
+    <li><span class="n">2</span>失败不放弃：按退避一直重试，界面上标出卡住的步骤，修好后可以立即重做。每一步用步骤 uuid 作幂等键，对方按它去重，超时后重做不会做两遍。删除是分批的：对方说「还有剩」，这一步就马上再做一次。</li>
+    <li><span class="n">3</span>停用通知到了以后，各系统在本地记一份租户状态。后台工作（run 续跑、入库、记忆补记）开始前查它：这些工作没有用户请求，靠用户中心挡入口是挡不住的。</li>
+  </ol>
+
+  <h2>原理 5　份额：运营中心管总量，按租户分</h2>
+  <p>共用设施分三层管。准入点在 Atlas 自己：认领 run、登记新沙箱时，在同一个事务里先锁住这个租户的份额行，再数用量、再判，所以精确不超：</p>
+  <svg width="1240" viewBox="0 0 1240 230" role="img" aria-label="份额三层">
+    <rect class="band-a" x="20" y="20" width="760" height="50" rx="6"/>
+    <text class="t-head" x="36" y="50">总容量：部署的执行能力（各实例的并发槽位之和）、集群资源</text>
+    <rect class="node" x="20" y="90" width="500" height="50" rx="4"/>
+    <text class="t-name" x="270" y="120">租户份额：星河科技同时 20 个 run（运营中心定）</text>
+    <rect class="node" x="20" y="160" width="300" height="50" rx="4"/>
+    <text class="t-name" x="170" y="190">每人上限：张三 3 个（租户管理员定）</text>
+    <text class="t-lab" x="810" y="50">份额加起来可以超过总容量；总量满了大家按先来后到排队</text>
+    <text class="t-lab" x="550" y="112">星河科技满了：只有星河科技的 run 排队，</text>
+    <text class="t-lab" x="550" y="132">别的租户照常；沙箱提示已满、上传拒绝</text>
+    <text class="t-lab" x="350" y="182">张三满了：张三的下一个 run 排队；高于份额时按份额算</text>
+    <text class="t-key" x="350" y="202">模型用量不设份额：模型走租户自己的供应商账号</text>
+  </svg>
+
+  <h2>设计决策</h2>
+  <table>
+    <thead><tr><th style="width: 34%">决策</th><th style="width: 46%">理由</th><th>详见</th></tr></thead>
+    <tbody>
+      <tr><td>每张业务表都记租户（包括子表），读写自动过滤，没有上下文就报错</td><td>自动过滤只看得到当前查的这张表；后台按 id 直接查子数据也要受保护。漏写条件报错而不是返回全部，测试第一次跑就暴露。</td><td><a href="../infra-platform/code-tenancy.html" target="_blank" rel="noopener">租户隔离库</a></td></tr>
+      <tr><td>系统范围必须给原因，只有「巡检取待办」「运营接口」两种</td><td>系统范围就是不过滤，是唯一跨租户的口子；收成两个有名字的用途，评审时一眼看出哪里在跨租户。</td><td><a href="../infra-platform/code-tenancy.html" target="_blank" rel="noopener">租户隔离库</a></td></tr>
+      <tr><td>没有平台租户；平台的事归独立的运营中心，运营账号不放进用户中心</td><td>放进用户中心就又多出一种不属于普通租户的特殊用户，各系统又要为它写特殊判断。代价是多一套登录，但运营人员少、功能简单。</td><td><a href="code-accounts.html" target="_blank" rel="noopener">运营账号与审计</a></td></tr>
+      <tr><td>运营中心只经运营接口做事，契约里没有读租户内容的方法；每个系统一把运营密钥，请求签名</td><td>看不到靠结构保证；运营接口能跨租户、能删数据，内部服务之间凭请求头互信那一套不够用。签名防重放，一把密钥泄露只影响一个系统。</td><td><a href="code-gateway.html" target="_blank" rel="noopener">系统接入</a>、<a href="../infra-platform/code-opsapi.html" target="_blank" rel="noopener">运营接口库</a></td></tr>
+      <tr><td>数据留在用它的系统里，运营中心只存账号、审计和操作进度</td><td>执行规则的是各业务系统自己（派发 run 查份额、建沙箱读模板）；存两份就要对账。</td><td><a href="container.html" target="_blank" rel="noopener">运营中心容器图</a></td></tr>
+      <tr><td>租户操作拆成步骤、存进度、后台推进；失败一直重试，不放弃</td><td>关闭要删的数据可能很多、任何一步都可能超时；半停用、半删除的租户比失败更糟，修好对方后自动接着做。</td><td><a href="code-tenants.html" target="_blank" rel="noopener">租户</a></td></tr>
+      <tr><td>各系统本地记租户状态，后台工作开始前查它</td><td>用户中心只挡得住新的用户请求，挡不住 run 续跑、入库这些后台工作。</td><td><a href="../infra-platform/code-opsapi.html" target="_blank" rel="noopener">运营接口库</a></td></tr>
+      <tr><td>份额存在 Atlas；run 和沙箱在认领的事务里锁租户行，精确不超；满了 run 排队</td><td>先数再建在并发时是软上限；锁一行让同一租户的认领串行，不同租户互不影响。run 已经提交，排队等空位最符合预期。</td><td><a href="../agent/code-capacity.html" target="_blank" rel="noopener">容量</a></td></tr>
+      <tr><td>运行期参数分系统参数和租户设置；租户由调用方显式传入</td><td>影响所有租户的归运营中心，只影响一个租户的归租户管理员；租户设置没改过就跟着运营中心定的系统值走。</td><td><a href="../infra-platform/code-appconfig.html" target="_blank" rel="noopener">应用配置库</a>、<a href="../agent/code-tenant-settings.html" target="_blank" rel="noopener">租户设置</a></td></tr>
+      <tr><td>模型属于租户：系统功能的模型按租户绑定，能力表按供应商模型名查、随版本发布</td><td>没有平台提供的模型；租户可以随便给模型起名，按租户起的名字查能力迟早查错。</td><td><a href="../agent/code-model-access.html" target="_blank" rel="noopener">模型接入</a></td></tr>
+    </tbody>
+  </table>
+
+  <h2>图索引</h2>
+  <p>原理在上面，各图里是具体的交互、类和数据。链接在新标签页打开。</p>
+  <h3>系统、容器与组件</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="system-context.html" target="_blank" rel="noopener">运营中心 · 系统上下文</a></td><td>运营人员用运营中心；运营中心连用户中心、Agent 平台和五个同级服务，每条线写了能做什么。</td></tr>
+      <tr><td><a href="container.html" target="_blank" rel="noopener">运营中心 · 容器</a></td><td>运营控制台、运营服务、运营库；所有对外调用都是运营接口（签名）。</td></tr>
+      <tr><td><a href="component-server.html" target="_blank" rel="noopener">运营服务 · 组件</a></td><td>六个组件：运营账号与审计、租户、应用、容量、系统设置、系统接入；只有系统接入连各业务系统。</td></tr>
+      <tr><td><a href="../agent/system-context.html" target="_blank" rel="noopener">Agent 平台 · 系统上下文</a>、<a href="../agent/container.html" target="_blank" rel="noopener">容器</a></td><td>多了运营中心：经 Agent 服务的运营接口管运行环境、份额、租户的挂起和删除。</td></tr>
+    </tbody>
+  </table>
+  <h3>时序图</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="../agent/dynamic/dynamic-tenant-context.html" target="_blank" rel="noopener">一次请求和一个 run 怎么带上租户</a></td><td>原理 1、2 的完整交互：网关写租户、用户中心核对（第 4 步）、自动过滤（第 8 步）、run 按会话的租户进入（第 10 步）、调知识库带上租户（第 12 步）。</td></tr>
+      <tr><td><a href="../agent/dynamic/dynamic-tenant-quota.html" target="_blank" rel="noopener">run 按租户份额排队</a></td><td>原理 5：认领事务里锁份额行、数在跑的 run；满了排队并推「排队中」；空出位置后兜底任务接走。</td></tr>
+      <tr><td><a href="dynamic/dynamic-tenant-open.html" target="_blank" rel="noopener">开通租户</a></td><td>第一步在接口里同步跑、临时密码只出现一次；第二步设份额由后台推进。</td></tr>
+      <tr><td><a href="dynamic/dynamic-tenant-suspend.html" target="_blank" rel="noopener">停用租户</a></td><td>原理 4 的完整交互：先挡入口再通知各系统；知识库超时后用同一个幂等键重做；到期从哪里发起。</td></tr>
+      <tr><td><a href="dynamic/dynamic-tenant-close.html" target="_blank" rel="noopener">关闭租户</a></td><td>只能关已停用的；Atlas 分批删（先外部资源后数据库，「还有剩」就再做一次）；最后删用户中心里的租户。</td></tr>
+    </tbody>
+  </table>
+  <h3>类图</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="../infra-platform/code-tenancy.html" target="_blank" rel="noopener">公共库 · 租户隔离</a></td><td>原理 1、2 的实现：TenantScope 和 contextvar、自动过滤、系统范围的两种原因、跨租户巡检的固定写法、名字带租户、按表分批删除、给已有表加租户的迁移。</td></tr>
+      <tr><td><a href="../infra-platform/code-opsapi.html" target="_blank" rel="noopener">公共库 · 运营接口</a></td><td>各业务系统一侧的运营接口：签名校验、幂等记录、本地租户状态和 TenantGate、宿主要实现的 TenantLifecycle；两张表。</td></tr>
+      <tr><td><a href="../infra-platform/code-appconfig.html" target="_blank" rel="noopener">公共库 · 应用配置</a></td><td>加了作用域：系统参数只给运营中心改，租户设置按「本租户 → 系统值 → 默认值」取。</td></tr>
+      <tr><td><a href="code-tenants.html" target="_blank" rel="noopener">运营中心 · 租户</a></td><td>原理 4 的实现：TenantOperation 和步骤、顺序规则、后台推进与退避、到期自动停用；两张表。</td></tr>
+      <tr><td><a href="code-gateway.html" target="_blank" rel="noopener">运营中心 · 系统接入</a></td><td>原理 3 的契约：五组接口、系统登记与能力、签名、OperatorStamp、两类错误。</td></tr>
+      <tr><td><a href="code-accounts.html" target="_blank" rel="noopener">运营中心 · 运营账号与审计</a></td><td>双因素登录、两个运营角色、会话、只追加的运营审计；三张表。</td></tr>
+      <tr><td><a href="../agent/code-capacity.html" target="_blank" rel="noopener">Atlas · 容量</a></td><td>原理 5 的实现：租户份额、每人上限、三个准入点、用量怎么数；两张表。</td></tr>
+      <tr><td><a href="../agent/code-ops.html" target="_blank" rel="noopener">Atlas · 运营接口</a></td><td>Atlas 挂起、恢复时 run、沙箱、设备怎么处理；删除外部资源的顺序；容量和沙箱模板两组契约的实现。</td></tr>
+      <tr><td><a href="../agent/code-tenant-settings.html" target="_blank" rel="noopener">Atlas · 租户设置</a></td><td>原来的平台管理：租户指令、默认智能体、每人上限，改要租户级操作码 settings:manage。</td></tr>
+      <tr><td><a href="../agent/code-model-access.html" target="_blank" rel="noopener">Atlas · 模型接入</a></td><td>系统功能的模型按租户绑定；能力表按供应商模型名查。</td></tr>
+    </tbody>
+  </table>
+</main>
+</body>
+</html>

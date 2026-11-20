@@ -3,7 +3,7 @@ name = "atlas"
 version = "0.1.0"
 description = "Atlas — agent platform (workspace root)"
 requires-python = ">=3.13"
-dependencies = ["atlas-acp", "atlas-agent", "atlas-appconfig", "atlas-bench", "atlas-bridge", "atlas-connect", "atlas-devicegw", "atlas-devicelink", "atlas-engine", "atlas-host", "atlas-jobs", "atlas-jsonrpc", "atlas-knowledge", "atlas-mcpgateway", "atlas-memory", "atlas-modelgateway", "atlas-redislock", "atlas-skill", "atlas-teamflow", "atlas-usercenter"]
+dependencies = ["atlas-acp", "atlas-agent", "atlas-appconfig", "atlas-bench", "atlas-bridge", "atlas-connect", "atlas-devicegw", "atlas-devicelink", "atlas-engine", "atlas-host", "atlas-jobs", "atlas-jsonrpc", "atlas-knowledge", "atlas-mcpgateway", "atlas-memory", "atlas-modelgateway", "atlas-opscenter", "atlas-opsapi", "atlas-redislock", "atlas-skill", "atlas-teamflow", "atlas-tenancy", "atlas-usercenter"]
 
 # Workspace root is a container, not an installable package.
 [tool.uv]
@@ -23,8 +23,11 @@ members = [
   "agent-platform/libs/jsonrpc",
   "infra-platform/libs/appconfig",
   "infra-platform/libs/jobs",
+  "infra-platform/libs/opsapi",
   "infra-platform/libs/redislock",
+  "infra-platform/libs/tenancy",
   "agent-platform/services/knowledge",
+  "opscenter/services/opscenter",
   "agent-platform/services/mcpgateway",
   "agent-platform/services/memory",
   "agent-platform/services/modelgateway",
@@ -50,9 +53,12 @@ atlas-knowledge = { workspace = true }
 atlas-mcpgateway = { workspace = true }
 atlas-memory = { workspace = true }
 atlas-modelgateway = { workspace = true }
+atlas-opscenter = { workspace = true }
+atlas-opsapi = { workspace = true }
 atlas-redislock = { workspace = true }
 atlas-skill = { workspace = true }
 atlas-teamflow = { workspace = true }
+atlas-tenancy = { workspace = true }
 atlas-usercenter = { workspace = true }
 
 [dependency-groups]
@@ -74,7 +80,7 @@ dev = [
 # ★ 依赖单向的硬约束（文档 §2.1）。engine 一旦 import server/db/web 就 CI 红。
 # ---------------------------------------------------------------------------
 [tool.importlinter]
-root_packages = ["atlas_acp", "atlas_agent", "atlas_appconfig", "atlas_bench", "atlas_bridge", "atlas_connect", "atlas_devicegw", "atlas_devicelink", "atlas_engine", "atlas_host", "atlas_jobs", "atlas_jsonrpc", "atlas_knowledge", "atlas_mcpgateway", "atlas_memory", "atlas_modelgateway", "atlas_redislock", "atlas_skill", "atlas_teamflow", "atlas_usercenter"]
+root_packages = ["atlas_acp", "atlas_agent", "atlas_appconfig", "atlas_bench", "atlas_bridge", "atlas_connect", "atlas_devicegw", "atlas_devicelink", "atlas_engine", "atlas_host", "atlas_jobs", "atlas_jsonrpc", "atlas_knowledge", "atlas_mcpgateway", "atlas_memory", "atlas_modelgateway", "atlas_opscenter", "atlas_opsapi", "atlas_redislock", "atlas_skill", "atlas_teamflow", "atlas_tenancy", "atlas_usercenter"]
 # forbidden_modules 里有第三方包（fastapi/sqlalchemy/...），必须打开这个开关
 include_external_packages = true
 
@@ -409,8 +415,8 @@ source_modules = [
 ]
 forbidden_modules = ["atlas_mcpgateway"]
 
-# 模型网关是独立部署物（doc/model-design.html §3）：所有模型调用的唯一入口。Atlas、知识库只经
-# HTTP 调它（内部接口 + 数据面 /v1/*），双方互不 import；和 MCP 网关也互不 import（各自一份）。
+# 模型平台是独立部署物（agent-platform/doc/design/model-gateway-design.html）：模型网关是所有模型
+# 调用的唯一入口。Atlas、知识库只经 HTTP 调它，双方互不 import；和 MCP 网关也互不 import（各自一份）。
 [[tool.importlinter.contracts]]
 name = "atlas_modelgateway 不认识 atlas 其它包"
 type = "forbidden"
@@ -428,7 +434,6 @@ forbidden_modules = [
   "atlas_memory",
   "atlas_teamflow",
   "atlas_usercenter",
-  "redis",
   "langchain",
   "langgraph",
 ]
@@ -529,7 +534,7 @@ exclude = ["agent-platform/libs/engine/src/atlas_engine/kernel/**"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["agent-platform/tests", "agent-platform/libs/devicelink/tests", "agent-platform/services/devicegw/tests", "agent-platform/device/connector/tests", "agent-platform/services/skill/tests", "usercenter/services/usercenter/tests", "teamflow/services/teamflow/tests", "agent-platform/services/knowledge/tests", "agent-platform/services/memory/tests", "agent-platform/services/mcpgateway/tests", "agent-platform/services/modelgateway/tests", "agent-platform/bench/tests", "infra-platform/libs/redislock/tests", "infra-platform/libs/appconfig/tests", "infra-platform/libs/jobs/tests"]
+testpaths = ["agent-platform/tests", "agent-platform/libs/devicelink/tests", "agent-platform/services/devicegw/tests", "agent-platform/device/connector/tests", "agent-platform/services/skill/tests", "usercenter/services/usercenter/tests", "teamflow/services/teamflow/tests", "agent-platform/services/knowledge/tests", "agent-platform/services/memory/tests", "agent-platform/services/mcpgateway/tests", "agent-platform/services/modelgateway/tests", "agent-platform/bench/tests", "infra-platform/libs/redislock/tests", "infra-platform/libs/appconfig/tests", "infra-platform/libs/jobs/tests", "infra-platform/libs/tenancy/tests", "infra-platform/libs/opsapi/tests", "opscenter/services/opscenter/tests"]
 addopts = "-ra"
 
 [tool.mypy]
@@ -559,3 +564,31 @@ name = "atlas_jobs 不依赖本仓任何其它包"
 type = "forbidden"
 source_modules = ["atlas_jobs"]
 forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_skill", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_agent", "atlas_teamflow", "atlas_usercenter", "atlas_redislock", "atlas_appconfig"]
+
+[[tool.importlinter.contracts]]
+# 租户隔离嵌入每个业务服务（c4-model/infra-platform/code-tenancy.html）：谁都可以用，因此它不能认识其中任何一个
+name = "atlas_tenancy 不依赖本仓任何其它包"
+type = "forbidden"
+source_modules = ["atlas_tenancy"]
+forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_skill", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_agent", "atlas_teamflow", "atlas_usercenter", "atlas_redislock", "atlas_appconfig", "atlas_jobs", "atlas_opsapi", "atlas_mcpgateway", "atlas_modelgateway", "atlas_memory", "atlas_devicegw"]
+
+[[tool.importlinter.contracts]]
+# 运营接口嵌入每个业务服务（c4-model/infra-platform/code-opsapi.html）：只依赖三个公共库，不认识任何业务服务
+name = "atlas_opsapi 只依赖租户隔离、应用配置、定时任务三个公共库"
+type = "forbidden"
+source_modules = ["atlas_opsapi"]
+forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_skill", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_agent", "atlas_teamflow", "atlas_usercenter", "atlas_redislock", "atlas_mcpgateway", "atlas_modelgateway", "atlas_memory", "atlas_devicegw"]
+
+[[tool.importlinter.contracts]]
+# 运营中心是独立系统（c4-model/opscenter/）：只经各系统的运营接口（HTTP、签名）做事，代码上只认
+# 运营接口库（签名、OperatorStamp；它带进来的租户隔离库不用）和定时任务库；业务系统也不认识它
+name = "atlas_opscenter 不认识任何业务系统"
+type = "forbidden"
+source_modules = ["atlas_opscenter"]
+forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_skill", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_agent", "atlas_teamflow", "atlas_usercenter", "atlas_redislock", "atlas_mcpgateway", "atlas_modelgateway", "atlas_memory", "atlas_devicegw"]
+
+[[tool.importlinter.contracts]]
+name = "业务系统不认识 atlas_opscenter"
+type = "forbidden"
+source_modules = ["atlas_agent", "atlas_knowledge", "atlas_skill", "atlas_mcpgateway", "atlas_modelgateway", "atlas_memory", "atlas_usercenter", "atlas_teamflow", "atlas_devicegw", "atlas_opsapi"]
+forbidden_modules = ["atlas_opscenter"]

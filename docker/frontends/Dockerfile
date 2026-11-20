@@ -28,6 +28,8 @@ FROM base AS ws
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY agent-platform/web/package.json agent-platform/web/
 COPY teamflow/web/package.json teamflow/web/
+# 运营中心前端也在 workspace 里（锁文件有它）：只拷清单让 --frozen-lockfile 对得上，这个镜像不构建它
+COPY opscenter/web/package.json opscenter/web/
 COPY packages/chat-ui/package.json packages/chat-ui/
 COPY packages/appconfig-ui/package.json packages/appconfig-ui/
 COPY packages/jobs-ui/package.json packages/jobs-ui/
