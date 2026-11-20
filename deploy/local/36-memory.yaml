@@ -28,6 +28,9 @@ spec:
           command: ["python", "-m", "atlas_memory", "migrate"]
           env: &memory-env
             - {name: ATLAS_MEMORY_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_memory"}
+            # 运营接口（/ops/v1）的签名密钥：运营中心（48-opscenter.yaml）调用时核对（apply.sh 建 atlas-ops-keys）
+            - name: ATLAS_MEMORY_OPS_API_KEY
+              valueFrom: {secretKeyRef: {name: atlas-ops-keys, key: memory}}
             # 多租户迁移把已有数据归到原平台租户（apply.sh 按 .env 的 TENANT_BACKFILL_UUID 建；只有迁移读它）
             - name: TENANT_BACKFILL_UUID
               valueFrom: {configMapKeyRef: {name: atlas-tenancy, key: backfill_uuid, optional: true}}

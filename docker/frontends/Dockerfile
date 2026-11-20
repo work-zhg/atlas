@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
-# 三个前端（Atlas、用户中心、AI TeamFlow）一个镜像：各自 Next standalone 产物放在 /app/<名>，
-# 由同一个 Pod 里的三个容器分别启动（node /app/<名>/server.js），前面是 nginx 容器按路径路由。
+# 四个前端（Atlas、用户中心、AI TeamFlow、运营中心）一个镜像：各自 Next standalone 产物放在 /app/<名>，
+# Atlas、用户中心、TeamFlow 由同一个 Pod 里的三个容器分别启动（node /app/<名>/server.js），前面是 nginx 容器按路径路由；
+# 运营中心由自己的 Deployment 启动（deploy/local/48-opscenter.yaml）。
 #
 # 构建（仓库根目录）：
 # ★ Atlas 与 TeamFlow 在前端 workspace（根 pnpm-workspace.yaml）里，共用 @atlas/chat-ui；用户中心独立。
@@ -28,7 +29,6 @@ FROM base AS ws
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
 COPY agent-platform/web/package.json agent-platform/web/
 COPY teamflow/web/package.json teamflow/web/
-# 运营中心前端也在 workspace 里（锁文件有它）：只拷清单让 --frozen-lockfile 对得上，这个镜像不构建它
 COPY opscenter/web/package.json opscenter/web/
 COPY packages/chat-ui/package.json packages/chat-ui/
 COPY packages/appconfig-ui/package.json packages/appconfig-ui/
@@ -38,6 +38,7 @@ RUN --mount=type=cache,id=pnpm-store,target=/pnpm-store,sharing=locked \
 COPY packages/ packages/
 COPY agent-platform/web/ agent-platform/web/
 COPY teamflow/web/ teamflow/web/
+COPY opscenter/web/ opscenter/web/
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # ── Atlas：/atlas；接口经 nginx 的 /atlas-api、/skill-api 等同源访问
@@ -64,6 +65,13 @@ FROM ws AS tf
 ENV NEXT_PUBLIC_BASE_PATH=/teamflow
 RUN pnpm --filter atlas-teamflow-web build
 
+# ── 运营中心：/ops。和租户入口同一个域名，但不经租户网关（nginx 的登录校验）：traefik 直接转给它
+#   （deploy/server/20-ingress.yaml）。/ops/api 由 Next 转给运营中心后端 —— 地址在构建时写进路由表
+FROM ws AS ops
+ENV NEXT_PUBLIC_BASE_PATH=/ops \
+    OPS_API_ORIGIN=http://atlas-opscenter.atlas-system.svc.cluster.local:8100
+RUN pnpm --filter atlas-opscenter-web build
+
 # ── 运行镜像：只带 standalone 产物与静态资源（没有 pnpm、源码、构建缓存）
 FROM node:22-alpine
 ENV NODE_ENV=production HOSTNAME=0.0.0.0 NEXT_TELEMETRY_DISABLED=1
@@ -75,6 +83,9 @@ COPY --from=uc --chown=node:node /src/.next/standalone ./uc
 COPY --from=uc --chown=node:node /src/.next/static ./uc/.next/static
 COPY --from=tf --chown=node:node /src/teamflow/web/.next/standalone ./tf
 COPY --from=tf --chown=node:node /src/teamflow/web/.next/static ./tf/teamflow/web/.next/static
+# 运营中心前端不在 atlas-frontends 的 Pod 里：它自己的 Deployment 用这个镜像起 /app/ops/opscenter/web/server.js
+COPY --from=ops --chown=node:node /src/opscenter/web/.next/standalone ./ops
+COPY --from=ops --chown=node:node /src/opscenter/web/.next/static ./ops/opscenter/web/.next/static
 USER node
 # 默认启动 Atlas；Pod 里每个容器用 command 指定自己的 server.js 与 PORT
 CMD ["node", "/app/atlas/agent-platform/web/server.js"]

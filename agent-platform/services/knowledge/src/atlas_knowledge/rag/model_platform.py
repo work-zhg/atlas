@@ -8,8 +8,8 @@
     远程重排    rerank_client            检索设置里从这把 Key 的可用模型里选
 
 ★ 管理员事先在平台上建好这几把客户端 Key（如客户端类型 Service）、分配模型；知识库按「类型:编码」
-  取 Key，带着它直连 LiteLLM。Key 原文只在内存里，不持有供应商 Key。
-★ Key 随时可能被重置：请求时才取（短缓存），LiteLLM 回 401 就重新取一次再试。
+  取 Key，带着它调模型网关。Key 原文只在内存里，不持有供应商 Key。
+★ Key 随时可能被重置：请求时才取（短缓存），网关回 401 就重新取一次再试。
 ★ 多租户：服务 Key 是每个租户自己的。按当前租户取（X-Tenant-Id），缓存也按租户分开；
   不在任何租户里取 Key 是代码问题（tenant_headers 抛 TenantViolation）。
 ★ 平台暂时不可用：沿用上次取到的；从没取到过的，这项能力暂时不可用（入库增强降级为不做）。
@@ -146,7 +146,7 @@ def _require(found: ServiceKey, client: tuple[str, str]) -> str:
 
 
 class PlatformKeyAuth(httpx.Auth):
-    """同步客户端（远程嵌入、重排）用：每个请求带上最新的 Key；LiteLLM 回 401 就重取一次再试。"""
+    """同步客户端（远程嵌入、重排）用：每个请求带上最新的 Key；网关回 401 就重取一次再试。"""
 
     def __init__(self, keys: ServiceKeys, client: tuple[str, str]) -> None:
         self._keys = keys
@@ -164,7 +164,7 @@ class PlatformKeyAuth(httpx.Auth):
 
 
 class PlatformChat:
-    """ChatModel：带服务级客户端 Key 调 LiteLLM 的 OpenAI 兼容对话接口。
+    """ChatModel：带服务级客户端 Key 调模型网关的 OpenAI 格式对话接口。
 
     ★ Key 不可用、模型不在 Key 里时 complete() 抛 RuntimeError：
       调用方按「LLM 不可用」降级（同没配 LLM）。
@@ -172,7 +172,7 @@ class PlatformChat:
 
     def __init__(
         self,
-        litellm_url: str,
+        gateway_url: str,
         keys: ServiceKeys,
         client: tuple[str, str],
         model: str,
@@ -184,7 +184,7 @@ class PlatformChat:
         self._keys = keys
         self._client = client
         self._chat = OpenAICompatibleChat(
-            f"{litellm_url.rstrip('/')}/v1", "", model, timeout_s=timeout_s, transport=transport
+            f"{gateway_url.rstrip('/')}/v1", "", model, timeout_s=timeout_s, transport=transport
         )
 
     async def aclose(self) -> None:

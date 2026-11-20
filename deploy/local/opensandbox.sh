@@ -104,8 +104,8 @@ kubectl -n atlas-system create secret generic atlas-opensandbox \
   ${BENCH_ARGS[@]+"${BENCH_ARGS[@]}"} --dry-run=client -o yaml | kubectl apply -f -
 # 会话 Pod 的模型 key：会话 Pod 模板把它以文件挂进 Pod（/run/secrets/atlas/model_api_key）
 MODEL_KEY="${ATLAS_CLI_MODEL_API_KEY:-${ATLAS_ACP_MODEL_API_KEY:-${ATLAS_CLUSTER_MODEL_API_KEY:-}}}"
-# ★ 已切到模型管理平台（ConfigMap atlas-model-platform 在）：Pod 拿 LiteLLM 地址和智能体的客户端 Key，
-#   不再放供应商 Key（agent-platform/doc/design/model-design.html、deploy/server/model-cutover.sh）
+# ★ 已切到模型平台（ConfigMap atlas-model-platform 在）：Pod 拿模型网关地址和智能体的客户端 Key，
+#   不再放供应商 Key（agent-platform/doc/design/model-gateway-design.html）
 if kubectl -n atlas-system get configmap atlas-model-platform >/dev/null 2>&1; then
   MODEL_KEY=""
   echo "· 已经经模型管理平台：会话 Pod 里不放供应商 Key"

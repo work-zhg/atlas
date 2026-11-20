@@ -1,0 +1,44 @@
+# 运营中心前端（opscenter/web，basePath /ops）：和 Atlas 等前端同一个镜像（atlas-frontends，产物在 /app/ops），
+# 自己的 Deployment —— 不在 atlas-frontends 的 Pod 里，也不经它的 nginx（租户网关校验的是用户中心登录，
+# 运营中心有自己的账号）。/ops/api 由 Next 转给运营中心后端（48-opscenter.yaml），地址在镜像构建时定。
+#
+# 对外：服务器上 traefik 按路径 /ops 直接转给它（deploy/server/20-ingress.yaml）；本机
+#   kubectl -n atlas-system port-forward svc/atlas-opscenter-web 3300:3300 → http://localhost:3300/ops
+# ★ deploy/local/frontends.sh 应用本文件，镜像标签和 40-frontends.yaml 一样替换。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-opscenter-web
+  namespace: atlas-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: atlas-opscenter-web}
+  template:
+    metadata:
+      labels: {app: atlas-opscenter-web}
+    spec:
+      enableServiceLinks: false
+      containers:
+        - name: web
+          image: atlas-frontends:dev
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/app/ops/opscenter/web/server.js"]
+          env:
+            - {name: PORT, value: "3300"}
+          ports: [{containerPort: 3300, name: http}]
+          readinessProbe:
+            httpGet: {path: /ops/login, port: 3300}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 20m, memory: 96Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-opscenter-web
+  namespace: atlas-system
+spec:
+  type: ClusterIP
+  selector: {app: atlas-opscenter-web}
+  ports: [{port: 3300, targetPort: 3300}]

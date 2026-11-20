@@ -29,6 +29,9 @@ spec:
           command: ["python", "-m", "atlas_usercenter", "migrate"]
           env: &uc-env
             - {name: ATLAS_UC_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_usercenter"}
+            # 运营接口（/ops/v1）的签名密钥：运营中心（48-opscenter.yaml）调用时核对（apply.sh 建 atlas-ops-keys）
+            - name: ATLAS_UC_OPS_API_KEY
+              valueFrom: {secretKeyRef: {name: atlas-ops-keys, key: usercenter}}
       containers:
         - name: usercenter
           image: atlas-app:dev

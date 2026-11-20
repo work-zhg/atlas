@@ -41,6 +41,9 @@ spec:
             # PG / Redis / MinIO 都留在宿主的 docker compose 里。
             - {name: DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas"}
             - {name: REDIS_URL, value: "redis://__HOST_IP__:6380/0"}
+            # 运营接口（/ops/v1）的签名密钥：运营中心（48-opscenter.yaml）调用时核对（apply.sh 建 atlas-ops-keys）
+            - name: OPS_API_KEY
+              valueFrom: {secretKeyRef: {name: atlas-ops-keys, key: atlas}}
             - {name: OSS_ENDPOINT, value: "http://__HOST_IP__:9000"}
             - {name: OSS_BUCKET, value: atlas-dev}
             - {name: OSS_ADDRESSING_STYLE, value: path}
@@ -112,19 +115,13 @@ spec:
               valueFrom: {secretKeyRef: {name: atlas-browser, key: state_keys, optional: true}}
             - name: BROWSER_VIEW_SECRET
               valueFrom: {secretKeyRef: {name: atlas-browser, key: view_secret, optional: true}}
-            # 模型（agent-platform/doc/design/model-design.html）：ConfigMap atlas-model-platform 有了才经
-            #   模型管理平台（38-modelgateway.yaml）和 LiteLLM（39-litellm.yaml）—— deploy/server/model-cutover.sh
-            #   建它；没有时照旧直连 LITELLM_BASE_URL。
-            #   ★ 经平台时每个智能体一把客户端 Key，调用直连 LiteLLM；会话 Pod 拿到的是 LiteLLM 地址和这把 Key
-            #   ★ gateway_url 有了（deploy/server/gateway-cutover.sh 加）就改连自研模型网关（atlas-llmgateway）
-            #     的通用接口（…:8091/universal），LiteLLM 退成网关后面的一个过渡账号；删掉这个键再滚动重启
-            #     就切回 LiteLLM
+            # 模型（agent-platform/doc/design/model-gateway-design.html）：ConfigMap atlas-model-platform 有
+            #   platform_url 才经模型平台（38-modelgateway.yaml）；没有时照旧直连 LITELLM_BASE_URL（本机开发）。
+            #   ★ 经平台时每个智能体一把客户端 Key，调模型网关（atlas-llmgateway）的通用接口：按 Anthropic
+            #     格式发，线路是哪种格式由网关转换；会话 Pod 里的 CLI 拿到的也是这个地址和这把 Key
             - name: MODEL_PLATFORM_URL
               valueFrom: {configMapKeyRef: {name: atlas-model-platform, key: platform_url, optional: true}}
-            - name: MODEL_LITELLM_URL
-              valueFrom: {configMapKeyRef: {name: atlas-model-platform, key: litellm_url, optional: true}}
-            - name: MODEL_GATEWAY_URL
-              valueFrom: {configMapKeyRef: {name: atlas-model-platform, key: gateway_url, optional: true}}
+            - {name: MODEL_GATEWAY_URL, value: "http://atlas-llmgateway.atlas-system.svc.cluster.local:8091/universal"}
             # ★ 会话文件预览的 frame-ancestors（previews.py）：经前端网关（:8080，见 40-frontends.yaml）
             #   打开的预览页要能 iframe 嵌入预览站点
             #   __PUBLIC_ORIGIN__ = 前端网关的对外地址（apply.sh 替换；本机 http://localhost:8080）

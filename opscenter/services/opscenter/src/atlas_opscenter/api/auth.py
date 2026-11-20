@@ -44,7 +44,12 @@ async def login(
 ) -> dict[str, Any]:
     ip = request.client.host if request.client else None
     token, op = await Accounts(session, settings).login(body.account, body.password, ip)
-    cookie = {"httponly": True, "secure": settings.cookie_secure, "samesite": "lax", "path": "/"}
+    cookie = {
+        "httponly": True,
+        "secure": settings.cookie_secure,
+        "samesite": "lax",
+        "path": settings.cookie_path,
+    }
     response.set_cookie(SESSION_COOKIE, token, **cookie)  # type: ignore[arg-type]
     # CSRF 双提交：前端读这个 Cookie，写请求带同值的请求头
     response.set_cookie(
@@ -52,7 +57,7 @@ async def login(
         secrets.token_urlsafe(16),
         secure=settings.cookie_secure,
         samesite="lax",
-        path="/",
+        path=settings.cookie_path,
     )
     return {
         "id": str(op.operator_uuid),
@@ -68,8 +73,8 @@ async def logout(
     request: Request, response: Response, session: SessionDep, settings: SettingsDep
 ) -> dict[str, bool]:
     await Accounts(session, settings).logout(request.cookies.get(SESSION_COOKIE))
-    response.delete_cookie(SESSION_COOKIE, path="/")
-    response.delete_cookie(CSRF_COOKIE, path="/")
+    response.delete_cookie(SESSION_COOKIE, path=settings.cookie_path)
+    response.delete_cookie(CSRF_COOKIE, path=settings.cookie_path)
     return {"ok": True}
 
 

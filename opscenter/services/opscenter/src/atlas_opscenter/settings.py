@@ -86,6 +86,8 @@ class OpsSettings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:3300", "http://127.0.0.1:3300"]
     #: 生产必须 True（HTTPS）
     cookie_secure: bool = False
+    #: 会话、CSRF Cookie 的 Path。挂在别的系统的域名下（如 /ops）时设成前缀，Cookie 不带给那个系统
+    cookie_path: str = "/"
 
     # ── 登录 ──────────────────────────────────────────────────────────
     session_idle_minutes: int = 30

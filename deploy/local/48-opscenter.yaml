@@ -1,0 +1,73 @@
+# 运营中心后端（c4-model/opscenter/）：自己的运营账号（不在用户中心任何租户里），只经各系统的运营接口
+# （/ops/v1，HMAC 签名）管租户、应用目录、容量、系统设置。前端是 49-opscenter-web.yaml。
+#
+# ★ 库是宿主 Postgres 上的独立 database atlas_opscenter（服务器部署由 deploy/server/deploy.sh 建）。
+# ★ 系统登记（地址、能力）写在这里的 ATLAS_OPS_SYSTEMS；每个系统一把运营密钥在 Secret atlas-ops-keys
+#   （apply.sh 建）：各系统自己的 ops_api_key 取对应的那一项，运营中心取全部（system_keys）。
+# ★ 首个运营管理员：kubectl -n atlas-system exec deploy/atlas-opscenter -- python -m atlas_opscenter
+#   bootstrap --account ops --name 运营管理员（临时密码只输出这一次，首次登录须修改）
+# ★ ClusterIP：只由运营中心前端（Next 把 /ops/api 转过来）调；不经租户网关（atlas-frontends 的 nginx）。
+# ★ 只能 1 个副本：推进租户操作、到期检查是实例任务。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atlas-opscenter
+  namespace: atlas-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: atlas-opscenter}
+  template:
+    metadata:
+      labels: {app: atlas-opscenter}
+    spec:
+      # ★ 不碰 K8s：默认 SA。Service 名 atlas-opscenter 会注入 ATLAS_OPSCENTER_* 变量，不撞 ATLAS_OPS_ 前缀，
+      #   关掉也无妨
+      enableServiceLinks: false
+      initContainers:
+        - name: migrate
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_opscenter", "migrate"]
+          env:
+            - {name: ATLAS_OPS_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_opscenter"}
+      containers:
+        - name: opscenter
+          image: atlas-app:dev
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-m", "atlas_opscenter", "serve"]
+          ports: [{containerPort: 8100, name: http}]
+          env:
+            - {name: ATLAS_OPS_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_opscenter"}
+            # 前端与后端同源（Next 转发），不需要 CORS
+            - {name: ATLAS_OPS_CORS_ORIGINS, value: "[]"}
+            # 挂在 {域名}/ops 下：Cookie 只带给 /ops，不带给同域名的租户入口；HTTPS 时加 Secure
+            - {name: ATLAS_OPS_COOKIE_PATH, value: "/ops"}
+            - {name: ATLAS_OPS_COOKIE_SECURE, value: "__PUBLIC_HTTPS__"}
+            # 系统登记（按顺序：挂起、删除时依次调）。TeamFlow 这次不接（只给已有租户开通）
+            - name: ATLAS_OPS_SYSTEMS
+              value: >-
+                [{"code":"usercenter","name":"用户中心","base_url":"http://atlas-usercenter.atlas-system.svc.cluster.local:8030","capabilities":["user_center"]},
+                {"code":"atlas","name":"Atlas","base_url":"http://atlas-server.atlas-system.svc.cluster.local:8000","capabilities":["lifecycle","capacity","settings","jobs","runtime_env"]},
+                {"code":"knowledge","name":"知识库","base_url":"http://atlas-knowledge.atlas-system.svc.cluster.local:8050","capabilities":["lifecycle","capacity","settings","jobs"]},
+                {"code":"skill","name":"技能","base_url":"http://atlas-skill.atlas-system.svc.cluster.local:8020","capabilities":["lifecycle","skill_market"]},
+                {"code":"mcpgateway","name":"MCP 网关","base_url":"http://atlas-mcpgateway.atlas-system.svc.cluster.local:8070","capabilities":["lifecycle","jobs"]},
+                {"code":"modelgateway","name":"模型平台","base_url":"http://atlas-modelgateway.atlas-system.svc.cluster.local:8090","capabilities":["lifecycle","jobs"]},
+                {"code":"memory","name":"记忆服务","base_url":"http://atlas-memory.atlas-system.svc.cluster.local:8060","capabilities":["lifecycle","memory_scopes"]}]
+            - name: ATLAS_OPS_SYSTEM_KEYS
+              valueFrom: {secretKeyRef: {name: atlas-ops-keys, key: system_keys}}
+          readinessProbe:
+            httpGet: {path: /health, port: 8100}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atlas-opscenter
+  namespace: atlas-system
+spec:
+  type: ClusterIP
+  selector: {app: atlas-opscenter}
+  ports: [{port: 8100, targetPort: 8100}]

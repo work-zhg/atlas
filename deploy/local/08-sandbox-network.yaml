@@ -48,11 +48,7 @@ spec:
       ports:
         - {protocol: UDP, port: 53}
         - {protocol: TCP, port: 53}
-    # CLI 直接调的平台服务（凭 Key / 令牌）：模型（LiteLLM、自研模型网关）、MCP 网关、知识库 MCP
-    - to:
-        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: atlas-system}}
-          podSelector: {matchLabels: {app: atlas-litellm}}
-      ports: [{protocol: TCP, port: 4000}]
+    # CLI 直接调的平台服务（凭 Key / 令牌）：模型网关、MCP 网关、知识库 MCP
     - to:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: atlas-system}}
           podSelector: {matchLabels: {app: atlas-llmgateway}}

@@ -112,12 +112,12 @@ class KnowledgeSettings(BaseSettings):
     #: 查询向量缓存秒数（同 Dify）
     query_embedding_ttl_s: int = 600
 
-    # ── 模型管理平台（agent-platform/doc/design/model-design.html 第 9 章）───────
+    # ── 模型平台（agent-platform/doc/design/model-gateway-design.html）───────
     #: 配了就经平台：各用途用平台上事先建好的服务级客户端 Key（客户端类型:编码），
-    #: 带着它直连 LiteLLM。不持有供应商 Key。空 = 照旧按下面的 llm_* / embedding_* / rerank_* 直连
+    #: 带着它调模型网关。不持有供应商 Key。空 = 照旧按下面的 llm_* / embedding_* / rerank_* 直连
     model_platform_url: str | None = None
-    #: LiteLLM 地址（经平台时模型调用连它）
-    model_litellm_url: str | None = None
+    #: 模型网关地址（经平台时模型调用连它的 OpenAI 格式入口：{地址}/v1/chat/completions 等）
+    model_gateway_url: str | None = None
     #: 入库增强、查询理解用的客户端 Key（如 Service:knowledge-chat）与模型；
     #: 查询理解的模型空 = 同入库增强
     chat_client: str | None = None
@@ -126,7 +126,7 @@ class KnowledgeSettings(BaseSettings):
     #: 远程嵌入、重排用的客户端 Key：建库时可选的模型 = 这把 Key 的可用模型
     embedding_client: str | None = None
     rerank_client: str | None = None
-    #: 客户端 Key 的缓存时间（秒）：Key 被重置后最多滞后这么久（LiteLLM 回 401 时立即重取）
+    #: 客户端 Key 的缓存时间（秒）：Key 被重置后最多滞后这么久（网关回 401 时立即重取）
     model_key_ttl_s: float = 60.0
 
     # ── LLM（上下文补全、表格摘要、查询理解；doc/knowledge-enterprise-design.html）──

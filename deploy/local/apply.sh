@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 把用户中心、server、技能应用、knowledge、memory、MCP 网关、模型网关、设备网关与 TeamFlow 后端部署到本机 K8s（Docker Desktop）。
+# 把用户中心、server、技能应用、knowledge、memory、MCP 网关、模型网关、设备网关、TeamFlow 后端与运营中心后端部署到本机 K8s（Docker Desktop）。
 #
 # 前置：make up（宿主的 PG / Redis / MinIO）、镜像已构建：
 #   docker build -f docker/bridge/Dockerfile -t atlas-cli-bridge:0.4.0 .   # CLI 会话的 CLI 镜像
@@ -60,29 +60,37 @@ kubectl -n atlas-system create secret generic atlas-knowledge-mcp \
 # 旧版 MCP 网关的凭据：网关直连上游、上游凭据存在网关库里之后不再需要
 kubectl -n atlas-system delete secret atlas-mcpgateway-creds --ignore-not-found
 
-# LiteLLM（39-litellm.yaml）：master key（管理接口，只给模型管理平台）与 salt key（加密库里的供应商凭据）。
-# .env 里有就用；没有就沿用集群里已有的；都没有才新生成。
-# ★ salt key 设了就不能再换：换了 LiteLLM 库里已存的供应商凭据就解不开了
 secret_value() { kubectl -n atlas-system get secret "$1" -o jsonpath="{.data.$2}" 2>/dev/null | base64 --decode || true; }
-LITELLM_MASTER="${LITELLM_MASTER_KEY:-$(secret_value atlas-litellm-creds master_key)}"
-[ -n "$LITELLM_MASTER" ] || LITELLM_MASTER="sk-$(openssl rand -hex 24)"
-LITELLM_SALT="${LITELLM_SALT_KEY:-$(secret_value atlas-litellm-creds salt_key)}"
-[ -n "$LITELLM_SALT" ] || LITELLM_SALT="sk-$(openssl rand -hex 24)"
-kubectl -n atlas-system create secret generic atlas-litellm-creds \
-  --from-literal=master_key="${LITELLM_MASTER}" \
-  --from-literal=salt_key="${LITELLM_SALT}" \
-  --dry-run=client -o yaml | kubectl apply -f -
 # 上一版自研模型网关的凭据（已不用；现在的是下面的 atlas-modelgw-creds）
 kubectl -n atlas-system delete secret atlas-modelgateway-creds --ignore-not-found
+# LiteLLM 已退役：模型调用全部经自研模型网关（38-modelgateway.yaml）直连供应商。
+# ★ 删之前先在模型管理端把经 LiteLLM 的线路换成直连账号，否则这些模型就没有线路了。
+#   库 atlas_litellm 不删（留着查旧记录；确认不要了再手动 DROP）
+kubectl -n atlas-system delete deployment/atlas-litellm service/atlas-litellm secret/atlas-litellm-creds \
+  --ignore-not-found
+
+# 运营接口（/ops/v1）的签名密钥：每个系统一把，各系统的 ops_api_key 取自己那项，运营中心（48-opscenter.yaml）
+# 取全部（system_keys，JSON）。沿用集群里已有的，没有才新生成；不放 .env。
+# ★ 换某个系统的密钥：删掉 Secret 里那一项再跑本脚本，然后滚动重启那个系统和运营中心
+OPS_ARGS=()
+OPS_JSON=""
+for sys_code in usercenter atlas knowledge skill mcpgateway modelgateway memory; do
+  key="$(secret_value atlas-ops-keys "$sys_code")"
+  [ -n "$key" ] || key="$(openssl rand -hex 32)"
+  OPS_ARGS+=(--from-literal="${sys_code}=${key}")
+  OPS_JSON="${OPS_JSON:+${OPS_JSON},}\"${sys_code}\":\"${key}\""
+done
+kubectl -n atlas-system create secret generic atlas-ops-keys "${OPS_ARGS[@]}" \
+  --from-literal=system_keys="{${OPS_JSON}}" \
+  --dry-run=client -o yaml | kubectl apply -f -
 
 # 模型管理平台 + 模型网关（38-modelgateway.yaml）：账号密钥的主密钥（Fernet，逗号分隔、第一把加密）、
-# 运营接口密钥、海外供应商的出网代理。.env 里有就用；没有就沿用集群里已有的；主密钥都没有才新生成。
+# 海外供应商的出网代理。.env 里有就用；没有就沿用集群里已有的；主密钥都没有才新生成。
 # ★ 主密钥设了就不能丢：丢了库里存的账号密钥就解不开。轮换是在前面加一把新的、旧的留着
 MODELGW_KEYS="${ATLAS_MODELGW_SECRET_KEYS:-$(secret_value atlas-modelgw-creds secret_keys)}"
 [ -n "$MODELGW_KEYS" ] || MODELGW_KEYS="$(openssl rand -base64 32 | tr '+/' '-_')"
 kubectl -n atlas-system create secret generic atlas-modelgw-creds \
   --from-literal=secret_keys="${MODELGW_KEYS}" \
-  --from-literal=ops_api_key="${ATLAS_MODELGW_OPS_API_KEY:-$(secret_value atlas-modelgw-creds ops_api_key)}" \
   --from-literal=egress_proxy="${ATLAS_MODELGW_EGRESS_PROXY:-$(secret_value atlas-modelgw-creds egress_proxy)}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
@@ -145,12 +153,15 @@ OSS_ADDR="${ATLAS_OSS_ADDR:-${HOST_IP}:9000}"
 QDRANT_ADDR="${ATLAS_QDRANT_ADDR:-${HOST_IP}:6333}"
 OTEL_ADDR="${ATLAS_OTEL_ADDR:-${HOST_IP}:4318}"
 PUBLIC_ORIGIN="${ATLAS_PUBLIC_ORIGIN:-http://localhost:8080}"
+# 对外是 HTTPS 时登录 Cookie 加 Secure（运营中心）
+case "$PUBLIC_ORIGIN" in https://*) PUBLIC_HTTPS=true ;; *) PUBLIC_HTTPS=false ;; esac
 APP_IMAGE="${ATLAS_APP_IMAGE:-atlas-app:dev}"
 render() {
   sed -e "s#image: atlas-app:dev\$#image: ${APP_IMAGE}#" -e "s#__HOST_IP__:5433#${PG_ADDR}#g" -e "s#__HOST_IP__:6380#${REDIS_ADDR}#g" \
       -e "s#__HOST_IP__:9000#${OSS_ADDR}#g" -e "s#__HOST_IP__:6333#${QDRANT_ADDR}#g" \
       -e "s#__HOST_IP__:4318#${OTEL_ADDR}#g" \
-      -e "s#__PUBLIC_ORIGIN__#${PUBLIC_ORIGIN}#g" -e "s#__HOST_IP__#${HOST_IP}#g" "$1"
+      -e "s#__PUBLIC_ORIGIN__#${PUBLIC_ORIGIN}#g" -e "s#__PUBLIC_HTTPS__#${PUBLIC_HTTPS}#g" \
+      -e "s#__HOST_IP__#${HOST_IP}#g" "$1"
 }
 
 # 一次性（内网身份传递 §4）：后端 Service 从 LoadBalancer 改为 ClusterIP，只经网关对外。
@@ -167,17 +178,16 @@ kubectl -n atlas-system rollout status deploy/atlas-usercenter --timeout=180s
 render deploy/local/25-skill.yaml   | kubectl apply -f -
 render deploy/local/36-memory.yaml  | kubectl apply -f -
 render deploy/local/37-mcpgateway.yaml | kubectl apply -f -
-render deploy/local/39-litellm.yaml | kubectl apply -f -
 render deploy/local/38-modelgateway.yaml | kubectl apply -f -
 render deploy/local/30-server.yaml  | kubectl apply -f -
 render deploy/local/32-devicegw.yaml | kubectl apply -f -
 render deploy/local/35-knowledge.yaml | kubectl apply -f -
 render deploy/local/45-teamflow.yaml | kubectl apply -f -
+render deploy/local/48-opscenter.yaml | kubectl apply -f -
 
 kubectl -n atlas-system rollout status deploy/atlas-skill --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-memory --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-mcpgateway --timeout=180s
-kubectl -n atlas-system rollout status deploy/atlas-litellm --timeout=600s
 kubectl -n atlas-system rollout status deploy/atlas-modelgateway --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-llmgateway --timeout=300s
 kubectl -n atlas-system rollout status deploy/atlas-server --timeout=180s
@@ -185,6 +195,7 @@ kubectl -n atlas-system rollout status deploy/atlas-devicegw --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-knowledge --timeout=300s
 kubectl -n atlas-system rollout status deploy/atlas-knowledge-worker --timeout=300s
 kubectl -n atlas-system rollout status deploy/atlas-teamflow --timeout=180s
+kubectl -n atlas-system rollout status deploy/atlas-opscenter --timeout=180s
 # 配置服务改为技能应用（atlas-skill）之后的遗留：旧 Deployment / Service 与改名前的 Secret。
 # ★ 放在最后：知识库的新 Pod 已经改用 atlas-oss-creds，删旧 Secret 不会挡住它们启动。
 #   服务器上第一次切换走 deploy/server/skill-cutover.sh（先停旧服务、改库名、搬持久指令）

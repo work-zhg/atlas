@@ -27,6 +27,7 @@
 !agent-platform/services/agent/
 !usercenter/services/usercenter/
 !teamflow/services/teamflow/
+!opscenter/services/opscenter/
 # 由 uv.lock 导出的第三方依赖（构建前由 docker/app/requirements.sh 生成）
 !docker/app/requirements.txt
 **/__pycache__/

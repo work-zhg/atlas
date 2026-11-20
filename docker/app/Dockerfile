@@ -67,6 +67,8 @@ COPY agent-platform/services/agent/ server/
 # 用户中心与 AI TeamFlow 后端：与 Atlas 共用依赖树（fastapi / sqlalchemy / httpx），同一个镜像、各自的 Deployment
 COPY usercenter/services/usercenter/ usercenter/
 COPY teamflow/services/teamflow/ teamflow/
+# 运营中心后端：同一个镜像、自己的 Deployment（deploy/local/48-opscenter.yaml）
+COPY opscenter/services/opscenter/ opscenter/
 
 # ★ 本仓的包一次装：它们彼此按名字依赖（server → engine/acp/redislock/appconfig），
 #   分开装的话 pip 会去 PyPI 找 atlas-engine，而那里没有这个包。
@@ -81,14 +83,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
                 ./skill ./knowledge ./memory ./mcpgateway \
                 ./modelgateway ./devicelink ./devicegw \
                 ./server \
-                ./usercenter ./teamflow \
+                ./usercenter ./teamflow ./opscenter \
     && pip check
 
 
 # alembic.ini 与 migrations/ 在包外（server/ 目录下），迁移要从这里跑。
 WORKDIR /app/server
 
-EXPOSE 8000 8020 8030 8040 8050 8060 8070 8090
+EXPOSE 8000 8020 8030 8040 8050 8060 8070 8090 8100
 
 # server 的入口。skill 由 Deployment 覆盖成 python -m atlas_skill serve（迁移：python -m atlas_skill migrate，
 # 迁移脚本在包内，不依赖工作目录）。

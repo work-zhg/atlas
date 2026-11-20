@@ -68,7 +68,6 @@ THIRD=(
   docker.io/library/redis:7-alpine
   docker.io/qdrant/qdrant:v1.19.1
   docker.io/otel/opentelemetry-collector:0.160.0
-  ghcr.io/berriai/litellm:main-stable
   registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.16.0
   sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/server:release-1.1.1
   sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/controller:release-1.1.1

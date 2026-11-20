@@ -124,6 +124,12 @@ data:
 
       # ── Atlas（会话事件是 SSE：关闭缓冲）
       # 服务间接口不对外（内网免令牌，挡在这里）
+      # 运营接口（/ops/v1）只给运营中心在集群内调：网关一律不转发（多租户设计；还要验签名，这里是第一道）
+      location ^~ /atlas-api/ops/ { return 404; }
+      location ^~ /skill-api/ops/ { return 404; }
+      location ^~ /atlas-knowledge-api/ops/ { return 404; }
+      location ^~ /mcp-gateway-api/ops/ { return 404; }
+      location ^~ /model-gateway-api/ops/ { return 404; }
       location ^~ /atlas-api/internal/ { return 404; }
       location ^~ /atlas-api/ {
         include /etc/nginx/conf.d/identity.inc;
@@ -190,7 +196,7 @@ data:
         proxy_pass http://atlas-mcpgateway.atlas-system.svc.cluster.local:8070/;
       }
       # 模型管理平台的管理端接口（agent-platform/doc/design/model-design.html）。/internal 给 Atlas、
-      # 知识库取客户端 Key，只走集群内地址；/v1 已经没有了（模型调用直连 LiteLLM），保留 404 防误配
+      # 知识库取客户端 Key，只走集群内地址；/v1 已经没有了（模型调用走模型网关），保留 404 防误配
       # 设备网关（本机 CLI）。★ 不经 auth_request：凭据是设备令牌、会话令牌，网关自己认。
       #   /connect 是长连接 WebSocket（双方每 20 秒心跳，server 级 proxy_read_timeout 1h 足够）；
       #   能力代理转发模型的流式回复，不缓冲。请求体可能是大的模型上下文

@@ -180,16 +180,16 @@ def build_runtime(settings: KnowledgeSettings, *, dispatcher: Dispatcher | None 
 def _platform_runtime(
     settings: KnowledgeSettings, qdrant: Any, dispatcher: Dispatcher | None
 ) -> Runtime:
-    """经模型管理平台（agent-platform/doc/design/model-design.html 第 9 章）：各用途带着平台上
-    事先建好的服务级客户端 Key 直连 LiteLLM。不持有供应商 Key。
+    """经模型平台（agent-platform/doc/design/model-gateway-design.html）：各用途带着平台上
+    事先建好的服务级客户端 Key 调模型网关的 OpenAI 格式入口。不持有供应商 Key。
 
     哪项没配客户端 Key，哪项就不可用（LLM 增强降级为不做；远程嵌入、重排不出现在建库选项里）。
     """
     import redis.asyncio as aioredis
 
-    if not settings.model_litellm_url:
-        raise ValueError("经模型管理平台时要配 LiteLLM 地址（ATLAS_KB_MODEL_LITELLM_URL）")
-    litellm = settings.model_litellm_url.rstrip("/")
+    if not settings.model_gateway_url:
+        raise ValueError("经模型平台时要配模型网关地址（ATLAS_KB_MODEL_GATEWAY_URL）")
+    gateway = settings.model_gateway_url.rstrip("/")
     keys = ServiceKeys(
         str(settings.model_platform_url),
         app_code=settings.uc_app_code,
@@ -201,7 +201,7 @@ def _platform_runtime(
         if client is None:
             return {}
         return {
-            "base_url": f"{litellm}/v1",
+            "base_url": f"{gateway}/v1",
             "api_key": None,
             "timeout_s": settings.remote_model_timeout_s,
             "auth": PlatformKeyAuth(keys, client),
@@ -211,7 +211,7 @@ def _platform_runtime(
         client = parse_client(settings.chat_client)
         if client is None or not model:
             return None
-        return PlatformChat(litellm, keys, client, model, timeout_s=settings.llm_timeout_s)
+        return PlatformChat(gateway, keys, client, model, timeout_s=settings.llm_timeout_s)
 
     llm = chat(settings.enrich_model)
     return Runtime(

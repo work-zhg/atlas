@@ -1,4 +1,4 @@
-# 只把三个前端的源码送进构建上下文
+# 只把四个前端的源码送进构建上下文
 *
 !package.json
 !pnpm-workspace.yaml
@@ -7,7 +7,7 @@
 !agent-platform/web/
 !usercenter/web/
 !teamflow/web/
-!opscenter/web/package.json
+!opscenter/web/
 **/node_modules/
 **/.next/
 **/*.tsbuildinfo

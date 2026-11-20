@@ -118,12 +118,13 @@ PRESETS: tuple[Preset, ...] = (
             tools=True, thinking=ThinkingSupport.OPTIONAL, context_window=64_000, max_output=8_192
         ),
     ),
-    # 实测：MiniMax 不接受「关闭思考」，传了直接 400 —— 思考参数一律不传
+    # 实测：MiniMax 不接受「关闭思考」，传了直接 400 —— 思考参数一律不传。
+    # 看图：MiniMax-M3、MiniMax-M3.1-Flash 经 Anthropic 地址都认得出图片（2026-11-20 实测）
     Preset(
         "minimax",
         "MiniMax-*",
         UpstreamRules(history_thinking="keep"),
-        ModelCaps(tools=True, thinking=ThinkingSupport.ALWAYS_ON),
+        ModelCaps(vision=True, tools=True, thinking=ThinkingSupport.ALWAYS_ON),
     ),
     # 通义千问：思考开关是 enable_thinking（方言里改字段名），额度 thinking_budget
     Preset(

@@ -1,5 +1,6 @@
 .PHONY: up down sync lint types arch test migrate serve check smoke regress skill-migrate skill-serve \
-        memory-migrate memory-serve mcpgw-migrate mcpgw-serve modelgw-migrate modelgw-serve memory-scopes \
+        memory-migrate memory-serve mcpgw-migrate mcpgw-serve modelgw-migrate modelgw-serve modelgw-gateway memory-scopes \
+        ops-migrate ops-serve ops-bootstrap ops-web-dev \
         uc-migrate uc-serve uc-bootstrap uc-web-install uc-web-dev uc-dev \
         tf-migrate tf-serve tf-worker tf-web-install tf-web-dev tf-dev \
         web-install web-dev web-build web-check web-gen dev
@@ -30,14 +31,20 @@ memory-scopes:  ; uv run python -m atlas_memory scope add user --key uid --descr
 #   atlas-server 配 MCP_GATEWAY_URL=http://127.0.0.1:8070（Atlas 只经网关调 MCP）
 mcpgw-migrate: ; uv run python -m atlas_mcpgateway migrate
 mcpgw-serve:   ; uv run python -m atlas_mcpgateway serve
-# 模型管理平台（agent-platform/doc/design/model-design.html）。库是同一 PG 上的 atlas_modelgateway
-#   （make up 会建）。模型网关是 LiteLLM（deploy/local/39-litellm.yaml），平台只调它的管理接口：
-#   要配 ATLAS_MODELGW_LITELLM_BASE_URL、ATLAS_MODELGW_LITELLM_MASTER_KEY。
+# 模型平台（agent-platform/doc/design/model-gateway-design.html）。库是同一 PG 上的 atlas_modelgateway
+#   （make up 会建）。管理平台（:8090）登记账号、模型与线路、Key；模型网关（:8091）按 Key 选线路直连供应商。
 #   首次：make modelgw-migrate；应用目录由运营人员在运营中心录入应用目录（见各服务 README「用户中心登记」）；
-#   在模型管理端登记模型、给客户端 Key 分配模型。
-#   atlas-server 配 MODEL_PLATFORM_URL + MODEL_LITELLM_URL 才经平台（不配照旧直连 LITELLM_BASE_URL）
+#   在模型管理端登记账号、模型与线路，给客户端 Key 分配模型。
+#   atlas-server 配 MODEL_PLATFORM_URL + MODEL_GATEWAY_URL=http://127.0.0.1:8091/universal 才经平台
 modelgw-migrate: ; uv run python -m atlas_modelgateway migrate
 modelgw-serve:   ; uv run python -m atlas_modelgateway serve
+modelgw-gateway: ; uv run python -m atlas_modelgateway gateway
+# 运营中心（c4-model/opscenter/）。库是同一 PG 上的 atlas_opscenter（make up 会建）。
+#   首次：make ops-migrate && make ops-bootstrap ACCOUNT=ops NAME=运营管理员；前端 make ops-web-dev（:3300）
+ops-migrate:   ; uv run python -m atlas_opscenter migrate
+ops-serve:     ; uv run python -m atlas_opscenter serve
+ops-bootstrap: ; uv run python -m atlas_opscenter bootstrap --account "$(ACCOUNT)" --name "$(NAME)"
+ops-web-dev:   ; pnpm --filter atlas-opscenter-web dev
 # 用户中心（独立系统，prototype/usercenter/docs/）。库是同一 PG 上的 atlas_usercenter（make up 会建）。
 #   首次：make uc-migrate && make uc-bootstrap ACCOUNT=admin NAME=管理员 EMAIL=admin@example.com COMPANY=星海科技
 uc-migrate:   ; uv run python -m atlas_usercenter migrate

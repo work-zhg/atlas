@@ -25,10 +25,15 @@ RENDERED="$(sed -e "s/__HOST_IP__/${HOST_IP}/g" -e "s#image: atlas-frontends:dev
   deploy/local/40-frontends.yaml)"
 SHA="$(printf '%s' "$RENDERED" | shasum | cut -c1-12)"
 printf '%s' "$RENDERED" | sed "s/__CONFIG_SHA__/${SHA}/" | kubectl apply -f -
+# 运营中心前端：同一个镜像，自己的 Deployment（不经 nginx，见 49-opscenter-web.yaml）
+sed -e "s#image: atlas-frontends:dev\$#image: ${FRONTENDS_IMAGE}#" deploy/local/49-opscenter-web.yaml \
+  | kubectl apply -f -
 # 镜像标签不变（:dev）时 apply 不会触发重建：重新构建过就主动滚动一次
-[ "${1:-}" = "--no-build" ] || kubectl -n atlas-system rollout restart deploy/atlas-frontends
+[ "${1:-}" = "--no-build" ] || kubectl -n atlas-system rollout restart deploy/atlas-frontends deploy/atlas-opscenter-web
 kubectl -n atlas-system rollout status deploy/atlas-frontends --timeout=180s
+kubectl -n atlas-system rollout status deploy/atlas-opscenter-web --timeout=180s
 
 echo "Atlas     → http://localhost:8080/atlas"
 echo "用户中心  → http://localhost:8080/uc"
 echo "TeamFlow  → http://localhost:8080/teamflow"
+echo "运营中心  → kubectl -n atlas-system port-forward svc/atlas-opscenter-web 3300:3300 后开 http://localhost:3300/ops"

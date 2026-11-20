@@ -13,11 +13,12 @@
 #     secret_keys   账号密钥的主密钥（逗号分隔，第一把加密）。管理平台加密、网关解密。
 #                   ★ 设了就不能删：删了库里已存的账号密钥就解不开了；轮换是在前面加一把新的
 #                   （python -m atlas_modelgateway encrypt-secrets 用新的重新加密），旧的留着
-#     ops_api_key   运营接口（/ops/v1）的签名密钥；空 = 运营接口一律 403
+#     egress_proxy  海外供应商的出网代理
+# ★ 运营接口（/ops/v1）的签名密钥在 Secret atlas-ops-keys 的 modelgateway（apply.sh 建，运营中心持有同一把）
 # ★ 迁移 m0004 把已有数据归到原平台租户：ConfigMap atlas-tenancy 的 backfill_uuid（apply.sh 按 .env 的
 #   TENANT_BACKFILL_UUID 建）。表里有数据却没给，迁移失败、Pod 起不来。
 # ★ 管理接口经网关（nginx）登录后访问；/internal（给 Atlas、知识库）只在集群内，nginx 不转发。
-#   ★ /internal 要带 X-Tenant-Id：知识库还没按租户改造，取不到服务级客户端 Key（切换前要先改知识库）。
+#   ★ /internal 要带 X-Tenant-Id（应用替自己的租户取 Key）。
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -57,12 +58,12 @@ spec:
             - name: ATLAS_MODELGW_SECRET_KEYS
               valueFrom: {secretKeyRef: {name: atlas-modelgw-creds, key: secret_keys}}
             - name: ATLAS_MODELGW_OPS_API_KEY
-              valueFrom: {secretKeyRef: {name: atlas-modelgw-creds, key: ops_api_key, optional: true}}
+              valueFrom: {secretKeyRef: {name: atlas-ops-keys, key: modelgateway}}
             # 海外供应商的出网代理（账号选「经出网代理」时用）；没配就只能连国内直连的供应商
             - name: ATLAS_MODELGW_EGRESS_PROXY
               valueFrom: {secretKeyRef: {name: atlas-modelgw-creds, key: egress_proxy, optional: true}}
-            # 允许连的内网地址（JSON 数组）：默认内网一律不连（防 SSRF）；过渡账号指向集群内的 LiteLLM，
-            #   gateway-cutover.sh 只放行它的 ClusterIP（/32），不放整个 Service 网段
+            # 允许连的内网地址（JSON 数组）：默认内网一律不连（防 SSRF）。账号要连内网的自部署模型（vLLM 等）
+            #   时才建 ConfigMap atlas-modelgw-config，只放行那几个地址
             - name: ATLAS_MODELGW_UPSTREAM_ALLOW_CIDRS
               valueFrom: {configMapKeyRef: {name: atlas-modelgw-config, key: upstream_allow_cidrs, optional: true}}
           readinessProbe:
@@ -116,8 +117,8 @@ spec:
               valueFrom: {secretKeyRef: {name: atlas-modelgw-creds, key: secret_keys}}
             - name: ATLAS_MODELGW_EGRESS_PROXY
               valueFrom: {secretKeyRef: {name: atlas-modelgw-creds, key: egress_proxy, optional: true}}
-            # 允许连的内网地址（JSON 数组）：默认内网一律不连（防 SSRF）；过渡账号指向集群内的 LiteLLM，
-            #   gateway-cutover.sh 只放行它的 ClusterIP（/32），不放整个 Service 网段
+            # 允许连的内网地址（JSON 数组）：默认内网一律不连（防 SSRF）。账号要连内网的自部署模型（vLLM 等）
+            #   时才建 ConfigMap atlas-modelgw-config，只放行那几个地址
             - name: ATLAS_MODELGW_UPSTREAM_ALLOW_CIDRS
               valueFrom: {configMapKeyRef: {name: atlas-modelgw-config, key: upstream_allow_cidrs, optional: true}}
           lifecycle:

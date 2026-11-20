@@ -164,14 +164,15 @@ for sts in postgres redis minio qdrant; do
   kubectl -n atlas-infra rollout status "statefulset/$sts" --timeout=600s
 done
 kubectl -n atlas-infra wait --for=condition=complete job/minio-init --timeout=300s
-# 首次部署之后才加的库：上面的 init SQL 只在数据目录为空时执行，已部署的服务器在这里补建（幂等）
-for db in atlas_memory atlas_mcpgateway atlas_modelgateway atlas_litellm; do
+fi
+# 首次部署之后才加的库：10-infra 的 init SQL 只在数据目录为空时执行，已部署的服务器在这里补建
+# （幂等；app 模式也跑 —— 新服务的库要在它的 Deployment 迁移之前就有）
+for db in atlas_memory atlas_mcpgateway atlas_modelgateway atlas_opscenter; do
   if ! kubectl -n atlas-infra exec statefulset/postgres -- psql -U atlas -d atlas -tAc \
        "SELECT 1 FROM pg_database WHERE datname='${db}'" | grep -q 1; then
     kubectl -n atlas-infra exec statefulset/postgres -- psql -U atlas -d atlas -c "CREATE DATABASE ${db}"
   fi
 done
-fi
 [ "$MODE" != infra ] || exit 0
 
 # ── 2. OpenSandbox（CSI 驱动 + 存储 + 控制器 + 两个 lifecycle server）─────────
