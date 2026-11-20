@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 
 from atlas_engine.contracts import EngineError
 from atlas_jobs import JobScheduler
+from atlas_tenancy import TenantScope
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -16,12 +17,12 @@ from starlette.requests import Request
 
 from .api.internal import router as internal_router
 from .api.v1 import router as v1_router
-from .api.v1.configs import config_router
-from .api.v1.jobs import jobs_router
 from .api.v1.previews import install_log_mask
+from .api.v1.tenant_settings import tenant_config_router
 from .auth.service import listen_invalidations
 from .auth.uc import UCClient
 from .browser.component import BrowserComponent
+from .capacity import CapacityService
 from .cli.runtime import CliRuntime
 from .config import get_settings
 from .db.session import get_sessionmaker
@@ -32,6 +33,7 @@ from .executor.compose import build_executor, register_jobs
 from .instance import instance_id
 from .maintainer import Maintainer
 from .memory import Backfiller, make_memory_runtime
+from .ops import mount_ops
 from .outbound import IdentityScopeMiddleware
 from .redisx import make_redis
 from .runtime_config import RuntimeConfig
@@ -67,6 +69,18 @@ def _on_sigterm(start_drain: Callable[[], None]) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """★ 后台任务从「没有租户」开始：它们处理哪个租户的数据，就自己进入哪个租户（atlas_tenancy）。
+
+    测试里 lifespan 可能跑在带着测试租户的任务里，不清掉的话后台任务会继承它，漏设租户的
+    后台路径就测不出来。
+    """
+    with TenantScope.isolated():
+        async with _lifespan(app):
+            yield
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     """执行器、维护者与各后台任务的生命周期（横向扩展设计 §3 · §6 · §7）。
 
     ★ 启动时不再做「本进程专属」的回收：在途 run 由各实例的兜底任务按租约接管，
@@ -110,6 +124,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # CLI 智能体的执行：经会话 Pod（或使用者电脑）上的 bridge（上游协议 atlas.host.v1）
         cli_runtime=CliRuntime(get_sessionmaker(), settings, pods, devices=devices),
         memory=memory,
+        gate=app.state.tenant_gate,
     )
 
     executor = app.state.executor
@@ -145,7 +160,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             settings,
             get_sessionmaker(),
             backfiller=(
-                Backfiller(memory, executor.model_builder, lambda: make_redis(settings))
+                Backfiller(
+                    memory,
+                    executor.model_builder,
+                    lambda: make_redis(settings),
+                    gate=app.state.tenant_gate,
+                )
                 if memory is not None
                 else None
             ),
@@ -204,12 +224,16 @@ def create_app() -> FastAPI:
     app.include_router(v1_router)
     # 集群内接口（设备网关核对设备令牌）。nginx 挡掉 /atlas-api/internal/
     app.include_router(internal_router)
-    # 运行期配置（每人沙箱配额、镜像白名单）的管理接口；lifespan 里登记 key
+    # 运行期配置（应用配置库）：租户设置的管理接口给租户管理员（settings:manage），系统参数的
+    # 只给运营中心（运营接口）；lifespan 里登记 key
     app.state.runtime_config = RuntimeConfig(settings, get_sessionmaker())
-    app.include_router(config_router(app.state.runtime_config.config))
-    # 定时任务（兜底、续租）的只读管理接口；lifespan 里注册任务并启动
+    app.state.capacity = CapacityService(app.state.runtime_config)
+    app.include_router(tenant_config_router(app.state.runtime_config.config))
+    # 定时任务（兜底、续租）：lifespan 里注册任务并启动；只读的管理接口在运营接口里
     app.state.jobs = JobScheduler()
-    app.include_router(jobs_router(app.state.jobs))
+    # 运营接口（/ops/v1）：租户的停用、恢复、删除，份额，沙箱模板，系统参数，系统任务。
+    # ★ 也在这里建 TenantGate：鉴权、执行器、设备核对都靠它挡住已停用的租户
+    mount_ops(app, settings)
 
     # ★ SSE 并发闸门。会话流的寿命是「用户开着这个会话多久」，而不是「一轮
     #   多久」—— 每条占一个 Redis 连接，不设限的表现是**所有** HTTP 请求一起

@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from atlas_tenancy import TenantScope
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -60,7 +61,8 @@ PURPOSES: dict[str, str] = {
 
 #: 配置的进程内缓存时间（改了配置最多滞后这么久；本进程里改的立即生效）
 _TTL_S = 60.0
-_cache: dict[str, tuple[float, ServiceModel | None]] = {}
+#: (租户, 用途) → 配置。★ 键里必须有租户：每个租户各配各的（service_model 是租户表）
+_cache: dict[tuple[UUID, str], tuple[float, ServiceModel | None]] = {}
 
 
 def reset_service_model_cache() -> None:
@@ -77,12 +79,13 @@ class ResolvedModel:
 
 
 async def _binding(purpose: str) -> ServiceModel | None:
-    row = _cache.get(purpose)
+    slot = (TenantScope.require(), purpose)
+    row = _cache.get(slot)
     if row is not None and time.monotonic() - row[0] < _TTL_S:
         return row[1]
     async with get_sessionmaker()() as session:
         found = await fetch_one(session, ServiceModel, ServiceModel.purpose == purpose)
-    _cache[purpose] = (time.monotonic(), found)
+    _cache[slot] = (time.monotonic(), found)
     return found
 
 
@@ -208,7 +211,7 @@ class ServiceModelService:
             existing.client_type, existing.client_code = client_type, client_code
             existing.model, existing.updated_by_uuid = model, actor
         await self._s.flush()
-        _cache.pop(purpose, None)
+        _cache.pop((TenantScope.require(), purpose), None)
         return await self._view(purpose, PURPOSES[purpose], row)
 
     async def clear(self, purpose: str) -> None:
@@ -216,4 +219,4 @@ class ServiceModelService:
         if row is not None:
             await self._s.delete(row)
             await self._s.flush()
-        _cache.pop(purpose, None)
+        _cache.pop((TenantScope.require(), purpose), None)

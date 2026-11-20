@@ -6,6 +6,11 @@ from atlas_memory.db.session import get_sessionmaker
 
 _RANK = {"NONE": 0, "READ": 1, "WRITE": 2, "OWNER": 3}
 
+#: 没指定租户的请求都在这个租户里（conftest 的客户端默认带它）
+TEST_TENANT = "00000000-0000-0000-0000-00000000000a"
+#: 用户 → 所属租户：登记在这里的人不在测试租户里（用户中心替身在别的租户里找不到他）
+USERS_ELSEWHERE: dict[str, str] = {}
+
 
 class FakePermissions:
     """用户中心数据权限的内存替身：(数据编码, 数据标识) → {用户: 级别}。"""
@@ -71,3 +76,18 @@ async def add_scope(
             actor="test",
         )
         await session.commit()
+
+
+def ops_request(method: str, path: str, body: object = None) -> dict[str, object]:
+    """运营中心的签名请求：→ httpx 的 request 参数（content、headers）。"""
+    import json
+    from uuid import uuid4
+
+    from atlas_opsapi import OperatorStamp, sign
+
+    raw = b"" if body is None else json.dumps(body).encode()
+    headers = sign(b"test-ops-key", method, path, raw)
+    headers.update(OperatorStamp(operator_name="值班", idempotency_key=uuid4()).to_headers())
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    return {"content": raw, "headers": headers}

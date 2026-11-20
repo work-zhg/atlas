@@ -20,6 +20,7 @@ from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from typing import Any
 from urllib.parse import urlsplit
+from uuid import UUID
 
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,11 +39,12 @@ from .definitions import (
 from .errors import Conflict, Invalid, NotFound, TooSoon
 from .perms import DATA_SERVER, DATA_TOOL, Permissions, tool_data_id
 from .settings import GatewaySettings
-from .upstreams import DiscoveryFailed
+from .upstreams import DiscoveryFailed, UpstreamUnavailable
 from .upstreams import grpc as grpc_up
 from .upstreams import rest as rest_up
 from .upstreams.credentials import Credential
 from .upstreams.credentials import validate as validate_credential
+from .upstreams.guard import upstream_targets
 from .upstreams.hub import Discovered, Upstreams
 from .upstreams.mcp import TRANSPORTS
 
@@ -178,6 +180,7 @@ class Registry:
                 descriptor = previous.descriptor
             else:
                 raise Invalid("请上传描述文件（FileDescriptorSet）")
+        await self._check_addresses(kind, conn, cred)
         try:
             return await self.upstreams.discover(
                 kind, conn, Credential.of(cred, secret), service=service, descriptor=descriptor
@@ -335,11 +338,21 @@ class Registry:
         )
         return row
 
+    async def _check_addresses(
+        self, kind: str, conn: Mapping[str, Any], cred: Mapping[str, Any]
+    ) -> None:
+        """登记、改连接、改凭据时：租户填的地址不能指向平台内部（upstreams/guard.py）。"""
+        try:
+            await self.upstreams.guard.check_all(upstream_targets(kind, conn, cred))
+        except UpstreamUnavailable as exc:  # 含 UpstreamBlocked
+            raise Invalid(str(exc), code="UPSTREAM_ADDRESS") from exc
+
     async def update_connection(
         self, name: str, connection: Mapping[str, Any], *, pass_identity: bool, actor: str
     ) -> McpService:
         row = await self.get(name)
         conn = validate_connection(row.kind, connection)
+        await self._check_addresses(row.kind, conn, row.credential)
         if row.kind == "grpc":
             conn["services"] = row.connection.get("services") or []
         row.connection, row.pass_identity, row.updated_by = conn, pass_identity, actor
@@ -355,6 +368,7 @@ class Registry:
     ) -> McpService:
         row = await self.get(name)
         cred = validate_credential(row.kind, credential, secret, previous=row.credential)
+        await self._check_addresses(row.kind, row.connection, cred)
         if secret:
             row.credential_secret = secret
         elif cred["type"] == "none":
@@ -463,8 +477,11 @@ class Registry:
         await self.session.flush()
         return changed
 
-    async def claim_due(self) -> list[str]:
-        """维护任务：领到该刷新的 MCP 代理（多实例只让一个去拉：领取 = 写租约时间）。"""
+    async def claim_due(self) -> list[tuple[str, UUID]]:
+        """维护任务：领到该刷新的 MCP 代理（多实例只让一个去拉：领取 = 写租约时间）。
+
+        → [(服务名, 租户)]。跨租户：调用方在系统范围里调，刷新时逐个进入服务所属的租户。
+        """
         now = utcnow()
         due = now - timedelta(seconds=self.settings.refresh_interval_s)
         lease = now - timedelta(seconds=max(self.settings.discovery_timeout_s * 4, 60))
@@ -477,9 +494,9 @@ class Registry:
                 or_(McpService.refresh_claimed_at.is_(None), McpService.refresh_claimed_at < lease),
             )
             .values(refresh_claimed_at=now)
-            .returning(McpService.name)
+            .returning(McpService.name, McpService.tenant_uuid)
         )
-        return [r[0] for r in result.all()]
+        return [(r[0], r[1]) for r in result.all()]
 
     # ------------------------------------------------------------------ REST / gRPC：重新导入
 

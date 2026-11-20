@@ -34,6 +34,7 @@ from atlas_engine.contracts.spec import ModelSpec
 from atlas_engine.runtime.models import complete
 from atlas_engine.runtime.translator import extract_text
 from atlas_redislock import LockBusy, RedisLock
+from atlas_tenancy import SystemReason, TenantScope
 from sqlalchemy import or_, select
 
 from ..db.models import MemoryBackfill, Message, Run, Thread, ThreadMemory
@@ -44,6 +45,8 @@ from .prompts import EXTRACT_PROMPT, SOURCE_LABELS, SPLIT_PROMPT
 from .runtime import SOURCE_AGENT, SOURCE_BACKFILL, SOURCE_USER, MemoryRuntime
 
 if TYPE_CHECKING:
+    from atlas_opsapi import TenantGate
+
     from ..executor.run_models import ModelBuilder
 
 logger = logging.getLogger(__name__)
@@ -74,23 +77,31 @@ class BackfillResult:
 
 class Backfiller:
     def __init__(
-        self, runtime: MemoryRuntime, model_builder: ModelBuilder, redis_factory: Any
+        self,
+        runtime: MemoryRuntime,
+        model_builder: ModelBuilder,
+        redis_factory: Any,
+        *,
+        gate: TenantGate | None = None,
     ) -> None:
         self.runtime = runtime
         self.settings = runtime.settings
         self._build_model = model_builder
         self._redis_factory = redis_factory
+        #: 租户停用了不替它补记（运营接口）：会话留着，恢复后照常
+        self._gate = gate
 
     # ── 扫描
 
-    async def due_threads(self) -> list[UUID]:
+    async def due_threads(self) -> list[tuple[UUID, UUID]]:
+        """到期的会话和它们的租户（跨租户：在系统范围里查，处理时逐个进入租户）。"""
         from ..repositories.run import _UNFINISHED
 
         s = self.settings
         now = datetime.now(UTC)
         busy = select(Run.thread_uuid).where(Run.status.in_(_UNFINISHED))
         stmt = (
-            select(Thread.thread_uuid)
+            select(Thread.thread_uuid, Thread.tenant_uuid)
             .outerjoin(ThreadMemory, ThreadMemory.thread_uuid == Thread.thread_uuid)
             .where(
                 Thread.memory == "on",
@@ -111,8 +122,9 @@ class Backfiller:
             .order_by(Thread.updated_at)
             .limit(s.memory_backfill_batch)
         )
-        async with self.runtime.sessionmaker() as session:
-            return list((await session.execute(stmt)).scalars())
+        with TenantScope.system(SystemReason.SWEEP):
+            async with self.runtime.sessionmaker() as session:
+                return [(t, tenant) for t, tenant in (await session.execute(stmt)).all()]
 
     async def run_due(self) -> int:
         """处理一批到期的会话，返回处理了几个。维护者调用；单个会话失败不影响其它。"""
@@ -122,10 +134,13 @@ class Backfiller:
         redis = self._redis_factory()
         done = 0
         try:
-            for thread_id in threads:
+            for thread_id, tenant in threads:
+                if self._gate is not None and not await self._gate.is_active(tenant):
+                    continue
                 try:
                     async with RedisLock(redis, f"{_LOCK_PREFIX}{thread_id}", ttl_s=60).hold():
-                        await self.process(thread_id)
+                        with TenantScope.enter(tenant):
+                            await self.process(thread_id)
                     done += 1
                 except LockBusy:
                     continue

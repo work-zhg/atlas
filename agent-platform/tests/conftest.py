@@ -14,15 +14,20 @@ from __future__ import annotations
 import os
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from atlas_agent.config import Settings, get_settings
 from atlas_agent.db.session import get_engine, get_sessionmaker
+from atlas_tenancy import TenantScope
 
-from tests.fake_uc import FakeUC
+from tests.fake_uc import TEST_TENANT, FakeUC
 
 # MCP 网关的测试环境（进程内网关 + 上游 MCP 服务替身）：用到才起，见 tests/gateway_env.py
 from tests.gateway_env import gateway, gateway_environment, upstream  # noqa: F401
+
+# 运营接口：配上运营密钥的夹具，见 tests/ops_env.py
+from tests.ops_env import ops_key  # noqa: F401
 
 REPO_ROOT = Path(__file__).resolve().parents[2]  # agent-platform/tests → 仓库根
 
@@ -127,6 +132,17 @@ def _object_storage_is_not_inherited_from_the_developer(tmp_path_factory) -> Ite
 
 
 @pytest.fixture(autouse=True)
+def _in_test_tenant() -> Iterator[None]:
+    """测试代码默认在测试租户里：直接调服务、直接查库的用例不用一个个进入租户。
+
+    ★ 应用的 lifespan 和每个请求都会先清掉它（TenantScope.isolated）：请求按用户中心替身给的
+      租户进入，后台任务按数据所属的租户进入 —— 漏设租户的后台路径照样会报错，不会被这里掩盖。
+    """
+    with TenantScope.enter(UUID(TEST_TENANT)):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def fake_user_center(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeUC]:
     """没有免鉴权模式（dev 模式已删）：每个 create_app() 都接一个用户中心替身。
 
@@ -186,6 +202,9 @@ _TEST_DATA_TABLES = (
     # 沙箱浏览器：登录态、浏览器宿主
     "browser_login",
     "browser_host",
+    # 容量：租户份额、每人存储用量（份额留下来会挡住后面的测试）
+    "tenant_capacity",
+    "storage_usage",
     "thread",
     "agent_version",
     "agent",

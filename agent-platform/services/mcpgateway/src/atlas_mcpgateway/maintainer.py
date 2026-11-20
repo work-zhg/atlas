@@ -2,7 +2,7 @@
 
 多实例各跑一个；谁领到（registry.claim_due 写租约）谁拉，一个服务同一时间只有一个实例在拉。
 定时是定时任务库 atlas_jobs 的实例任务（ToolRefresh）：循环、出错隔离、停机交给库，运行情况在
-/api/v1/jobs 看。
+运营接口 /ops/v1/jobs 看。
 """
 
 from __future__ import annotations
@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 
 from atlas_jobs import Job, JobContext, NoParams
+from atlas_opsapi import TenantGate
+from atlas_tenancy import SystemReason, TenantScope
 
 from .db.session import get_sessionmaker
 from .perms import Permissions
@@ -23,30 +25,50 @@ __all__ = ["ToolRefresh", "refresh_due"]
 
 
 async def refresh_due(
-    settings: GatewaySettings, perms: Permissions, upstreams: Upstreams
+    settings: GatewaySettings,
+    perms: Permissions,
+    upstreams: Upstreams,
+    gate: TenantGate | None = None,
 ) -> list[str]:
-    """拉一轮到期的服务，返回拉了哪些。每个服务一个事务：一个出错不影响别的。"""
+    """拉一轮到期的服务，返回拉了哪些。每个服务一个事务：一个出错不影响别的。
+
+    ★ 跨租户巡检的固定写法：在系统范围里领（只拿服务名和租户），逐个进入服务所属的租户去拉。
+      停用的租户的不拉（领到了也跳过，租约过期后恢复了再拉）。
+    """
     sessionmaker = get_sessionmaker()
-    async with sessionmaker() as session:
-        names = await Registry(session, settings, perms, upstreams).claim_due()
-        await session.commit()
-    for name in names:
+    with TenantScope.system(SystemReason.SWEEP):
+        async with sessionmaker() as session:
+            due = await Registry(session, settings, perms, upstreams).claim_due()
+            await session.commit()
+    done: list[str] = []
+    for name, tenant in due:
+        if gate is not None and not await gate.is_active(tenant):
+            continue
         try:
-            async with sessionmaker() as session:
-                registry = Registry(session, settings, perms, upstreams)
-                await registry.refresh(await registry.get(name))
-                await session.commit()
+            with TenantScope.enter(tenant):
+                async with sessionmaker() as session:
+                    registry = Registry(session, settings, perms, upstreams)
+                    await registry.refresh(await registry.get(name))
+                    await session.commit()
+            done.append(name)
         except Exception:
             logger.exception("MCP 服务 %s 定期刷新失败", name)
-    return names
+    return done
 
 
 class ToolRefresh(Job):
     type = "mcpgateway.tool_refresh"
     description = "刷新 MCP 工具定义"
 
-    def __init__(self, settings: GatewaySettings, perms: Permissions, upstreams: Upstreams) -> None:
+    def __init__(
+        self,
+        settings: GatewaySettings,
+        perms: Permissions,
+        upstreams: Upstreams,
+        gate: TenantGate | None = None,
+    ) -> None:
         self._settings, self._perms, self._upstreams = settings, perms, upstreams
+        self._gate = gate
 
     async def execute(self, ctx: JobContext, params: NoParams) -> None:
-        await refresh_due(self._settings, self._perms, self._upstreams)
+        await refresh_due(self._settings, self._perms, self._upstreams, self._gate)

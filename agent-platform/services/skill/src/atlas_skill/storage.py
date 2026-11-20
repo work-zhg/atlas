@@ -1,9 +1,11 @@
 """技能包的对象存储。
 
-布局（与运行时 skill_copy.py 约定的源仓库一致）：
+布局（第一层目录是租户；运行时按版本记着的 storage_key 去拷，不自己拼路径）：
 
-    _skills/{slug}/{version}/…     已发布包 —— 只增不改，运行时从这里拷进会话
-    _skills_drafts/{upload_id}/…   待审查的上传 —— 发布时拷走、被拒时删掉
+    {租户}/_skills/{slug}/{version}/…     已发布包 —— 只增不改，运行时从这里拷进会话
+    {租户}/_skills_drafts/{upload_id}/…   待审查的上传 —— 发布时拷走、被拒时删掉
+    _market/skills/{slug}/{version}/…     技能市场（不分租户）：租户安装时拷到自己的 _skills/
+    _skills/{slug}/{version}/…            多租户之前发布的（原地不动，归原平台租户）
 
 ★ 同步接口：boto3 是同步的。调用方（service 层）用 asyncio.to_thread 包。
 """
@@ -12,30 +14,47 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
+from atlas_tenancy import TenantNaming
+
 from .settings import SkillSettings
 
 __all__ = [
     "DRAFTS_PREFIX",
+    "MARKET_PREFIX",
     "PUBLISHED_PREFIX",
     "S3SkillStorage",
     "SkillStorage",
     "StorageNotConfigured",
     "draft_prefix",
+    "legacy_prefix",
     "make_storage",
+    "market_prefix",
     "published_prefix",
 ]
 
 PUBLISHED_PREFIX = "_skills"
 DRAFTS_PREFIX = "_skills_drafts"
+MARKET_PREFIX = "_market/skills"
 _DELETE_BATCH = 1000
 
 
 def published_prefix(slug: str, version: int) -> str:
-    return f"{PUBLISHED_PREFIX}/{slug}/{version}/"
+    """当前租户里一个已发布版本的目录。"""
+    return TenantNaming.object_prefix(PUBLISHED_PREFIX, slug, str(version)) + "/"
 
 
 def draft_prefix(upload_id: str) -> str:
-    return f"{DRAFTS_PREFIX}/{upload_id}/"
+    """当前租户里一个待审查上传的目录。"""
+    return TenantNaming.object_prefix(DRAFTS_PREFIX, upload_id) + "/"
+
+
+def market_prefix(slug: str, version: int) -> str:
+    return f"{MARKET_PREFIX}/{slug}/{version}/"
+
+
+def legacy_prefix(slug: str, version: int) -> str:
+    """多租户之前的已发布目录（登记已有技能 adopt 用）。"""
+    return f"{PUBLISHED_PREFIX}/{slug}/{version}/"
 
 
 class StorageNotConfigured(RuntimeError):

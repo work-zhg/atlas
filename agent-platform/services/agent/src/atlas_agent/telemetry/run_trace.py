@@ -29,6 +29,8 @@ import logging
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
+from atlas_tenancy import TenantScope
+
 from . import content
 from . import semconv as sc
 
@@ -159,6 +161,11 @@ class RunTrace:
         }
         if user_id is not None:
             attributes[sc.LF_USER_ID] = str(user_id)
+        # 多租户（租户隔离设计 §3.5）：调用链里的对话内容也属于租户，按租户能筛、能清
+        tenant = getattr(thread, "tenant_uuid", None) or TenantScope.current()
+        if tenant is not None:
+            attributes[sc.TENANT_ID] = str(tenant)
+            attributes[f"{sc.LF_TRACE_METADATA}tenant_id"] = str(tenant)
         # 横向扩展设计 §10：哪个实例跑的这一段；换实例接管的段记下原因（交接 / 过期接管）
         from ..instance import instance_id
 

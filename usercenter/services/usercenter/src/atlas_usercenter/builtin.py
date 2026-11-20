@@ -16,8 +16,6 @@ from .db.models import App, Menu, Operation, Role, RoleMenu, RoleOperation
 from .db.tenancy import platform_scope
 
 __all__ = [
-    "PLATFORM_MENUS",
-    "PLATFORM_OPERATIONS",
     "SUPER_ROLE_CODE",
     "UC_APP_NAME",
     "sync_builtin",
@@ -47,14 +45,10 @@ OPERATIONS: list[tuple[str, str, str]] = [
     #   业务应用的角色里不再有「管理全部 xx」的操作码 —— 那属于数据权限领域
     ("数据权限", "data:type_grant", "数据编码级授权（某编码下全部数据）"),
     ("应用", "tenant_app:manage", "本租户已开通应用的可访问范围"),
-    ("平台", "app:manage", "应用目录：接入应用、凭据、操作、菜单与数据编码"),
-    ("平台", "tenant:view", "查看租户"),
-    ("平台", "tenant:manage", "新建 / 停用租户、配额、给租户开通应用"),
 ]
-
-#: 平台级操作码（租户设计 §07）：只对平台租户内的人生效。客户租户里即使被授予（例如把
-#: 超级管理员角色授给客户租户的管理员）也不计入 —— 防止客户租户误拿到平台能力。
-PLATFORM_OPERATIONS = frozenset({"app:manage", "tenant:view", "tenant:manage"})
+# ★ 没有平台级操作码（租户隔离设计 §7）：租户目录、应用目录（应用、操作、菜单、数据编码、
+#   应用内置角色）都归运营中心，经运营接口（api/ops.py）维护，不在任何租户的角色里。
+#   原来的 app:manage、tenant:view、tenant:manage 由下次 sync_builtin 删掉。
 
 #: (编码, 名称, 图标, 路由, 公共)
 MENUS: list[tuple[str, str, str, str, bool]] = [
@@ -63,11 +57,7 @@ MENUS: list[tuple[str, str, str, str, bool]] = [
     # ★ 公共菜单：人人都可能是某条数据的 Owner，至少要能进「数据授权」
     ("grants", "权限管理", "🛂", "/grants", True),
     ("apps", "应用接入", "🔗", "/apps", False),
-    ("tenants", "租户管理", "🏛️", "/tenants", False),
 ]
-
-#: 平台级菜单：只对平台租户内的人可见
-PLATFORM_MENUS = frozenset({"tenants"})
 
 _ALL_OPS = [code for _, code, _ in OPERATIONS]
 #: (编码, 名称, 说明, 操作码, 菜单编码)
@@ -75,9 +65,9 @@ ROLES: list[tuple[str, str, str, list[str], list[str]]] = [
     (
         SUPER_ROLE_CODE,
         "超级管理员",
-        "本租户的全部操作；在平台租户内还包括租户与应用目录",
+        "本租户的全部操作",
         _ALL_OPS,
-        ["org", "users", "apps", "tenants"],
+        ["org", "users", "apps"],
     ),
     (
         "UC_USER_ADMIN",
@@ -103,7 +93,7 @@ async def uc_app_uuid(session: AsyncSession) -> UUID:
 
 
 async def sync_builtin(session: AsyncSession) -> None:
-    """内置应用目录是平台级的；内置角色是应用内置角色（无租户，所有租户共用）。"""
+    """用户中心自己的应用目录随版本发布（产品自带）；内置角色是应用内置角色（无租户，所有租户共用）。"""
     with platform_scope(session):
         await _sync(session)
 

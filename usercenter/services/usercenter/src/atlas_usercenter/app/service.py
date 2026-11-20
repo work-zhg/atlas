@@ -2,9 +2,10 @@
 
 ★ 编码一律不可改（操作码 / 菜单编码 / 角色编码 / 数据编码都写在应用代码里）。
 ★ 内置应用（用户中心）：不能停用；操作与菜单只读；内置角色锁定。
-★ 租户（租户设计 §04）：应用目录（应用、操作、菜单、数据编码）属于平台；可访问范围属于
+★ 租户（租户设计 §04，租户隔离设计 §3.3）：应用目录（应用、凭据、操作、菜单、数据编码、
+  应用内置角色）归运营中心，经运营接口在 catalog_scope 里维护（api/ops.py）；可访问范围属于
   「租户 × 应用」（uc_tenant_app + uc_app_scope_dept）；接口令牌绑定 (应用, 租户)；
-  角色两级 —— 平台租户建的是应用内置角色（所有租户共用），客户租户建的只属于自己。
+  角色两级 —— 没有租户上下文（运营接口）建的是应用内置角色（所有租户共用），租户里建的只属于自己。
 """
 
 from __future__ import annotations
@@ -151,8 +152,7 @@ class AppService:
         )
         self.session.add(app)
         await self.session.flush()
-        # 给建它的（平台）租户开通。★ scope_all=False：默认无人可访问，避免配置没做完就对全员开放
-        self.session.add(TenantApp(app_uuid=app.uuid, enabled_by=self.actor.user_uuid))
+        # ★ 接入后哪个租户都还没开通：由运营中心给租户开通（tenant/service.py::set_app）
         record(self.session, self.actor, "app.create", "app", app.uuid, name)
         return app, secret
 
@@ -322,10 +322,10 @@ class AppService:
     ) -> tuple[str, int, Tenant]:
         """App Key / Secret + 企业代码 → 绑定 (应用, 租户) 的接口令牌。
 
-        ★ 企业代码缺省 = 平台租户（兼容期：单租户部署的应用不用改就能继续工作）。
-        ★ 在平台范围内调用（还没有租户上下文）。
+        ★ 企业代码只在只有一个租户时可省（单租户部署的应用不用改就能继续工作）。
+        ★ 在跨租户范围内调用（还没有租户上下文）。
         """
-        from ..tenant.service import find_by_code, tenant_usable
+        from ..tenant.service import find_by_code, sole_tenant, tenant_usable
 
         app = (
             await self.session.execute(select(App).where(App.app_key == (app_key or "")))
@@ -337,9 +337,7 @@ class AppService:
         if tenant_code:
             tenant = await find_by_code(self.session, tenant_code)
         else:
-            tenant = (
-                await self.session.execute(select(Tenant).where(Tenant.kind == "platform"))
-            ).scalar_one_or_none()
+            tenant = await sole_tenant(self.session)
         if tenant is None:
             raise NotFound("TENANT_NOT_FOUND", "租户不存在")
         if not tenant_usable(tenant):
@@ -713,19 +711,16 @@ class AppService:
             )
         )
 
-    async def _on_platform(self) -> bool:
-        tid = current_tenant(self.session)
-        if tid is None:
-            return True  # 平台范围（迁移脚本、同步内置目录）
-        kind = await self.session.scalar(select(Tenant.kind).where(Tenant.uuid == tid))
-        return kind == "platform"
+    def _shared(self) -> bool:
+        """没有租户上下文 = 运营接口在维护应用目录：建的、改的是应用内置角色。"""
+        return current_tenant(self.session) is None
 
     async def _role_mutable(self, role: Role) -> None:
         if role.is_builtin:
             raise Conflict("BUILTIN_READONLY", "内置角色不能修改")
-        if role.tenant_uuid is None and not await self._on_platform():
+        if role.tenant_uuid is None and not self._shared():
             raise Forbidden(
-                "SHARED_ROLE_READONLY", "应用内置角色由平台维护，可以复制为本租户的角色后再修改"
+                "SHARED_ROLE_READONLY", "应用内置角色由运营中心维护，可以复制为本租户的角色后再修改"
             )
 
     async def create_role(
@@ -745,8 +740,8 @@ class AppService:
                 "编码格式：大写字母开头，大写字母、数字、下划线，2–32 位",
                 field="code",
             )
-        # 平台租户建的是应用内置角色（所有租户共用）；客户租户建的只属于自己
-        shared = await self._on_platform()
+        # 运营接口建的是应用内置角色（所有租户共用）；租户里建的只属于自己
+        shared = self._shared()
         tenant_uuid = None if shared else current_tenant(self.session)
         if shared:
             # 共用角色的编码不能与任何租户的角色冲突（否则那个租户里会出现两个同编码角色）
@@ -870,6 +865,22 @@ class AppService:
 
         role = await self.get_role(uuid)
         await self._role_mutable(role)
+        if self._shared():
+            # 运营接口删应用内置角色：各租户授了多少只给数字，不给租户里的岗位名、人
+            with platform_scope(self.session):
+                impact = {
+                    "grants": await self._count(Grant, Grant.role_uuid == role.uuid),
+                    "positions": await self._count(
+                        PositionRole, PositionRole.role_uuid == role.uuid
+                    ),
+                }
+            if not dry_run:
+                await self.session.delete(role)
+                await self.session.flush()
+                record(
+                self.session, self.actor, "role.delete", "role", role.uuid, role.name, **impact
+                )
+            return impact
         grants = int(
             await self.session.scalar(
                 select(func.count()).select_from(Grant).where(Grant.role_uuid == role.uuid)
@@ -893,6 +904,11 @@ class AppService:
             await self.session.flush()
             record(self.session, self.actor, "role.delete", "role", role.uuid, role.name, **impact)
         return impact
+
+    async def _count(self, model: Any, *where: Any) -> int:
+        return int(
+            await self.session.scalar(select(func.count()).select_from(model).where(*where)) or 0
+        )
 
     # ───────────────────────────── 数据编码
 
@@ -965,7 +981,9 @@ class AppService:
 
     async def delete_data_type(self, uuid: UUID) -> None:
         dt = await self._data_type(uuid)
-        n = await self.data_type_count(dt.uuid)
+        # 数据编码是应用目录里的：要看所有租户都没有用它的数据了
+        with platform_scope(self.session):
+            n = await self.data_type_count(dt.uuid)
         if n:
             raise Conflict(
                 "DATA_TYPE_IN_USE",

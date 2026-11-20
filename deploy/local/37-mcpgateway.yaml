@@ -30,6 +30,9 @@ spec:
           command: ["python", "-m", "atlas_mcpgateway", "migrate"]
           env: &mcpgw-env
             - {name: ATLAS_MCPGW_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_mcpgateway"}
+            # 多租户迁移把已有数据归到原平台租户（apply.sh 按 .env 的 TENANT_BACKFILL_UUID 建；只有迁移读它）
+            - name: TENANT_BACKFILL_UUID
+              valueFrom: {configMapKeyRef: {name: atlas-tenancy, key: backfill_uuid, optional: true}}
             - {name: ATLAS_MCPGW_UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
             # 外部客户端连网关的地址（管理端显示配置示例用）：经前端网关的 /mcp-gateway-api/mcp/{服务名}
             - {name: ATLAS_MCPGW_PUBLIC_URL, value: "__PUBLIC_ORIGIN__/mcp-gateway-api"}

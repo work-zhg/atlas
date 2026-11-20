@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 __all__ = ["MemorySettings", "get_settings"]
@@ -36,8 +37,10 @@ class MemorySettings(BaseSettings):
     uc_app_code: str = "memory"
     #: 数据权限校验结果的缓存时间（授权收回最多滞后这么久；只缓存「有权限」的结果）
     perm_cache_ttl_s: float = 30.0
-    #: 作用域管理接口的授权快照缓存时间
+    #: 核对「这个人在这个租户里」的结果缓存时间
     authz_ttl_s: float = 30.0
+    #: 运营接口（/ops/v1）的签名密钥，和运营中心里登记本服务时的一致。空 = 没启用（一律 403）
+    ops_api_key: SecretStr | None = None
 
     # ── 输入上限 ──────────────────────────────────────────────────────
     #: 单条条目的字符上限。★ 不是主题大小上限（那个归客户端，§3.3）：只防一次写进一整篇文档

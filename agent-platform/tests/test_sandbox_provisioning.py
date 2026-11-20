@@ -21,12 +21,19 @@ from typing import Any
 from uuid import UUID
 
 import pytest
+from atlas_agent.capacity import CapacityService, Quota
 from atlas_agent.config import get_settings
-from atlas_agent.db.models import SandboxAccountRow, SandboxBindingRow, UserSandboxRow
+from atlas_agent.db.models import (
+    SandboxAccountRow,
+    SandboxBindingRow,
+    TenantCapacityRow,
+    UserSandboxRow,
+)
 from atlas_agent.db.session import get_sessionmaker
 from atlas_agent.ids import uuid7
 from atlas_agent.redisx import make_redis
 from atlas_agent.repositories.sandbox_account import SandboxAccountRepository
+from atlas_agent.runtime_config import RuntimeConfig
 from atlas_agent.sandbox.base.lifecycle.runtime import OpenSandboxRuntime
 from atlas_agent.sandbox.base.lifecycle.spec import CreateSpec
 from atlas_agent.sandbox.provisioning.model import (
@@ -177,6 +184,45 @@ async def test_one_person_never_exceeds_the_quota_even_concurrently(
     assert len(made) == 2 and len(refused) == 3, results
     assert len(fake.created) == 2
     assert len(await env["prov"].of_user(user)) == 2
+
+
+async def test_the_tenant_quota_holds_across_people_even_concurrently(
+    env: dict[str, Any], fake: FakeOpenSandbox
+) -> None:
+    """租户份额（code-capacity.html）：几个人并发新建，合计不超过份额（2）；复用已有的不判。"""
+    capacity = CapacityService(RuntimeConfig(get_settings(), get_sessionmaker()))
+
+    async def tenant_quota(session: Any, user: UUID) -> str | None:
+        admission = await capacity.admit_sandbox(session, user)
+        return None if admission.allowed else admission.message
+
+    prov = SandboxProvisioning(
+        env["runtime"],
+        get_sessionmaker(),
+        quota=QuotaPolicy(0),
+        cache_s=0.0,
+        tenant_quota=tenant_quota,
+    )
+    prov.register(env["kind"])
+    async with get_sessionmaker()() as session:
+        await capacity.set_quota(session, Quota(sandboxes=2), by="test")
+        await session.commit()
+    try:
+        fake.create_delay_s = 0.1
+        bizs = [_biz(env) for _ in range(4)]
+        results = await asyncio.gather(
+            *(prov.ensure(b, "req") for b in bizs), return_exceptions=True
+        )
+        made = [r for r in results if isinstance(r, SandboxRef)]
+        refused = [r for r in results if isinstance(r, QuotaExceeded)]
+        assert len(made) == 2 and len(refused) == 2, results
+        assert "本租户" in str(refused[0])
+        owner = next(b for b, r in zip(bizs, results, strict=True) if isinstance(r, SandboxRef))
+        assert await prov.ensure(owner, "req") in made, "复用已有的不判份额"
+    finally:
+        async with get_sessionmaker()() as session:
+            await session.execute(delete(TenantCapacityRow))
+            await session.commit()
 
 
 async def test_admission_happens_before_anything_is_registered(env: dict[str, Any]) -> None:

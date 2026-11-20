@@ -7,6 +7,8 @@
     mem_revision  修订历史：每次写入删除了哪些、新增了哪一条；撤销、拆分、移动也各记一条
 
 ★ 自增 id + uuid 逻辑主键；关联与 API 一律用 uuid（字段名 xxx_uuid）。
+★ 多租户（迁移 m0002）：作用域是产品自带的定义，所有租户共用；实例及以下归租户（TenantOwned），
+  查询按当前租户自动过滤，同一个「作用域 + 关联主键」在每个租户里各是一个实例。
 ★ 不建外键（与其它服务一致）：引用完整性由 service 层保证。
 ★ 条目编号、版本号都由实例行上的计数器分配，只在实例锁内递增（store.py）：
     · 编号在实例内递增，之后不再改变 —— 移动、拆分都不动它（§3.4）
@@ -20,6 +22,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from atlas_tenancy import TenantOwned
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -80,7 +83,7 @@ class Scope(_Row, Base):
     created_by: Mapped[str] = mapped_column(String(64), default="", nullable=False)
 
 
-class Instance(_Row, Base):
+class Instance(TenantOwned, _Row, Base):
     __tablename__ = "mem_instance"
 
     scope_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
@@ -99,12 +102,12 @@ class Instance(_Row, Base):
     owner_uid: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("scope_uuid", "key_text"),
+        UniqueConstraint("tenant_uuid", "scope_uuid", "key_text"),
         Index("ix_mem_instance_key", "key", postgresql_using="gin"),
     )
 
 
-class Topic(_Row, Base):
+class Topic(TenantOwned, _Row, Base):
     __tablename__ = "mem_topic"
 
     instance_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
@@ -133,7 +136,7 @@ class Topic(_Row, Base):
     )
 
 
-class Entry(_Row, Base):
+class Entry(TenantOwned, _Row, Base):
     """一条条目。created_at = 入库时间（追溯用）；occurred_at = 客户端给的时间（判断先后用）。"""
 
     __tablename__ = "mem_entry"
@@ -163,7 +166,7 @@ class Entry(_Row, Base):
     )
 
 
-class Revision(_Row, Base):
+class Revision(TenantOwned, _Row, Base):
     """一次修订。created_at = 入库时间。"""
 
     __tablename__ = "mem_revision"

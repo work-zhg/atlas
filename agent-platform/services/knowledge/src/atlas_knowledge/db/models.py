@@ -3,6 +3,9 @@
 ★ 自增 id + uuid 逻辑主键；关联与 API 一律用 uuid（字段名 xxx_uuid）。
 ★ 不建外键（与运行时 0013 起的约定一致）：引用完整性由 service 层保证。
 ★ 人员字段存用户中心用户 id（= Atlas app_user.id）或服务账号 id 的字符串形式。
+★ 多租户（迁移 k0009）：除向量缓存外的表都归租户（TenantOwned），查询按当前租户自动过滤。
+  向量缓存（kb_embedding_cache）是（模型, 文本哈希）→ 向量的纯函数缓存，不归任何租户：
+  只有拿着同一段原文才查得到，查到的也只是这段原文自己的向量。
 """
 
 from __future__ import annotations
@@ -11,6 +14,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
+from atlas_tenancy import TenantOwned
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -69,7 +73,7 @@ class _Row:
     )
 
 
-class KnowledgeSet(_Row, Base):
+class KnowledgeSet(TenantOwned, _Row, Base):
     """知识集：把同一主题的知识库编成一组（doc/design/knowledge-set-design.html）。
 
     智能体按知识集使用知识：名称和介绍进智能体提示词里的「可查的知识」，由维护人写。
@@ -91,7 +95,7 @@ class KnowledgeSet(_Row, Base):
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
-class Dataset(_Row, Base):
+class Dataset(TenantOwned, _Row, Base):
     __tablename__ = "kb_dataset"
 
     #: 所属知识集（kb_knowledge_set.uuid）。升级时按原来的库 1:1 建的知识集与库同一个 uuid
@@ -123,6 +127,9 @@ class Dataset(_Row, Base):
     #: 入库增强开关（doc/knowledge-enterprise-design.html §5.3 / §5.5）：上下文补全 L2、大表摘要
     enhancements: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
     collection_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    #: 这个库的文件在对象存储里的目录（原文件、解析结果、图片都在下面）。多租户以后是
+    #: {租户}/_knowledge/{库}；之前建的库是 _knowledge/{库}（迁移 k0009 回填，对象原地不动）
+    storage_prefix: Mapped[str] = mapped_column(String(255), nullable=False)
     #: 最近一次使用的处理规则（新文档沿用）
     latest_process_rule_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
     #: internal | external（P2）
@@ -130,7 +137,7 @@ class Dataset(_Row, Base):
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
-class DatasetPermission(_Row, Base):
+class DatasetPermission(TenantOwned, _Row, Base):
     """★ 已废弃：接入用户中心前 partial_members 的成员表。只有迁移命令（sync-uc）还会读它。"""
 
     __tablename__ = "kb_dataset_permission"
@@ -142,7 +149,7 @@ class DatasetPermission(_Row, Base):
     __table_args__ = (UniqueConstraint("dataset_uuid", "principal_id"),)
 
 
-class ProcessRule(_Row, Base):
+class ProcessRule(TenantOwned, _Row, Base):
     __tablename__ = "kb_process_rule"
 
     dataset_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False, index=True)
@@ -152,7 +159,7 @@ class ProcessRule(_Row, Base):
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
 
 
-class Document(_Row, Base):
+class Document(TenantOwned, _Row, Base):
     __tablename__ = "kb_document"
 
     dataset_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
@@ -162,6 +169,8 @@ class Document(_Row, Base):
     data_source_type: Mapped[str] = mapped_column(String(32), nullable=False)
     #: upload_file: {object_key, size, mime, extension}
     data_source_info: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False)
+    #: 原文件的字节数：算租户的知识库存储用量（capacity.py）
+    file_size: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     doc_form: Mapped[str] = mapped_column(String(32), nullable=False)
     doc_language: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -209,7 +218,7 @@ class Document(_Row, Base):
         return self.enabled and not self.archived and self.review_status in ("none", "approved")
 
 
-class Segment(_Row, Base):
+class Segment(TenantOwned, _Row, Base):
     __tablename__ = "kb_segment"
 
     dataset_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False, index=True)
@@ -244,7 +253,7 @@ class Segment(_Row, Base):
     __table_args__ = (Index(None, "document_uuid", "position"),)
 
 
-class ChildChunk(_Row, Base):
+class ChildChunk(TenantOwned, _Row, Base):
     __tablename__ = "kb_child_chunk"
 
     dataset_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
@@ -278,7 +287,7 @@ class EmbeddingCache(_Row, Base):
     __table_args__ = (UniqueConstraint("provider", "model", "text_hash"),)
 
 
-class QueryLog(_Row, Base):
+class QueryLog(TenantOwned, _Row, Base):
     """检索记录（同 Dify dataset_queries）。"""
 
     __tablename__ = "kb_query_log"
@@ -294,7 +303,7 @@ class QueryLog(_Row, Base):
     retrieval_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
 
 
-class Retrieval(_Row, Base):
+class Retrieval(TenantOwned, _Row, Base):
     """一次检索的过程记录：各环节的候选（rag/recorder.py），排查「为什么没检索到」用。
 
     ★ 一次检索一条（可能跨多个库），kb_query_log 按库各一条并指回这里。
@@ -326,7 +335,7 @@ INDEX_VERSION_STATUSES = ("building", "ready", "active", "retired", "deleted", "
 LIVE_INDEX_STATUSES = ("building", "ready", "active", "retired")
 
 
-class IndexVersion(_Row, Base):
+class IndexVersion(TenantOwned, _Row, Base):
     """知识库的向量索引版本（doc/knowledge-enterprise-design.html §6.2）。
 
     kb_dataset 上的 embedding_* 与 collection_name 是 active 版本的指针：切换版本 = 在一个事务里
@@ -357,7 +366,7 @@ class IndexVersion(_Row, Base):
 METADATA_TYPES = ("string", "number", "date", "enum")
 
 
-class MetadataField(_Row, Base):
+class MetadataField(TenantOwned, _Row, Base):
     """知识库的元数据字段定义（§7.2）。值存在 kb_document.doc_metadata，检索时转成 payload 过滤。"""
 
     __tablename__ = "kb_metadata_field"
@@ -374,3 +383,15 @@ class MetadataField(_Row, Base):
     llm_extract: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     __table_args__ = (UniqueConstraint("dataset_uuid", "name"),)
+
+
+class TenantCapacity(TenantOwned, _Row, Base):
+    """运营中心单独给这个租户定的知识库存储份额（capacity.py）。没有行 = 用默认份额。"""
+
+    __tablename__ = "kb_tenant_capacity"
+
+    #: None = 不限
+    storage_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    updated_by: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    __table_args__ = (UniqueConstraint("tenant_uuid"),)

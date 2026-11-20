@@ -30,17 +30,17 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：Agent 平台 - Agent 服务 - 模型接入",
-  "description": "目标模型，只画期望的样子、不对照现状。智能体和平台服务的模型 Key、可用模型、调用端点、规格与能力，以及调用失败的解释。",
+  "description": "目标模型，只画期望的样子、不对照现状。智能体和平台服务的模型 Key、可用模型、调用端点、规格与能力，以及调用失败的解释。模型和 Key 都属于租户；系统功能用哪个模型按租户配（整体设计见 ../opscenter/design-tenant-isolation.html）。",
   "component": "模型接入",
   "package": "模型接入（目标模型）",
-  "overview": "模型接入回答「这一次模型调用连哪、带哪把 Key、哪些模型能用、每个模型能传哪些参数」。每个智能体在模型平台上有一把客户端 Key，管理员给它分配模型；原生智能体每段开始前、CLI 智能体开会话时，这里取最新的 Key、检查用到的模型都分配了，交出 LiteLLM 地址、Key 和模型的规格与能力。会话标题、记忆补记、自动模式判断器这类平台自己的调用，按用途绑定平台上的一把 Key 和其中一个模型，取不到就让调用方降级。\n\n它不建模型客户端（原生运行时按规格和端点建，Agent 服务不依赖 LangChain），不发起模型调用，也不管谁能用哪个智能体（智能体管理）。Key 的创建、分配、停用和预算在模型平台和 LiteLLM 里管，这里只取用。",
+  "overview": "模型接入回答「这一次模型调用连哪、带哪把 Key、哪些模型能用、每个模型能传哪些参数」。每个智能体在模型平台上有一把客户端 Key，管理员给它分配模型；原生智能体每段开始前、CLI 智能体开会话时，这里取最新的 Key、检查用到的模型都分配了，交出 LiteLLM 地址、Key 和模型的规格与能力。会话标题、记忆补记、自动模式判断器这类系统功能的调用，每个租户按用途绑定本租户的一把 Key 和其中一个模型，没配或取不到就让调用方降级。\n\n它不建模型客户端（原生运行时按规格和端点建，Agent 服务不依赖 LangChain），不发起模型调用，也不管谁能用哪个智能体（智能体管理）。Key 的创建、分配、停用和预算在模型平台和 LiteLLM 里管，这里只取用。",
   "elements": [
     {
       "id": "resolver",
       "kind": "class",
       "name": "ModelResolver",
       "stereotype": "应用服务",
-      "responsibility": "运行时的入口：这一次模型调用连哪、带哪把 Key、哪些模型能用。原生智能体每段解析一次（主模型和压缩模型都要在 Key 里）；CLI 智能体开会话时取一份交给 Pod；会话标题、记忆补记、自动模式判断器这类不属于某个智能体的调用按用途取。每次都取最新的 Key，不在进程里长期缓存。",
+      "responsibility": "运行时的入口：这一次模型调用连哪、带哪把 Key、哪些模型能用。原生智能体每段解析一次（主模型和压缩模型都要在 Key 里）；CLI 智能体开会话时取一份交给 Pod；会话标题、记忆补记、自动模式判断器这类不属于某个智能体的调用，按当前租户的绑定、按用途取。每次都取最新的 Key，不在进程里长期缓存。",
       "methods": [
         [
           "+",
@@ -65,7 +65,7 @@
       "kind": "class",
       "name": "ModelManagement",
       "stereotype": "应用服务",
-      "responsibility": "管理面的入口：建智能体时在模型平台上补建它的客户端 Key（尽力而为，平台不可用不挡住建智能体），改名时同步名字；编辑器的模型选项（Key 分配了就列分配的，还没分配就列平台上的全部并说明分配前不能运行）；平台服务模型的列出、设置、清除，设置时当场校验 Key 和模型，配错了直接报。",
+      "responsibility": "管理面的入口：建智能体时在模型平台上补建它的客户端 Key（尽力而为，平台不可用不挡住建智能体），改名时同步名字；编辑器的模型选项（Key 分配了就列分配的，还没分配就列平台上的全部并说明分配前不能运行）；系统功能模型的列出、设置、清除（租户设置的一部分，租户管理员用），设置时当场校验 Key 和模型都是本租户的、配错了直接报。",
       "methods": [
         [
           "+",
@@ -115,7 +115,7 @@
       "kind": "class",
       "name": "PlatformKeySource",
       "stereotype": "防腐层",
-      "responsibility": "经模型平台的内部接口取 Key（没有就以智能体的名字补建，状态「待分配」）、改名、列平台上的模型；平台给的规格（窗口、最大输出）和实测的能力合成 ModelProfile。平台暂时不可用时沿用本进程上次取到的 Key 和模型列表，最终由 LiteLLM 校验；从没取到过的才报暂时不可用。",
+      "responsibility": "经模型平台的内部接口取 Key（没有就以智能体的名字补建，状态「待分配」）、改名、列平台上的模型；平台给的规格（窗口、最大输出）和实测的能力合成 ModelProfile：平台同时给出租户的每个模型对应哪个供应商模型，能力按供应商模型名查。平台暂时不可用时沿用本进程上次取到的 Key 和模型列表，最终由 LiteLLM 校验；从没取到过的才报暂时不可用。",
       "methods": [
         [
           "+",
@@ -253,11 +253,11 @@
       "kind": "class",
       "name": "CapabilityCatalog",
       "stereotype": "仓储",
-      "responsibility": "model_catalog 表：每个模型实测的能力和兜底的规格。平台不登记能力，这张表是能力的唯一来源；表里没有的模型按什么都不支持处理。",
+      "responsibility": "model_catalog 表：各供应商模型实测的能力和兜底的规格，按供应商的模型名（如 minimax/MiniMax-M3）查，不按租户起的名字查。产品自带，随版本发布，所有租户共用，不含任何租户内容。平台不登记能力，这张表是能力的唯一来源；表里没有的模型按什么都不支持处理。",
       "methods": [
         [
           "+",
-          "capabilities(models) -> dict[name, …]"
+          "capabilities(provider_models) -> dict[provider_model, …]"
         ]
       ],
       "at": [
@@ -270,7 +270,7 @@
       "kind": "class",
       "name": "ServiceModelBinding",
       "stereotype": "实体",
-      "responsibility": "一种平台服务用哪个模型：模型平台上的哪把客户端 Key（类型 + 编码，事先在平台上建好、分配模型），用其中哪个模型。",
+      "responsibility": "一种系统功能在一个租户里用哪个模型：本租户在模型平台上的哪把客户端 Key（类型 + 编码，事先建好、分配模型），用其中哪个模型。",
       "attributes": [
         [
           "+",
@@ -297,7 +297,7 @@
       "kind": "class",
       "name": "ServiceModelRepository",
       "stereotype": "仓储",
-      "responsibility": "service_model 表，每种用途一行；读有 60 秒的进程内缓存，本进程改了立即生效。",
+      "responsibility": "service_model 表（租户表，按租户自动过滤），每个租户每种用途一行；读有 60 秒的进程内缓存（按租户和用途），本进程改了立即生效。",
       "methods": [
         [
           "+",
@@ -486,10 +486,10 @@
       "description": "LiteLLM 地址 + 智能体的 Key + 模型名；轻量模型也指向同一个，Pod 里没有供应商凭据"
     },
     {
-      "name": "平台服务的模型",
+      "name": "系统功能的模型",
       "entry": "ModelResolver.for_purpose(purpose) -> ServiceModel | None",
       "callers": "会话管理（会话标题）、记忆（补记）、原生运行时（自动模式判断器）",
-      "description": "按用途找绑定、取那把 Key；没配置、Key 用不了、平台不可用都返回 None，由调用方降级"
+      "description": "按当前租户的绑定、按用途取那把 Key；没配置、Key 用不了、平台不可用都返回 None，由调用方降级"
     },
     {
       "name": "解释调用失败",
@@ -510,10 +510,10 @@
       "description": "Key 的状态、能选的模型及其能力，以及分配之前不能运行这类说明"
     },
     {
-      "name": "平台服务模型配置",
+      "name": "系统功能模型配置（租户设置）",
       "entry": "ModelManagement.service_models · set_service_model · clear_service_model",
-      "callers": "HTTP 接口（/v1/service-models，model:manage）、命令行",
-      "description": "设置时要求平台上已有这把 Key 并分配了这个模型，配错当场报"
+      "callers": "HTTP 接口（/v1/service-models，settings:manage）",
+      "description": "设置时要求本租户在平台上已有这把 Key、分配了这个模型，配错当场报"
     }
   ],
   "decisions": [
@@ -538,27 +538,35 @@
       "reason": "CLI（Claude Code）只会这一种；原生也走它，只维护一种调用协议。非 Anthropic 的模型由 LiteLLM 转换，智能体能用哪个模型只看 Key 分配了什么。"
     },
     {
-      "decision": "模型缺了本轮不开始，平台服务取不到就降级",
-      "reason": "智能体的一轮缺了模型就做不了，开始前说清缺哪个、找谁，比跑到一半失败好。平台服务不能拖累对话：标题用问题截断、补记下次再做；判断器要区分「没配置」（不装判断器）和「配了但现在用不了」（退回请示用户），所以另有一个查询告诉调用方配了没有。"
+      "decision": "模型缺了本轮不开始，系统功能取不到就降级",
+      "reason": "智能体的一轮缺了模型就做不了，开始前说清缺哪个、找谁，比跑到一半失败好。系统功能不能拖累对话：标题用问题截断、补记下次再做；判断器要区分「没配置」（不装判断器）和「配了但现在用不了」（退回请示用户），所以另有一个查询告诉调用方配了没有。"
     },
     {
       "decision": "调用失败按 LiteLLM 的 error.type 分，不按报错文字猜",
       "reason": "Key 被重置、模型被移出、预算用完，重发的结果完全不同，用户该做的事也不同。错误类型是和 LiteLLM 之间的协议，升级 LiteLLM 后要复核；报错文字随版本变，按它猜迟早认错。"
     },
     {
-      "decision": "平台服务模型归模型接入",
-      "reason": "它回答的是「平台自己的调用用哪把 Key、哪个模型」，和智能体取 Key 是同一件事；放在别处，原生运行时的判断器、记忆组件都要反过来依赖那里。"
+      "decision": "系统功能模型归模型接入",
+      "reason": "它回答的是「系统功能的调用用哪把 Key、哪个模型」，和智能体取 Key 是同一件事；放在别处，原生运行时的判断器、记忆组件都要反过来依赖那里。"
     },
     {
       "decision": "能用哪些模型与智能体的权限类型无关",
       "reason": "Key 是按智能体建的，同一个智能体对所有使用者能用的模型相同；谁能用这个智能体由智能体管理判断，不在这里叠一层。"
+    },
+    {
+      "decision": "系统功能用哪个模型按租户绑定",
+      "reason": "模型和 Key 都属于租户，没有平台提供的模型；每个租户的标题、判断器、补记用自己的模型，花自己的钱。没配的租户这些功能降级，不影响对话。"
+    },
+    {
+      "decision": "能力表按供应商模型名查，随版本发布，不按租户分",
+      "reason": "租户可以随便给模型起名，两个租户的 minimax-m3 可能是不同的模型，按租户起的名字查能力迟早查错；能力是供应商模型本身的事实（传错参数供应商回 400），和哪个租户无关，作为产品自带的数据最合适。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用，不对外、不做关联；xxx_uuid 是逻辑主键（UUIDv7，Python 侧生成），表间引用和 API 都用它。表间不建外键约束，引用由代码维护；引用会话、run 这些别的领域的表时只写列说明，不画连线。类型写的是 db/types.py 和 SQLAlchemy 的通用类型。",
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用，不对外、不做关联；xxx_uuid 是逻辑主键（UUIDv7，Python 侧生成），表间引用和 API 都用它。表间不建外键约束，引用由代码维护；引用会话、run 这些别的领域的表时只写列说明，不画连线。类型写的是 db/types.py 和 SQLAlchemy 的通用类型。service_model 继承 TenantOwned（租户隔离库），按租户自动过滤；model_catalog 是产品自带的数据，不是租户表。",
   "tables": [
     {
       "name": "model_catalog",
-      "description": "每个模型实测的能力和兜底的规格（CapabilityCatalog）。模型名就是逻辑主键：智能体配置和 LiteLLM 都按名字引用。",
+      "description": "各供应商模型实测的能力和兜底的规格（CapabilityCatalog）。产品自带、随版本发布，不按租户分；供应商模型名就是逻辑主键。",
       "at": [
         0,
         0
@@ -575,7 +583,7 @@
           "name": "model",
           "type": "String(128)",
           "key": "UK",
-          "description": "模型名（LiteLLM 里的名字）"
+          "description": "供应商模型名（如 minimax/MiniMax-M3，即 LiteLLM 里实际调用的模型），不是租户起的名字"
         },
         {
           "name": "provider",
@@ -641,7 +649,7 @@
     },
     {
       "name": "service_model",
-      "description": "平台服务用哪个模型（ServiceModelBinding），每种用途一行；用途就是逻辑主键。没接模型平台时不用这张表。",
+      "description": "系统功能用哪个模型（ServiceModelBinding），每个租户每种用途一行。没接模型平台时不用这张表。",
       "at": [
         1,
         0
@@ -655,9 +663,13 @@
           "description": "库内主键"
         },
         {
+          "name": "tenant_uuid",
+          "type": "UUIDType",
+          "description": "租户（TenantOwned）"
+        },
+        {
           "name": "purpose",
           "type": "String(32)",
-          "key": "UK",
           "description": "title / memory_backfill / approval_judge"
         },
         {
@@ -668,7 +680,7 @@
         {
           "name": "client_code",
           "type": "String(128)",
-          "description": "客户端编码"
+          "description": "客户端编码（本租户的客户端）"
         },
         {
           "name": "model",
@@ -685,6 +697,17 @@
           "name": "updated_at",
           "type": "UTCDateTime",
           "default": "now()"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uk_service_model_purpose",
+          "columns": [
+            "tenant_uuid",
+            "purpose"
+          ],
+          "unique": true,
+          "description": "每个租户每种用途一行"
         }
       ]
     }

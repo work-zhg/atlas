@@ -4,8 +4,9 @@
     - 会话的工作目录建会话时定下、之后不变（沙箱里的 cwd）。所以有会话在用的目录（它本身或它下面
       有会话的工作目录）不能改名、移动 —— 要换目录就在新目录里新开会话。
     - 删除时，正在运行的会话的工作目录不能删；没在运行的可以删，会话保留，下次运行从空目录开始。
-★ 上传的两个上限都读运行期配置（workspace.upload_max_mb、workspace.quota_mb），改了不用重启。
-  配额按 files/ 下的全部对象算，智能体写的也在内；只在上传时检查（智能体在沙箱里写拦不住）。
+★ 上传的两个上限都读运行期配置（workspace.upload_max_mb、每人存储配额 capacity.storage_mb_per_person
+  是租户设置），改了不用重启。配额按 files/ 下的全部对象算，智能体写的也在内；只在上传时检查
+  （智能体在沙箱里写拦不住）。还要在租户的存储份额之内（容量组件，各人最近一次的用量之和）。
 ★ 只有本人：路径里有 user 段，接口只按当前主体取前缀，管理员也看不到别人的。
 """
 
@@ -18,6 +19,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..capacity import CapacityService
 from ..config import Settings
 from ..errors import AppError, Conflict, DependencyUnavailable, NotFound
 from ..providers.filesystem import PathEscape, UserFiles, WorkspaceRouting, make_user_files
@@ -51,10 +53,14 @@ class WorkspaceInUse(Conflict):
 
 
 class WorkspaceService:
-    def __init__(self, session: AsyncSession, settings: Settings) -> None:
+    def __init__(
+        self, session: AsyncSession, settings: Settings, capacity: CapacityService | None = None
+    ) -> None:
         self._session = session
         self._settings = settings
         self._threads = ThreadRepository(session)
+        #: 租户的存储份额（code-capacity.html）；None = 不判
+        self._capacity = capacity
 
     # ------------------------------------------------------------------ 读
 
@@ -63,6 +69,8 @@ class WorkspaceService:
         if files is None:
             return WorkspaceOut(configured=False)
         used, count = await asyncio.to_thread(files.usage)
+        if self._capacity is not None:
+            await self._capacity.record_storage(self._session, owner, used)
         return WorkspaceOut(
             configured=True,
             used_bytes=used,
@@ -112,21 +120,39 @@ class WorkspaceService:
     # ------------------------------------------------------------------ 写
 
     async def check_upload(self, owner: UUID, size: int, limits: WorkspaceLimits) -> None:
-        """上传前检查：单个文件上限、存储配额（覆盖同名文件时多算了一份，宁可严一点）。"""
+        """上传前检查：单个文件上限、每人存储配额、租户的存储份额（覆盖同名文件时多算了一份，
+        宁可严一点）。用量按目录现算，两层都不限时不算。"""
         if limits.upload_max and size > limits.upload_max:
             raise UploadTooLarge(f"文件超过单个 {_mb(limits.upload_max)} 的上限", size=size)
-        if not limits.quota:
-            return
         files = make_user_files(self._settings, owner)
         if files is None:
             return
-        used, _ = await asyncio.to_thread(files.usage)
-        if used + size > limits.quota:
-            raise UploadTooLarge(
-                f"工作空间存储配额 {_mb(limits.quota)} 已用 {_mb(used)}，放不下这个文件",
-                used=used,
-                quota=limits.quota,
+        measured: list[int] = []
+
+        async def measure() -> int:
+            if not measured:
+                measured.append((await asyncio.to_thread(files.usage))[0])
+            return measured[0]
+
+        if limits.quota:
+            used = await measure()
+            if used + size > limits.quota:
+                raise UploadTooLarge(
+                    f"工作空间存储配额 {_mb(limits.quota)} 已用 {_mb(used)}，放不下这个文件",
+                    used=used,
+                    quota=limits.quota,
+                )
+        if self._capacity is not None:
+            admission = await self._capacity.admit_storage(
+                self._session, owner, measure=measure, adding=size
             )
+            if not admission.allowed:
+                raise UploadTooLarge(
+                    f"本租户的工作空间存储份额 {_mb(admission.limit or 0)} 已用 "
+                    f"{_mb(admission.used)}，放不下这个文件",
+                    used=admission.used,
+                    quota=admission.limit,
+                )
 
     async def put(self, owner: UUID, path: str, data: bytes, limits: WorkspaceLimits) -> int:
         await self.check_upload(owner, len(data), limits)

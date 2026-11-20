@@ -17,6 +17,8 @@ from atlas_knowledge.rag.model_platform import (
 )
 from atlas_knowledge.rag.remote_models import OpenAICompatibleEmbedding
 
+from conftest import TEST_TENANT
+
 CHAT = ("Service", "knowledge-chat")
 EMBEDDING = ("Service", "knowledge-embedding")
 
@@ -39,6 +41,8 @@ class FakePlatform:
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.fetches += 1
         assert request.headers["x-caller-app"] == "atlas"
+        # 服务 Key 是租户自己的：按当前租户取（conftest 让每个用例都在 TEST_TENANT 里）
+        assert request.headers["x-tenant-id"] == TEST_TENANT
         if self.down:
             return httpx.Response(503)
         slot = (request.url.params["client_type"], request.url.params["client_code"])

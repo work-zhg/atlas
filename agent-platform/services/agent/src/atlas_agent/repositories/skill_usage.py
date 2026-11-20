@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from typing import Any
 from uuid import UUID
 
+from atlas_tenancy import TenantScope
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -68,6 +69,8 @@ class SkillUsageRepository:
             "agent_uuid": agent_id,
             "loads": 1,
             "completed_runs": completed,
+            # Core 的 upsert 不经过 flush，租户要自己写（atlas_tenancy）
+            "tenant_uuid": TenantScope.require(),
         }
         table = SkillUsageDaily.__table__
         dialect = self._session.bind.dialect.name if self._session.bind else "postgresql"

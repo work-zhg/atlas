@@ -1,0 +1,72 @@
+# 沙箱的网络隔离（多租户设计 §2「运行环境共用，但彼此不通」）。
+#
+#   不同人的沙箱之间不通     atlas-sbx、atlas-cli 的 Pod 只接受平台组件（atlas-system、opensandbox-system）
+#                           连进来：Atlas 连 bridge / 浏览器画面，OpenSandbox 连 execd、发凭据给 egress
+#   沙箱连不到平台内部服务   平台内部服务之间凭请求头互相信任，谁连得上就能冒充别人。
+#                           原生沙箱（atlas-sbx）的出站由 egress 镜像的 deny.always 拦集群网段（docker/egress）；
+#                           CLI 会话 Pod（atlas-cli）要直接调模型、MCP 网关、知识库 MCP（凭 Key / 令牌），
+#                           所以出站只放行这几个服务的端口 + DNS + 集群外的地址
+#   公网、局域网             照常放开（2026-11-10 定的「网络放开」）
+#
+# ★ __POD_CIDRS__ = 集群的 Pod 网段（apply.sh 探测后替换，逗号分隔）：出站到集群外的放行要把它除掉。
+#   Service 地址经 kube-proxy 换成 Pod 地址之后才按策略判，所以只除 Pod 网段就够。
+# ★ 已知的残留：放行的是端口，不是路径 —— CLI Pod 连得上知识库 8050 上的 /internal、MCP 网关 8070 上的
+#   管理接口。等自研模型网关上线、这三个都改走网关的公开地址（/llm、/mcp-gateway-api/mcp、知识库 MCP）后，
+#   CLI 的 egress 换成带 deny.always 的镜像，这里的出站白名单就可以删掉。
+# ★ 要 CNI 支持 NetworkPolicy：112 上是 Calico；k3s 自带策略控制器（没用 --disable-network-policy）。
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-ingress-from-platform
+  namespace: atlas-sbx
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: atlas-system}}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: opensandbox-system}}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: cli-pod-isolation
+  namespace: atlas-cli
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: atlas-system}}
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: opensandbox-system}}
+  egress:
+    # DNS
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}
+          podSelector: {matchLabels: {k8s-app: kube-dns}}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    # CLI 直接调的平台服务（凭 Key / 令牌）：模型（LiteLLM、自研模型网关）、MCP 网关、知识库 MCP
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: atlas-system}}
+          podSelector: {matchLabels: {app: atlas-litellm}}
+      ports: [{protocol: TCP, port: 4000}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: atlas-system}}
+          podSelector: {matchLabels: {app: atlas-llmgateway}}
+      ports: [{protocol: TCP, port: 8091}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: atlas-system}}
+          podSelector: {matchLabels: {app: atlas-mcpgateway}}
+      ports: [{protocol: TCP, port: 8070}]
+    - to:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: atlas-system}}
+          podSelector: {matchLabels: {app: atlas-knowledge}}
+      ports: [{protocol: TCP, port: 8050}]
+    # 集群外：公网、节点、局域网
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [__POD_CIDRS__]

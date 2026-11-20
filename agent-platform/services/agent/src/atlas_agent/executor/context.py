@@ -57,9 +57,9 @@ async def load_instructions(
     if user_id:
         try:
             async with sessionmaker() as session:
-                platform, user = await InstructionService(session).for_user(user_id)
-            if platform:
-                layers.append(("平台指令（管理员设定，必须遵守）", platform))
+                tenant, user = await InstructionService(session).for_user(user_id)
+            if tenant:
+                layers.append(("组织指令（管理员设定，必须遵守）", tenant))
             if user:
                 layers.append(("用户的个人指令", user))
         except Exception as exc:  # 读不到：本轮不带指令，不失败

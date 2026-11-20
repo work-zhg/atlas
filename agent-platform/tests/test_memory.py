@@ -102,16 +102,29 @@ def _memory_database() -> Iterator[None]:
         memory_settings.cache_clear()
 
 
+def _uc_finds_everyone(request: httpx.Request) -> httpx.Response:
+    """记忆服务核对「这个人在这个租户里」时问的用户中心：谁都在请求头写的那个租户里。"""
+    uid = request.url.path.split("/")[-2]
+    tenant = request.headers.get("x-tenant-id")
+    user = {"id": uid, "status": "active", "tenant_id": tenant}
+    return httpx.Response(200, json={"can_access": True, "permissions": [], "user": user})
+
+
 @pytest.fixture
-async def memory_app() -> AsyncIterator[Any]:
+async def memory_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
+    from atlas_memory import auth as memory_auth
     from atlas_memory.api.app import create_app as create_memory_app
     from atlas_memory.db.session import get_engine
     from atlas_memory.db.session import get_sessionmaker as memory_sessions
     from atlas_memory.scopes import ScopeService
 
     async with memory_sessions()() as session:
+        # 租户状态也清：记忆服务自己的测试会停用测试租户
         await session.execute(
-            text("TRUNCATE mem_scope, mem_instance, mem_topic, mem_entry, mem_revision")
+            text(
+                "TRUNCATE mem_scope, mem_instance, mem_topic, mem_entry, mem_revision,"
+                " app_tenant_state, app_ops_request"
+            )
         )
         await ScopeService(session).create(
             code="user",
@@ -122,6 +135,8 @@ async def memory_app() -> AsyncIterator[Any]:
             actor="test",
         )
         await session.commit()
+    monkeypatch.setattr(memory_auth, "_transport", httpx.MockTransport(_uc_finds_everyone))
+    monkeypatch.setattr(memory_auth, "_cache", memory_auth._Cache())
     app = create_memory_app(perms=OwnerOnly())
     yield app
     await get_engine().dispose()
@@ -670,9 +685,9 @@ async def test_backfill_failures_back_off(rt: MemoryRuntime, owners: list[UUID])
 async def test_due_threads(rt: MemoryRuntime, owners: list[UUID]) -> None:
     thread = await make_session(owners, [("user", "记住：周报每周五发。", at(10))])
     filler = backfiller(rt, FakeModel([{"writes": []}]))
-    assert thread.thread_uuid in await filler.due_threads()
+    assert (thread.thread_uuid, thread.tenant_uuid) in await filler.due_threads()
     await filler.process(thread.thread_uuid)
-    assert thread.thread_uuid not in await filler.due_threads()
+    assert thread.thread_uuid not in [t for t, _ in await filler.due_threads()]
 
 
 # ───────────────────────────── 管理接口（§7）

@@ -7,7 +7,8 @@
             最后结束的子 run）。占不到槽、抢不到锁都不报错，run 留在库里
     兜底    满了没接的、发版交出来的、崩溃后租约过期的、续跑信号丢了的，由每个实例都跑的
             兜底任务（RecoveryJob）分页拉出来、逐个抢锁，抢到就在本实例跑
-    续租    LeaseRenewer 每 lease/3 一条 SQL 续本实例全部的 run；续不上 = 被别的实例抢走，立即停
+    续租    LeaseRenewer 每 lease/3 一条 SQL 续本实例全部的 run；续不上 = 被别的实例抢走，立即停；
+            顺带查租户状态，已停用的租户的 run 交出去（停用期间谁也不接，恢复后兜底照常接）
     交接    停机时关准入，native 走到安全点、CLI 直接断开，清掉租约，交给别的实例的兜底任务
 
 兜底和续租是定时任务库（atlas_jobs）的实例任务：这里只写 execute，循环、抖动、出错隔离、
@@ -30,8 +31,11 @@ from uuid import UUID
 
 import redis.asyncio as aioredis
 from atlas_jobs import Job, JobContext, NoParams
+from atlas_opsapi import TenantGate
+from atlas_tenancy import SystemReason, TenantScope
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from ..capacity import CapacityService
 from ..config import Settings
 from ..redisx import make_redis
 from ..repositories.run import SUSPENDED_STATUSES, LeaseLost, RunRepository
@@ -60,6 +64,8 @@ class ExecutionSlot:
     drain: bool = False
     #: CLI 智能体：停机时直接断开（那一轮在 Pod 里照常进行）
     cli: bool = False
+    #: run 所属的租户：租户停用时按它找出要交出去的槽
+    tenant: UUID | None = None
 
     def stop_lost(self) -> None:
         """租约已在别人手里：立即停掉本地执行，防止「假死后复活」的双写。"""
@@ -115,8 +121,14 @@ class RunWorker:
         segment: SegmentExecution,
         continuation: Continuation,
         model_builder: Any = None,
+        capacity: CapacityService | None = None,
+        gate: TenantGate | None = None,
     ) -> None:
         self._sessionmaker = sessionmaker
+        #: 租户份额和每人上限（code-capacity.html）：抢锁的同一个事务里判，不行就回滚
+        self._capacity = capacity
+        #: 租户停用了不接它的 run（运营接口，code-ops.html）：留在库里，恢复后兜底任务照常接
+        self.gate = gate
         self._settings = settings
         self._segment = segment
         self._continuation = continuation
@@ -152,6 +164,8 @@ class RunWorker:
 
     async def try_take(self, run_id: UUID) -> bool:
         """占槽 → 按 run 号抢锁 → 起执行槽。抢到返回 True；没槽、没抢到返回 False。"""
+        if self.gate is not None and not await self.gate.is_active(TenantScope.require()):
+            return False
         if not self.admission.reserve():
             return False
         try:
@@ -159,7 +173,15 @@ class RunWorker:
                 taken = await RunQueue(session).take(
                     run_id, owner=self._instance, lease_s=self._settings.run_lease_s
                 )
-                await session.commit()
+                if taken is not None and self._capacity is not None:
+                    admission = await self._capacity.admit_run(session, run_id)
+                    if not admission.allowed:
+                        # 份额满了：回滚抢锁，run 留在排队里，兜底任务下一轮再来
+                        await session.rollback()
+                        logger.info("run %s 暂不开跑：%s", run_id, admission.message)
+                        taken = None
+                if taken is not None:
+                    await session.commit()
         except asyncio.CancelledError:
             self.admission.release()
             raise
@@ -224,9 +246,38 @@ class RunWorker:
         """在跑、要续租的 run：已在收尾的和已被抢走的不算。"""
         return {rid: s for rid, s in self._slots.items() if not s.settled and not s.lost}
 
+    def pause_tenant(self, tenant: UUID) -> int:
+        """租户停用：本实例上这个租户在跑的 run 交出去（与停机交接同一套：native 到安全点、CLI
+        直接断开），清掉租约后状态不变。停用期间谁也接不了它（try_take 先问 TenantGate），恢复后
+        兜底任务照常接走、从检查点接着跑。返回交出了几个。
+
+        ★ 不设到点中止：一个工具跑很久就等它跑完（不设运行上限的原则）。
+        """
+        paused = 0
+        for slot in self.live_slots().values():
+            if slot.tenant != tenant or slot.drain:
+                continue
+            slot.drain = True
+            if slot.cli and slot.task is not None:
+                slot.task.cancel()
+            paused += 1
+        return paused
+
+    async def pause_inactive_tenants(self) -> None:
+        """续租时顺带查：本实例在跑的 run 里有没有租户已停用的（停用请求打到了别的实例）。"""
+        if self.gate is None:
+            return
+        tenants = {s.tenant for s in self.live_slots().values() if s.tenant and not s.drain}
+        for tenant in tenants:
+            if not await self.gate.is_active(tenant) and (n := self.pause_tenant(tenant)):
+                logger.info("租户 %s 已停用：交出本实例上它的 %d 个 run", tenant, n)
+
     # ------------------------------------------------------------------ 执行
 
     def _start(self, run_id: UUID, takeover: str | None) -> None:
+        # 抢锁是在这个 run 的租户里做的（请求、父 run、兜底任务都先进入了租户）：
+        # 下面的任务用全新的上下文，租户要显式带过去
+        tenant = TenantScope.require()
         # ★ 本实例上还有这个 run 的旧任务（例如事件循环卡过、租约过期后自己又抢了回来）：
         #   旧的必须停，同一个 run 不能有两个本地执行。
         #   已在收尾的（settled）不算：挂起后续跑时，上一段的任务正是在收尾之后续上了这一段
@@ -235,7 +286,7 @@ class RunWorker:
             old.stop_lost()
 
         # 停机中抢到的（关准入之前已经在抢）：领到就交回去
-        slot = ExecutionSlot(drain=self._draining)
+        slot = ExecutionSlot(drain=self._draining, tenant=tenant)
         # ★ 必须给一个**全新的** contextvars.Context。
         #
         #   派发第一次可能在「另一个 run 的执行上下文里」被调用（父 run 的 task 工具起
@@ -245,7 +296,7 @@ class RunWorker:
         #   assistant 消息是空的。症状极具迷惑性：子 run 状态 succeeded、模型确实被调用、
         #   只是内容凭空消失。
         slot.task = asyncio.create_task(
-            self._guarded(run_id, slot, takeover),
+            self._guarded(run_id, slot, tenant, takeover),
             name=f"run:{run_id}",
             context=contextvars.Context(),
         )
@@ -262,7 +313,13 @@ class RunWorker:
         slot.task.add_done_callback(_forget)
 
     async def _guarded(
-        self, run_id: UUID, slot: ExecutionSlot, takeover: str | None = None
+        self, run_id: UUID, slot: ExecutionSlot, tenant: UUID, takeover: str | None = None
+    ) -> None:
+        with TenantScope.enter(tenant):
+            await self._guarded_in_tenant(run_id, slot, takeover)
+
+    async def _guarded_in_tenant(
+        self, run_id: UUID, slot: ExecutionSlot, takeover: str | None
     ) -> None:
         outcome: SegmentOutcome | None = None
         try:
@@ -399,24 +456,30 @@ class RecoveryJob(Job):
             logger.info("兜底：本实例接下 %d 个 run", taken)
 
     async def _take_orphans(self) -> int:
-        """排队超过几秒没人接的、租约过期的、交接了没人接的：逐个抢锁。"""
+        """排队超过几秒没人接的、租约过期的、交接了没人接的：逐个抢锁。
+
+        ★ 跨租户巡检的固定写法（TenantSweep）：候选在系统范围里取（只有 id 和租户），抢锁时
+          进入候选所属的租户。
+        """
         taken = 0
         after = 0
         while self._worker.has_free_slot():
-            async with self._sessionmaker() as session:
-                page = await RunQueue(session).candidates(
-                    after_id=after,
-                    limit=RECOVERY_PAGE,
-                    queued_for_s=self._settings.run_recovery_queued_s,
-                )
+            with TenantScope.system(SystemReason.SWEEP):
+                async with self._sessionmaker() as session:
+                    page = await RunQueue(session).candidates(
+                        after_id=after,
+                        limit=RECOVERY_PAGE,
+                        queued_for_s=self._settings.run_recovery_queued_s,
+                    )
             if not page:
                 break
             for candidate in page:
                 after = candidate.id
                 if not self._worker.has_free_slot():
                     break
-                if await self._worker.try_take(candidate.run_uuid):
-                    taken += 1
+                with TenantScope.enter(candidate.tenant_uuid):
+                    if await self._worker.try_take(candidate.run_uuid):
+                        taken += 1
         return taken
 
     async def _resume_suspended(self) -> int:
@@ -424,17 +487,19 @@ class RecoveryJob(Job):
         resumed = 0
         after = 0
         while self._worker.has_free_slot():
-            page = await self._continuation.suspended_candidates(
-                after_id=after, limit=RECOVERY_PAGE
-            )
+            with TenantScope.system(SystemReason.SWEEP):
+                page = await self._continuation.suspended_candidates(
+                    after_id=after, limit=RECOVERY_PAGE
+                )
             if not page:
                 break
             for candidate in page:
                 after = candidate.id
                 if not self._worker.has_free_slot():
                     break
-                if await self._worker.resume_if_ready(candidate.run_uuid):
-                    resumed += 1
+                with TenantScope.enter(candidate.tenant_uuid):
+                    if await self._worker.resume_if_ready(candidate.run_uuid):
+                        resumed += 1
         return resumed
 
 
@@ -468,11 +533,17 @@ class LeaseRenewer(Job):
         live = self._worker.live_slots()
         if not live:
             return
-        async with self._sessionmaker() as session:
-            held = await RunQueue(session).renew(
-                list(live), owner=self._instance, lease_s=self._settings.run_lease_s
-            )
-            await session.commit()
+        try:
+            await self._worker.pause_inactive_tenants()
+        except Exception:
+            logger.warning("查租户状态失败，这一轮不交出", exc_info=True)
+        # 本实例持有的 run 可能属于不同租户：按 run 号和持有者一条 SQL 续，在系统范围里做
+        with TenantScope.system(SystemReason.SWEEP):
+            async with self._sessionmaker() as session:
+                held = await RunQueue(session).renew(
+                    list(live), owner=self._instance, lease_s=self._settings.run_lease_s
+                )
+                await session.commit()
         redis = make_redis(self._settings)
         try:
             relay = EventRelay(redis)

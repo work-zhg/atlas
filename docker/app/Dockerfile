@@ -53,6 +53,9 @@ COPY agent-platform/libs/devicelink/ devicelink/
 COPY infra-platform/libs/redislock/ redislock/
 COPY infra-platform/libs/appconfig/ appconfig/
 COPY infra-platform/libs/jobs/ jobs/
+# 多租户（c4-model/opscenter/design-tenant-isolation.html）：按租户自动过滤、运营接口
+COPY infra-platform/libs/tenancy/ tenancy/
+COPY infra-platform/libs/opsapi/ opsapi/
 COPY agent-platform/services/skill/ skill/
 COPY agent-platform/services/knowledge/ knowledge/
 COPY agent-platform/services/memory/ memory/
@@ -74,7 +77,8 @@ COPY teamflow/services/teamflow/ teamflow/
 #   requirements.txt 时在这里构建失败，而不是到 Pod 里才 ImportError。
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --no-deps \
-                ./jsonrpc ./host ./acp ./engine ./redislock ./appconfig ./jobs ./skill ./knowledge ./memory ./mcpgateway \
+                ./jsonrpc ./host ./acp ./engine ./redislock ./appconfig ./jobs ./tenancy ./opsapi \
+                ./skill ./knowledge ./memory ./mcpgateway \
                 ./modelgateway ./devicelink ./devicegw \
                 ./server \
                 ./usercenter ./teamflow \

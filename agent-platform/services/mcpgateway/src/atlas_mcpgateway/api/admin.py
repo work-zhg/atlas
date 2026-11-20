@@ -51,10 +51,10 @@ import asyncio
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from opentelemetry import trace
 
-from ..auth import ManagerDep, Operator, OperatorDep
+from ..auth import ManagerDep, Operator, OperatorDep, verified_tenant
 from ..db.models import McpApiKey, McpService
 from ..errors import Conflict, Forbidden, Invalid, NotFound, Unavailable
 from ..keys import KeyService
@@ -112,7 +112,8 @@ from .views import (
     tool_out,
 )
 
-router = APIRouter(prefix="/api/v1", tags=["admin"])
+# ★ 先核对租户、进入它（auth.verified_tenant），之后的读写都按它自动过滤
+router = APIRouter(prefix="/api/v1", tags=["admin"], dependencies=[Depends(verified_tenant)])
 _tracer = trace.get_tracer("atlas_mcpgateway")
 
 

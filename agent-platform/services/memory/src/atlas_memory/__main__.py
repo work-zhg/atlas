@@ -7,14 +7,12 @@
                                      [--check-permission] [--data-code …] [--if-missing]
     python -m atlas_memory scope set <编码> [--description …]
                                      [--check-permission | --no-check-permission]
-    python -m atlas_memory register-uc --account admin
-                                     把应用、操作码、各作用域的数据编码登记到用户中心
 
 ★ Atlas 需要的作用域（记忆设计 §4.1，本期只用「用户」）。部署清单（deploy/local/36-memory.yaml）
-  在迁移之后用 --if-missing 建好它；数据编码要管理员再跑一次 register-uc 登记到用户中心：
+  在迁移之后用 --if-missing 建好它；打开了数据权限开关的作用域，它的数据编码由运营人员在运营中心
+  录入（见 README「用户中心登记」）：
     python -m atlas_memory scope add user --key uid --description 用户 \
         --check-permission --if-missing
-    python -m atlas_memory register-uc --account admin
 """
 
 from __future__ import annotations
@@ -53,6 +51,7 @@ def serve() -> None:
 
 
 def migrate(revision: str = "head") -> None:
+    """本服务的表，再加运营接口库的两张表（租户状态、运营请求；各自的版本表）。"""
     from alembic import command
     from alembic.config import Config
 
@@ -60,6 +59,20 @@ def migrate(revision: str = "head") -> None:
     cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
     cfg.set_main_option("sqlalchemy.url", get_settings().database_url)
     command.upgrade(cfg, revision)
+    asyncio.run(_upgrade_opsapi())
+
+
+async def _upgrade_opsapi() -> None:
+    from atlas_opsapi import upgrade
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(upgrade)
+    finally:
+        await engine.dispose()
 
 
 async def _with_scopes(fn: Callable[[ScopeService], Awaitable[Any]]) -> Any:
@@ -106,7 +119,10 @@ def scope_command(args: argparse.Namespace) -> int:
             return 0
         _print_scope(view)
         if view["check_permission"]:
-            print("  打开了数据权限开关：运行 register-uc 把数据编码登记到用户中心")
+            print(
+                f"  打开了数据权限开关：数据编码 {view['data_code']} "
+                "要在运营中心录入到应用 memory 名下"
+            )
         return 0
     if args.action == "set":
 
@@ -126,35 +142,6 @@ def scope_command(args: argparse.Namespace) -> int:
 
 async def _views(svc: ScopeService) -> list[dict[str, Any]]:
     return [scope_view(s) for s in await svc.list()]
-
-
-def register_command(args: argparse.Namespace) -> int:
-    from .register import register
-
-    views = asyncio.run(_with_scopes(_views))
-    data_types = [
-        {
-            "code": v["data_code"],
-            "name": f"记忆 · {v['description'] or v['code']}",
-            "description": "一个作用域实例一条：只读（列目录、加载）/ 读写（写入、拆分、撤销）/ "
-            "Owner（彻底删除）",
-        }
-        for v in views
-        if v["check_permission"] and v["data_code"]
-    ]
-    settings = get_settings()
-    password = os.environ.get("UC_ADMIN_PASSWORD") or getpass.getpass(
-        f"用户中心账号 {args.account} 的密码："
-    )
-    register(
-        args.uc_url or settings.uc_base_url,
-        args.account,
-        password,
-        app_code=settings.uc_app_code,
-        data_types=data_types,
-        tenant=args.tenant,
-    )
-    return 0
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -178,11 +165,6 @@ def _parser() -> argparse.ArgumentParser:
     upd.add_argument("--description")
     upd.add_argument("--check-permission", action=argparse.BooleanOptionalAction, default=None)
     upd.add_argument("--data-code")
-
-    reg = sub.add_parser("register-uc", help="把应用、操作码、数据编码登记到用户中心")
-    reg.add_argument("--account", required=True, help="用户中心管理员账号")
-    reg.add_argument("--uc-url", default=None)
-    reg.add_argument("--tenant", default=None, help="管理员所在的企业代码（有多个租户时必填）")
     return parser
 
 
@@ -198,8 +180,6 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "scope":
             return scope_command(args)
-        if args.command == "register-uc":
-            return register_command(args)
     except MemoryServiceError as exc:
         print(f"✗ {exc.message}", file=sys.stderr)
         return 1

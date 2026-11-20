@@ -30,17 +30,17 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：基础设施平台 - 公共库 - 应用配置",
-  "description": "目标模型（新库 infra-platform/libs/appconfig）。宿主应用引用后就有带类型、带版本的配置：key 由代码声明，值存在宿主自己的库里，每次读取都查库。",
+  "description": "目标模型（新库 infra-platform/libs/appconfig）。宿主应用引用后就有带类型、带版本的配置：key 由代码声明，值存在宿主自己的库里，每次读取都查库。配置分两种作用域：系统参数（只有运营中心能改）和租户设置（每个租户一份，租户管理员改）。多租户的整体设计见 ../opscenter/design-tenant-isolation.html",
   "component": "应用配置",
   "package": "atlas_appconfig",
-  "overview": "应用配置是一个嵌入式库，用来管理应用运行期间可以改的业务参数，例如配额、开关、白名单。每条配置由 key、类型、值和版本组成，类型可以是 string、int、float、bool，也可以是元素为基本类型的 list 和 map。key 和类型由宿主在代码里用 ConfigKey 声明，启动时登记到宿主自己的库里；运行时管理员经管理接口改值，每改一次版本加一并留一条修订，可以查历史、回滚。读取不缓存，每次查库，改动立即对所有实例生效。\n\n它不管这些：数据库地址、密钥这类启动参数仍然放在环境变量（pydantic-settings）里，值以明文存储、接口里可以看到，所以不能放机密；只有应用级配置，没有按租户、按用户的配置；不提供变更回调。鉴权由宿主实现 ConfigGuard。",
+  "overview": "应用配置是一个嵌入式库，用来管理应用运行期间可以改的业务参数，例如配额、开关、白名单。每条配置由 key、类型、值和版本组成，类型可以是 string、int、float、bool，也可以是元素为基本类型的 list 和 map。key 和类型由宿主在代码里用 ConfigKey 声明，启动时登记到宿主自己的库里；运行时管理员经管理接口改值，每改一次版本加一并留一条修订，可以查历史、回滚。读取不缓存，每次查库，改动立即对所有实例生效。\n\n它不管这些：数据库地址、密钥这类启动参数仍然放在环境变量（pydantic-settings）里，值以明文存储、接口里可以看到，所以不能放机密；没有按用户的配置；不提供变更回调。鉴权由宿主实现 ConfigGuard。\n\n配置分两种作用域，在 ConfigKey 里声明。系统参数（SYSTEM）全系统一份，不含任何租户内容，比如可用镜像、上传的硬上限，只有运营中心能经运营接口改。租户设置（TENANT）每个租户一份，比如默认智能体、每人几个沙箱，由租户管理员改；读的时候按「本租户的值 → 系统值 → 代码默认值」取，系统值就是运营中心给所有租户定的默认。租户由调用方显式传入，库不从请求或上下文里推断。",
   "elements": [
     {
       "id": "routes",
       "kind": "class",
       "name": "ConfigRoutes",
       "stereotype": "对外接口",
-      "responsibility": "管理接口：宿主挂到自己的 FastAPI 应用上。列出和查看本版本代码声明的 key（带默认值和是否已覆盖），改值、恢复默认值、看历史、回滚。每个请求先经 ConfigGuard 鉴权、拿到操作人；改值和回滚必须带期望版本，版本不对返回 409。",
+      "responsibility": "管理接口：宿主挂两份。系统参数一份（scope=SYSTEM）挂在运营接口下，守卫由运营接口库的 OpsGuard 实现，列出系统参数和租户设置的系统值；租户设置一份（scope=TENANT）挂在宿主自己的接口下，守卫由宿主实现（租户管理员），只列租户设置、显示本租户的有效值，租户从守卫取。列出和查看本版本代码声明的 key（带默认值和是否已覆盖），改值、恢复默认值、看历史、回滚。每个请求先经守卫鉴权、拿到操作人；改值和回滚必须带期望版本，版本不对返回 409。",
       "attributes": [
         [
           "-",
@@ -52,6 +52,10 @@
         ]
       ],
       "methods": [
+        [
+          "+",
+          "ConfigRoutes(config, guard, *, scope, prefix)"
+        ],
         [
           "+",
           "router -> APIRouter"
@@ -83,7 +87,7 @@
       "kind": "interface",
       "name": "ConfigGuard",
       "stereotype": "扩展点",
-      "responsibility": "鉴权由宿主实现：谁能看配置、谁能改配置，返回操作人（记进修订历史），没权限就抛 403。库不认识用户中心和操作码，各应用按自己的权限模型接入。",
+      "responsibility": "鉴权由宿主实现：谁能看配置、谁能改配置，返回操作人（记进修订历史），没权限就抛 403。库不认识用户中心和操作码，各应用按自己的权限模型接入。系统参数那一份由运营接口库的 OpsGuard 实现（只认运营中心）。",
       "methods": [
         [
           "+",
@@ -104,7 +108,7 @@
       "kind": "class",
       "name": "AppConfig",
       "stereotype": "应用服务",
-      "responsibility": "库的入口。宿主用自己的 async_sessionmaker 和声明的 key 构造它，在 lifespan 里 register() 一次，之后读写都经它。读不缓存，每次查库：值为空或行还没建时返回代码里的默认值，查库失败直接抛出，不退回默认值。写入校验类型和期望版本，版本加一并追加一条修订，在同一个事务里完成。",
+      "responsibility": "库的入口。宿主用自己的 async_sessionmaker 和声明的 key 构造它，在 lifespan 里 register() 一次，之后读写都经它。读不缓存，每次查库：系统参数取系统值，值为空返回代码里的默认值；租户设置要传 tenant_uuid，按本租户的值 → 系统值 → 代码默认值取，一次查询拿到两行；作用域和是否传了租户对不上就抛 ScopeMismatch。查库失败直接抛出，不退回默认值。写入校验类型和期望版本，版本加一并追加一条修订，在同一个事务里完成。",
       "attributes": [
         [
           "-",
@@ -118,31 +122,31 @@
       "methods": [
         [
           "+",
-          "register()（类型对不上抛 TypeChanged）"
+          "register()（类型或作用域对不上抛 TypeChanged）"
         ],
         [
           "+",
-          "get(key: ConfigKey[T]) -> T"
+          "get(key: ConfigKey[T], *, tenant_uuid=None) -> T"
         ],
         [
           "+",
-          "get_many(*keys) -> tuple"
+          "get_many(*keys, tenant_uuid=None) -> tuple"
         ],
         [
           "+",
-          "list() -> list[ConfigItem]"
+          "list(scope, *, tenant_uuid=None) -> list[ConfigItem]"
         ],
         [
           "+",
-          "set(name, value, *, expected_version, by, note) -> ConfigItem"
+          "set(name, value, *, tenant_uuid=None, expected_version, by, note) -> ConfigItem"
         ],
         [
           "+",
-          "history(name) -> list[ConfigRevision]"
+          "history(name, *, tenant_uuid=None) -> list[ConfigRevision]"
         ],
         [
           "+",
-          "rollback(name, to_version, *, expected_version, by) -> ConfigItem"
+          "rollback(name, to_version, *, tenant_uuid=None, expected_version, by) -> ConfigItem"
         ]
       ],
       "at": [
@@ -155,7 +159,7 @@
       "kind": "class",
       "name": "ConfigKey[T]",
       "stereotype": "值对象",
-      "responsibility": "代码里的一个配置声明，通常写成模块级常量。类型从 Python 注解得出，泛型参数让 get() 的返回值有静态类型。名字只能用小写字母、数字、点、下划线和连字符；同一个 AppConfig 里不能重名。",
+      "responsibility": "代码里的一个配置声明，通常写成模块级常量。类型从 Python 注解得出，泛型参数让 get() 的返回值有静态类型。名字只能用小写字母、数字、点、下划线和连字符；同一个 AppConfig 里不能重名。作用域（scope）声明这是系统参数还是租户设置，登记后不能改：要改就换一个 key 名。",
       "attributes": [
         [
           "+",
@@ -172,12 +176,16 @@
         [
           "+",
           "description: str"
+        ],
+        [
+          "+",
+          "scope: ConfigScope（默认 SYSTEM）"
         ]
       ],
       "methods": [
         [
           "+",
-          "ConfigKey(name, int | list[str] | dict[str, int] …, *, default, description)"
+          "ConfigKey(name, int | list[str] | dict[str, int] …, *, default, description, scope)"
         ]
       ],
       "at": [
@@ -248,19 +256,19 @@
       "kind": "class",
       "name": "ConfigRepository",
       "stereotype": "仓储",
-      "responsibility": "读写 app_config 和 app_config_revision 两张表，使用调用方传入的会话。登记用 INSERT … ON CONFLICT DO NOTHING，多个实例同时启动不会互相冲突；保存用版本号做 CAS（UPDATE … WHERE version = 期望版本），没更新到行就抛 VersionConflict，修订行在同一个事务里追加。",
+      "responsibility": "读写 app_config 和 app_config_revision 两张表，使用调用方传入的会话。一个 key 一行系统值，再加每个改过它的租户各一行；租户行第一次写入时才建。登记用 INSERT … ON CONFLICT DO NOTHING，多个实例同时启动不会互相冲突；保存用版本号做 CAS（UPDATE … WHERE version = 期望版本），没更新到行就抛 VersionConflict，修订行在同一个事务里追加。",
       "methods": [
         [
           "+",
-          "get(session, name) -> ConfigItem | None"
+          "get(session, name, tenant_uuid=None) -> ConfigItem | None"
         ],
         [
           "+",
-          "get_many(session, names) -> dict[str, ConfigItem]"
+          "effective(session, names, tenant_uuid) -> dict[str, (ConfigItem | None, ConfigItem)]"
         ],
         [
           "+",
-          "list(session) -> list[ConfigItem]"
+          "list(session, scope, tenant_uuid=None) -> list[ConfigItem]"
         ],
         [
           "+",
@@ -272,11 +280,11 @@
         ],
         [
           "+",
-          "history(session, name) -> list[ConfigRevision]"
+          "history(session, name, tenant_uuid=None) -> list[ConfigRevision]"
         ],
         [
           "+",
-          "revision(session, name, version) -> ConfigRevision | None"
+          "revision(session, name, version, tenant_uuid=None) -> ConfigRevision | None"
         ]
       ],
       "at": [
@@ -289,7 +297,7 @@
       "kind": "class",
       "name": "ConfigItem",
       "stereotype": "聚合根",
-      "responsibility": "库里的一条配置：key、类型、值和版本。值为空表示没有覆盖、用代码里的默认值。改值只能经 change()：先校验期望版本和类型，再把版本加一，并产生这一版的修订；类型登记后不能再改。",
+      "responsibility": "库里的一条配置：key、类型、值和版本；tenant_uuid 为空是系统值，否则是这个租户的值。值为空表示没有覆盖、用代码里的默认值。改值只能经 change()：先校验期望版本和类型，再把版本加一，并产生这一版的修订；类型登记后不能再改。",
       "attributes": [
         [
           "+",
@@ -298,6 +306,10 @@
         [
           "+",
           "name: str"
+        ],
+        [
+          "+",
+          "tenant_uuid: UUID | None（空 = 系统值）"
         ],
         [
           "+",
@@ -327,7 +339,7 @@
         ],
         [
           "+",
-          "effective(default: T) -> T"
+          "effective(default: T, system: ConfigItem | None) -> T"
         ]
       ],
       "at": [
@@ -365,7 +377,45 @@
       ],
       "at": [
         0,
-        3.75
+        4.75
+      ]
+    },
+    {
+      "id": "scope",
+      "kind": "enum",
+      "name": "ConfigScope",
+      "stereotype": "值对象",
+      "responsibility": "配置的作用域。SYSTEM：全系统一份，不含任何租户内容，只有运营中心能改。TENANT：每个租户一份，没改过的租户用系统值。",
+      "attributes": [
+        [
+          "",
+          "SYSTEM（系统参数）"
+        ],
+        [
+          "",
+          "TENANT（租户设置）"
+        ]
+      ],
+      "at": [
+        4.85,
+        0
+      ]
+    },
+    {
+      "id": "tguard",
+      "kind": "interface",
+      "name": "TenantConfigGuard",
+      "stereotype": "扩展点",
+      "responsibility": "租户设置那一份管理接口的守卫：在 ConfigGuard 之上多回答「这个请求是哪个租户」。由宿主实现（租户管理员），库不从请求头推断租户。",
+      "methods": [
+        [
+          "+",
+          "tenant(request) -> UUID"
+        ]
+      ],
+      "at": [
+        0,
+        3.0
       ]
     }
   ],
@@ -430,6 +480,17 @@
       "to": "vtype",
       "type": "association",
       "description": "按类型校验值"
+    },
+    {
+      "from": "key",
+      "to": "scope",
+      "type": "association",
+      "description": "作用域"
+    },
+    {
+      "from": "tguard",
+      "to": "guard",
+      "type": "extends"
     }
   ],
   "capabilities": [
@@ -443,7 +504,7 @@
       "name": "声明配置",
       "entry": "ConfigKey(name, type, *, default, description)",
       "callers": "宿主代码（模块级常量）",
-      "description": "类型写 Python 注解：str、int、float、bool、list[T]、dict[str, T]，其中 T 是基本类型"
+      "description": "类型写 Python 注解：str、int、float、bool、list[T]、dict[str, T]，其中 T 是基本类型；scope 默认 SYSTEM，租户设置写 scope=TENANT"
     },
     {
       "name": "登记",
@@ -453,15 +514,15 @@
     },
     {
       "name": "读取",
-      "entry": "get(key) -> T · get_many(*keys)",
+      "entry": "get(key, *, tenant_uuid=None) -> T · get_many(*keys, tenant_uuid=None)",
       "callers": "宿主业务代码",
-      "description": "每次都查库，不缓存；值为空返回默认值；读到的值也会按声明的类型再校验一次"
+      "description": "每次都查库，不缓存；系统参数：值为空返回默认值。租户设置：必须传 tenant_uuid，按本租户的值 → 系统值 → 代码默认值取。读到的值也会按声明的类型再校验一次"
     },
     {
       "name": "修改",
-      "entry": "set(name, value, *, expected_version, by, note)",
+      "entry": "set(name, value, *, tenant_uuid=None, expected_version, by, note)",
       "callers": "管理接口、宿主代码",
-      "description": "校验类型和期望版本，版本加一并追加修订；value=None 表示恢复默认值。版本不对抛 VersionConflict"
+      "description": "校验类型和期望版本，版本加一并追加修订；value=None 表示恢复默认值。版本不对抛 VersionConflict。改租户设置传 tenant_uuid；不传就是改系统值（所有没改过的租户都跟着变）"
     },
     {
       "name": "历史与回滚",
@@ -471,9 +532,9 @@
     },
     {
       "name": "管理接口",
-      "entry": "ConfigRoutes(config, guard).router",
-      "callers": "宿主 include_router",
-      "description": "列出、查看、改值、历史、回滚；查看和修改分别经 ConfigGuard.view / edit 鉴权"
+      "entry": "ConfigRoutes(config, guard, scope=SYSTEM | TENANT).router",
+      "callers": "运营接口库（系统参数，挂在 /ops/v1/configs）、宿主（租户设置）",
+      "description": "宿主挂两份：系统参数一份只给运营中心；租户设置一份给租户管理员，只看得到、改得到本租户的值"
     }
   ],
   "decisions": [
@@ -512,13 +573,33 @@
     {
       "decision": "鉴权交给宿主实现 ConfigGuard",
       "reason": "库不认识用户中心和操作码，各应用的权限模型也不一样（比如 Atlas 用操作码，别的应用可能只看是不是管理员）"
+    },
+    {
+      "decision": "两种作用域：系统参数只有运营中心能改；租户设置每个租户一份，由租户管理员改",
+      "reason": "没有平台租户之后，「平台管理员」不存在了：不含租户内容、影响所有租户的参数归运营中心；只影响一个租户的（默认智能体、每人上限）交给那个租户自己。"
+    },
+    {
+      "decision": "租户设置按「本租户的值 → 系统值 → 代码默认值」取",
+      "reason": "运营中心要能给所有租户定一个默认（比如每人几个沙箱）而不用发版；租户没改过就跟着系统值走，改过的以自己的为准。"
+    },
+    {
+      "decision": "租户由调用方显式传入，库不从请求头或上下文里推断",
+      "reason": "库是抽象服务，键应该是接口参数：读的时候宿主自己知道是哪个租户（TenantScope），管理接口由守卫回答；库不依赖租户隔离库，也不会在没有租户的后台任务里悄悄读成系统值。"
+    },
+    {
+      "decision": "作用域和类型一样，登记后不能改：要改就换一个 key 名",
+      "reason": "把租户设置改成系统参数，已有的租户行就没人读了；原地改作用域，滚动发布时新旧实例读到的值不一样。"
+    },
+    {
+      "decision": "租户的值和系统值存在同一张表，租户行第一次写入时才建",
+      "reason": "修订、CAS、回滚整套逻辑不用复制一份；没改过设置的租户在库里没有任何行，开通租户时不用给每个 key 建行。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用，不对外、不做关联；xxx_uuid 是逻辑主键（UUIDv7，Python 侧生成），表间引用和 API 都用它。表间不建外键约束（与本仓各服务一致），「引用」列和 ER 图里的连线都是逻辑引用。类型写的是 SQLAlchemy 通用类型，以及库里自带的 UUIDType、UTCDateTime、JSONType（PostgreSQL 上是 JSONB），不绑定数据库厂商。两张表建在宿主的库里，表名带 app_config 前缀，以免和宿主的表重名。",
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用，不对外、不做关联；xxx_uuid 是逻辑主键（UUIDv7，Python 侧生成），表间引用和 API 都用它。表间不建外键约束（与本仓各服务一致），「引用」列和 ER 图里的连线都是逻辑引用。类型写的是 SQLAlchemy 通用类型，以及库里自带的 UUIDType、UTCDateTime、JSONType（PostgreSQL 上是 JSONB），不绑定数据库厂商。两张表建在宿主的库里，表名带 app_config 前缀，以免和宿主的表重名。app_config 里一个 key 有一行系统值（登记时建），再加改过它的每个租户各一行；唯一约束 (key, tenant_uuid) 把空值当成相同的值（PostgreSQL 用 NULLS NOT DISTINCT）。修订表不用改：每一行配置（不论是系统值还是租户的值）有自己的 config_uuid，修订挂在它上面。",
   "tables": [
     {
       "name": "app_config",
-      "description": "配置项（聚合根 ConfigItem），一个 key 一行，保存的是最新版本。",
+      "description": "配置项（聚合根 ConfigItem）：一个 key 一行系统值，再加改过它的每个租户各一行，保存的是最新版本。",
       "at": [
         0,
         0
@@ -541,8 +622,18 @@
         {
           "name": "key",
           "type": "String(128)",
-          "key": "UK",
-          "description": "配置名，即 ConfigKey.name"
+          "description": "配置名，即 ConfigKey.name；和 tenant_uuid 一起唯一"
+        },
+        {
+          "name": "scope",
+          "type": "String(16)",
+          "description": "SYSTEM | TENANT，登记时按代码写入，之后不能改"
+        },
+        {
+          "name": "tenant_uuid",
+          "type": "UUIDType",
+          "nullable": true,
+          "description": "空 = 系统值；否则是这个租户的值（只有 TENANT 的 key 才有）"
         },
         {
           "name": "value_kind",
@@ -576,7 +667,7 @@
         {
           "name": "updated_by",
           "type": "String(64)",
-          "description": "最后修改人（用户 uuid，登记时是 system）"
+          "description": "最后修改人（用户 uuid 或运营人员；登记时是 system）"
         },
         {
           "name": "created_at",
@@ -599,12 +690,13 @@
           "unique": true
         },
         {
-          "name": "uk_app_config_key",
+          "name": "uk_app_config_key_tenant",
           "columns": [
-            "key"
+            "key",
+            "tenant_uuid"
           ],
           "unique": true,
-          "description": "读取按它查"
+          "description": "NULLS NOT DISTINCT：一个 key 只有一行系统值，每个租户至多一行"
         }
       ]
     },

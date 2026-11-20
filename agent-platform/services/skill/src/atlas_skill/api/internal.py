@@ -3,16 +3,18 @@
 ★ 只返回 published / disabled / revoked。待审查与被拒的上传在这里**不存在** ——
   运行时拿不到草稿，不是靠它自觉过滤，而是接口根本不给。
 ★ 只在内网可达：网关一律 404。内网免令牌（内网身份传递 §3），不再校验服务间令牌。
+★ 要带 X-Tenant-Id：只看得到这个租户的技能（包括它从技能市场装的）。
 """
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
+from ..auth import verified_tenant
 from ..schemas import RevokedSkill, SkillCatalogItem, SkillVersionOut
 from .deps import SkillServiceDep
 
-router = APIRouter(prefix="/internal", tags=["internal"])
+router = APIRouter(prefix="/internal", tags=["internal"], dependencies=[Depends(verified_tenant)])
 
 
 @router.get("/skills/catalog", response_model=list[SkillCatalogItem])

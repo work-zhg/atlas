@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from atlas_jobs import JobScheduler
+from atlas_opsapi import NoExternal, OpsGuard, OpsRoutes, TenantGate, TenantLifecycleService
+from atlas_tenancy import TenantDataPurge
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.types import Receive, Scope, Send
@@ -12,6 +14,7 @@ from starlette.types import Receive, Scope, Send
 from .. import tracing
 from ..auth import IdentityHeadersMiddleware
 from ..dataplane import DataPlane
+from ..db.models import Base, McpApiKey, McpAudit, McpService, McpTool
 from ..db.session import get_sessionmaker
 from ..errors import GatewayError
 from ..maintainer import ToolRefresh
@@ -19,7 +22,6 @@ from ..perms import AccessCache, Permissions, UCPermissions
 from ..settings import get_settings
 from ..upstreams.hub import Upstreams
 from . import admin, internal
-from .jobs import jobs_router
 
 __all__ = ["create_app"]
 
@@ -38,7 +40,7 @@ def create_app(*, perms: Permissions | None = None) -> FastAPI:
     """perms 可注入 —— 测试用内存实现；不注入则按设置连用户中心。"""
     settings = get_settings()
     tracing.setup()
-    # 定时任务（刷新工具定义）：lifespan 里注册、启动；/api/v1/jobs 看运行情况
+    # 定时任务（刷新工具定义）：lifespan 里注册、启动；运营接口 /ops/v1/jobs 看运行情况
     jobs = JobScheduler()
 
     @asynccontextmanager
@@ -49,11 +51,12 @@ def create_app(*, perms: Permissions | None = None) -> FastAPI:
             _wire(app, owned)
         upstreams = Upstreams(settings)
         app.state.upstreams = upstreams
-        plane = DataPlane(get_sessionmaker(), app.state.perms, app.state.access, upstreams)
+        gate = app.state.tenant_gate
+        plane = DataPlane(get_sessionmaker(), app.state.perms, app.state.access, upstreams, gate)
         app.state.data_plane = plane
         if settings.maintainer_tick_s > 0:
             jobs.register(
-                ToolRefresh(settings, app.state.perms, upstreams),
+                ToolRefresh(settings, app.state.perms, upstreams, gate),
                 scope="instance",
                 every=settings.maintainer_tick_s,
             )
@@ -95,9 +98,25 @@ def create_app(*, perms: Permissions | None = None) -> FastAPI:
         app.add_route(path, route, methods=["GET", "POST", "DELETE"], include_in_schema=False)
 
     app.include_router(admin.router)
-    app.include_router(jobs_router(jobs))
     app.include_router(internal.router)
+    _mount_ops(app, jobs)
     return app
+
+
+def _mount_ops(app: FastAPI, jobs: JobScheduler) -> None:
+    """运营接口（/ops/v1）：租户停用、恢复、删除，系统任务（刷新工具定义）。
+
+    数据库之外没有要删的（用户中心里登记的服务、Key 的主体随租户在用户中心里一起删）。停用后
+    管理接口、内部接口 403，数据面上这个租户的 Key 一律无效，定期刷新也跳过它。
+    """
+    settings = get_settings()
+    key = settings.ops_api_key.get_secret_value() if settings.ops_api_key else None
+    sessions = get_sessionmaker()
+    app.state.ops_guard = guard = OpsGuard(key)
+    app.state.tenant_gate = gate = TenantGate(sessions)
+    purge = TenantDataPurge((McpAudit, McpTool, McpApiKey, McpService), base=Base)
+    lifecycle = TenantLifecycleService(sessions, NoExternal(), gate, purge)
+    app.include_router(OpsRoutes(guard, lifecycle, jobs=jobs).router)
 
 
 def _wire(app: FastAPI, perms: Permissions) -> None:

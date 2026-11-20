@@ -8,6 +8,8 @@
     mcp_audit     管理动作的审计（不记 Key 原文、上游凭据）
 
 ★ 自增 id + uuid 逻辑主键；关联与 API 一律用 uuid（字段名 xxx_uuid）。
+★ 多租户（迁移 g0003）：四张表都归租户（TenantOwned），查询按当前租户自动过滤；服务名在租户内
+  唯一，「公有」只对本租户公有。数据面先按 Key 认出租户，再在这个租户里找服务。
 ★ 不建外键（与其它服务一致）：引用完整性由 service 层保证。
 ★ 服务没有删除：服务名是工具名前缀、用户中心里的数据标识、智能体配置里的引用，
   停用后也不能复用。
@@ -20,6 +22,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from atlas_tenancy import TenantOwned
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -67,10 +70,11 @@ class _Row:
     )
 
 
-class McpService(_Row, Base):
+class McpService(TenantOwned, _Row, Base):
     __tablename__ = "mcp_service"
 
-    name: Mapped[str] = mapped_column(String(24), unique=True, nullable=False)
+    #: 租户内唯一
+    name: Mapped[str] = mapped_column(String(24), nullable=False)
     display_name: Mapped[str] = mapped_column(String(100), default="", nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     kind: Mapped[str] = mapped_column(String(8), nullable=False)
@@ -102,13 +106,14 @@ class McpService(_Row, Base):
     refresh_claimed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
     __table_args__ = (
+        UniqueConstraint("tenant_uuid", "name"),
         CheckConstraint("kind IN ('mcp','rest','grpc')", name="kind"),
         CheckConstraint("visibility IN ('public','private')", name="visibility"),
         CheckConstraint("status IN ('enabled','disabled')", name="status"),
     )
 
 
-class McpTool(_Row, Base):
+class McpTool(TenantOwned, _Row, Base):
     __tablename__ = "mcp_tool"
 
     service_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
@@ -145,7 +150,7 @@ class McpTool(_Row, Base):
     )
 
 
-class McpApiKey(_Row, Base):
+class McpApiKey(TenantOwned, _Row, Base):
     """一把 API Key。
 
     用户 Key：一人一把（user_uuid 唯一），本人申请，给外部客户端用。
@@ -198,7 +203,7 @@ class McpApiKey(_Row, Base):
     )
 
 
-class McpAudit(_Row, Base):
+class McpAudit(TenantOwned, _Row, Base):
     __tablename__ = "mcp_audit"
 
     actor: Mapped[str] = mapped_column(String(64), nullable=False)

@@ -3,7 +3,7 @@
 # ★ 库是宿主 Postgres 上的独立 database atlas_memory（docker compose 的 memory-init-db；
 #   服务器部署由 deploy/server/deploy.sh 建）。不用 Redis：实例锁是数据库行锁。
 # ★ 内网免令牌（内网身份传递 §3）：实例由接口参数定位，调用用户在请求头里；打开数据权限开关的
-#   作用域按用户中心的数据权限校验（数据编码挂在本服务的应用 memory 名下，register-uc 登记）。
+#   作用域按用户中心的数据权限校验（数据编码挂在本服务的应用 memory 名下，运营人员在运营中心录入）。
 # ★ 只有 atlas-server 调它（管理界面也经 atlas-server 的 /v1/memories），Service 只需 ClusterIP，
 #   网关不转发。
 apiVersion: apps/v1
@@ -28,9 +28,12 @@ spec:
           command: ["python", "-m", "atlas_memory", "migrate"]
           env: &memory-env
             - {name: ATLAS_MEMORY_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_memory"}
+            # 多租户迁移把已有数据归到原平台租户（apply.sh 按 .env 的 TENANT_BACKFILL_UUID 建；只有迁移读它）
+            - name: TENANT_BACKFILL_UUID
+              valueFrom: {configMapKeyRef: {name: atlas-tenancy, key: backfill_uuid, optional: true}}
             - {name: ATLAS_MEMORY_UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
         # Atlas 用的「用户」作用域（§4.1）：已存在就不动（作用域归管理员管，不覆盖它的设置）。
-        # ★ 数据编码 MemoryUser 要管理员跑一次 register-uc 才登记到用户中心（deploy/server/register.sh）；
+        # ★ 数据编码 MemoryUser 要运营人员在运营中心录入到应用 memory 名下；
         #   在那之前登记实例会失败，Atlas 当作「记忆暂时不可用」，对话照常
         - name: scopes
           image: atlas-app:dev

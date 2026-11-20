@@ -1,6 +1,6 @@
-"""持久指令（doc/context-management-design.html §10）：个人 / 平台两层，运行时每轮读取。
+"""持久指令（doc/context-management-design.html §10）：个人 / 租户两层，运行时每轮读取。
 
-★ 开发与测试共用一个库：个人指令用一次性的用户、测完删掉；平台指令全局一份，测完恢复原样。
+★ 开发与测试共用一个库：个人指令用一次性的用户、测完删掉；租户指令每个租户一份，测完恢复原样。
 """
 
 from __future__ import annotations
@@ -14,10 +14,13 @@ from atlas_agent.db.models import Instruction
 from atlas_agent.db.session import fetch_one, get_sessionmaker
 from atlas_agent.executor.context import load_instructions
 from atlas_agent.main import create_app
+from atlas_tenancy import TenantScope
 from httpx import ASGITransport
 from sqlalchemy import delete
 
 from tests.fake_uc import FakeUC
+
+OTHER_TENANT = "00000000-0000-0000-0000-00000000000b"
 
 
 @pytest.fixture
@@ -29,10 +32,10 @@ async def client() -> AsyncIterator[httpx.AsyncClient]:
 
 @pytest.fixture
 async def users(fake_user_center: FakeUC) -> AsyncIterator[dict[str, str]]:
-    """一次性的用户：member 只能对话，admin 另有 model:manage。测完删掉他们的个人指令。"""
+    """一次性的用户：member 只能对话，admin 另有 settings:manage。测完删掉他们的个人指令。"""
     made = {
         "member": fake_user_center.add("member", ["chat:use"]),
-        "admin": fake_user_center.add("admin", ["chat:use", "model:manage"]),
+        "admin": fake_user_center.add("admin", ["chat:use", "settings:manage"]),
     }
     yield made
     async with get_sessionmaker()() as s:
@@ -41,16 +44,16 @@ async def users(fake_user_center: FakeUC) -> AsyncIterator[dict[str, str]]:
 
 
 @pytest.fixture
-async def keep_platform() -> AsyncIterator[None]:
+async def keep_tenant() -> AsyncIterator[None]:
     async with get_sessionmaker()() as s:
         row = await fetch_one(
-            s, Instruction, Instruction.scope == "platform", Instruction.owner_id == ""
+            s, Instruction, Instruction.scope == "tenant", Instruction.owner_id == ""
         )
         saved = None if row is None else (row.content, row.updated_by_uuid, row.updated_at)
     yield
     async with get_sessionmaker()() as s:
         row = await fetch_one(
-            s, Instruction, Instruction.scope == "platform", Instruction.owner_id == ""
+            s, Instruction, Instruction.scope == "tenant", Instruction.owner_id == ""
         )
         if saved is None and row is not None:
             await s.delete(row)
@@ -80,23 +83,38 @@ async def test_personal_instructions_are_per_user(
     assert r.status_code == 422
 
 
-@pytest.mark.usefixtures("keep_platform")
-async def test_platform_needs_model_manage_and_reaches_runtime(
+@pytest.mark.usefixtures("keep_tenant")
+async def test_tenant_needs_settings_manage_and_reaches_runtime(
     client: httpx.AsyncClient, users: dict[str, str]
 ) -> None:
     member, admin = _as(users["member"]), _as(users["admin"])
-    r = await client.put("/v1/instructions/platform", json={"content": "越权"}, headers=member)
+    r = await client.put("/v1/instructions/tenant", json={"content": "越权"}, headers=member)
     assert r.status_code == 403
-    r = await client.put("/v1/instructions/platform", json={"content": "遵守合规"}, headers=admin)
+    r = await client.put("/v1/instructions/tenant", json={"content": "遵守合规"}, headers=admin)
     assert r.status_code == 200, r.text
-    # 平台指令人人可读
-    assert (await client.get("/v1/instructions/platform", headers=member)).json()[
+    # 租户指令本租户的人都可读
+    assert (await client.get("/v1/instructions/tenant", headers=member)).json()[
         "content"
     ] == "遵守合规"
     await client.put("/v1/instructions/me", json={"content": "简洁回答"}, headers=member)
 
-    # 运行时：平台在前、个人在后（后面的优先）；别人的个人指令不会混进来
+    # 运行时：租户在前、个人在后（后面的优先）；别人的个人指令不会混进来
     text = await load_instructions(get_sessionmaker(), None, UUID(users["member"]))
     assert text.index("遵守合规") < text.index("简洁回答")
     text = await load_instructions(get_sessionmaker(), None, users["admin"])
     assert "遵守合规" in text and "简洁回答" not in text
+
+
+@pytest.mark.usefixtures("keep_tenant")
+async def test_tenant_instructions_stay_in_their_tenant(
+    client: httpx.AsyncClient, users: dict[str, str], fake_user_center: FakeUC
+) -> None:
+    r = await client.put(
+        "/v1/instructions/tenant", json={"content": "遵守合规"}, headers=_as(users["admin"])
+    )
+    assert r.status_code == 200, r.text
+    outsider = fake_user_center.add("outsider", ["chat:use"], tenant=OTHER_TENANT)
+    r = await client.get("/v1/instructions/tenant", headers=_as(outsider))
+    assert r.status_code == 200 and r.json()["content"] == "", "别的租户看不到"
+    with TenantScope.enter(UUID(OTHER_TENANT)):
+        assert "遵守合规" not in await load_instructions(get_sessionmaker(), None, outsider)

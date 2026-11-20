@@ -1,8 +1,8 @@
-"""平台服务用哪个模型（模型管理方案设计第 9 章）：会话标题、记忆补记。
+"""系统功能用哪个模型（模型管理方案设计第 9 章）：会话标题、记忆补记。按租户配（租户设置）。
 
-    GET /v1/service-models               每种用途的配置和现在能不能用          model:manage
-    PUT /v1/service-models/{purpose}     配置：客户端类型 + 编码 + 模型        model:manage
-    DELETE /v1/service-models/{purpose}  清除（之后这项平台功能降级）          model:manage
+    GET /v1/service-models               每种用途的配置和现在能不能用          settings:manage
+    PUT /v1/service-models/{purpose}     配置：客户端类型 + 编码 + 模型        settings:manage
+    DELETE /v1/service-models/{purpose}  清除（之后这项平台功能降级）          settings:manage
 
 ★ 要先在模型管理平台上建好客户端 Key、分配模型：设置时当场校验，配错了直接报。
 """
@@ -21,7 +21,7 @@ from ...services.service_models import ServiceModelService, ServiceModelView
 
 router = APIRouter(prefix="/service-models", tags=["service-models"])
 
-Manager = Annotated[Principal, Depends(require("model:manage"))]
+Manager = Annotated[Principal, Depends(require("settings:manage"))]
 
 
 class ServiceModelOut(BaseModel):

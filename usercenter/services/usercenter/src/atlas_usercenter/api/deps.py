@@ -10,7 +10,8 @@ from dataclasses import dataclass
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, Request
+from atlas_opsapi import OperatorStamp, OpsGuard
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +31,7 @@ __all__ = [
     "SESSION_COOKIE",
     "OpenActorDep",
     "OpenAppDep",
+    "OpsDep",
     "Principal",
     "PrincipalDep",
     "SessionDep",
@@ -172,3 +174,20 @@ async def open_actor(request: Request, app: OpenAppDep) -> Actor:
 
 
 OpenActorDep = Annotated[Actor, Depends(open_actor)]
+
+
+async def current_ops(request: Request, settings: SettingsDep) -> Actor:
+    """运营接口（/ops/v1）：只认运营中心 —— 核对签名和 5 分钟时间窗（atlas_opsapi）。
+
+    ★ 网关不转发 /ops/*；内网请求头（X-Caller-App、X-Uid）在这里一概不认。
+    → 审计主体：运营账号，detail 里记运营人员的名字和运营中心的租户操作。
+    """
+    try:
+        stamp: OperatorStamp = await OpsGuard(settings.ops_api_key).verify(request)
+    except HTTPException as exc:
+        cls = Unauthorized if exc.status_code == 401 else Forbidden
+        raise cls("OPS_NOT_ALLOWED", str(exc.detail)) from exc
+    return Actor.ops(stamp.operator_uuid, stamp.operator_name, stamp.operation_uuid)
+
+
+OpsDep = Annotated[Actor, Depends(current_ops)]

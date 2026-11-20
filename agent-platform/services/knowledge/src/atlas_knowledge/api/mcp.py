@@ -4,13 +4,15 @@ knowledge_search（知识集方案 §3.2、§3.4；知识集目录由 atlas-serv
 鉴权：请求头 X-Knowledge-Token（旧名 X-Atlas-Knowledge-Token 过渡一个版本），由 atlas-server
 在打开 ACP 会话时签发：
     base64url({"s": [{"n": 知识集名称, "d": [库 id], "k": top_k}],
-               "t": 会话 id, "u": auth-uid, "o": 发起人})
+               "t": 会话 id, "u": auth-uid, "o": 发起人, "tenant": 租户})
     + "." + HMAC-SHA256(mcp_secret)
 门槛用各库自己的设置；知识集在智能体里定义时签发的令牌带 "h": 门槛，照旧生效。
 旧令牌只有 "d": [库 id]（知识集之前签发的，会话还开着）：当作一个没有名称的知识集。
 查哪些库看令牌里的知识集 —— 与原生工具一样，库 id 不进工具参数，模型只能填知识集和库的名称；
 库级、文档级权限都按 u（按谁判），u 读不到的库不列出、检索时跳过并在结果里说明。
 检索记录里记 o（谁在用；旧令牌没有 o 时取 u）。
+租户（多租户）取令牌里的 tenant，进入它再查；多租户之前签发的令牌没有租户，一律拒绝（重新打开会话
+就会换新令牌）。租户已停用的同样拒绝。
 
 ★ 会话 Pod 跑的是不可信代码：这里只认令牌，不认任何身份请求头（内网身份传递 §5.3）。
 
@@ -36,6 +38,7 @@ import re
 from typing import Any
 from uuid import UUID
 
+from atlas_tenancy import TenantScope, parse_tenant
 from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from sqlalchemy import select
@@ -190,7 +193,7 @@ def build_mcp(runtime_of: Any) -> MCPServer:
         ),
     )
 
-    def claims_of(ctx: Context) -> tuple[dict[str, Any], Runtime] | str:  # type: ignore[type-arg]
+    async def claims_of(ctx: Context) -> tuple[dict[str, Any], Runtime] | str:  # type: ignore[type-arg]
         rt: Runtime = runtime_of()
         headers = ctx.headers or {}
         token = headers.get(TOKEN_HEADER) or headers.get(LEGACY_TOKEN_HEADER, "")
@@ -200,8 +203,16 @@ def build_mcp(runtime_of: Any) -> MCPServer:
         except (TokenInvalid, ValueError) as exc:
             logger.warning("知识库 MCP 令牌无效：%s", exc)
             return "知识库访问凭据无效，无法检索。"
-        # 主体展开（atlas-server → 用户中心）带令牌里的身份，而不是 Pod 发来的请求头
-        use_identity(claims.get("o") or claims.get("u"), claims.get("u"))
+        tenant = parse_tenant(claims.get("tenant"))
+        if tenant is None:
+            logger.warning("知识库 MCP 令牌里没有租户（多租户之前签发的）")
+            return "知识库访问凭据已过期，请重新打开会话后再检索。"
+        if not await rt.gate.is_active(tenant):
+            return "所在的组织已停用，无法检索。"
+        # 之后的读写按令牌里的租户自动过滤；主体展开（→ 用户中心）带令牌里的身份和租户，
+        # 而不是 Pod 发来的请求头
+        TenantScope.bind(tenant)
+        use_identity(claims.get("o") or claims.get("u"), claims.get("u"), str(tenant))
         return claims, rt
 
     async def readable_cards(session: Any, rt: Runtime, claims: dict, ids: list[str]) -> list[dict]:
@@ -229,7 +240,7 @@ def build_mcp(runtime_of: Any) -> MCPServer:
         keyword: str = "",
         page: int = 1,
     ) -> str:
-        got = claims_of(ctx)
+        got = await claims_of(ctx)
         if isinstance(got, str):
             return got
         claims, rt = got
@@ -262,7 +273,7 @@ def build_mcp(runtime_of: Any) -> MCPServer:
         knowledge_set: str = "",
         knowledge_bases: list[str] | None = None,
     ) -> str:
-        got = claims_of(ctx)
+        got = await claims_of(ctx)
         if isinstance(got, str):
             return got
         claims, rt = got

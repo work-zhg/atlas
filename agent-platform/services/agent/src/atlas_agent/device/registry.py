@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -23,6 +24,7 @@ from typing import Any
 from uuid import UUID
 
 import redis.asyncio as aioredis
+from atlas_tenancy import SystemReason, TenantScope
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import Device
@@ -62,12 +64,14 @@ class DeviceIdentity:
     device_uuid: UUID
     owner_uuid: UUID
     name: str
+    tenant_uuid: UUID
 
     def to_json(self) -> dict[str, Any]:
         return {
             "device_uuid": str(self.device_uuid),
             "owner_uuid": str(self.owner_uuid),
             "name": self.name,
+            "tenant_uuid": str(self.tenant_uuid),
         }
 
 
@@ -112,19 +116,30 @@ class PairingCodes:
         self._redis = redis
         self._ttl = ttl_s
 
-    async def issue(self, owner: UUID) -> PairingCode:
+    async def issue(self, owner: UUID, tenant: UUID) -> PairingCode:
+        """码里记下人和他所在的租户：兑换时没有用户请求，设备要归到这个租户。"""
+        value = json.dumps({"owner": str(owner), "tenant": str(tenant)})
         while True:
             code = normalize_code(
                 "".join(secrets.choice(_CODE_ALPHABET) for _ in range(2 * _CODE_HALF))
             )
             # 撞上别人还没用掉的码（极少）就换一个
-            if await self._redis.set(_PAIRING_KEY.format(code), str(owner), ex=self._ttl, nx=True):
+            if await self._redis.set(_PAIRING_KEY.format(code), value, ex=self._ttl, nx=True):
                 return PairingCode(code, owner, datetime.now(UTC) + timedelta(seconds=self._ttl))
 
-    async def take(self, code: str) -> UUID | None:
-        """取了就删：同一个码只能兑换一次。"""
-        owner = await self._redis.getdel(_PAIRING_KEY.format(normalize_code(code)))
-        return UUID(owner) if owner else None
+    async def take(self, code: str) -> tuple[UUID, UUID] | None:
+        """取了就删：同一个码只能兑换一次。→ (人, 租户)。
+
+        没记租户的旧码（升级前发的，最多存 10 分钟）当作无效：不知道设备该归哪个租户。
+        """
+        raw = await self._redis.getdel(_PAIRING_KEY.format(normalize_code(code)))
+        if not raw:
+            return None
+        try:
+            value = json.loads(raw)
+            return UUID(value["owner"]), UUID(value["tenant"])
+        except (ValueError, KeyError, TypeError):
+            return None
 
 
 class DefaultDevicePolicy:
@@ -171,14 +186,19 @@ class DeviceService:
 
     async def start_pairing(self, owner: UUID) -> PairingCode:
         assert self._codes is not None, "配对要 Redis"
-        return await self._codes.issue(owner)
+        return await self._codes.issue(owner, TenantScope.require())
 
     async def redeem(self, code: str, report: dict[str, Any]) -> IssuedDevice | None:
         """码有效就建设备、发令牌；无效或已用过返回 None。"""
         assert self._codes is not None, "配对要 Redis"
-        owner = await self._codes.take(code)
-        if owner is None:
+        taken = await self._codes.take(code)
+        if taken is None:
             return None
+        owner, tenant = taken
+        with TenantScope.enter(tenant):
+            return await self._redeem(owner, report)
+
+    async def _redeem(self, owner: UUID, report: dict[str, Any]) -> IssuedDevice:
         raw, digest = DeviceToken.issue()
         now = datetime.now(UTC)
         device = Device(
@@ -192,17 +212,27 @@ class DeviceService:
         await self._repo.flush()
         await self._defaults.on_paired(owner, device)
         await self._repo.flush()
-        return IssuedDevice(DeviceIdentity(device.device_uuid, owner, device.name), raw)
+        return IssuedDevice(
+            DeviceIdentity(device.device_uuid, owner, device.name, device.tenant_uuid), raw
+        )
 
     async def authenticate(self, token: str, report: dict[str, Any]) -> DeviceIdentity | None:
-        """按摘要找设备；已吊销或找不到一律拒绝。通过后记下最近一次连上的时间、系统和连接器版本。"""
-        device = await self._repo.by_token_hash(DeviceToken.digest(token))
+        """按摘要找设备；已吊销或找不到一律拒绝。通过后记下最近一次连上的时间、系统和连接器版本。
+
+        ★ 这时还不知道令牌属于哪个租户：按全局唯一的令牌摘要在系统范围里只查这一行，查到就
+          进入它的租户再改（CREDENTIAL）。
+        """
+        with TenantScope.system(SystemReason.CREDENTIAL):
+            device = await self._repo.by_token_hash(DeviceToken.digest(token))
         if device is None or device.status != "active":
             return None
-        device.last_seen_at = datetime.now(UTC)
-        _apply_report(device, report)
-        await self._repo.flush()
-        return DeviceIdentity(device.device_uuid, device.owner_uuid, device.name)
+        with TenantScope.enter(device.tenant_uuid):
+            device.last_seen_at = datetime.now(UTC)
+            _apply_report(device, report)
+            await self._repo.flush()
+        return DeviceIdentity(
+            device.device_uuid, device.owner_uuid, device.name, device.tenant_uuid
+        )
 
     # ------------------------------------------------------------------ 我的设备
 

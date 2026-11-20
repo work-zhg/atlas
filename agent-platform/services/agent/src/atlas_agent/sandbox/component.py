@@ -20,6 +20,7 @@ from uuid import UUID
 
 import httpx
 
+from ..capacity import CapacityService
 from ..db.session import get_sessionmaker
 from ..runtime_config import RuntimeConfig
 from .base.execution.channels import SandboxChannels
@@ -108,8 +109,18 @@ class SandboxComponent:
         async def quota() -> QuotaPolicy:
             return QuotaPolicy(await config.sandbox_quota())
 
+        capacity = CapacityService(config)
+
+        async def tenant_quota(session: AsyncSession, user: UUID) -> str | None:
+            admission = await capacity.admit_sandbox(session, user)
+            return None if admission.allowed else admission.message
+
         provisioning = SandboxProvisioning(
-            runtime, sessions, quota=quota, cache_s=settings.sandbox_binding_cache_s
+            runtime,
+            sessions,
+            quota=quota,
+            cache_s=settings.sandbox_binding_cache_s,
+            tenant_quota=tenant_quota,
         )
         images = ImagePolicy(
             settings.sandbox_default_image,

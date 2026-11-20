@@ -8,15 +8,22 @@ from __future__ import annotations
 
 from typing import Any
 
-from uc_testkit import Client, admin_client, make_dept, make_user, role_id, root_id
+from uc_testkit import (
+    Client,
+    OpsClient,
+    admin_client,
+    make_app,
+    make_dept,
+    make_user,
+    role_id,
+    root_id,
+)
 
 H = {"X-Caller-App": "atlas"}
 
 
 async def _app(c: Client, name: str = "Atlas", code: str = "atlas") -> str:
-    r = await c.post("/api/v1/apps", {"name": name, "code": code})
-    assert r.status_code == 201, r.text
-    app_id = r.json()["app"]["id"]
+    app_id = (await make_app(name, code))["app"]["id"]
     await c.put(f"/api/v1/apps/{app_id}/scope", {"all": True, "dept_ids": []})
     return app_id
 
@@ -156,16 +163,20 @@ async def test_only_direct_grants_count() -> None:
     root = await root_id(c)
     zhang, _ = await make_user(c, "zhang.ming", root)
     app_id = await _app(c)
+    ops = OpsClient()
     op = (
-        await c.post(
-            f"/api/v1/apps/{app_id}/operations",
+        await ops.post(
+            f"/ops/v1/apps/{app_id}/operations",
             {"module": "知识库", "code": "kb:create", "name": "建知识库"},
         )
     ).json()["id"]
     role = (
-        await c.post(f"/api/v1/apps/{app_id}/roles", {"name": "知识库建设者", "code": "KB_BUILDER"})
+        await ops.post(
+            f"/ops/v1/apps/{app_id}/roles", {"name": "知识库建设者", "code": "KB_BUILDER"}
+        )
     ).json()["id"]
-    await c.put(f"/api/v1/roles/{role}/operations", {"ids": [op]})
+    await ops.put(f"/ops/v1/roles/{role}/operations", {"ids": [op]})
+    await ops.close()
     de = (await _create(c, "agent-1", zhang)).json()
 
     async def perms(uid: str) -> list[str]:
@@ -223,11 +234,13 @@ async def test_data_permissions() -> None:
     root = await root_id(c)
     zhang, _ = await make_user(c, "zhang.ming", root)
     app_id = await _app(c)
+    ops = OpsClient()
     dt = (
-        await c.post(
-            f"/api/v1/apps/{app_id}/data-types", {"code": "AtlasKnowledgeBase", "name": "知识库"}
+        await ops.post(
+            f"/ops/v1/apps/{app_id}/data-types", {"code": "AtlasKnowledgeBase", "name": "知识库"}
         )
     ).json()
+    await ops.close()
     de = (await _create(c, "agent-1", zhang)).json()
 
     async def check(uid: str) -> str:
@@ -301,7 +314,8 @@ async def test_not_counted_in_quota() -> None:
     await _app(c)
     me = (await c.get("/api/v1/auth/me")).json()
     tenant = me["tenant"]["id"]
-    r = await c.patch(f"/api/v1/tenants/{tenant}", {"max_users": 2})  # admin + zhang
+    ops = OpsClient()
+    r = await ops.patch(f"/ops/v1/tenants/{tenant}", {"max_users": 2})  # admin + zhang
     assert r.status_code == 200, r.text
     assert (await _create(c, "agent-1", zhang)).status_code == 201
     r = await c.post(
@@ -309,6 +323,6 @@ async def test_not_counted_in_quota() -> None:
         {"name": "新人", "account": "xin.ren", "email": "x@xinghai.com", "dept_id": root},
     )
     assert r.json()["code"] == "TENANT_QUOTA_EXCEEDED"
-    row = next(t for t in (await c.get("/api/v1/tenants")).json() if t["id"] == tenant)
-    assert row["users"] == 2
+    assert (await ops.get(f"/ops/v1/tenants/{tenant}")).json()["users"] == 2
+    await ops.close()
     await c.close()

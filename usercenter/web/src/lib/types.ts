@@ -27,8 +27,8 @@ export interface Me {
   password_policy: string;
   /** 与 password_policy 同一份规则的结构化形式：设置新密码时逐条打勾 */
   password_rules: PasswordRules;
-  /** 当前租户（租户设计）：platform = 平台租户（运营方）；customer = 客户租户 */
-  tenant: { id: string; code: string; name: string; kind: "platform" | "customer" };
+  /** 当前租户。所有租户一律平等（没有平台租户；租户的开通、停用归运营中心） */
+  tenant: { id: string; code: string; name: string };
 }
 
 export interface PasswordRules {
@@ -47,18 +47,6 @@ export interface LoginLog {
   app: string | null;
 }
 
-export interface TenantInfo {
-  id: string;
-  code: string;
-  name: string;
-  kind: "platform" | "customer";
-  status: "active" | "suspended" | "closed";
-  usable: boolean;
-  max_users: number | null;
-  expires_at: string | null;
-  created_at: string;
-  users: number;
-}
 
 export interface User {
   id: string;
@@ -165,6 +153,8 @@ export interface Role {
   name: string;
   description: string | null;
   is_builtin: boolean;
+  /** 应用内置角色（所有租户共用，运营中心维护）：租户里只能看、复制；否则是本租户自定义的 */
+  shared: boolean;
   version: number;
   operation_count?: number;
   holder_count?: number;

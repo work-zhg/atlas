@@ -16,8 +16,35 @@ BOB = "00000000-0000-7000-8000-0000000000b0"
 CAROL = "00000000-0000-7000-8000-0000000000c0"
 
 
+#: 没指定租户的请求都在这个租户里（conftest 的客户端默认带它）
+TEST_TENANT = "00000000-0000-0000-0000-00000000000a"
+OTHER_TENANT = "00000000-0000-0000-0000-00000000000b"
+#: 用户 → 所属租户：登记在这里的人不在测试租户里（用户中心替身在别的租户里找不到他）
+USERS_ELSEWHERE: dict[str, str] = {}
+OPS_KEY = "test-ops-key"
+
+
 def as_user(uid: str) -> dict[str, str]:
     return {"X-Uid": uid}
+
+
+def in_tenant(tenant: str, **headers: str) -> dict[str, str]:
+    return {"X-Tenant-Id": tenant, **headers}
+
+
+def ops_request(method: str, path: str, body: object = None) -> dict[str, Any]:
+    """运营中心的签名请求：→ httpx 的 request 参数（content、headers）。"""
+    import json
+    from uuid import uuid4
+
+    from atlas_opsapi import OperatorStamp, sign
+
+    raw = b"" if body is None else json.dumps(body).encode()
+    headers = sign(OPS_KEY.encode(), method, path, raw)
+    headers.update(OperatorStamp(operator_name="值班", idempotency_key=uuid4()).to_headers())
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    return {"content": raw, "headers": headers}
 
 
 ATLAS = {"X-Caller-App": "atlas"}

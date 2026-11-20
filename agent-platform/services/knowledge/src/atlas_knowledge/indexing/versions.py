@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from atlas_tenancy import TenantScope, TenantSweep
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -33,7 +34,7 @@ from ..db.types import utcnow
 from ..rag.vdb import BaseVector
 from ..runtime import Runtime
 
-__all__ = ["Target", "activate", "rebuild", "stores", "write_targets"]
+__all__ = ["Target", "activate", "rebuild", "rebuild_queued", "stores", "write_targets"]
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,34 @@ async def _valid_point_ids(session: AsyncSession, ds: Dataset) -> set[str]:
         )
     )
     return {str(x) for x in seg_ids.all()} | {str(x) for x in child_ids.all()}
+
+
+async def rebuild_queued(
+    rt: Runtime, sm: async_sessionmaker[AsyncSession], version_uuid: str
+) -> bool:
+    """worker 的入口：进入索引版本所属的租户再重建（租户从版本这一行取）。
+
+    租户已停用的不开始。→ 是不是因为租户停用没做。
+    """
+    suspended = False
+
+    async def fetch() -> list[tuple[str, UUID]]:
+        async with sm() as s:
+            tenant = await s.scalar(
+                select(IndexVersion.tenant_uuid).where(IndexVersion.uuid == UUID(version_uuid))
+            )
+        return [] if tenant is None else [(version_uuid, tenant)]
+
+    async def handle(vid: str) -> None:
+        nonlocal suspended
+        if not await rt.gate.is_active(TenantScope.require()):
+            logger.info("索引版本 %s 所在的租户已停用，暂不重建", vid)
+            suspended = True
+            return
+        await rebuild(rt, sm, vid)
+
+    await TenantSweep.each(fetch, handle)
+    return suspended
 
 
 async def rebuild(rt: Runtime, sm: async_sessionmaker[AsyncSession], version_uuid: str) -> None:

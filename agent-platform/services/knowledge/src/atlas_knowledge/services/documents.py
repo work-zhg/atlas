@@ -226,6 +226,8 @@ class DocumentService:
         if count + len(files) > self._rt.settings.max_documents_per_dataset:
             raise Invalid(f"单个知识库最多 {self._rt.settings.max_documents_per_dataset} 份文档")
         exts = [self._check_file(f) for f in files]
+        # 租户的知识库存储份额（运营中心定）：放不下就整批拒绝，什么都不存
+        await self._rt.storage_capacity.check(self._s, sum(len(f.data) for f in files))
         mode, rules = self._rule(doc_form, process_rule)
 
         rule = ProcessRule(dataset_uuid=ds.uuid, mode=mode, rules=rules, created_by=access.p.uid)
@@ -246,7 +248,7 @@ class DocumentService:
         for i, (f, ext) in enumerate(zip(files, exts, strict=True), start=1):
             doc_uuid = uuid4()
             base = f.filename.rsplit("/", 1)[-1]
-            key = f"{self._rt.settings.oss_prefix}/{ds.uuid}/{doc_uuid}/{base}"
+            key = f"{ds.storage_prefix}/{doc_uuid}/{base}"
             mime = f.content_type or mimetypes.guess_type(f.filename)[0]
             await asyncio.to_thread(self._rt.storage.put, key, f.data, mime)
             doc = Document(
@@ -263,6 +265,7 @@ class DocumentService:
                     "mime": mime,
                     "extension": ext,
                 },
+                file_size=len(f.data),
                 name=f.filename[:255],
                 doc_form=doc_form,
                 indexing_status="waiting",
@@ -399,7 +402,7 @@ class DocumentService:
             await self._s.execute(delete(ChildChunk).where(ChildChunk.document_uuid == doc.uuid))
             await self._s.execute(delete(Segment).where(Segment.document_uuid == doc.uuid))
             await self._s.delete(doc)
-            prefix = f"{self._rt.settings.oss_prefix}/{access.ds.uuid}/{doc.uuid}/"
+            prefix = f"{access.ds.storage_prefix}/{doc.uuid}/"
             try:
                 await asyncio.to_thread(self._rt.storage.delete_prefix, prefix)
             except Exception:

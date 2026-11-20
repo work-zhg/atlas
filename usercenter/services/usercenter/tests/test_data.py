@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from uc_testkit import Client, admin_client, make_dept, make_user, root_id
+from uc_testkit import Client, OpsClient, admin_client, make_app, make_dept, make_user, root_id
 
 
 async def _atlas(c: Client) -> tuple[str, dict[str, str]]:
-    r = await c.post("/api/v1/apps", {"name": "Atlas", "code": "atlas"})
-    app_id = r.json()["app"]["id"]
-    assert (
-        await c.post(f"/api/v1/apps/{app_id}/data-types", {"code": "Agent", "name": "智能体"})
-    ).status_code == 201
+    app_id = (await make_app("Atlas", "atlas"))["app"]["id"]
+    ops = OpsClient()
+    r = await ops.post(f"/ops/v1/apps/{app_id}/data-types", {"code": "Agent", "name": "智能体"})
+    assert r.status_code == 201, r.text
+    await ops.close()
     # 内网免令牌：调用方应用看请求头 X-Caller-App（内网身份传递 §3）
     return app_id, {"X-Caller-App": "atlas"}
 
@@ -137,8 +137,7 @@ async def test_data_code_isolated_per_app() -> None:
     root = await root_id(admin)
     u, _ = await make_user(admin, "x.user", root)
     await _atlas(admin)
-    r = await admin.post("/api/v1/apps", {"name": "TeamFlow", "code": "teamflow"})
-    assert r.status_code == 201, r.text
+    await make_app("TeamFlow", "teamflow")
     r = await admin.http.post(
         "/open/v1/data-permissions",
         json={

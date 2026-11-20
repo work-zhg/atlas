@@ -40,6 +40,7 @@ import httpx
 from atlas_engine.contracts.events import EventType
 from atlas_engine.contracts.spec import KnowledgeSpec
 from atlas_engine.contracts.tools import ToolSpec
+from atlas_tenancy import TenantScope
 from opentelemetry import propagate
 from opentelemetry.trace import SpanKind
 
@@ -618,15 +619,18 @@ def sign_mcp_token(
     thread_id: UUID,
     auth_uid: UUID | None,
     uid: UUID | None = None,
+    tenant: UUID,
 ) -> str:
     """sets：[{n: 知识集名称, d: [库 id], k: top_k}]（h 门槛已不用：门槛归各库自己的设置）。
-    u = 检索按谁判（auth-uid）；o = 发起人（只进检索记录）。内网身份传递 §5.3。"""
+    u = 检索按谁判（auth-uid）；o = 发起人（只进检索记录）。内网身份传递 §5.3。
+    tenant = 会话所在的租户：知识库按它进入租户（Pod 发来的请求头一律不认）。"""
     payload = json.dumps(
         {
             "s": sets,
             "t": str(thread_id),
             "u": str(auth_uid) if auth_uid else None,
             "o": str(uid) if uid else None,
+            "tenant": str(tenant),
         },
         separators=(",", ":"),
         sort_keys=True,
@@ -651,6 +655,7 @@ def mcp_server_entry(
         thread_id=thread_id,
         auth_uid=ident.auth_uid if ident else None,
         uid=ident.uid if ident else None,
+        tenant=TenantScope.require(),
     )
     return {
         "type": "http",

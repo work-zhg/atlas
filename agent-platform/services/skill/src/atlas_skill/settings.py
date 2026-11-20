@@ -81,6 +81,8 @@ class SkillSettings(BaseSettings):
     allow_self_review: bool = False
     #: BFF 上线前管理页由浏览器直连（设计 §13.3）
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    #: 运营接口（/ops/v1）的签名密钥，和运营中心里登记本服务时的一致。空 = 没启用（一律 403）
+    ops_api_key: SecretStr | None = None
 
     # ── 技能包上限（设计 §6.2）──────────────────────────────────────────
     skill_max_bytes: int = 20 * 1024 * 1024

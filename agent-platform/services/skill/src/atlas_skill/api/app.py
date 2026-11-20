@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from atlas_tenancy import TenantScope
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -9,6 +10,7 @@ from fastapi.responses import JSONResponse
 from ..errors import SkillError
 from ..skill.package import ScanBlocked
 from . import admin, internal
+from .ops import mount_ops
 
 __all__ = ["create_app"]
 
@@ -49,4 +51,19 @@ def create_app(*, storage: Any = None, cors_origins: list[str] | None = None) ->
 
     app.include_router(internal.router)
     app.include_router(admin.router)
+    # 运营接口：技能市场，租户的停用、恢复、删除
+    mount_ops(app)
+    # 每个请求从「没有租户」开始，由 auth.verified_tenant 进入
+    app.add_middleware(_TenantIsolation)
     return app
+
+
+class _TenantIsolation:
+    """纯 ASGI：每个请求一个干净的租户上下文。"""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        with TenantScope.isolated():
+            await self.app(scope, receive, send)

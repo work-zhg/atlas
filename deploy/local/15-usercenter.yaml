@@ -4,7 +4,7 @@
 # ★ initContainer 先迁移（含内置应用同步）再起服务：用户中心的迁移改约束、改唯一性，
 #   必须在新代码接请求之前完成。
 # ★ ClusterIP（内网身份传递 §4）：浏览器经网关 /uc/api；它也是网关 auth_request 的校验方
-#   （/api/v1/auth/verify）。宿主上的 register-uc 等运维命令先
+#   （/api/v1/auth/verify）。宿主上要直接调它的运维命令先
 #   kubectl -n atlas-system port-forward svc/atlas-usercenter 8030:8030，再按 127.0.0.1:8030 访问。
 # ★ Service 名不叫 atlas-uc：K8s 会给 Pod 注入 <SERVICE>_PORT 一类变量，ATLAS_UC_ 前缀正是
 #   用户中心的配置前缀，会撞上。另外关掉 enableServiceLinks，双保险。

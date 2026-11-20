@@ -696,7 +696,7 @@ export function AgentStudio({ agentId }: { agentId: string }) {
 
   const moreItems = [
     { key: "dup", icon: <Icon name="copy" size={14} />, label: "复制为新智能体" },
-    ...(can(me, "config:manage") && detail.status === "enabled" && !isDefault
+    ...(can(me, "settings:manage") && detail.status === "enabled" && !isDefault
       ? [{ key: "default", icon: <Icon name="star" size={14} />, label: "设为默认智能体" }]
       : []),
     ...(hasDraft && !readOnly ? [{ key: "discard", icon: <Icon name="retry" size={14} />, label: "放弃未发布的修改" }] : []),
@@ -903,7 +903,7 @@ export function AgentStudio({ agentId }: { agentId: string }) {
                   showIcon
                   style={{ marginTop: 10 }}
                   message="还没有给它分配模型，分配之前不能对话"
-                  description="请模型管理员在「模型 › 客户端 Key」里给它分配模型。"
+                  description="请模型管理员在「模型 › Key 管理」里给它分配模型。"
                 />
               )}
               {showParams && (

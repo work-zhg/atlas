@@ -61,6 +61,8 @@ THREAD_ID = "atlas.thread_id"
 PARENT_RUN_ID = "atlas.parent_run_id"
 #: 这一段是不是挂起后的续跑（一个 run 可以分多段执行，同属一条 trace）
 RESUMED = "atlas.resumed"
+#: 这一段属于哪个租户（多租户：调用链里的对话内容也属于租户）
+TENANT_ID = "atlas.tenant_id"
 
 # ── 整轮累计用量（只给人看，不参与计费）──────────────────────────────
 #

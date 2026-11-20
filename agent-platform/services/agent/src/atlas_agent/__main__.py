@@ -1,8 +1,7 @@
 """atlas-server 命令行（服务本身由 uvicorn 启动：atlas_agent.main:create_app）。
 
-  python -m atlas_agent register-uc --account admin   把 Atlas 登记到用户中心（权限设计 §6）
-  python -m atlas_agent migrate-appconfig              应用配置库的表（alembic upgrade head 之后跑；
-                                                       版本表 app_config_alembic_version 单独一张）
+  python -m atlas_agent migrate-appconfig              嵌入的公共库的表：应用配置、运营接口（alembic
+                                                       upgrade head 之后跑；各有单独的版本表）
   python -m atlas_agent reassign-threads map.json      TeamFlow 的存量会话改归真实的人（§14）
   python -m atlas_agent backfill-agent-identity        存量 Agent 补数字员工、登记 AtlasAgent
                                                        （数字员工设计 §12，迁移 0023 之后）
@@ -22,23 +21,15 @@
 from __future__ import annotations
 
 import argparse
-import getpass
-import os
 import sys
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m atlas_agent")
     sub = parser.add_subparsers(dest="command", required=True)
-    reg = sub.add_parser("register-uc", help="把操作码、菜单、角色、数据编码登记到用户中心")
-    reg.add_argument("--account", required=True, help="用户中心管理员账号")
-    reg.add_argument("--uc-url", default=None)
-    reg.add_argument(
-        "--tenant", default=None, help="管理员所在的企业代码（用户中心有多个租户时必填）"
-    )
     sub.add_parser(
         "migrate-appconfig",
-        help="应用配置（atlas_appconfig）的表迁移到最新；和 alembic upgrade head 一起跑",
+        help="嵌入的公共库（应用配置、运营接口）的表迁移到最新；和 alembic upgrade head 一起跑",
     )
     rt = sub.add_parser(
         "reassign-threads",
@@ -91,27 +82,22 @@ def main(argv: list[str] | None = None) -> int:
         total = sum(p.objects for p in found)
         print(f"{verb} {len(found)} 个旧会话目录、{total} 个对象")
         return 0
-    if args.command == "register-uc":
-        from .auth.register import register
-        from .config import get_settings
-
-        password = os.environ.get("UC_ADMIN_PASSWORD") or getpass.getpass(
-            f"用户中心账号 {args.account} 的密码："
-        )
-        register(
-            args.uc_url or get_settings().uc_base_url, args.account, password, tenant=args.tenant
-        )
-    elif args.command == "migrate-appconfig":
+    if args.command == "migrate-appconfig":
         import asyncio
 
         from atlas_appconfig import upgrade
+        from atlas_opsapi import upgrade as upgrade_opsapi
 
+        from .config_carryover import carry_over
         from .db.session import get_engine
 
         async def _migrate() -> None:
             try:
                 async with get_engine().begin() as conn:
                     await conn.run_sync(upgrade)
+                    await conn.run_sync(upgrade_opsapi)
+                    # 多租户换了名的几个运行期配置：旧值搬到新键（幂等）
+                    await conn.run_sync(carry_over)
             finally:
                 await get_engine().dispose()
 

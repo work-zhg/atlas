@@ -11,7 +11,7 @@ import pytest
 from atlas_knowledge.errors import Conflict, Forbidden
 from atlas_knowledge.perms import DATA_CODE, Grant, UCDataPermissions
 from atlas_usercenter.api.app import create_app
-from uc_testkit import admin_client, make_user, root_id
+from uc_testkit import OpsClient, admin_client, make_app, make_user, root_id
 
 
 async def test_uc_data_permissions_adapter() -> None:
@@ -20,12 +20,13 @@ async def test_uc_data_permissions_adapter() -> None:
     li, _ = await make_user(c, "li.gong", root)
     he, _ = await make_user(c, "he.chao", root)
     # 内网免令牌：知识库以 Atlas 应用的身份调用（X-Caller-App: atlas，内网身份传递 §3）
-    r = await c.post("/api/v1/apps", {"name": "Atlas", "code": "atlas"})
-    app_id = r.json()["app"]["id"]
+    app_id = (await make_app("Atlas", "atlas"))["app"]["id"]
     await c.put(f"/api/v1/apps/{app_id}/scope", {"all": True, "dept_ids": []})
+    ops = OpsClient()
     dt = (
-        await c.post(f"/api/v1/apps/{app_id}/data-types", {"code": DATA_CODE, "name": "知识库"})
+        await ops.post(f"/ops/v1/apps/{app_id}/data-types", {"code": DATA_CODE, "name": "知识库"})
     ).json()
+    await ops.close()
 
     perms = UCDataPermissions("http://uc", transport=httpx.ASGITransport(app=create_app()))
     try:

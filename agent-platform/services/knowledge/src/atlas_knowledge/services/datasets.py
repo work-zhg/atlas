@@ -7,6 +7,7 @@ import logging
 from typing import Any
 from uuid import UUID, uuid4
 
+from atlas_tenancy import TenantNaming
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -200,6 +201,10 @@ class DatasetService:
             doc_form=doc_form,
             review_required=bool(body.get("review_required", False)),
             collection_name=collection_name(dataset_uuid),
+            # 第一层目录是租户：删租户时整个目录一起删
+            storage_prefix=TenantNaming.object_prefix(
+                self._rt.settings.oss_prefix, str(dataset_uuid)
+            ),
             created_by=p.uid,
             owner_kind="user",
         )
@@ -304,7 +309,7 @@ class DatasetService:
         await self._s.delete(ds)
         await self._s.flush()
         await self._rt.perms.cleanup(str(ds.uuid))
-        prefix = f"{self._rt.settings.oss_prefix}/{ds.uuid}/"
+        prefix = f"{ds.storage_prefix}/"
         try:
             await asyncio.to_thread(self._rt.storage.delete_prefix, prefix)
         except Exception:  # 原文件残留不影响删除结果，留给清理任务

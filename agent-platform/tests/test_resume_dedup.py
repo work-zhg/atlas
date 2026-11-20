@@ -141,7 +141,9 @@ async def test_resubmit_keeps_strong_ref_to_new_task() -> None:
     ex._draining = False
     release = asyncio.Event()
 
-    async def guarded(run_id: object, slot: object, takeover: object = None) -> None:
+    async def guarded(
+        run_id: object, slot: object, tenant: object, takeover: object = None
+    ) -> None:
         await release.wait()
 
     ex._guarded = guarded  # type: ignore[method-assign]

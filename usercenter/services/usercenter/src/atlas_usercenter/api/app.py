@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from ..errors import UCError
-from . import apps, auth, open, org, perm, tenants, users
+from . import apps, auth, open, ops, org, perm, users
 
 __all__ = ["create_app"]
 
@@ -51,8 +51,8 @@ def create_app(*, cors_origins: list[str] | None = None) -> FastAPI:
         users.router,
         apps.router,
         perm.router,
-        tenants.router,
         open.router,
+        ops.router,
     ):
         app.include_router(r)
     return app

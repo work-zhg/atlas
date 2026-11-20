@@ -14,8 +14,8 @@ from . import (
     meta,
     previews,
     runs,
-    sandbox_templates,
     service_models,
+    tenant_settings,
     threads,
     workspace,
 )
@@ -35,7 +35,7 @@ router.include_router(catalog.router, dependencies=_authed)
 router.include_router(previews.router)
 router.include_router(directory.router, dependencies=_authed)
 router.include_router(service_models.router, dependencies=_authed)
-router.include_router(sandbox_templates.router, dependencies=_authed)
+router.include_router(tenant_settings.router, dependencies=_authed)
 router.include_router(credentials.router, dependencies=_authed)
 router.include_router(workspace.router, dependencies=_authed)
 router.include_router(devices.router, dependencies=_authed)

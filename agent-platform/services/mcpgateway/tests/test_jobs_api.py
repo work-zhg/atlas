@@ -1,4 +1,5 @@
-"""定时任务的只读管理接口（JobRoutes）：只给 mcp:manage；刷新工具定义是本实例的实例任务。"""
+"""定时任务的只读管理接口（JobRoutes）：在运营接口里（/ops/v1/jobs），只给运营中心；刷新工具定义是
+本实例的实例任务。"""
 
 from __future__ import annotations
 
@@ -6,7 +7,7 @@ from typing import Any
 
 import httpx
 import pytest
-from gateway_testkit import ADMIN, as_user
+from gateway_testkit import ADMIN, TEST_TENANT, as_user, in_tenant, ops_request
 
 
 async def test_jobs_are_listed_for_managers_only(
@@ -25,10 +26,12 @@ async def test_jobs_are_listed_for_managers_only(
             transport=httpx.ASGITransport(app=app), base_url="http://gateway"
         ) as client,
     ):
-        denied = await client.get("/api/v1/jobs", headers=as_user("someone"))
-        ok = await client.get("/api/v1/jobs", headers=as_user(ADMIN))
+        gone = await client.get("/api/v1/jobs", headers=in_tenant(TEST_TENANT, **as_user(ADMIN)))
+        denied = await client.get("/ops/v1/jobs", headers=as_user(ADMIN))
+        ok = await client.request("GET", "/ops/v1/jobs", **ops_request("GET", "/ops/v1/jobs"))
 
-    assert denied.status_code == 403
+    assert gone.status_code == 404, "租户里没有了"
+    assert denied.status_code == 401
     assert ok.status_code == 200
     [job] = ok.json()["jobs"]
     assert (job["type"], job["scope"], job["every"]) == ("mcpgateway.tool_refresh", "instance", 30)

@@ -15,10 +15,9 @@
 make up                         # 会建 atlas_teamflow 库
 make tf-migrate
 make uc-serve                   # 依赖用户中心（:8030）
-make tf-register-uc ACCOUNT=admin
-                                # 登记 TeamFlow 的应用编码 teamflow、操作 / 菜单 / 角色 / 数据编码 Team。
-                                # 内网免令牌（doc/identity-propagation-design.html）：调用户中心、Atlas 只带
-                                # 请求头 X-Uid + X-Caller-App: teamflow，不需要 App Key / Secret。幂等
+                                # 应用目录（应用编码 teamflow、操作 / 菜单 / 角色 / 数据编码 Team）由运营人员
+                                # 在运营中心录入（services/teamflow/README.md）。内网免令牌：调用户中心、
+                                # Atlas 只带请求头 X-Uid + X-Caller-App: teamflow
 pnpm install                    # 前端 workspace（仓库根）：Atlas、TeamFlow 与共享对话组件一起装
 make tf-dev                     # 后端 :8040 + 前端 :3200（/api 由 Next 反向代理）
 ```
@@ -60,8 +59,6 @@ teamflow/
   src/atlas_teamflow/
     db/            表模型（自增 id + uuid 逻辑主键，关联用 uuid）
     migrations/    alembic
-    catalog.py     在用户中心登记的操作、菜单、角色、数据编码
-    register.py    register-uc：按 catalog 幂等同步到用户中心
     uc.py          用户中心开放接口客户端（唯一接触点）
     atlas.py       Atlas 客户端（Agent 列表 / 详情）
     identity.py    请求头身份（X-Uid，网关写入）、授权快照缓存、团队级别缓存

@@ -10,6 +10,11 @@ schema 定义里出现厂商名，整张表就和那一家焊死了。
 
 **不建外键**（迁移 0013 起）：引用完整性与级联删除由代码逻辑负责，表上只保留
 引用列与索引。新增表、新增列时不要再写 `ForeignKey(...)`。
+
+**租户**（迁移 0047，c4-model/infra-platform/code-tenancy.html）：业务表都继承 TenantOwned，
+多一列 tenant_uuid，查询自动按当前租户过滤、新行自动填当前租户（atlas_tenancy）。不是租户表的
+只有两张：model_catalog（产品自带的模型能力）、sandbox_template（运营中心管的运行环境）。
+名字类的唯一约束一律带上租户（智能体 slug、service_model 的用途、指令的 owner）。
 """
 
 from __future__ import annotations
@@ -19,6 +24,7 @@ from datetime import UTC, date, datetime
 from typing import Any
 from uuid import UUID
 
+from atlas_tenancy import TenantOwned
 from pydantic import SecretStr
 from sqlalchemy import (
     BigInteger,
@@ -61,7 +67,7 @@ def _logical_key() -> Mapped[UUID]:
     return mapped_column(UUIDType, nullable=False, default=uuid7)
 
 
-class AppUser(Base):
+class AppUser(TenantOwned, Base):
     """用户中心用户在 Atlas 的投影（权限设计 §5）。
 
     ★ id 直接用用户中心的用户 id：created_by、对象存储路径、Pod 配额标签、记忆的 user_id
@@ -92,6 +98,7 @@ class AppUser(Base):
         UniqueConstraint("user_uuid", name="uk_app_user_uuid"),
         Index(
             "ux_app_user_external_id",
+            "tenant_uuid",
             "external_id",
             unique=True,
             postgresql_where=text("external_id IS NOT NULL"),
@@ -134,12 +141,13 @@ class ModelCatalog(Base):
     )
 
 
-class Agent(Base, TimestampMixin):
+class Agent(TenantOwned, Base, TimestampMixin):
     __tablename__ = "agent"
 
     id: Mapped[int] = _pk()
     agent_uuid: Mapped[UUID] = _logical_key()
-    slug: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    #: 租户内唯一（uq_agent_tenant_slug）
+    slug: Mapped[str] = mapped_column(String(128), nullable=False)
     name: Mapped[str] = mapped_column(Text, nullable=False)
     # TEXT 列的默认值挪到 Python 侧：MySQL 不接受 TEXT/JSON 的字面量默认值（1101）
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -164,6 +172,7 @@ class Agent(Base, TimestampMixin):
 
     __table_args__ = (
         UniqueConstraint("agent_uuid", name="uk_agent_uuid"),
+        UniqueConstraint("tenant_uuid", "slug", name="uq_agent_tenant_slug"),
         CheckConstraint("status IN ('draft','enabled','archived')", name="status_enum"),
         CheckConstraint("auth_subject IN ('user','agent')", name="auth_subject_enum"),
     )
@@ -174,7 +183,7 @@ class Agent(Base, TimestampMixin):
         return self.auth_subject == "agent"
 
 
-class AgentVersion(Base):
+class AgentVersion(TenantOwned, Base):
     """★ 配置版本快照：run 必须能指回"当时用的哪份配置"（文档 §5.4）。"""
 
     __tablename__ = "agent_version"
@@ -201,7 +210,7 @@ class AgentVersion(Base):
     )
 
 
-class Thread(Base, TimestampMixin):
+class Thread(TenantOwned, Base, TimestampMixin):
     __tablename__ = "thread"
 
     id: Mapped[int] = _pk()
@@ -301,7 +310,7 @@ class Thread(Base, TimestampMixin):
     )
 
 
-class Device(Base):
+class Device(TenantOwned, Base):
     """一个人配对到平台的一台电脑（聚合根 Device，迁移 0045）。
 
     c4-model/agent/device/code-device-registry.html。设备只属于一个人；每人至多一台默认设备
@@ -347,7 +356,7 @@ class Device(Base):
     )
 
 
-class Message(Base):
+class Message(TenantOwned, Base):
     """存 Anthropic content blocks 原始结构。永远保留完整原文（文档 §7.4）。
 
     ★ 一轮的**中间消息**也在这里：模型发出的 tool_use（assistant 的 block）
@@ -391,7 +400,7 @@ class Message(Base):
     )
 
 
-class MessageFeedback(Base):
+class MessageFeedback(TenantOwned, Base):
     """对一条回答的反馈（有帮助 / 没帮助）。一个人对一条回答只有一条，再点就是改（迁移 0041）。"""
 
     __tablename__ = "message_feedback"
@@ -425,7 +434,7 @@ class MessageFeedback(Base):
     )
 
 
-class Run(Base):
+class Run(TenantOwned, Base):
     """一次对话轮次。
 
     ★ thread_id 与 agent_version_id 都非空（迁移 0006）：试跑移除之后，
@@ -526,7 +535,7 @@ class Run(Base):
     )
 
 
-class RunEvent(Base):
+class RunEvent(TenantOwned, Base):
     """轨迹事件归档。Redis Stream 是实时通道，这里是历史（文档 §10.2）。
 
     ★ 主键是 `(thread_id, thread_seq)` 而不是 `(run_id, seq)`（迁移 0011）。
@@ -564,7 +573,7 @@ class RunEvent(Base):
     )
 
 
-class RunState(Base):
+class RunState(TenantOwned, Base):
     """run 的图状态里 message 表装不下的部分（迁移 0028）。一个 state 键一行。
 
     ★ 为什么要存：Atlas 不用 checkpointer，每段从 message 表重建图的 state ——
@@ -589,7 +598,7 @@ class RunState(Base):
     __table_args__ = (UniqueConstraint("run_uuid", "key", name="uk_run_state_key"),)
 
 
-class RunFile(Base):
+class RunFile(TenantOwned, Base):
     """虚拟文件系统产物。MVP 直接入库；>1MB 时改对象存储（风险 R9）。"""
 
     __tablename__ = "run_file"
@@ -613,7 +622,7 @@ class RunFile(Base):
     )
 
 
-class Approval(Base):
+class Approval(TenantOwned, Base):
     """人工确认（文档 §12.2）。拒绝不终止 run，作为工具结果回给 agent。"""
 
     __tablename__ = "approval"
@@ -659,7 +668,7 @@ class Approval(Base):
     )
 
 
-class ThreadContext(Base, TimestampMixin):
+class ThreadContext(TenantOwned, Base, TimestampMixin):
     """会话的上下文状态（聚合根 ThreadContext，迁移 0033），一个会话一行。
 
     见 c4-model/agent/code-native-runtime-context.html。摘要替换掉覆盖边界之前的消息（§7.4）：
@@ -687,7 +696,7 @@ class ThreadContext(Base, TimestampMixin):
     )
 
 
-class CliSession(Base, TimestampMixin):
+class CliSession(TenantOwned, Base, TimestampMixin):
     """CLI 会话的接续信息（聚合根 CliSession，迁移 0031）。
 
     见 c4-model/agent/code-cli-runtime-link.html。
@@ -712,7 +721,7 @@ class CliSession(Base, TimestampMixin):
     __table_args__ = (UniqueConstraint("thread_uuid", name="uk_cli_session_thread"),)
 
 
-class SkillUsageDaily(Base):
+class SkillUsageDaily(TenantOwned, Base):
     """技能的使用量，按天汇总（技能 / MCP 设计 §7.4，迁移 0014）。
 
     「选中」= 模型读了 SKILL.md（skill.loaded 事件）。run 进入终态时从该 run
@@ -738,7 +747,7 @@ class SkillUsageDaily(Base):
     )
 
 
-class ThreadMemory(Base):
+class ThreadMemory(TenantOwned, Base):
     """会话的记忆状态（doc/memory-design.html §4.1、§5.3、§5.5、§4.5；迁移 0025）。
 
     一个会话一行，按需建出。随会话保存而不是放进程内存：换副本接管会话后仍然有效。
@@ -774,7 +783,7 @@ class ThreadMemory(Base):
     __table_args__ = (UniqueConstraint("thread_uuid", name="uk_thread_memory_thread"),)
 
 
-class MemoryUserSetting(Base):
+class MemoryUserSetting(TenantOwned, Base):
     """用户级的记忆设置（§7；迁移 0025）。
 
     paused  暂停：两条写入路径都停止写入；已有记忆照常常驻、照常可以加载（「暂停优于删除」）
@@ -795,7 +804,7 @@ class MemoryUserSetting(Base):
     __table_args__ = (UniqueConstraint("user_uuid", name="uk_memory_user_setting_user"),)
 
 
-class MemoryBackfill(Base):
+class MemoryBackfill(TenantOwned, Base):
     """一次会话后补记的结果（§4.3「下次会话开始时提示：上次会话补记了 2 条［查看］」；迁移 0025）。
 
     只记写入了东西（或拆分了主题）的那些。seen_at 为空 = 用户还没看过。
@@ -821,7 +830,7 @@ class MemoryBackfill(Base):
     )
 
 
-class ServiceModel(Base):
+class ServiceModel(TenantOwned, Base):
     """平台服务用哪个模型（模型管理方案设计第 9 章；迁移 0026）：会话标题、记忆补记这类不属于
     某个智能体的调用。
 
@@ -844,10 +853,12 @@ class ServiceModel(Base):
         UTCDateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
-    __table_args__ = (UniqueConstraint("purpose", name="uk_service_model_purpose"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_uuid", "purpose", name="uk_service_model_purpose"),
+    )
 
 
-class Instruction(Base):
+class Instruction(TenantOwned, Base):
     """持久指令（上下文管理设计 §10；迁移 0027，原在配置服务）：人主动写下、每轮都带给智能体的规则。
 
     平台（管理员维护）与用户（个人偏好）两层，一层一行。运行时每轮开始时读一次，拼在系统提示词
@@ -869,8 +880,8 @@ class Instruction(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("scope", "owner_id", name="uk_instruction_owner"),
-        CheckConstraint("scope IN ('platform','user')", name="scope_enum"),
+        UniqueConstraint("tenant_uuid", "scope", "owner_id", name="uk_instruction_owner"),
+        CheckConstraint("scope IN ('tenant','user')", name="scope_enum"),
     )
 
 
@@ -931,7 +942,7 @@ class SandboxTemplate(Base, TimestampMixin):
         return template_sha(self.yaml)
 
 
-class SandboxInstance(Base, TimestampMixin):
+class SandboxInstance(TenantOwned, Base, TimestampMixin):
     """沙箱实例的登记（聚合根 SandboxInstance）：身份、模板版本和两个令牌。
 
     状态以 OpenSandbox 为准，这里只是最近一次观测，用前刷新。删沙箱时整行删除。
@@ -1028,6 +1039,8 @@ class SandboxInstance(Base, TimestampMixin):
         detail: dict[str, Any] | None = None,
     ) -> SandboxEvent:
         return SandboxEvent(
+            # 对账在系统范围里写日志：租户跟着实例走，不靠上下文
+            tenant_uuid=self.tenant_uuid,
             sandbox_uuid=self.sandbox_uuid,
             external_id=self.external_id,
             event_type=event_type,
@@ -1038,7 +1051,7 @@ class SandboxInstance(Base, TimestampMixin):
         )
 
 
-class SandboxEvent(Base):
+class SandboxEvent(TenantOwned, Base):
     """沙箱生命周期日志（领域事件 SandboxEvent）：只追加、不修改；实例删了也保留，按保留期清理。
 
     event_type：registered、created、launch_failed、state_changed、paused、resumed、destroyed、
@@ -1073,7 +1086,7 @@ class SandboxEvent(Base):
 # ─────────────────────────────────────────────── 沙箱 · 通用供给（迁移 0037）
 
 
-class SandboxAccountRow(Base, TimestampMixin):
+class SandboxAccountRow(TenantOwned, Base, TimestampMixin):
     """一个人的沙箱账户（聚合根 SandboxAccount 的锚点）：只有版本号，是按人判配额时的并发锚点。
 
     见 c4-model/agent/sandbox/code-sandbox-provisioning.html。第一次给这个人分配沙箱时建。
@@ -1091,7 +1104,7 @@ class SandboxAccountRow(Base, TimestampMixin):
     __table_args__ = (UniqueConstraint("user_uuid", name="uk_sandbox_account_user"),)
 
 
-class UserSandboxRow(Base, TimestampMixin):
+class UserSandboxRow(TenantOwned, Base, TimestampMixin):
     """这个人名下的一个沙箱（实体 UserSandbox）。
 
     和基座的 sandbox_instance 一对一、共用 sandbox_uuid。
@@ -1121,7 +1134,7 @@ class UserSandboxRow(Base, TimestampMixin):
     )
 
 
-class SandboxBindingRow(Base):
+class SandboxBindingRow(TenantOwned, Base):
     """沙箱正在服务的业务（实体 SandboxBinding）。解绑、退役时删除；只增删、不修改。
 
     ★ (biz_type, biz_id) 唯一：一个业务至多绑一个沙箱，由唯一约束兜底（不靠分布式锁）。
@@ -1151,7 +1164,7 @@ class SandboxBindingRow(Base):
     )
 
 
-class SandboxExecution(Base, TimestampMixin):
+class SandboxExecution(TenantOwned, Base, TimestampMixin):
     """执行账本（命令执行领域的 ExecutionLedger）：哪一次工具调用对应沙箱里哪条命令（迁移 0040）。
 
     ★ 先记后提交：提交之前落一行（cmd_id 为空 = 提交中），拿到命令 id 再补上。实例死在两者之间时，
@@ -1175,7 +1188,7 @@ class SandboxExecution(Base, TimestampMixin):
     )
 
 
-class BrowserLogin(Base, TimestampMixin):
+class BrowserLogin(TenantOwned, Base, TimestampMixin):
     """一个人在一个站点上的登录态（浏览器 · 登录态领域的聚合根 SiteLogin，迁移 0046）。
 
     c4-model/agent/browser/code-browser-login.html。
@@ -1208,7 +1221,7 @@ class BrowserLogin(Base, TimestampMixin):
     )
 
 
-class BrowserHostRow(Base, TimestampMixin):
+class BrowserHostRow(TenantOwned, Base, TimestampMixin):
     """哪些沙箱是浏览器宿主（浏览器 · 宿主领域的 HostRegistry，迁移 0046）。
 
     c4-model/agent/browser/code-browser-host.html。
@@ -1237,4 +1250,51 @@ class BrowserHostRow(Base, TimestampMixin):
         UniqueConstraint("sandbox_uuid", name="uk_browser_host_sandbox"),
         Index("ix_browser_host_user", "user_uuid"),
         CheckConstraint("kind IN ('native','cli')", name="browser_host_kind_enum"),
+    )
+
+
+# ──────────────────────────── 容量（迁移 0048，c4-model/agent/code-capacity.html）
+
+
+class TenantCapacityRow(TenantOwned, Base):
+    """租户份额（聚合根 TenantCapacity）：运营中心经运营接口定。没有行 = 用默认份额。
+
+    ★ 准入时在调用方的事务里 SELECT … FOR UPDATE 锁住这一行再数用量：同一个租户的认领串行，
+      不会超；第一次准入时按默认份额建行（is_default = True，之后运营中心改默认份额照样跟着变）。
+    """
+
+    __tablename__ = "tenant_capacity"
+
+    id: Mapped[int] = _pk()
+    #: 同时运行的 run；空 = 不限
+    running_runs: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: 同时存在的沙箱和会话 Pod；空 = 不限
+    sandboxes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: 工作空间存储；空 = 不限
+    storage_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    #: 还在用默认份额（系统参数 capacity.default_*）
+    is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    updated_by: Mapped[str] = mapped_column(String(64), nullable=False, default="system")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    __table_args__ = (UniqueConstraint("tenant_uuid", name="uk_tenant_capacity_tenant"),)
+
+
+class StorageUsageRow(TenantOwned, Base):
+    """一个人在对象存储里用了多少字节：上传、看工作空间时按实际大小刷新（软上限）。"""
+
+    __tablename__ = "storage_usage"
+
+    id: Mapped[int] = _pk()
+    user_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    measured_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, server_default=func.now(), nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tenant_uuid", "user_uuid", name="uk_storage_usage_user"),
     )

@@ -15,6 +15,8 @@ from atlas_agent.auth.catalog import ALL_OPERATIONS
 #: 测试请求的身份（原 dev 模式的默认用户）
 TEST_USER = "00000000-0000-0000-0000-000000000001"
 AS_USER = {"X-Uid": TEST_USER}
+#: 没指定租户的用户都在这个租户里（conftest 的自动夹具也让测试代码默认在它里面）
+TEST_TENANT = "00000000-0000-0000-0000-00000000000a"
 
 #: 没登记过的用户的授权快照：什么都能做
 _ANYONE = {"can_access": True, "roles": [], "permissions": sorted(ALL_OPERATIONS), "menus": []}
@@ -43,10 +45,15 @@ class FakeUC:
         self.digital: dict[str, dict[str, Any]] = {}
         #: 收到的身份请求头（断言透传）
         self.seen: list[dict[str, str | None]] = []
+        #: 用户 id → 所属租户；没登记的在 TEST_TENANT
+        self.tenants: dict[str, str] = {}
         self.root_dept = str(uuid.uuid4())
 
-    def add(self, account: str, ops: list[str], *, can_access: bool = True) -> str:
+    def add(
+        self, account: str, ops: list[str], *, can_access: bool = True, tenant: str = TEST_TENANT
+    ) -> str:
         uid = str(uuid.uuid4())
+        self.tenants[uid] = tenant
         self.users[account] = {
             "id": uid,
             "account": account,
@@ -147,8 +154,14 @@ class FakeUC:
         if path == "/open/v1/depts/tree":
             return ok(200, json=[{"id": self.root_dept, "parent_id": None, "name": "总部"}])
         uid = path.split("/")[4]
+        tenant = self.tenants.get(uid, TEST_TENANT)
+        claimed = req.headers.get("x-tenant-id")
+        if claimed and claimed != tenant:
+            # 和用户中心一样：只在请求上写的租户里找人
+            return ok(404, json={"code": "USER_NOT_FOUND", "message": "用户不存在"})
         if path.endswith("/authz"):
-            return ok(200, json=self.snapshots.get(uid) or _ANYONE)
+            snap = self.snapshots.get(uid) or _ANYONE
+            return ok(200, json={**snap, "user": {"id": uid, "tenant_id": tenant}})
         u = next((x for x in self.users.values() if x["id"] == uid), None)
         return ok(
             200, json=u or {"id": uid, "account": "tester", "name": "测试", "status": "active"}

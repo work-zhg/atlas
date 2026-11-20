@@ -4,6 +4,8 @@
 ★ Redis 用 12 号库，只清 kb: 前缀的键；Qdrant 用 qdrant-client 的内存模式；
   向量模型用确定性的假实现（字符 bigram 哈希），不下载模型；对象存储用内存字典。
 ★ 投递器只记录要入库的文档；测试显式调 run_indexing() 跑 runner —— 与 worker 执行的是同一段代码。
+★ 多租户：每个用例默认在 TEST_TENANT 里（_in_test_tenant）；HTTP 请求由应用自己按请求头进入租户，
+  客户端默认带 TEST_TENANT。
 """
 
 from __future__ import annotations
@@ -13,11 +15,13 @@ import hashlib
 import os
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
+from uuid import UUID
 
 import numpy as np
 import pytest
 from atlas_knowledge.db.session import get_engine, get_sessionmaker
 from atlas_knowledge.settings import get_settings
+from atlas_tenancy import TenantScope
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -25,6 +29,11 @@ TEST_DB = "atlas_knowledge_test"
 _ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
 TEST_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{TEST_DB}"
 TEST_REDIS = "redis://localhost:6380/12"
+#: 没指定租户的都在这个租户里
+TEST_TENANT = "00000000-0000-0000-0000-00000000000a"
+OTHER_TENANT = "00000000-0000-0000-0000-00000000000b"
+#: 运营接口的签名密钥
+OPS_KEY = "test-ops-key"
 _TABLES = (
     "kb_knowledge_set",
     "kb_dataset",
@@ -38,19 +47,25 @@ _TABLES = (
     "kb_retrieval",
     "kb_index_version",
     "kb_metadata_field",
+    "kb_tenant_capacity",
+    "app_tenant_state",
+    "app_ops_request",
 )
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _test_env() -> Iterator[None]:
-    saved = {
-        k: os.environ.get(k)
-        for k in ("ATLAS_KB_DATABASE_URL", "ATLAS_KB_REDIS_URL", "ATLAS_KB_INGEST_SWEEP_INTERVAL_S")
+    overrides = {
+        "ATLAS_KB_DATABASE_URL": TEST_URL,
+        "ATLAS_KB_REDIS_URL": TEST_REDIS,
+        # 入库巡检不在后台跑：用例显式调 recover_stalled
+        "ATLAS_KB_INGEST_SWEEP_INTERVAL_S": "0",
+        "ATLAS_KB_OPS_API_KEY": OPS_KEY,
+        # 测试库里有多租户之前留下的行时，迁移 k0009 把它们归到测试租户
+        "TENANT_BACKFILL_UUID": TEST_TENANT,
     }
-    os.environ["ATLAS_KB_DATABASE_URL"] = TEST_URL
-    os.environ["ATLAS_KB_REDIS_URL"] = TEST_REDIS
-    # 入库巡检不在后台跑：用例显式调 recover_stalled
-    os.environ["ATLAS_KB_INGEST_SWEEP_INTERVAL_S"] = "0"
+    saved = {k: os.environ.get(k) for k in overrides}
+    os.environ.update(overrides)
     get_settings.cache_clear()
 
     async def _ensure() -> None:
@@ -277,23 +292,36 @@ class FakeDataPermissions:
         return {u: f"用户{u}" for u in user_ids}
 
 
+@pytest.fixture(autouse=True)
+def _in_test_tenant() -> Iterator[None]:
+    """直接调 service、runner 的用例默认在测试租户里。
+
+    应用的每个请求会先清掉它，再按请求头进入。
+    """
+    with TenantScope.enter(UUID(TEST_TENANT)):
+        yield
+
+
 #: 用户中心授权快照的替身：没有免鉴权模式（dev 模式已删），谁都能用、操作码全有
 _ANYONE = {
     "can_access": True,
     "permissions": ["kb:create", "kb:review", "chat:use", "agent:create"],
-    "user": {"status": "active"},
 }
 
 
 @pytest.fixture(autouse=True)
 def _fake_user_center(monkeypatch: pytest.MonkeyPatch) -> None:
-    """授权快照（auth._authz）走替身；测权限的用例自己再换 auth._transport。"""
+    """授权快照（auth._authz）走替身：人都在请求头写的租户里。
+
+    测权限的用例自己再换 auth._transport。
+    """
     import httpx
     from atlas_knowledge import auth
 
     def handler(req: httpx.Request) -> httpx.Response:
         assert req.url.path.endswith("/authz"), req.url.path
-        return httpx.Response(200, json=_ANYONE)
+        user = {"status": "active", "tenant_id": req.headers.get("x-tenant-id")}
+        return httpx.Response(200, json={**_ANYONE, "user": user})
 
     monkeypatch.setattr(auth, "_transport", httpx.MockTransport(handler))
     monkeypatch.setattr(auth, "_cache", auth._Cache())
@@ -352,24 +380,40 @@ async def client(rt: Any) -> AsyncIterator[Any]:
     app = create_app(runtime=rt)
     app.state.runtime = rt
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://kb") as c:
+    async with httpx.AsyncClient(
+        transport=transport, base_url="http://kb", headers={"X-Tenant-Id": TEST_TENANT}
+    ) as c:
         yield c
 
 
 async def run_rebuilds(rt: Any) -> None:
     """把投递器记下的索引版本重建跑一遍。"""
-    from atlas_knowledge.indexing.versions import rebuild
+    from atlas_knowledge.indexing.versions import rebuild_queued
 
     queued, rt.dispatcher.rebuilds = list(rt.dispatcher.rebuilds), []
     for version_uuid in queued:
-        await rebuild(rt, get_sessionmaker(), version_uuid)
+        await rebuild_queued(rt, get_sessionmaker(), version_uuid)
 
 
 async def run_indexing(rt: Any) -> None:
-    """把投递器记下的文档跑一遍（worker 跑的就是这段）。"""
-    from atlas_knowledge.indexing.runner import IndexingRunner
+    """把投递器记下的文档跑一遍（worker 跑的就是这段：按文档行进入它的租户）。"""
+    from atlas_knowledge.indexing.runner import run_queued
 
-    runner = IndexingRunner(rt, get_sessionmaker())
     queued, rt.dispatcher.queued = list(rt.dispatcher.queued), []
     for doc_uuid in queued:
-        await runner.run(doc_uuid)
+        await run_queued(rt, get_sessionmaker(), [doc_uuid])
+
+
+def ops_request(method: str, path: str, body: object = None) -> dict[str, Any]:
+    """运营中心的签名请求：→ httpx 的 request 参数（content、headers）。"""
+    import json
+    from uuid import uuid4
+
+    from atlas_opsapi import OperatorStamp, sign
+
+    raw = b"" if body is None else json.dumps(body).encode()
+    headers = sign(OPS_KEY.encode(), method, path, raw)
+    headers.update(OperatorStamp(operator_name="值班", idempotency_key=uuid4()).to_headers())
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    return {"content": raw, "headers": headers}

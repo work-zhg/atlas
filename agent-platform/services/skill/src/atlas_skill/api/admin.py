@@ -13,10 +13,20 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from sqlalchemy import select
 
-from ..auth import AUDIT_VIEW, SKILL_REVIEW, SKILL_UPLOAD, Principal, current_principal, require_any
+from ..auth import (
+    AUDIT_VIEW,
+    SKILL_REVIEW,
+    SKILL_UPLOAD,
+    Principal,
+    current_principal,
+    require_any,
+    verified_tenant,
+)
 from ..db.models import SkillAudit
 from ..schemas import (
     AuditOut,
+    MarketInstalled,
+    MarketSkillOut,
     ReviewDecisionIn,
     SkillDetailOut,
     SkillVersionAdminOut,
@@ -24,9 +34,10 @@ from ..schemas import (
 )
 from ..skill.package import ScanBlocked, load_zip
 from ..skill.service import limits_of
-from .deps import SessionDep, SkillServiceDep
+from .deps import MarketServiceDep, SessionDep, SkillServiceDep
 
-router = APIRouter(prefix="/api/v1", tags=["admin"])
+# ★ 先核对租户、进入它（auth.verified_tenant），之后的读写都按它自动过滤
+router = APIRouter(prefix="/api/v1", tags=["admin"], dependencies=[Depends(verified_tenant)])
 
 #: 按操作码鉴权（权限设计 §6.1）。查看目录不要操作码：在本应用可访问范围内就能看
 #: （范围在用户中心设置，auth.py 对范围外的人一律 403）。
@@ -97,7 +108,7 @@ async def upload_skill(
     service: SkillServiceDep,
     principal: SkillUploader,
     file: Annotated[UploadFile, File(description="技能包 zip")],
-    source: Annotated[Literal["builtin", "tenant", "imported"], Form()] = "builtin",
+    source: Annotated[Literal["tenant", "imported"], Form()] = "tenant",
     origin_url: Annotated[str | None, Form()] = None,
 ) -> SkillVersionAdminOut:
     limits = limits_of(service.settings)
@@ -144,6 +155,26 @@ async def change_status(
             slug, version, action=action, actor=principal.user, reason=body.reason if body else None
         )
     return _admin_out(row)
+
+
+# ───────────────────────────────────────────── 技能市场
+
+
+@router.get("/market/skills", response_model=list[MarketSkillOut])
+async def market(service: MarketServiceDep, _: SkillReader) -> list[MarketSkillOut]:
+    """技能市场里能装的技能（产品自带的），带上本租户已经装了哪些版本。"""
+    return await service.for_tenant()
+
+
+@router.post("/market/skills/{slug}/install", response_model=MarketInstalled)
+async def install(
+    slug: str,
+    service: MarketServiceDep,
+    principal: SkillReviewer,
+    version: Annotated[int | None, Query(ge=1)] = None,
+) -> MarketInstalled:
+    """把市场里的一个版本（缺省 = 最新的已发布版本）拷进本租户：之后就是本租户的技能。"""
+    return await service.install(slug, version, actor=principal.user)
 
 
 # ───────────────────────────────────────────── 审计

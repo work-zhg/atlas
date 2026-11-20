@@ -3,7 +3,8 @@
 内网免令牌：身份在请求头里 —— 网关按登录态写入；atlas-server 运行时调用时写这一轮的身份。
   X-Uid         谁在用（建库人、上传人、检索记录里的发起人）
   X-Auth-Uid    按谁的权限判，缺省 = X-Uid：库级、文档级权限都按它（只剩这一套规则）
-  X-Tenant-Id   租户，原样透传给用户中心
+  X-Tenant-Id   租户（必填）：带了 X-Uid 的经用户中心核对「这个人在这个租户里」，然后进入这个
+                租户，数据按它自动过滤（atlas_tenancy）。租户已停用（运营接口）的一律 403
   X-Caller-App  直接调用方：gateway / atlas …
 
   缺 X-Uid → 401；操作码按 auth-uid 取用户中心授权快照（以 Atlas 应用的身份）。
@@ -23,8 +24,10 @@ import time
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Annotated, Any
+from uuid import UUID
 
 import httpx
+from atlas_tenancy import TENANT_HEADER, TenantScope, parse_tenant
 from fastapi import Depends, HTTPException, Request
 
 from .settings import KnowledgeSettings, get_settings
@@ -37,6 +40,7 @@ __all__ = [
     "current_principal",
     "outbound_headers",
     "use_identity",
+    "verified_tenant",
 ]
 
 #: 入站（小写）→ 出站请求头
@@ -82,7 +86,12 @@ def use_identity(uid: str | None, auth_uid: str | None = None, tenant: str | Non
 
 
 def outbound_headers() -> dict[str, str]:
-    return {**(_outbound.get() or {}), "X-Caller-App": get_settings().uc_app_code}
+    """出站请求头。没透传到租户（入库任务、MCP）时写当前租户。"""
+    headers = {**(_outbound.get() or {}), "X-Caller-App": get_settings().uc_app_code}
+    tenant = TenantScope.current()
+    if TENANT_HEADER not in headers and tenant is not None:
+        headers[TENANT_HEADER] = str(tenant)
+    return headers
 
 
 class IdentityHeadersMiddleware:
@@ -102,7 +111,9 @@ class IdentityHeadersMiddleware:
         }
         token = _outbound.set(got or None)
         try:
-            await self.app(scope, receive, send)
+            # 每个请求从「没有租户」开始：由 verified_tenant 核对后进入（MCP 按令牌进入）
+            with TenantScope.isolated():
+                await self.app(scope, receive, send)
         finally:
             _outbound.reset(token)
 
@@ -111,19 +122,19 @@ class IdentityHeadersMiddleware:
 
 
 class _Cache:
-    """auth-uid → (过期时刻, 快照)。只缓存成功结果。"""
+    """(auth-uid, 租户) → (过期时刻, 快照)。只缓存成功结果。"""
 
     def __init__(self) -> None:
-        self._rows: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._rows: dict[tuple[str, UUID], tuple[float, dict[str, Any]]] = {}
 
-    def get(self, key: str) -> dict[str, Any] | None:
+    def get(self, key: tuple[str, UUID]) -> dict[str, Any] | None:
         row = self._rows.get(key)
         if row is None or row[0] < time.monotonic():
             self._rows.pop(key, None)
             return None
         return row[1]
 
-    def put(self, key: str, snap: dict[str, Any], ttl: float) -> None:
+    def put(self, key: tuple[str, UUID], snap: dict[str, Any], ttl: float) -> None:
         if len(self._rows) > 10_000:
             self._rows.clear()
         self._rows[key] = (time.monotonic() + ttl, snap)
@@ -134,15 +145,16 @@ _cache = _Cache()
 _transport: httpx.AsyncBaseTransport | None = None
 
 
-async def _authz(settings: KnowledgeSettings, auth_uid: str) -> dict[str, Any]:
-    hit = _cache.get(auth_uid)
+async def _authz(settings: KnowledgeSettings, auth_uid: str, tenant: UUID) -> dict[str, Any]:
+    """在这个租户里向用户中心取这个人的授权快照；不在这个租户里就是 404 → 401。"""
+    hit = _cache.get((auth_uid, tenant))
     if hit is not None:
         return hit
     try:
         async with httpx.AsyncClient(timeout=5.0, trust_env=False, transport=_transport) as client:
             r = await client.get(
                 f"{settings.uc_base_url.rstrip('/')}/open/v1/users/{auth_uid}/authz",
-                headers=outbound_headers(),
+                headers={**outbound_headers(), TENANT_HEADER: str(tenant)},
             )
     except httpx.HTTPError as exc:
         logger.warning("取授权快照失败（用户中心不可达）：%s", exc)
@@ -153,12 +165,39 @@ async def _authz(settings: KnowledgeSettings, auth_uid: str) -> dict[str, Any]:
         logger.warning("授权快照返回 %s：%s", r.status_code, r.text[:200])
         raise HTTPException(status_code=503, detail="暂时无法校验权限，请稍后重试")
     snap: dict[str, Any] = r.json()
-    _cache.put(auth_uid, snap, settings.authz_ttl_s)
+    _cache.put((auth_uid, tenant), snap, settings.authz_ttl_s)
     return snap
 
 
-async def current_principal(
+async def verified_tenant(
     request: Request, settings: Annotated[KnowledgeSettings, Depends(get_settings)]
+) -> UUID:
+    """管理接口、内部接口的入口：取请求头里的租户，核对后进入它（之后的读写按它自动过滤）。
+
+    带了用户的经用户中心核对他在这个租户里；没带的（检索的旧调用方）按请求头。
+    """
+    tenant = parse_tenant(request.headers.get("x-tenant-id"))
+    if tenant is None:
+        raise HTTPException(status_code=401, detail="缺少租户（X-Tenant-Id）")
+    h = request.headers
+    uid = (h.get("x-uid") or "").strip()
+    if uid:
+        auth_uid = (h.get("x-auth-uid") or "").strip() or uid
+        snap = await _authz(settings, auth_uid, tenant)
+        home = parse_tenant((snap.get("user") or {}).get("tenant_id"))
+        if home is not None and home != tenant:
+            raise HTTPException(status_code=401, detail="请求头里的租户和用户所属的不一致")
+    gate = getattr(request.app.state, "tenant_gate", None)
+    if gate is not None and not await gate.is_active(tenant):
+        raise HTTPException(status_code=403, detail="所在的组织已停用")
+    TenantScope.bind(tenant)
+    return tenant
+
+
+async def current_principal(
+    request: Request,
+    settings: Annotated[KnowledgeSettings, Depends(get_settings)],
+    tenant: Annotated[UUID, Depends(verified_tenant)],
 ) -> Principal:
     h = request.headers
     uid = (h.get("x-uid") or "").strip()
@@ -166,7 +205,7 @@ async def current_principal(
     caller = (h.get("x-caller-app") or "").strip() or "unknown"
     if not uid:
         raise HTTPException(status_code=401, detail="请先登录")
-    snap = await _authz(settings, auth_uid)
+    snap = await _authz(settings, auth_uid, tenant)
     user = snap.get("user") or {}
     if user.get("status") == "disabled":
         raise HTTPException(status_code=401, detail="账号已停用")

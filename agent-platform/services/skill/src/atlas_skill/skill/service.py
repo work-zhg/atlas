@@ -34,7 +34,7 @@ from ..schemas import (
     SkillVersionOut,
 )
 from ..settings import SkillSettings
-from ..storage import SkillStorage, draft_prefix, published_prefix
+from ..storage import SkillStorage, draft_prefix, legacy_prefix, published_prefix
 from .package import Limits, RawPackage
 from .scanner import content_scan, parse, similarity_scan
 
@@ -70,11 +70,16 @@ class SkillService:
         actor: str,
         origin_url: str | None = None,
     ) -> SkillVersion:
-        """上传一个新版本。builtin 且不含脚本时直接发布，否则进入待审查。
+        """上传一个新版本，进入本租户的待审查。
 
         第 1 层（归档）已在读包时做完；这里做第 2、3 层与描述冲突检查。
+
+        ★ 多租户以后没有 builtin 的上传：产品自带的技能发布到技能市场（运营接口），租户从市场
+          拷贝；租户自己上传的一律经本租户的审核人审核（原来作者选 builtin 就能跳过审查）。
         """
-        if source not in ("builtin", "tenant", "imported"):
+        if source == "builtin":
+            raise Invalid("产品自带的技能发布到技能市场（运营中心），不能作为租户技能上传")
+        if source not in ("tenant", "imported"):
             raise Invalid(f"未知来源 {source!r}")
         if source == "imported" and not origin_url:
             raise Invalid("imported 技能必须给出出处（origin_url）")
@@ -85,6 +90,8 @@ class SkillService:
             skill = Skill(slug=parsed.slug, source=source, origin_url=origin_url, created_by=actor)
             self.session.add(skill)
             await self.session.flush()
+        elif skill.source == "market":
+            raise Conflict(f"技能 {parsed.slug} 是从技能市场安装的，新版本请从技能市场安装")
         elif skill.source != source:
             raise Conflict(
                 f"技能 {parsed.slug} 的来源是 {skill.source}，不能以 {source} 上传新版本"
@@ -150,13 +157,6 @@ class SkillService:
             has_scripts=parsed.has_scripts,
         )
 
-        # ★ 含脚本或非 builtin 必须人工审查，没有例外（skill.html §05）
-        if not parsed.has_scripts and source == "builtin":
-            row.scan_result = {
-                **row.scan_result,
-                "review": {"result": "skipped", "reason": "builtin 且不含脚本"},
-            }
-            await self._publish(row, actor=actor)
         return row
 
     async def review(
@@ -234,7 +234,7 @@ class SkillService:
         return row
 
     async def adopt(self, slug: str, version: int, *, actor: str) -> SkillVersion:
-        """把源仓库里**已有**的包登记进表（P1 上线前手工放进 _skills/ 的技能）。
+        """把源仓库里**已有**的包登记进当前租户（P1 上线前手工放进桶根 _skills/ 的技能）。
 
         只读对象、算哈希，不移动对象 —— 已经引用它的 agent 不受任何影响。
         """
@@ -245,7 +245,7 @@ class SkillService:
         )
         if exists is not None:
             raise Conflict(f"{slug} v{version} 已经登记过")
-        prefix = published_prefix(slug, version)
+        prefix = legacy_prefix(slug, version)
         files = await asyncio.to_thread(self.storage.get_tree, prefix)
         if not files:
             raise NotFound(f"源仓库里没有 {prefix}")
@@ -395,7 +395,7 @@ class SkillService:
         return [_detail_out(s, by_slug.get(s.slug, [])) for s in skills]
 
     async def admin_detail(self, slug: str) -> SkillDetailOut:
-        skill = await self.session.get(Skill, slug)
+        skill = await self._skill(slug)
         if skill is None:
             raise NotFound(f"技能 {slug} 不存在")
         rows = (
@@ -503,8 +503,11 @@ class SkillService:
             raise NotFound(f"技能 {slug} v{version} 不存在")
         return row
 
+    async def _skill(self, slug: str) -> Skill | None:
+        return await self.session.scalar(select(Skill).where(Skill.slug == slug))
+
     async def _source(self, slug: str) -> str:
-        skill = await self.session.get(Skill, slug)
+        skill = await self._skill(slug)
         if skill is None:
             raise NotFound(f"技能 {slug} 不存在")
         return skill.source
@@ -538,6 +541,7 @@ def _runtime_out(row: SkillVersion, source: str) -> SkillVersionOut:
         published_by=row.published_by,
         published_at=row.published_at,
         status_reason=row.status_reason,
+        storage_key=row.storage_key,
     )
 
 

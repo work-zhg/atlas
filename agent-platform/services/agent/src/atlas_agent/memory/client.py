@@ -18,6 +18,7 @@ from urllib.parse import quote
 from uuid import UUID
 
 import httpx
+from atlas_tenancy import TenantScope
 
 from ..errors import CapabilityUnavailable
 from ..outbound import caller_app, current_identity
@@ -164,6 +165,9 @@ class MemoryClient:
         ident = current_identity()
         if ident is not None and ident.tenant_id:
             headers["X-Tenant-Id"] = ident.tenant_id
+        elif (tenant := TenantScope.current()) is not None:
+            # 后台任务（会话后补记）没有出站身份：用它进入的租户
+            headers["X-Tenant-Id"] = str(tenant)
         return headers
 
     async def _call(

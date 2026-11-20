@@ -18,7 +18,7 @@ from uuid import UUID
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..builtin import PLATFORM_MENUS, PLATFORM_OPERATIONS, SUPER_ROLE_CODE
+from ..builtin import SUPER_ROLE_CODE
 from ..common import advisory_lock
 from ..db.models import (
     App,
@@ -187,20 +187,13 @@ async def visible_menu_tree(
     session: AsyncSession,
     app_uuid: UUID,
     role_uuids: Iterable[UUID],
-    *,
-    hidden: frozenset[str] = frozenset(),
 ) -> tuple[list[dict[str, Any]], set[UUID]]:
-    """可见菜单 = 公共菜单 ∪ 角色绑定的菜单，再补上级目录（目录只在有可见子菜单时出现）。
-
-    hidden：不论角色怎么绑都不显示的菜单编码（客户租户看不到平台级菜单）。
-    """
-    menus = [
-        m
-        for m in await session.scalars(
+    """可见菜单 = 公共菜单 ∪ 角色绑定的菜单，再补上级目录（目录只在有可见子菜单时出现）。"""
+    menus = list(
+        await session.scalars(
             select(Menu).where(Menu.app_uuid == app_uuid).order_by(Menu.sort, Menu.id)
         )
-        if m.code not in hidden
-    ]
+    )
     by_uuid = {m.uuid: m for m in menus}
     rids = list(role_uuids)
     bound = (
@@ -249,14 +242,7 @@ async def authz_snapshot(session: AsyncSession, user: User, app: App) -> dict[st
                 )
             )
         )
-    # ★ 平台级操作码 / 菜单只对平台租户内的人生效（租户设计 §07）
-    hidden: frozenset[str] = frozenset()
-    if app.is_builtin and (await _tenant(session, user)).kind != "platform":
-        perms = [p for p in perms if p not in PLATFORM_OPERATIONS]
-        hidden = PLATFORM_MENUS
-    menus, _ = (
-        await visible_menu_tree(session, app.uuid, rids, hidden=hidden) if access else ([], set())
-    )
+    menus, _ = await visible_menu_tree(session, app.uuid, rids) if access else ([], set())
     return {
         "can_access": access,
         "roles": sorted(r.code for r in roles),

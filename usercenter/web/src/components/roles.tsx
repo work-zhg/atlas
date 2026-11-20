@@ -103,7 +103,8 @@ export function RoleDetail({ app, roleId, onEdit, onDeleted }: { app: AppInfo; r
       setMenuIds(r.menu_ids ?? []);
     }
   }, [r]);
-  const editable = !!r && can("role:manage") && !r.is_builtin;
+  // 应用内置角色（所有租户共用）由运营中心维护：租户里只能看、复制
+  const editable = !!r && can("role:manage") && !r.is_builtin && !r.shared;
   const modules = useMemo(() => {
     const m = new Map<string, Operation[]>();
     for (const o of ops.data ?? []) m.set(o.module, [...(m.get(o.module) ?? []), o]);
@@ -141,7 +142,11 @@ export function RoleDetail({ app, roleId, onEdit, onDeleted }: { app: AppInfo; r
       </div>
     ) : (
       <div className="uc-sub" style={{ marginTop: 12 }}>
-        {r.is_builtin ? "内置角色随版本发布，不能修改" : "你只能查看角色；修改需要「管理角色」权限"}
+        {r.is_builtin
+          ? "内置角色随版本发布，不能修改"
+          : r.shared
+            ? "应用内置角色由运营中心维护，所有租户共用；可以复制成本租户的角色再改"
+            : "你只能查看角色；修改需要「管理角色」权限"}
       </div>
     );
 
@@ -152,7 +157,7 @@ export function RoleDetail({ app, roleId, onEdit, onDeleted }: { app: AppInfo; r
           <div className="uc-row" style={{ flexWrap: "wrap" }}>
             <span style={{ fontSize: 18, fontWeight: 650 }}>{r.name}</span>
             <span className="uc-mono uc-muted">{r.code}</span>
-            {r.is_builtin && <Tag>内置</Tag>}
+            {(r.is_builtin || r.shared) && <Tag>内置</Tag>}
           </div>
           <div className="uc-row uc-sub" style={{ marginTop: 4 }}>
             <AppIcon app={app} size={18} />

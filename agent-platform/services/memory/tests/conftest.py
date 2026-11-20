@@ -14,14 +14,23 @@ import httpx
 import pytest
 from atlas_memory.db.session import get_engine, get_sessionmaker
 from atlas_memory.settings import get_settings
-from memory_testkit import FakePermissions
+from memory_testkit import TEST_TENANT, USERS_ELSEWHERE, FakePermissions
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 TEST_DB = "atlas_memory_test"
 _ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
 TEST_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{TEST_DB}"
-_TABLES = ("mem_scope", "mem_instance", "mem_topic", "mem_entry", "mem_revision")
+_TABLES = (
+    "mem_scope",
+    "mem_instance",
+    "mem_topic",
+    "mem_entry",
+    "mem_revision",
+    "app_tenant_state",
+    "app_ops_request",
+)
+OPS_KEY = "test-ops-key"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -73,18 +82,36 @@ def perms() -> FakePermissions:
 
 @pytest.fixture(autouse=True)
 def _fake_authz(monkeypatch: pytest.MonkeyPatch) -> None:
-    """作用域管理接口的授权快照：用户 admin 有 memory_scope:manage，其他人没有。"""
+    """用户中心的授权快照：用户都在请求头写的租户里，除了 users_elsewhere 里登记过的（用户中心
+    在请求头的租户里找不到他 → 404）。"""
     from atlas_memory import auth
 
     def handler(request: httpx.Request) -> httpx.Response:
         uid = request.url.path.split("/")[-2]
-        ops = ["memory_scope:manage"] if uid == "admin" else []
+        tenant = request.headers.get("x-tenant-id")
+        home = USERS_ELSEWHERE.get(uid)
+        if home is not None and home != tenant:
+            return httpx.Response(404, json={"message": "用户不存在"})
         return httpx.Response(
-            200, json={"can_access": True, "permissions": ops, "user": {"status": "active"}}
+            200,
+            json={
+                "can_access": True,
+                "permissions": [],
+                "user": {"id": uid, "status": "active", "tenant_id": tenant},
+            },
         )
 
     monkeypatch.setattr(auth, "_transport", httpx.MockTransport(handler))
     monkeypatch.setattr(auth, "_cache", auth._Cache())
+
+
+@pytest.fixture(autouse=True)
+def _ops_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("ATLAS_MEMORY_OPS_API_KEY", OPS_KEY)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+    USERS_ELSEWHERE.clear()
 
 
 @pytest.fixture
@@ -93,6 +120,8 @@ async def client(perms: FakePermissions) -> AsyncIterator[httpx.AsyncClient]:
 
     app = create_app(perms=perms)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://memory"
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://memory",
+        headers={"X-Tenant-Id": TEST_TENANT},
     ) as c:
         yield c

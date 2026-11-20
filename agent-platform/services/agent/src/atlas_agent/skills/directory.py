@@ -8,6 +8,9 @@
       下架要在一分钟内生效；技能应用短暂不可用不能让运行时停摆。
 
 技能应用不可用时：用过的版本照常装配；只有首次用到的版本会失败。
+
+★ 两层缓存都按租户分（多租户）：技能归租户，两个租户的 demo@v1 可以是完全不同的内容。租户取当前的
+  租户上下文（和发给技能应用的 X-Tenant-Id 是同一个）；没有租户上下文就报错，不按「没有租户」查。
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from atlas_skill.schemas import SkillCatalogItem, SkillVersionOut
+from atlas_tenancy import TenantScope
 
 from .client import SkillClient, SkillServiceNotFound, SkillServiceUnavailable
 
@@ -62,36 +66,44 @@ class HttpSkillDirectory:
         self._client = client
         self._cache_dir = cache_dir
         self._ttl = status_ttl_s
-        self._content: dict[tuple[str, int], SkillVersionOut] = {}
-        self._catalog: list[SkillCatalogItem] | None = None
-        self._catalog_at = 0.0
+        #: (租户, slug, 版本) → 内容
+        self._content: dict[tuple[str, str, int], SkillVersionOut] = {}
+        #: 租户 → (目录, 拉到的时刻)
+        self._catalogs: dict[str, tuple[list[SkillCatalogItem], float]] = {}
 
     async def catalog(self) -> list[SkillCatalogItem]:
-        if self._catalog is not None and time.monotonic() - self._catalog_at < self._ttl:
-            return self._catalog
+        tenant = _tenant()
+        cached = self._catalogs.get(tenant)
+        if cached is not None and time.monotonic() - cached[1] < self._ttl:
+            return cached[0]
         try:
             raw = await self._client.get("/internal/skills/catalog")
         except SkillServiceUnavailable:
-            if self._catalog is None:
+            if cached is None:
                 raise
             # ★ 可变状态拉不到时用上一次的：下架晚生效一会儿，好过整个运行时停摆
-            logger.warning("技能目录刷新失败，继续使用 %.0fs 前的结果", self._age())
-            self._catalog_at = time.monotonic()  # 一个 TTL 后再试，不要每次调用都去撞
-            return self._catalog
-        self._catalog = [SkillCatalogItem.model_validate(item) for item in raw]
-        self._catalog_at = time.monotonic()
-        return self._catalog
+            logger.warning(
+                "技能目录刷新失败，继续使用 %.0fs 前的结果", time.monotonic() - cached[1]
+            )
+            # 一个 TTL 后再试，不要每次调用都去撞
+            self._catalogs[tenant] = (cached[0], time.monotonic())
+            return cached[0]
+        catalog = [SkillCatalogItem.model_validate(item) for item in raw]
+        self._catalogs[tenant] = (catalog, time.monotonic())
+        return catalog
 
     async def get(self, slug: str, version: int) -> SkillVersionOut:
-        content = self._content.get((slug, version)) or self._from_disk(slug, version)
+        tenant = _tenant()
+        key = (tenant, slug, version)
+        content = self._content.get(key) or self._from_disk(tenant, slug, version)
         if content is None:
             try:
                 raw = await self._client.get(f"/internal/skills/{slug}/versions/{version}")
             except SkillServiceNotFound as exc:
                 raise SkillNotFound(f"技能 {slug} v{version} 不存在或未发布") from exc
             content = SkillVersionOut.model_validate(raw)
-            self._to_disk(content)
-        self._content[(slug, version)] = content
+            self._to_disk(tenant, content)
+        self._content[key] = content
         status = await self._status(slug, version)
         return content if status is None else content.model_copy(update={"status": status})
 
@@ -123,18 +135,16 @@ class HttpSkillDirectory:
                         return v.status
         return None
 
-    def _age(self) -> float:
-        return time.monotonic() - self._catalog_at
-
-    def _path(self, slug: str, version: int) -> Path | None:
+    def _path(self, tenant: str, slug: str, version: int) -> Path | None:
+        # 多租户之前的 skills/{slug}/{版本}.json 不再读（不知道是哪个租户的）
         return (
             None
             if self._cache_dir is None
-            else self._cache_dir / "skills" / slug / f"{version}.json"
+            else self._cache_dir / "skills" / tenant / slug / f"{version}.json"
         )
 
-    def _from_disk(self, slug: str, version: int) -> SkillVersionOut | None:
-        path = self._path(slug, version)
+    def _from_disk(self, tenant: str, slug: str, version: int) -> SkillVersionOut | None:
+        path = self._path(tenant, slug, version)
         if path is None or not path.exists():
             return None
         try:
@@ -143,8 +153,8 @@ class HttpSkillDirectory:
             logger.warning("技能缓存损坏，丢弃：%s", path, exc_info=True)
             return None
 
-    def _to_disk(self, content: SkillVersionOut) -> None:
-        path = self._path(content.slug, content.version)
+    def _to_disk(self, tenant: str, content: SkillVersionOut) -> None:
+        path = self._path(tenant, content.slug, content.version)
         if path is None:
             return
         try:
@@ -154,6 +164,10 @@ class HttpSkillDirectory:
             tmp.replace(path)  # 原子替换：并发写入不会留下半个文件
         except OSError:
             logger.warning("写技能缓存失败（不影响本次使用）：%s", path, exc_info=True)
+
+
+def _tenant() -> str:
+    return str(TenantScope.require())
 
 
 class UnconfiguredSkillDirectory:

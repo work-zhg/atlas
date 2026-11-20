@@ -42,6 +42,7 @@ from typing import Any
 from uuid import UUID
 
 import sqlalchemy as sa
+from atlas_tenancy import TenantScope
 from sqlalchemy import func, select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -224,6 +225,8 @@ class MemoryStore:
             await self.session.execute(
                 pg_insert(Instance)
                 .values(
+                    # ★ 插入语句不经 flush，租户要自己写（查询才自动过滤）
+                    tenant_uuid=TenantScope.require(),
                     uuid=uuid7(),
                     scope_uuid=scope.uuid,
                     key=dict(key),
@@ -234,7 +237,7 @@ class MemoryStore:
                     created_at=now,
                     updated_at=now,
                 )
-                .on_conflict_do_nothing(index_elements=["scope_uuid", "key_text"])
+                .on_conflict_do_nothing(index_elements=["tenant_uuid", "scope_uuid", "key_text"])
             )
         return await self.session.scalar(
             select(Instance)

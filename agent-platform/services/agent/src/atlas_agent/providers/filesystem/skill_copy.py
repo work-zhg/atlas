@@ -3,7 +3,10 @@
 ## 布局：一个人一份，按技能、版本分子目录
 
     {user}/skills/{slug}/{version}/    ← 这个人所有会话共用；沙箱里是 /data/skills/{slug}/{version}/
-    _skills/{slug}/{version}/          ← 源仓库，全局只读，在桶根（沙箱里看不到）
+    {租户}/_skills/{slug}/{version}/   ← 源仓库，技能应用发布的，沙箱里看不到
+
+源仓库的位置以技能应用给的 storage_key 为准，运行时不自己拼（多租户之前发布的在桶根 _skills/ 下，
+之后的在租户目录下）。没接技能应用时才按桶根 _skills/{slug}/{version}/ 找（接入前的行为）。
 
 同一版技能只拷一次，新会话、子会话大多不用再拷；不同智能体可能绑同一技能的不同版本，按版本分开才
 不会互相覆盖。每个会话的提示词只列出自己智能体绑定的技能和路径（清单来自智能体的配置，不扫描目录），
@@ -74,6 +77,8 @@ class SkillMeta:
     slug: str
     version: int
     description: str
+    #: 源仓库里这个版本的目录（技能应用给的）；None = 没接技能应用，按桶根 _skills/ 找
+    storage_key: str | None = None
 
 
 async def resolve_skills(
@@ -88,6 +93,8 @@ async def resolve_skills(
       （决定要不要展开正文）。让它始终来自那份经过审查的版本。
     ★ 没接技能应用（directory.configured=False）时退回接入前的行为：照 spec
       投送，描述以 slug 兜底。
+    ★ with_descriptions=False 只是不要描述；版本照样要查 —— 拷贝要用它的 storage_key
+      （多租户以后源仓库在租户目录下）。版本内容永久缓存，只有第一次用到时才问技能应用。
     ★ 下架清单拉不到时**放行**（打 warning）：拿不到「哪些被下架了」不该让所有
       带技能的会话一起失败 —— 下架晚生效一会儿是可以接受的代价。
 
@@ -108,14 +115,21 @@ async def resolve_skills(
         if (ref.slug, ref.version) in revoked:
             skipped.append({"slug": ref.slug, "version": ref.version, "reason": "revoked"})
             continue
-        description = ref.slug
-        if with_descriptions and directory.configured:
+        description, storage_key = ref.slug, None
+        if directory.configured:
             try:
-                description = (await directory.get(ref.slug, ref.version)).description
+                found = await directory.get(ref.slug, ref.version)
             except LookupError as exc:
                 msg = f"技能 {ref.slug}@v{ref.version} 在技能目录里不存在或未发布"
                 raise SkillUnavailable(msg) from exc
-        metas.append(SkillMeta(slug=ref.slug, version=ref.version, description=description))
+            storage_key = found.storage_key
+            if with_descriptions:
+                description = found.description
+        metas.append(
+            SkillMeta(
+                slug=ref.slug, version=ref.version, description=description, storage_key=storage_key
+            )
+        )
     return metas, skipped
 
 
@@ -134,13 +148,15 @@ def skill_refs_for(metas: Sequence[SkillMeta]) -> list[SkillRef]:
     ]
 
 
-#: 技能源仓库（全局只读，配置平面按版本发布）。会话副本从这里拷
-_SKILLS_REPO = "_skills"
+#: 没接技能应用时的源仓库（桶根，接入前的布局）
+_LEGACY_REPO = "_skills"
 
 
-def _skill_prefix(fs: Any, slug: str, version: int) -> str:
-    """技能源仓库里某个版本的绝对 key 前缀（全局只读）。"""
-    return f"{_SKILLS_REPO}/{slug}/{version}/"
+def _skill_prefix(meta: SkillMeta) -> str:
+    """源仓库里这个版本的绝对 key 前缀。"""
+    if meta.storage_key:
+        return meta.storage_key.rstrip("/") + "/"
+    return f"{_LEGACY_REPO}/{meta.slug}/{meta.version}/"
 
 
 async def seed_session_skills(fs: Any, metas: Sequence[SkillMeta]) -> list[SkillRef]:
@@ -156,7 +172,7 @@ async def seed_session_skills(fs: Any, metas: Sequence[SkillMeta]) -> list[Skill
 
 
 def _copy_one(fs: Any, meta: SkillMeta) -> None:
-    src_prefix = _skill_prefix(fs, meta.slug, meta.version)
+    src_prefix = _skill_prefix(meta)
     dst_prefix = fs.layout.key(WorkspaceLayout.skill(meta.slug, meta.version)) + "/"
     marker = f"{dst_prefix}{COMPLETE_MARKER}"
     try:

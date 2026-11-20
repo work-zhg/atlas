@@ -54,6 +54,7 @@ const SOURCE_LABEL: Record<string, string> = {
   builtin: "内置",
   tenant: "团队",
   imported: "第三方",
+  market: "技能市场",
 };
 
 /** 左侧菜单的三个入口：技能广场（已发布）/ 我上传的 / 待审查 */
@@ -145,7 +146,7 @@ export function SkillsPage({ view = "market" }: { view?: SkillsView }) {
               options={[
                 { value: "", label: "全部" },
                 { value: "tenant", label: "团队" },
-                { value: "builtin", label: "内置" },
+                { value: "market", label: "技能市场" },
                 { value: "imported", label: "第三方" },
               ]}
             />
@@ -581,7 +582,8 @@ function UploadModal({
   const { message } = AntdApp.useApp();
   const upload = useUploadSkill();
   const [file, setFile] = useState<File>();
-  const [source, setSource] = useState("builtin");
+  // 产品自带的技能走技能市场，这里只能传本团队的或第三方的（都要审核）
+  const [source, setSource] = useState("tenant");
   const [origin, setOrigin] = useState("");
   const err = upload.error as ApiError | null;
   const hits = (err?.details?.hits as string[] | undefined) ?? [];
@@ -635,7 +637,6 @@ function UploadModal({
           onChange={setSource}
           style={{ width: 200 }}
           options={[
-            { value: "builtin", label: "内置" },
             { value: "tenant", label: "团队" },
             { value: "imported", label: "第三方" },
           ]}

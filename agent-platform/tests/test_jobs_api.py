@@ -1,6 +1,7 @@
 """定时任务的只读管理接口接进 Atlas（c4-model/infra-platform/code-jobs.html · JobRoutes）。
 
-只给 job:manage；返回本实例的实例任务，实例标识与 run 租约的 owner 一致。
+在运营接口里（/ops/v1/jobs），只给运营中心；返回本实例的实例任务，实例标识与 run 租约的 owner
+一致。
 库本身的行为（间隔、不重叠、指标）见 infra-platform/libs/jobs/tests。
 """
 
@@ -16,6 +17,7 @@ from atlas_jobs import Job, JobContext, NoParams
 from httpx import ASGITransport
 
 from tests.fake_uc import FakeUC
+from tests.ops_env import ops_call
 
 
 class Tick(Job):
@@ -29,9 +31,10 @@ class Tick(Job):
         self.calls += 1
 
 
-async def test_jobs_are_listed_for_job_admins_only(fake_user_center: FakeUC) -> None:
-    member = {"X-Uid": fake_user_center.add("member", ["chat:use", "config:manage"])}
-    admin = {"X-Uid": fake_user_center.add("admin", ["chat:use", "job:manage"])}
+async def test_jobs_are_listed_for_the_ops_center_only(
+    fake_user_center: FakeUC, ops_key: str
+) -> None:
+    admin = {"X-Uid": fake_user_center.add("admin", ["chat:use", "settings:manage"])}
     app = create_app()
     tick = Tick()
     app.state.jobs.register(tick, scope="instance", every=0.02)  # lifespan 里注册执行器的任务
@@ -42,12 +45,13 @@ async def test_jobs_are_listed_for_job_admins_only(fake_user_center: FakeUC) -> 
                 break
             await asyncio.sleep(0.01)
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-            denied = await c.get("/v1/jobs", headers=member)
-            ok = await c.get("/v1/jobs", headers=admin)
+            assert (await c.get("/v1/jobs", headers=admin)).status_code == 404, "租户里没有了"
+            denied = await c.get("/ops/v1/jobs", headers=admin)
+            ok = await ops_call(c, "GET", "/ops/v1/jobs")
     finally:
         await app.state.jobs.stop()
 
-    assert denied.status_code == 403
+    assert denied.status_code == 401, "没有运营中心的签名"
     assert ok.status_code == 200
     body = ok.json()
     assert body["instance"] == instance_id()

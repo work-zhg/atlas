@@ -22,7 +22,7 @@ from atlas_agent.main import create_app
 from httpx import ASGITransport
 from sqlalchemy import select
 
-from tests.fake_uc import FakeUC
+from tests.fake_uc import TEST_TENANT, FakeUC
 
 SPEC = {"system_prompt": "p", "model": {"model": "claude-opus-5"}, "tool_names": []}
 TEXT = {"content": [{"type": "text", "text": "hi"}]}
@@ -194,7 +194,11 @@ async def test_uc_identity_headers_and_me(uc_app: tuple[Any, FakeUC], clean_db: 
     async with _client(app, outsider) as o:
         assert (await o.get("/v1/me")).status_code == 403  # 不在 Atlas 的可访问范围
 
-    tenant = str(uuid.uuid4())
+    # 请求头写的租户和用户所属的不一致（用户中心在那个租户里找不到他）→ 401
+    async with _client(app, zhang, **{"X-Tenant-Id": str(uuid.uuid4())}) as wrong:
+        assert (await wrong.get("/v1/me")).status_code == 401
+
+    tenant = TEST_TENANT
     async with _client(app, zhang, **{"X-Tenant-Id": tenant}) as c:
         me = (await c.get("/v1/me")).json()
         assert me["account"] == "zhang" and me["dept"] == "研发部"

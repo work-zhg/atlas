@@ -8,7 +8,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+from atlas_opsapi import TenantGate
 
 from .perms import DataPermissions, make_data_permissions
 from .principals import PrincipalResolver, make_resolver
@@ -18,6 +20,9 @@ from .rag.model_platform import PlatformChat, PlatformKeyAuth, ServiceKeys, pars
 from .rag.vdb import VectorFactory
 from .settings import KnowledgeSettings
 from .storage import FileStorage, make_storage
+
+if TYPE_CHECKING:
+    from .capacity import KnowledgeCapacity
 
 __all__ = ["Dispatcher", "Runtime", "build_runtime"]
 
@@ -64,6 +69,28 @@ class Runtime:
     principal_resolver: PrincipalResolver | None = None
     #: 库级权限（用户中心数据权限）。None = 按 settings 建（perms.make_data_permissions）
     data_permissions: DataPermissions | None = None
+    #: 租户能不能用（运营接口停用的不能用）：入库任务、巡检开始前问它。API 进程里和运营接口
+    #: 用同一个（停用后本进程立刻生效）；None = 按库建（worker 进程）
+    tenant_gate: TenantGate | None = None
+    #: 知识库文件的存储份额（capacity.py）。None = 按库建
+    capacity: KnowledgeCapacity | None = None
+
+    @property
+    def storage_capacity(self) -> KnowledgeCapacity:
+        if self.capacity is None:
+            from .capacity import KnowledgeCapacity
+            from .db.session import get_sessionmaker
+
+            self.capacity = KnowledgeCapacity(get_sessionmaker())
+        return self.capacity
+
+    @property
+    def gate(self) -> TenantGate:
+        if self.tenant_gate is None:
+            from .db.session import get_sessionmaker
+
+            self.tenant_gate = TenantGate(get_sessionmaker())
+        return self.tenant_gate
 
     @property
     def perms(self) -> DataPermissions:

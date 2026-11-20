@@ -171,12 +171,14 @@ def _same_biz(a: BizRef, b: BizRef) -> bool:
 
 
 class QuotaPolicy:
-    """每个人能同时有几个沙箱：全局上限，原生沙箱和 CLI Agent 合计，只数 CREATING 和 READY。"""
+    """每个人能同时有几个沙箱：原生沙箱和 CLI Agent 合计，只数 CREATING 和 READY。0 = 不限。"""
 
     def __init__(self, default_limit: int) -> None:
         self.default_limit = default_limit
 
     def admit(self, account: SandboxAccount) -> None:
+        if self.default_limit <= 0:
+            return
         count = sum(1 for s in account.sandboxes if s.status.counted())
         if count >= self.default_limit:
             raise QuotaExceeded(

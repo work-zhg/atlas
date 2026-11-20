@@ -255,7 +255,7 @@ function AgentsPage() {
                 key={a.id}
                 agent={a}
                 isDefault={a.id === defaultId}
-                isAdmin={can(me, "config:manage")}
+                isAdmin={can(me, "settings:manage")}
                 archivedView={archivedView}
                 onProfile={setProfile}
               />

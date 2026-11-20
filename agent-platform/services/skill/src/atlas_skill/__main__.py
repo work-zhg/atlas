@@ -2,12 +2,17 @@
 
     python -m atlas_skill serve                       起 HTTP 服务（默认 :8020）
     python -m atlas_skill migrate                     升级技能库到最新
-    python -m atlas_skill register-uc --account admin 把应用、操作码、角色登记到用户中心
-    python -m atlas_skill skill publish <目录|zip>    发布技能（P1 的发布入口）
-    python -m atlas_skill skill approve|reject <upload_id> --note …
-    python -m atlas_skill skill disable|enable|revoke|rescan <slug> <version> [--reason …]
-    python -m atlas_skill skill adopt <slug> <version> 登记源仓库里已有的技能
-    python -m atlas_skill skill list
+    python -m atlas_skill skill --tenant <租户 uuid> publish <目录|zip>   上传到这个租户（待审查）
+    python -m atlas_skill skill --tenant <租户 uuid> approve|reject <upload_id> --note …
+    python -m atlas_skill skill --tenant <租户 uuid> disable|enable|revoke|rescan <slug> <version>
+    python -m atlas_skill skill --tenant <租户 uuid> adopt <slug> <version>  登记桶根已有的技能
+    python -m atlas_skill skill --tenant <租户 uuid> list
+    python -m atlas_skill market publish <目录|zip> [--default]   发布到技能市场（产品自带的技能）
+    python -m atlas_skill market list
+    python -m atlas_skill market install --tenant <租户 uuid> [slug[@版本] …]
+                                     给租户装（不写 = 装全部默认安装的）
+
+★ 租户技能的命令都要写明是哪个租户的（多租户）；技能市场不属于任何租户（用户 11-19 定）。
 
 ★ 命令行与 HTTP 调同一个 SkillService —— 发布规则只有一份实现。
 """
@@ -26,9 +31,12 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
+from atlas_tenancy import TenantScope
+
 from .db.session import get_engine, get_sessionmaker
 from .errors import SkillError
 from .settings import get_settings
+from .skill.market import MarketService
 from .skill.package import ScanBlocked, load_dir, load_zip
 from .skill.service import SkillService, limits_of
 from .storage import make_storage
@@ -62,6 +70,7 @@ def serve() -> None:
 
 
 def migrate(revision: str = "head") -> None:
+    """本服务的表，再加运营接口库的两张表（租户状态、运营请求；各自的版本表）。"""
     from alembic import command
     from alembic.config import Config
 
@@ -69,6 +78,20 @@ def migrate(revision: str = "head") -> None:
     cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
     cfg.set_main_option("sqlalchemy.url", get_settings().database_url)
     command.upgrade(cfg, revision)
+    asyncio.run(_upgrade_opsapi())
+
+
+async def _upgrade_opsapi() -> None:
+    from atlas_opsapi import upgrade
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(upgrade)
+    finally:
+        await engine.dispose()
 
 
 # ───────────────────────────────────────────── skill
@@ -110,6 +133,51 @@ def _load(path: Path) -> Any:
 
 
 def skill_command(args: argparse.Namespace) -> int:
+    with TenantScope.enter(UUID(args.tenant)):
+        return _skill_command(args)
+
+
+async def _with_market(fn: Callable[[MarketService], Awaitable[Any]]) -> Any:
+    settings = get_settings()
+    storage = make_storage(settings)
+    try:
+        async with get_sessionmaker()() as session:
+            result = await fn(MarketService(session=session, storage=storage, settings=settings))
+            await session.commit()
+            return result
+    finally:
+        await get_engine().dispose()
+
+
+def market_command(args: argparse.Namespace) -> int:
+    actor = _actor(args)
+    if args.action == "publish":
+        pkg = _load(Path(args.path))
+        row = asyncio.run(
+            _with_market(
+                lambda svc: svc.publish(
+                    pkg, actor=actor, install_by_default=True if args.default else None
+                )
+            )
+        )
+        print(f"✓ 技能市场：{row.slug} v{row.version}（{row.file_count} 个文件）")
+        return 0
+    if args.action == "list":
+        for item in asyncio.run(_with_market(lambda svc: svc.listing())):
+            states = ", ".join(f"v{v.version}:{v.status}" for v in item.versions)
+            flag = "默认安装" if item.install_by_default else ""
+            print(f"{item.slug:<28} latest={item.latest or '-':<4} {flag:<6} {states}")
+        return 0
+    with TenantScope.enter(UUID(args.tenant)):
+        installed = asyncio.run(
+            _with_market(lambda svc: svc.install_many(args.skills, actor=actor))
+        )
+    for one in installed:
+        print(f"{'✓ 装好' if one.copied else '· 已有'} {one.slug} v{one.version}")
+    return 0
+
+
+def _skill_command(args: argparse.Namespace) -> int:
     actor = _actor(args)
 
     if args.action == "publish":
@@ -131,8 +199,9 @@ def skill_command(args: argparse.Namespace) -> int:
         _print_version(row)
         if row.status == "pending_review":
             print(
-                "\n待人工审查（含脚本或非 builtin）。审查后执行：\n"
-                f"  python -m atlas_skill skill approve {row.id} --reviewer <审查人> --note <意见>"
+                "\n待本租户的审核人审查。审查后执行：\n"
+                f"  python -m atlas_skill skill --tenant {args.tenant} approve {row.id}"
+                " --reviewer <审查人> --note <意见>"
             )
         return 0
 
@@ -188,23 +257,6 @@ def skill_command(args: argparse.Namespace) -> int:
     raise AssertionError(args.action)
 
 
-def register_command(args: argparse.Namespace) -> int:
-    from .register import register
-
-    settings = get_settings()
-    password = os.environ.get("UC_ADMIN_PASSWORD") or getpass.getpass(
-        f"用户中心账号 {args.account} 的密码："
-    )
-    register(
-        args.uc_url or settings.uc_base_url,
-        args.account,
-        password,
-        app_code=settings.uc_app_code,
-        tenant=args.tenant,
-    )
-    return 0
-
-
 # ───────────────────────────────────────────── argparse
 
 
@@ -215,10 +267,12 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("serve")
     sub.add_parser("migrate")
 
-    skill = sub.add_parser("skill").add_subparsers(dest="action", required=True)
+    skill_cmd = sub.add_parser("skill")
+    skill_cmd.add_argument("--tenant", required=True, help="技能所属租户的 uuid")
+    skill = skill_cmd.add_subparsers(dest="action", required=True)
     publish = skill.add_parser("publish")
     publish.add_argument("path")
-    publish.add_argument("--source", default="builtin", choices=["builtin", "tenant", "imported"])
+    publish.add_argument("--source", default="tenant", choices=["tenant", "imported"])
     publish.add_argument("--origin-url")
     publish.add_argument("--reviewed-by", help="含脚本时必须：审查人（不能是自己）")
     publish.add_argument("--note")
@@ -235,10 +289,15 @@ def _parser() -> argparse.ArgumentParser:
             p.add_argument("--reason", required=name == "revoke")
     skill.add_parser("list")
 
-    reg = sub.add_parser("register-uc", help="把应用、操作码、角色登记到用户中心")
-    reg.add_argument("--account", required=True, help="用户中心管理员账号")
-    reg.add_argument("--uc-url", default=None)
-    reg.add_argument("--tenant", default=None, help="管理员所在的企业代码（有多个租户时必填）")
+    market = sub.add_parser("market", help="技能市场（产品自带的技能，不属于任何租户）")
+    market_sub = market.add_subparsers(dest="action", required=True)
+    mpub = market_sub.add_parser("publish", help="发布一个版本到技能市场")
+    mpub.add_argument("path")
+    mpub.add_argument("--default", action="store_true", help="同时标成创建租户时默认安装")
+    market_sub.add_parser("list")
+    minst = market_sub.add_parser("install", help="给租户装（不写 = 装全部默认安装的）")
+    minst.add_argument("--tenant", required=True, help="租户 uuid")
+    minst.add_argument("skills", nargs="*", help="slug 或 slug@版本")
     return parser
 
 
@@ -254,8 +313,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "skill":
             return skill_command(args)
-        if args.command == "register-uc":
-            return register_command(args)
+        if args.command == "market":
+            return market_command(args)
     except ScanBlocked as exc:
         print(f"✗ {exc.layer} 检查未通过：", file=sys.stderr)
         for hit in exc.hits:

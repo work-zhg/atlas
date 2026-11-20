@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from starlette.concurrency import iterate_in_threadpool
 
 from ...auth.authz import PrincipalDep
+from ...capacity import CapacityService
 from ...deps import RedisDep, SessionDep, SettingsDep
 from ...runtime_config import WorkspaceLimits
 from ...schemas.thread import PreviewSessionOut
@@ -40,6 +41,11 @@ async def workspace_limits(request: Request) -> WorkspaceLimits:
     return await request.app.state.runtime_config.workspace_limits()  # type: ignore[no-any-return]
 
 
+def capacity(request: Request) -> CapacityService | None:
+    """容量组件（租户的存储份额）：组合根放在 app.state 上。"""
+    return getattr(request.app.state, "capacity", None)
+
+
 async def read_upload(request: Request, limit: int) -> bytes:
     """读上传的请求体：超过上限就停，不把超大的请求体整个读进内存。limit 为 0 = 不限。"""
     declared = request.headers.get("content-length", "")
@@ -59,7 +65,8 @@ async def overview(
 ) -> WorkspaceOut:
     """占用、配额、单个文件上传上限。"""
     limits = await workspace_limits(request)
-    return await WorkspaceService(session, settings).overview(principal.uid, limits)
+    service = WorkspaceService(session, settings, capacity(request))
+    return await service.overview(principal.uid, limits)
 
 
 @router.get("/entries", response_model=WorkspaceDirOut)
@@ -105,7 +112,8 @@ async def upload(
     """把请求体原样写成一个文件（覆盖同名；父目录不存在就一并出现）。"""
     limits = await workspace_limits(request)
     data = await read_upload(request, limits.upload_max)
-    size = await WorkspaceService(session, settings).put(principal.uid, path, data, limits)
+    service = WorkspaceService(session, settings, capacity(request))
+    size = await service.put(principal.uid, path, data, limits)
     return WorkspacePathOut(path=path.strip("/"), size=size)
 
 

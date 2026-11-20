@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 import httpx
 import pytest
 from atlas_skill.api.app import create_app
-from skill_testkit import make_zip, skill_files
+from skill_testkit import TEST_TENANT, make_zip, skill_files
 
 
 @pytest.fixture
@@ -15,7 +15,9 @@ async def client(storage) -> AsyncIterator[httpx.AsyncClient]:  # type: ignore[n
     app = create_app(storage=storage)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
-        transport=transport, base_url="http://skill", headers={"X-Uid": "tester"}
+        transport=transport,
+        base_url="http://skill",
+        headers={"X-Uid": "tester", "X-Tenant-Id": TEST_TENANT},
     ) as c:
         yield c
 
@@ -24,9 +26,18 @@ def _upload(client: httpx.AsyncClient, files: dict[str, bytes], *, user: str = "
     return client.post(
         "/api/v1/skills",
         files={"file": ("skill.zip", make_zip(files), "application/zip")},
-        data={"source": "builtin", **form},
+        data={"source": "tenant", **form},
         headers={"X-Uid": user},
     )
+
+
+async def _release(client: httpx.AsyncClient, files: dict[str, bytes]) -> dict:  # type: ignore[type-arg]
+    """上传 + 另一个人审核通过（租户的技能一律经审核人）。"""
+    upload = (await _upload(client, files)).json()
+    approve = f"/api/v1/skill-uploads/{upload['id']}/approve"
+    resp = await client.post(approve, json={"note": "ok"}, headers={"X-Uid": "bob"})
+    assert resp.status_code == 200, resp.text
+    return resp.json()  # type: ignore[no-any-return]
 
 
 # ───────────────────────────────────────────── 技能
@@ -35,7 +46,10 @@ def _upload(client: httpx.AsyncClient, files: dict[str, bytes], *, user: str = "
 async def test_upload_publish_and_runtime_view(client: httpx.AsyncClient) -> None:
     resp = await _upload(client, skill_files())
     assert resp.status_code == 201, resp.text
-    assert resp.json()["status"] == "published"
+    assert resp.json()["status"] == "pending_review"
+    approve = f"/api/v1/skill-uploads/{resp.json()['id']}/approve"
+    ok = await client.post(approve, json={"note": "ok"}, headers={"X-Uid": "bob"})
+    assert ok.json()["status"] == "published"
 
     version = (await client.get("/internal/skills/demo/versions/1")).json()
     assert version["description"].startswith("演示技能")
@@ -80,8 +94,13 @@ async def test_review_flow_over_http(client: httpx.AsyncClient) -> None:
     assert ok.status_code == 200 and ok.json()["version"] == 1
 
 
+async def test_builtin_upload_is_refused(client: httpx.AsyncClient) -> None:
+    resp = await _upload(client, skill_files(), source="builtin")
+    assert resp.status_code == 422
+
+
 async def test_status_actions(client: httpx.AsyncClient) -> None:
-    await _upload(client, skill_files())
+    await _release(client, skill_files())
     bad = await client.post("/api/v1/skills/demo/versions/1/revoke", json={})
     assert bad.status_code == 400
     resp = await client.post("/api/v1/skills/demo/versions/1/revoke", json={"reason": "泄露"})
@@ -92,12 +111,16 @@ async def test_status_actions(client: httpx.AsyncClient) -> None:
 
 
 async def test_internal_needs_no_token(client: httpx.AsyncClient) -> None:
-    """内网免令牌（内网身份传递 §3）：/internal 只在内网可达（网关 404），不再校验服务间令牌。"""
+    """内网免令牌（内网身份传递 §3）：/internal 只在内网可达（网关 404），不再校验服务间令牌。
+    但要带租户：漏了 X-Tenant-Id 的调用方要尽早暴露。"""
     ok = await client.get("/internal/skills/catalog", headers={"X-Caller-App": "atlas"})
     assert ok.status_code == 200
+    bare = httpx.AsyncClient(transport=client._transport, base_url="http://skill")
+    async with bare:
+        assert (await bare.get("/internal/skills/catalog")).status_code == 401
 
 
 async def test_audit_records_writes(client: httpx.AsyncClient) -> None:
-    await _upload(client, skill_files())
+    await _release(client, skill_files())
     actions = [a["action"] for a in (await client.get("/api/v1/audit?target_id=demo")).json()]
-    assert set(actions) == {"skill.upload", "skill.publish"}
+    assert set(actions) == {"skill.upload", "skill.approve", "skill.publish"}

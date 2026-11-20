@@ -87,6 +87,8 @@ class KnowledgeSettings(BaseSettings):
     #: Atlas 在用户中心的应用编码（知识库属于 Atlas 应用），出站请求头 X-Caller-App 写它
     uc_app_code: str = "atlas"
     cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    #: 运营接口（/ops/v1）的签名密钥，和运营中心里登记本服务时的一致。空 = 没启用（一律 403）
+    ops_api_key: SecretStr | None = None
 
     # ── 模型 ─────────────────────────────────────────────────────────────
     #: 默认向量模型（fastembed，本地 ONNX）。★ 与镜像里预下载的一致。

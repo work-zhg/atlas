@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -46,12 +46,19 @@ async def redeem_pairing_code(
 
 
 @router.post("/devices/authenticate")
-async def authenticate_device(body: AuthenticateIn, session: SessionDep) -> JSONResponse:
-    """→ {device_uuid, owner_uuid, name}；令牌不对或设备已吊销回 401。"""
+async def authenticate_device(
+    body: AuthenticateIn, session: SessionDep, request: Request
+) -> JSONResponse:
+    """→ {device_uuid, owner_uuid, name}；令牌不对或设备已吊销回 401，租户已停用回 403。"""
     identity = await DeviceService(session).authenticate(body.token, body.report)
     if identity is None:
         return JSONResponse(
             {"error": {"kind": "unauthorized", "message": "设备令牌无效或设备已吊销"}},
             status_code=401,
+        )
+    gate = getattr(request.app.state, "tenant_gate", None)
+    if gate is not None and not await gate.is_active(identity.tenant_uuid):
+        return JSONResponse(
+            {"error": {"kind": "forbidden", "message": "设备所在的组织已停用"}}, status_code=403
         )
     return JSONResponse(identity.to_json())

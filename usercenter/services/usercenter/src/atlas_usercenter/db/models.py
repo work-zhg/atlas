@@ -7,7 +7,8 @@
   · 租户表继承 TenantOwned（tenant_uuid 必填），查询自动按当前租户过滤（db/tenancy.py）
   · 租户表之间的引用用**复合外键** (tenant_uuid, xxx_uuid) → 对方 (tenant_uuid, uuid)：
     跨租户的引用在数据库层面写不进去
-  · 应用、操作、菜单、数据编码属于平台；角色两级（tenant_uuid 空 = 应用内置，所有租户共用）
+  · 应用、操作、菜单、数据编码是应用目录（运营中心经运营接口维护）；角色两级
+    （tenant_uuid 空 = 应用内置，所有租户共用、运营中心维护；非空 = 租户自定义）
 """
 
 from __future__ import annotations
@@ -71,26 +72,25 @@ class Audited:
 
 
 class Tenant(Keys, Audited, Base):
-    """租户：一个相互隔离的组织空间（租户设计 §02）。平台租户（kind=platform）全局唯一。"""
+    """租户：一个相互隔离的组织空间（租户设计 §02）。所有租户一律平等，没有平台租户
+    （租户隔离设计 §0）；建、停用、删除都由运营中心经运营接口做。"""
 
     __tablename__ = "uc_tenant"
 
     #: 企业代码：登录时用；小写字母开头，字母、数字与 -；创建后不可改
     code: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
     name: Mapped[str] = mapped_column(String(64), nullable=False)
-    kind: Mapped[str] = mapped_column(String(16), default="customer", nullable=False)
+    #: active | suspended（运营中心停用）| closed（旧数据；关闭租户现在直接删除）
     status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
+    #: 建租户时的首个管理员：他登录之前，运营中心可以补发临时密码；之后再也拿不到租户账号
+    admin_uuid: Mapped[UUID | None] = mapped_column(UUIDType)
     #: 人员配额（未停用的人；数字员工不计）。空 = 不限
     max_users: Mapped[int | None] = mapped_column(Integer)
     #: 到期后视同 suspended
     expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     __table_args__ = (
-        CheckConstraint("kind IN ('platform','customer')", name="kind_enum"),
         CheckConstraint("status IN ('active','suspended','closed')", name="status_enum"),
-        Index(
-            "uq_uc_tenant_platform", "kind", unique=True, postgresql_where=text("kind = 'platform'")
-        ),
     )
 
 
@@ -394,7 +394,7 @@ class Menu(Keys, Base):
 
 
 class Role(Keys, Audited, Base):
-    """角色两级（租户设计 §04）：tenant_uuid 空 = 应用内置，所有租户可授、只有平台能改；
+    """角色两级（租户设计 §04）：tenant_uuid 空 = 应用内置，所有租户可授、只有运营中心能改；
     非空 = 该租户自定义。查询时只看得到「内置 + 本租户」的（db/tenancy.py）。"""
 
     __tablename__ = "uc_role"
@@ -689,7 +689,7 @@ class AuditEvent(Keys, Base):
 
     __tablename__ = "uc_audit_event"
 
-    #: 发生在哪个租户；平台级操作（建租户、维护应用目录）为空。写入时按当前租户自动填
+    #: 发生在哪个租户；运营接口的操作（建租户、维护应用目录）为空。写入时按当前租户自动填
     tenant_uuid: Mapped[UUID | None] = mapped_column(UUIDType)
     occurred_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
     actor_type: Mapped[str] = mapped_column(String(8), nullable=False)

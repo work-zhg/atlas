@@ -81,7 +81,7 @@ def test_workspace_limits_are_runtime_config_keys() -> None:
     )  # type: ignore[call-arg]
     names = {k.name: k.default for k in keys.all()}
     assert names["workspace.upload_max_mb"] == 7
-    assert names["workspace.quota_mb"] == 0
+    assert names["capacity.storage_mb_per_person"] == 0  # 每人存储配额是租户设置
 
 
 # ──────────────────────────────────────────────── 文件（moto 内存桶）

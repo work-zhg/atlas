@@ -1,0 +1,732 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atlas 多租户隔离方案设计</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; text-align: center; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .m { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .inner { fill: var(--bg); stroke: var(--border); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .arw { fill: var(--fg); }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arw" d="M0,0 L8,4 L0,8 z"/></marker>
+</defs></svg>
+<main>
+<h1>Atlas 多租户隔离方案设计</h1>
+<p class="sub">日期：2026-11-19 · 范围：用户中心、Atlas 及其配套服务（知识库、技能、MCP 网关、模型平台、记忆、设备网关），新增运营中心 · 状态：<span class="tag warn">方案设计，待评审</span></p>
+
+<ol class="toc" start="0">
+  <li><a href="#s0">方案概览</a></li>
+  <li><a href="#s1">背景与目标</a></li>
+  <li><a href="#s2">什么归租户，什么归运营中心</a></li>
+  <li><a href="#s3">运营中心</a></li>
+  <li><a href="#s4">每条数据都记着租户</a></li>
+  <li><a href="#s5">租户上下文：每次读写都知道替谁做</a></li>
+  <li><a href="#s6">自动过滤：漏写条件也不会串</a></li>
+  <li><a href="#s7">权限：先分租户，再看授权</a></li>
+  <li><a href="#s8">模型、MCP、技能由租户自己管</a></li>
+  <li><a href="#s9">配额：运营中心管总量，按租户分份额</a></li>
+  <li><a href="#s10">租户的一生</a></li>
+  <li><a href="#s11">已有数据和功能怎么过渡</a></li>
+</ol>
+
+<!-- ====================================================================== -->
+<h2 id="s0">0. 方案概览</h2>
+<p>一句话：<b>所有租户一律平等，不存在「平台租户」。智能体、知识库、技能、模型、MCP 服务这些业务资源，全部由各租户自己建、自己管，别的租户看不到。每条数据在创建时就记下属于哪个租户；所有服务的数据访问层按「这一次是替哪个租户做的」自动加上过滤条件，漏写条件的代码会直接报错，不会返回别的租户的数据。至于大家共用的设施（运行环境、容量、系统参数、系统任务），以及租户本身的开通和关闭，交给一个独立的新系统「运营中心」来管。运营中心有自己的运营账号，这些账号不属于任何租户；它只能通过各系统专门开放的「运营接口」做事，看不到任何租户的业务内容。</b></p>
+<p>打个比方：每个租户是写字楼里租了一层的公司，楼里的家具、文件和员工（智能体、知识库、模型）都归租户自己。运营中心是物业办公室：它不在任何一层楼里，有自己的工牌；它管电梯、水电、承重墙（运行环境），按合同规定每家最多能用多少电（份额），也负责办理入驻和退租；但它没有任何一层楼的门禁卡。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 480" width="100%" role="img" aria-label="方案总览：运营中心、业务系统与租户">
+  <rect x="10" y="10" width="1060" height="118" rx="8" class="c4"/>
+  <text x="26" y="34" class="b">运营中心：一个独立的系统，用自己的运营账号登录，不属于任何租户</text>
+  <rect x="26" y="48" width="245" height="64" rx="6" class="inner"/>
+  <text x="148" y="74" text-anchor="middle" class="b">租户与应用</text>
+  <text x="148" y="96" text-anchor="middle" class="s">建租户、停用、关闭；开通应用</text>
+  <rect x="284" y="48" width="245" height="64" rx="6" class="inner"/>
+  <text x="406" y="74" text-anchor="middle" class="b">运行环境</text>
+  <text x="406" y="96" text-anchor="middle" class="s">沙箱模板、可用镜像</text>
+  <rect x="542" y="48" width="245" height="64" rx="6" class="inner"/>
+  <text x="664" y="74" text-anchor="middle" class="b">容量</text>
+  <text x="664" y="96" text-anchor="middle" class="s">总容量 + 各租户的份额、用量</text>
+  <rect x="800" y="48" width="245" height="64" rx="6" class="inner"/>
+  <text x="922" y="74" text-anchor="middle" class="b">系统参数 · 系统任务</text>
+  <text x="922" y="96" text-anchor="middle" class="s">都不含任何租户的内容</text>
+
+  <path d="M540,128 V160" class="ln"/>
+  <path d="M92,160 H988" class="ln"/>
+  <path d="M92,160 V196" class="ln" marker-end="url(#ar)"/>
+  <path d="M271,160 V196" class="ln" marker-end="url(#ar)"/>
+  <path d="M450,160 V196" class="ln" marker-end="url(#ar)"/>
+  <path d="M629,160 V196" class="ln" marker-end="url(#ar)"/>
+  <path d="M808,160 V196" class="ln" marker-end="url(#ar)"/>
+  <path d="M988,160 V196" class="ln" marker-end="url(#ar)"/>
+  <text x="550" y="151" class="s">运营接口：只有运营中心能调用，只能碰租户的名字、状态、份额、用量</text>
+
+  <rect x="10" y="198" width="165" height="48" rx="6" class="inner"/><text x="92" y="227" text-anchor="middle" class="b">用户中心</text>
+  <rect x="189" y="198" width="165" height="48" rx="6" class="inner"/><text x="271" y="227" text-anchor="middle" class="b">Atlas</text>
+  <rect x="368" y="198" width="165" height="48" rx="6" class="inner"/><text x="450" y="227" text-anchor="middle" class="b">知识库</text>
+  <rect x="547" y="198" width="165" height="48" rx="6" class="inner"/><text x="629" y="227" text-anchor="middle" class="b">技能</text>
+  <rect x="726" y="198" width="165" height="48" rx="6" class="inner"/><text x="808" y="227" text-anchor="middle" class="b">MCP 网关</text>
+  <rect x="905" y="198" width="165" height="48" rx="6" class="inner"/><text x="988" y="227" text-anchor="middle" class="b">模型平台</text>
+
+  <path d="M173,298 V250" class="ln" marker-end="url(#ar)"/>
+  <path d="M540,298 V250" class="ln" marker-end="url(#ar)"/>
+  <path d="M907,298 V250" class="ln" marker-end="url(#ar)"/>
+  <text x="183" y="280" class="s">租户的人经网关使用</text>
+  <text x="550" y="280" class="s">租户的人经网关使用</text>
+  <text x="917" y="280" class="s">租户的人经网关使用</text>
+
+  <rect x="10" y="300" width="326" height="170" rx="8" class="c1"/>
+  <text x="26" y="324" class="b">租户 A：星河科技</text>
+  <text x="26" y="350" class="s">智能体、知识库、知识集、技能</text>
+  <text x="26" y="372" class="s">模型、MCP 服务、各种 Key</text>
+  <text x="26" y="394" class="s">会话、记忆、工作空间、沙箱</text>
+  <text x="26" y="416" class="s">人、部门、授权（在用户中心里）</text>
+
+  <rect x="339" y="360" width="35" height="50" rx="6" class="c5"/>
+  <text x="356" y="381" text-anchor="middle" class="b">互不</text>
+  <text x="356" y="399" text-anchor="middle" class="b">可见</text>
+
+  <rect x="377" y="300" width="326" height="170" rx="8" class="c3"/>
+  <text x="393" y="324" class="b">租户 B：远山律所</text>
+  <text x="393" y="350" class="s">智能体、知识库、知识集、技能</text>
+  <text x="393" y="372" class="s">模型、MCP 服务、各种 Key</text>
+  <text x="393" y="394" class="s">会话、记忆、工作空间、沙箱</text>
+  <text x="393" y="416" class="s">人、部门、授权（在用户中心里）</text>
+
+  <rect x="706" y="360" width="35" height="50" rx="6" class="c5"/>
+  <text x="723" y="381" text-anchor="middle" class="b">互不</text>
+  <text x="723" y="399" text-anchor="middle" class="b">可见</text>
+
+  <rect x="744" y="300" width="326" height="170" rx="8" class="c2"/>
+  <text x="760" y="324" class="b">租户 C：原来的「平台租户」</text>
+  <text x="760" y="350" class="s">智能体、知识库、知识集、技能</text>
+  <text x="760" y="372" class="s">模型、MCP 服务、各种 Key</text>
+  <text x="760" y="394" class="s">会话、记忆、工作空间、沙箱</text>
+  <text x="760" y="416" class="s">人、部门、授权（在用户中心里）</text>
+  <text x="760" y="444">现在和别的租户完全一样</text>
+</svg>
+</div>
+<p class="cap">图 1　运营中心只通过运营接口管共用设施和租户的开通、关闭；业务资源全部在各租户里，原来的平台租户也只是一个普通租户</p>
+
+<!-- ====================================================================== -->
+<h2 id="s1">1. 背景与目标</h2>
+<p>用户中心已经支持多租户：一个人只属于一个租户，用户中心自己的数据也按租户自动过滤。但 Atlas 和配套服务里的数据都没有记租户，租户信息只是在调用用户中心时顺手传过去。现在看上去各租户互不相干，其实只是下面两件事顺带的效果：</p>
+<ul>
+  <li><b>按人存的数据</b>（会话、工作空间、沙箱、记忆）：一个人只在一个租户里，所以这些数据也跟着分开了。</li>
+  <li><b>用户中心里的单条授权</b>（比如「张三能用智能体 X」）：用户中心是按租户存的，所以这条授权只在本租户内有效。</li>
+</ul>
+<p>但有三种情况会穿透这层隔离：</p>
+<ul>
+  <li>「全部智能体 · 所有者」「全部知识库 · 所有者」这类授权，到了 Atlas 就变成「完全不过滤」。结果是，某个租户的管理员能看到所有租户的智能体和知识库。</li>
+  <li>「公有」的知识库、MCP 服务、模型，是对整个平台公有，而不是只对本租户公有。</li>
+  <li>模型、MCP 服务、技能、沙箱模板、运行期参数在整个平台只有一份。哪个租户的管理员拿到了对应权限，就能改所有租户都在用的那一份。</li>
+</ul>
+<p>另外，平台的事现在是由「平台租户」里的管理员来做的。这让平台权限和租户权限混在同一套角色和授权里，只能靠「这个人是不是在平台租户」这个特殊判断把两者分开。</p>
+
+<h3>目标</h3>
+<ul>
+  <li>所有租户一律平等，不再有特殊的平台租户。</li>
+  <li>一个租户的数据，别的租户看不到、改不到，运营人员也看不到。</li>
+  <li>智能体、知识库、技能、模型、MCP 服务等都由租户自己建、自己管，平台不提供。</li>
+  <li>平台的事交给独立的运营中心：运营权限和租户权限彻底分开，租户里的人无论怎么授权，都拿不到运营能力。</li>
+  <li>运行环境由运营中心统一运营，各租户共用。按租户分份额，一个租户用满了不会影响别的租户。</li>
+  <li>以后新加的代码即使漏写了租户条件，也不会串数据，而是直接报错。</li>
+</ul>
+<h3>不做</h3>
+<ul>
+  <li>租户之间不共享任何业务资源，包括统一提供的模型或技能。</li>
+  <li>运营中心不代管租户，不能进入租户去操作。</li>
+  <li>不给每个租户单独建数据库：大家共用同一套表，靠租户条件分开，和用户中心的做法一样。</li>
+</ul>
+
+<h3>先认识几个词</h3>
+<table>
+  <tr><th>词</th><th>意思</th><th>例子</th></tr>
+  <tr><td>租户</td><td>一个使用平台的组织。人和数据都只属于一个租户。所有租户的地位都一样</td><td>星河科技、远山律所</td></tr>
+  <tr><td>业务资源</td><td>租户自己建、自己用的东西</td><td>智能体、知识库、技能、模型、MCP 服务</td></tr>
+  <tr><td>运营中心</td><td>管理平台本身的独立系统。它不在任何租户里，也看不到租户的业务内容</td><td>建租户、给租户分份额、改沙箱模板</td></tr>
+  <tr><td>运营账号</td><td>登录运营中心用的账号，和租户里的账号完全无关</td><td>运营人员小周的运营账号</td></tr>
+  <tr><td>运营接口</td><td>各业务系统专门开给运营中心的一组接口，别人调用不了</td><td>Atlas 的「设置租户份额」</td></tr>
+  <tr><td>运行环境</td><td>所有租户共用的计算设施，决定沙箱怎么运行</td><td>沙箱模板、可用镜像、集群节点</td></tr>
+  <tr><td>租户上下文</td><td>「这一次读写是替哪个租户做的」，就像进楼时刷的门禁卡</td><td>张三在网页上点「智能体」：上下文是星河科技</td></tr>
+  <tr><td>份额（配额）</td><td>一个租户最多能同时占用多少共用设施</td><td>星河科技最多同时运行 30 个 run</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s2">2. 什么归租户，什么归运营中心</h2>
+<p>划分只看一条：<b>带业务内容的东西归租户；不带任何租户内容、所有租户共用的东西，以及租户本身的开通和关闭，归运营中心。</b>另外还有一类「产品自带」的东西：它们是软件的一部分，随版本发布，不属于任何人。</p>
+<table>
+  <tr><th>归谁</th><th>包括</th><th>谁来管</th></tr>
+  <tr><td><b>租户</b></td>
+      <td>智能体（含版本、数字员工）；会话、run、审批、对话里的文件；知识库、知识集；技能（上传、审核、版本）；模型和它的供应商 Key；MCP 服务和它的凭据；访问 Key（用户 Key、智能体 Key）；记忆；指令（租户指令、个人指令）；工作空间、沙箱实例、浏览器登录态、本机设备；租户设置（默认智能体、系统功能用哪个模型、每人上限等）；人、部门、角色、授权；审计记录</td>
+      <td>租户管理员，以及租户里有相应权限的人</td></tr>
+  <tr><td><b>运营中心</b></td>
+      <td>租户目录（建租户、停用、到期、关闭、人员名额）；应用目录（接入了哪些应用、给哪些租户开通）；运行环境（沙箱模板、可用镜像）；容量（总容量、各租户份额、用量）；系统参数（不含任何租户内容）；系统任务（巡检、兜底、清理的运行情况）</td>
+      <td>运营人员（运营账号）</td></tr>
+  <tr><td><b>产品自带</b></td>
+      <td>内置工具（读写文件、执行命令等）；和产品功能绑在一起的技能（浏览器、computer use）；记忆作用域的定义；各应用的操作码、菜单、数据编码、内置角色</td>
+      <td>随应用版本发布和登记，所有租户都一样，谁都不能改</td></tr>
+</table>
+
+<h3>为什么沙箱模板归运营中心</h3>
+<p>沙箱模板决定一个 Pod 能拿到多大权限，比如能不能以特权模式运行、能不能挂载宿主机目录。所有租户的沙箱都跑在同一个集群里，只要有一个租户把模板放开，它就可能通过宿主机碰到别的租户的沙箱。所以模板好比大楼的承重墙，只能由物业来管，租户只能选用。</p>
+
+<h3>为什么浏览器这类技能是产品自带</h3>
+<p>浏览器技能讲的是「怎么使用产品里的浏览器工具」，必须和产品版本一起升级：工具一改，技能就要跟着改。如果每个租户各存一份，产品升级后，各租户手里的旧版本就和新工具对不上了。所以它们和内置工具一样，属于软件的一部分。租户想要不同的写法，可以上传自己的技能。</p>
+
+<h3>运行环境共用，但彼此不通</h3>
+<ul>
+  <li>沙箱和会话 Pod 跑在同一个集群里。每个 Pod 都记着它属于哪个人、哪个租户，用来算份额和回收。</li>
+  <li>不同人的沙箱之间，网络互相不通。</li>
+  <li>沙箱访问不到平台内部的服务。原因是平台内部服务之间是凭请求上写的身份互相信任的，谁能直接连上它们，谁就能冒充任何租户里的任何人。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s3">3. 运营中心</h2>
+
+<h3>3.1 为什么单独做一个系统</h3>
+<ul>
+  <li><b>运营权限和租户权限彻底分开。</b>如果运营人员也是某个租户里的人，就得靠「这个人在不在特殊租户里」来判断他能不能做平台的事。每个业务系统都要写这个判断，漏写一处，租户管理员就可能拿到平台能力。单独一个系统之后，业务系统和用户中心里就只剩租户权限了。</li>
+  <li><b>所有租户都一样。</b>没有特殊租户，用户中心、Atlas 里所有和「平台租户」有关的特殊处理都可以去掉。</li>
+  <li><b>「看不到租户内容」是靠结构保证的。</b>运营中心只能调用运营接口，而运营接口里根本没有读取业务内容的功能（见 3.5）。</li>
+</ul>
+
+<h3>3.2 运营账号</h3>
+<ul>
+  <li>运营中心自己管理账号和登录，这些账号不在用户中心的任何租户里。所以运营人员不会出现在任何租户的人员列表里，也不占任何租户的人员名额。</li>
+  <li>运营账号人少、权限大：登录必须用双因素认证；不能自己注册，新账号只能由已有的运营管理员开；第一个账号在部署时用命令创建。</li>
+  <li>运营中心只有两个角色：<b>运营管理员</b>（能做全部运营操作）和 <b>运营观察员</b>（只能看租户列表、份额用量、系统任务状态）。</li>
+  <li>一个人同时也是某个租户的员工没有关系：他会有两个账号，分两次登录，两边互不相通。</li>
+  <li>运营中心的入口和租户的入口是分开的，租户的网关不会把请求转发到运营中心。</li>
+</ul>
+
+<h3>3.3 管哪些事：现有功能怎么分</h3>
+<table>
+  <tr><th>现在在哪</th><th>功能</th><th>以后</th></tr>
+  <tr><td>用户中心 · 租户管理</td><td>建租户、停用、到期、人员名额、给租户开通应用</td><td><b>运营中心 · 租户</b></td></tr>
+  <tr><td>用户中心 · 应用接入</td><td>接入应用、应用凭据、启用和停用应用</td><td><b>运营中心 · 应用</b>。操作码、菜单、数据编码、内置角色由各应用随版本自己登记，运营中心只能查看</td></tr>
+  <tr><td>Atlas · 沙箱模板</td><td>修订、发布、检查漂移；沙箱的生命周期记录</td><td><b>运营中心 · 运行环境</b></td></tr>
+  <tr><td>Atlas · 系统 · 配置项</td><td>可用镜像、浏览器镜像、上传和预览的硬上限</td><td><b>运营中心 · 系统参数</b></td></tr>
+  <tr><td>Atlas · 系统 · 配置项</td><td>每人几个沙箱、每人工作空间多大</td><td>运营中心定<b>租户份额</b>；租户管理员在份额内定每人上限</td></tr>
+  <tr><td>Atlas · 系统 · 定时任务；知识库、MCP 网关、模型平台的定时任务页</td><td>查看系统任务的运行情况</td><td><b>运营中心 · 系统任务</b></td></tr>
+  <tr><td>（新增）</td><td>各租户的用量</td><td><b>运营中心 · 容量</b></td></tr>
+  <tr><td>Atlas · 系统 · 平台设置</td><td>默认智能体、平台指令</td><td>不进运营中心，改成<b>租户设置</b>：每个租户有自己的默认智能体和租户指令</td></tr>
+  <tr><td>Atlas · 系统功能用的模型</td><td>会话标题、判断器、记忆补记用哪个模型</td><td>不进运营中心，改成<b>租户设置</b></td></tr>
+  <tr><td>模型平台、MCP 网关、技能的管理页</td><td>登记模型和 MCP 服务、审核技能</td><td>不进运营中心，由租户管理员在本租户里管</td></tr>
+  <tr><td>记忆 · 作用域</td><td>作用域的定义</td><td>产品自带，由应用随版本登记</td></tr>
+</table>
+<p>Atlas 里原来的「系统」菜单会拆掉：一部分搬到运营中心，另一部分变成租户管理员能看到的「租户设置」（默认智能体、租户指令、系统功能用的模型、每人上限，以及本租户的份额和用量）。</p>
+
+<h3>3.4 怎么连到各系统</h3>
+<div class="fig">
+<svg viewBox="0 0 1080 250" width="100%" role="img" aria-label="运营中心经运营接口改份额">
+  <rect x="20" y="30" width="190" height="80" rx="6" class="c4"/>
+  <text x="115" y="62" text-anchor="middle" class="b">运营人员</text>
+  <text x="115" y="84" text-anchor="middle" class="s">运营账号 + 双因素登录</text>
+  <rect x="250" y="30" width="230" height="80" rx="6" class="c4"/>
+  <text x="365" y="56" text-anchor="middle" class="b">运营中心</text>
+  <text x="365" y="78" text-anchor="middle" class="s">按运营角色判断能不能做</text>
+  <text x="365" y="98" text-anchor="middle" class="s">记运营审计</text>
+  <rect x="520" y="30" width="260" height="80" rx="6" class="inner"/>
+  <text x="650" y="56" text-anchor="middle" class="b">Atlas 的运营接口</text>
+  <text x="650" y="78" text-anchor="middle" class="s">核对调用方确实是运营中心</text>
+  <text x="650" y="98" text-anchor="middle" class="s">记下是哪个运营人员做的</text>
+  <rect x="820" y="30" width="240" height="80" rx="6" class="c1"/>
+  <text x="940" y="56" text-anchor="middle" class="b">Atlas 自己的数据</text>
+  <text x="940" y="78" text-anchor="middle" class="s">租户 A 的份额：30 → 40</text>
+  <text x="940" y="98" text-anchor="middle" class="s">下次派发 run 时就按新份额</text>
+  <path d="M210,70 H248" class="ln" marker-end="url(#ar)"/>
+  <path d="M480,70 H518" class="ln" marker-end="url(#ar)"/>
+  <path d="M780,70 H818" class="ln" marker-end="url(#ar)"/>
+  <rect x="20" y="140" width="1040" height="96" rx="6" class="inner"/>
+  <text x="36" y="166" class="s">数据留在用它的系统里：租户名单在用户中心，沙箱模板、份额、系统参数在 Atlas 等各自的系统里；运营中心只存运营账号和运营审计。</text>
+  <text x="36" y="190" class="s">租户的网关不转发运营接口。运营接口也不用内部服务之间那种凭请求头互相信任的方式，必须核对调用方确实是运营中心。</text>
+  <text x="36" y="214" class="s">运营接口里没有任何读取租户内容的功能：智能体、会话、知识库、文件、记忆、各种凭据都读不到。</text>
+</svg>
+</div>
+<p class="cap">图 2　以「给租户 A 调份额」为例：运营中心不自己存份额，而是通过 Atlas 的运营接口去改 Atlas 自己的数据</p>
+<ul>
+  <li><b>数据留在用它的系统里。</b>真正执行这些规则的是各业务系统：建沙箱时要读模板，派发 run 时要查份额。数据就放在用它的地方，这样不会出现两份数据对不上的情况。运营中心本身只是管理界面加上运营账号和运营审计。</li>
+  <li><b>运营接口比普通内部调用要求更严。</b>它可以跨租户操作，分量更重，所以必须核对调用方确实是运营中心。</li>
+  <li><b>两边都记审计。</b>运营中心记录「谁在什么时候做了什么」；业务系统也记录是哪个运营人员通过运营中心改的。</li>
+  <li><b>运营接口在「系统范围」里执行</b>（第 6 节）。涉及某个租户时，只能碰这个租户的元数据：名字、状态、份额、用量。</li>
+</ul>
+
+<h3>3.5 看不到什么</h3>
+<table>
+  <tr><th>能看、能做</th><th>看不到、做不了</th></tr>
+  <tr><td>
+    租户的名字、企业代码、状态、到期时间、人数<br>
+    各租户的份额和用量数字（同时运行的 run、沙箱数、存储量）<br>
+    沙箱模板、可用镜像、系统参数、系统任务<br>
+    开通、停用、关闭租户；关闭时删除租户的数据
+  </td><td>
+    任何租户的智能体、知识库、技能、模型、MCP 服务<br>
+    任何租户的会话内容、文件、记忆<br>
+    任何租户里的凭据（模型 Key、MCP 凭据）<br>
+    以租户里某个人的身份操作
+  </td></tr>
+</table>
+<ul>
+  <li><b>排查问题：</b>运营中心不提供「进入某个租户」的功能。确实需要时，由有服务器权限的运维用命令行工具显式进入某个租户去查，每次都记审计。</li>
+  <li><b>日志和调用链里的对话内容也属于租户。</b>这些内容也带上租户标签。排障时默认只看不含对话内容的指标和日志。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s4">4. 每条数据都记着租户</h2>
+<ul>
+  <li><b>归属在创建时就定下，之后不会改变。</b>不支持把数据从一个租户搬到另一个租户。</li>
+  <li><b>每张业务表都记租户，而不只是最上层的那条数据记。</b>比如运行事件，不靠「事件 → run → 会话 → 租户」一层层往上推，而是自己就记着租户。原因有两个：自动过滤（第 6 节）只能看到当前查询的这张表；后台按 id 直接查子数据时（比如按 run 的 id 取事件），也需要受到保护。多存一列，换来的是全系统只用遵守一条规则。</li>
+  <li><b>对象存储的第一层目录就是租户。</b>按租户统计用量、关闭租户时删除数据，都直接按这层目录来做。</li>
+  <li><b>向量：</b>每个知识库各有一个向量集合。检索之前，已经按租户和权限挑出了能用的知识库，所以不会查到别的租户的集合。</li>
+  <li><b>名字只需要在租户内唯一。</b>智能体标识、技能名、模型名、MCP 服务名都是这样，两个租户可以各有一个叫 <code>minimax-m3</code> 的模型。智能体配置里照旧按名字引用，只在本租户里查找，所以现有的引用方式不用改。</li>
+  <li><b>名字进入共用设施时要带上租户。</b>模型网关的路由、技能文件的存放位置、集群里的标签，一律使用「租户 + 名字」。</li>
+</ul>
+
+<div class="fig">
+<svg viewBox="0 0 1080 270" width="100%" role="img" aria-label="每条数据都记着租户；名字在租户内唯一">
+  <text x="20" y="22" class="b">每张业务表都记着租户（A），不靠连表往上推</text>
+  <rect x="20" y="40" width="128" height="36" rx="5" class="inner"/><text x="84" y="63" text-anchor="middle">智能体「通用助手」</text>
+  <rect x="168" y="40" width="128" height="36" rx="5" class="inner"/><text x="232" y="63" text-anchor="middle">会话</text>
+  <rect x="316" y="40" width="128" height="36" rx="5" class="inner"/><text x="380" y="63" text-anchor="middle">run</text>
+  <rect x="464" y="40" width="128" height="36" rx="5" class="inner"/><text x="528" y="63" text-anchor="middle">运行事件</text>
+  <path d="M148,58 H166" class="ln" marker-end="url(#ar)"/>
+  <path d="M296,58 H314" class="ln" marker-end="url(#ar)"/>
+  <path d="M444,58 H462" class="ln" marker-end="url(#ar)"/>
+  <rect x="122" y="31" width="26" height="17" rx="8" class="c1"/><text x="135" y="44" text-anchor="middle" class="b">A</text>
+  <rect x="270" y="31" width="26" height="17" rx="8" class="c1"/><text x="283" y="44" text-anchor="middle" class="b">A</text>
+  <rect x="418" y="31" width="26" height="17" rx="8" class="c1"/><text x="431" y="44" text-anchor="middle" class="b">A</text>
+  <rect x="566" y="31" width="26" height="17" rx="8" class="c1"/><text x="579" y="44" text-anchor="middle" class="b">A</text>
+
+  <rect x="20" y="110" width="128" height="36" rx="5" class="inner"/><text x="84" y="133" text-anchor="middle">知识库「人事制度」</text>
+  <rect x="168" y="110" width="128" height="36" rx="5" class="inner"/><text x="232" y="133" text-anchor="middle">文档</text>
+  <rect x="316" y="110" width="128" height="36" rx="5" class="inner"/><text x="380" y="133" text-anchor="middle">分段</text>
+  <rect x="464" y="110" width="128" height="36" rx="5" class="inner"/><text x="528" y="133" text-anchor="middle">检索记录</text>
+  <path d="M148,128 H166" class="ln" marker-end="url(#ar)"/>
+  <path d="M296,128 H314" class="ln" marker-end="url(#ar)"/>
+  <path d="M444,128 H462" class="ln" marker-end="url(#ar)"/>
+  <rect x="122" y="101" width="26" height="17" rx="8" class="c1"/><text x="135" y="114" text-anchor="middle" class="b">A</text>
+  <rect x="270" y="101" width="26" height="17" rx="8" class="c1"/><text x="283" y="114" text-anchor="middle" class="b">A</text>
+  <rect x="418" y="101" width="26" height="17" rx="8" class="c1"/><text x="431" y="114" text-anchor="middle" class="b">A</text>
+  <rect x="566" y="101" width="26" height="17" rx="8" class="c1"/><text x="579" y="114" text-anchor="middle" class="b">A</text>
+
+  <rect x="20" y="180" width="572" height="36" rx="5" class="inner"/>
+  <text x="306" y="203" text-anchor="middle">对象存储：<tspan class="m">A / 张三 / files / 报告.docx</tspan>（第一层目录是租户）</text>
+  <text x="20" y="246" class="s">按租户统计用量、关闭租户时删除数据，都直接按这一层目录做</text>
+
+  <rect x="630" y="10" width="440" height="250" rx="8" class="inner"/>
+  <text x="646" y="34" class="b">名字只在租户内唯一</text>
+  <rect x="646" y="54" width="170" height="50" rx="6" class="c1"/>
+  <text x="731" y="74" text-anchor="middle" class="s">租户 A 的模型</text>
+  <text x="731" y="94" text-anchor="middle" class="m b">minimax-m3</text>
+  <rect x="646" y="124" width="170" height="50" rx="6" class="c3"/>
+  <text x="731" y="144" text-anchor="middle" class="s">租户 B 的模型</text>
+  <text x="731" y="164" text-anchor="middle" class="m b">minimax-m3</text>
+  <rect x="876" y="54" width="180" height="50" rx="6" class="inner"/>
+  <text x="966" y="74" text-anchor="middle" class="s">模型网关里</text>
+  <text x="966" y="94" text-anchor="middle" class="m">A · minimax-m3</text>
+  <rect x="876" y="124" width="180" height="50" rx="6" class="inner"/>
+  <text x="966" y="144" text-anchor="middle" class="s">模型网关里</text>
+  <text x="966" y="164" text-anchor="middle" class="m">B · minimax-m3</text>
+  <path d="M816,79 H874" class="ln" marker-end="url(#ar)"/>
+  <path d="M816,149 H874" class="ln" marker-end="url(#ar)"/>
+  <text x="646" y="206" class="s">智能体配置照旧写名字，只在本租户里找；</text>
+  <text x="646" y="226" class="s">进入共用设施（网关路由、文件位置、集群标签）时带上租户</text>
+</svg>
+</div>
+<p class="cap">图 3　左：数据从上到下每一层都记着租户；右：两个租户可以用同一个名字，进入共用设施时带上租户区分</p>
+
+<!-- ====================================================================== -->
+<h2 id="s5">5. 租户上下文：每次读写都知道替谁做</h2>
+<p>每次读写数据之前，都要先确定「这一次是替哪个租户做的」。租户上下文有五个来源，<b>来源不同，可信程度也不同</b>：</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 400" width="100%" role="img" aria-label="租户上下文的五个来源">
+  <rect x="20" y="15" width="230" height="62" rx="6" class="c2"/>
+  <text x="135" y="51" text-anchor="middle" class="b">用户在网页上操作</text>
+  <rect x="280" y="15" width="520" height="62" rx="6" class="inner"/>
+  <text x="296" y="40">网关根据登录状态，在请求上写明租户</text>
+  <text x="296" y="62" class="s">服务请用户中心核对：在这个租户里找这个人，找不到就拒绝</text>
+
+  <rect x="20" y="92" width="230" height="62" rx="6" class="c2"/>
+  <text x="135" y="128" text-anchor="middle" class="b">后台继续跑 run</text>
+  <rect x="280" y="92" width="520" height="62" rx="6" class="inner"/>
+  <text x="296" y="117">从数据上取：建会话的时候就记下了租户</text>
+  <text x="296" y="139" class="s">不再拿人去用户中心反查租户</text>
+
+  <rect x="20" y="169" width="230" height="62" rx="6" class="c2"/>
+  <text x="135" y="205" text-anchor="middle" class="b">系统巡检、兜底任务</text>
+  <rect x="280" y="169" width="520" height="62" rx="6" class="inner"/>
+  <text x="296" y="194">先在「系统范围」里只取出待办的 id 和它们所属的租户</text>
+  <text x="296" y="216" class="s">再一条一条进入各自的租户去处理</text>
+
+  <rect x="20" y="246" width="230" height="62" rx="6" class="c5"/>
+  <text x="135" y="272" text-anchor="middle" class="b">沙箱、会话 Pod、</text>
+  <text x="135" y="292" text-anchor="middle" class="b">本机设备发来的请求</text>
+  <rect x="280" y="246" width="520" height="62" rx="6" class="inner"/>
+  <text x="296" y="271">里面跑着租户自己的代码：它自己声称的身份和租户一律去掉</text>
+  <text x="296" y="293" class="s">改用登记时记下的人和租户</text>
+
+  <rect x="830" y="15" width="230" height="293" rx="6" class="c1"/>
+  <text x="945" y="150" text-anchor="middle" class="b">进入租户 A 的上下文</text>
+  <text x="945" y="172" text-anchor="middle" class="s">之后的读写、对其他服务的调用</text>
+  <text x="945" y="190" text-anchor="middle" class="s">都带着它</text>
+  <path d="M250,46 H278" class="ln" marker-end="url(#ar)"/>
+  <path d="M250,123 H278" class="ln" marker-end="url(#ar)"/>
+  <path d="M250,200 H278" class="ln" marker-end="url(#ar)"/>
+  <path d="M250,277 H278" class="ln" marker-end="url(#ar)"/>
+  <path d="M800,46 H828" class="ln" marker-end="url(#ar)"/>
+  <path d="M800,123 H828" class="ln" marker-end="url(#ar)"/>
+  <path d="M800,200 H828" class="ln" marker-end="url(#ar)"/>
+  <path d="M800,277 H828" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="20" y="323" width="230" height="62" rx="6" class="c4"/>
+  <text x="135" y="359" text-anchor="middle" class="b">运营中心的调用</text>
+  <rect x="280" y="323" width="520" height="62" rx="6" class="inner"/>
+  <text x="296" y="348">不属于任何租户：要么只碰系统级的东西（模板、参数）</text>
+  <text x="296" y="370" class="s">要么写明目标租户，而且只能碰它的名字、状态、份额、用量</text>
+  <rect x="830" y="323" width="230" height="62" rx="6" class="c4"/>
+  <text x="945" y="350" text-anchor="middle" class="b">系统范围</text>
+  <text x="945" y="370" text-anchor="middle" class="s">只碰元数据</text>
+  <path d="M250,354 H278" class="ln" marker-end="url(#ar)"/>
+  <path d="M800,354 H828" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 4　租户上下文的五个来源：只有网关写的租户直接采用（还要经用户中心核对），其余的都从记下的数据里取；运营中心不进入任何租户</p>
+
+<ul>
+  <li><b>为什么用户中心核对一下就够了：</b>用户中心只会在请求上写的那个租户里找这个人。所以不管是租户写错了，还是有人冒用别的租户，都过不了身份解析这一关。</li>
+  <li><b>后台任务不再拿人去反查租户。</b>run、知识库入库、记忆补记这些任务，处理的都是某一条具体数据，而这条数据本身就记着租户。</li>
+  <li><b>服务之间调用时，原样带上租户。</b>比如 Atlas 调知识库、MCP 网关、模型平台、记忆服务，或者业务应用（TeamFlow、评测）调 Atlas，都要带上这次调用的租户。被调用的服务按同一套规则再核对一次。</li>
+  <li><b>没有租户上下文，说明代码有问题。</b>这时直接报错，而不是退回成「不过滤」。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s6">6. 自动过滤：漏写条件也不会串</h2>
+<p>业务代码不需要、也不应该自己写「且租户 = A」。这件事由每个服务的数据访问层统一来做：</p>
+<ul>
+  <li><b>读、改、删：</b>只要查询涉及租户数据，就自动加上「租户 = 当前上下文」。连表查询和子查询里涉及的也一样。</li>
+  <li><b>新增：</b>自动填上当前租户。如果在 A 的上下文里写入属于 B 的数据，直接拒绝。</li>
+  <li><b>没有租户上下文：</b>只要碰到租户数据就报错。这样漏设上下文的代码，在测试里第一次运行就会暴露出来。</li>
+  <li><b>系统范围：</b>需要跨租户时必须显式声明，而且只允许以下几处：系统巡检取待办、运营接口（统计用量、改份额、删除租户数据）。</li>
+</ul>
+<p>这和用户中心现在用的是同一套规则。用户中心已经这样在运行了，各服务按同样的约定来做。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 230" width="100%" role="img" aria-label="自动过滤">
+  <rect x="20" y="20" width="250" height="70" rx="6" class="c2"/>
+  <text x="145" y="48" text-anchor="middle" class="b">业务代码</text>
+  <text x="145" y="70" text-anchor="middle" class="s">查智能体列表，没写租户条件</text>
+  <path d="M270,55 H318" class="ln" marker-end="url(#ar)"/>
+  <rect x="320" y="20" width="290" height="70" rx="6" class="c1"/>
+  <text x="465" y="48" text-anchor="middle" class="b">数据访问层自动补上</text>
+  <text x="465" y="70" text-anchor="middle" class="s">且 租户 = A（当前上下文）</text>
+  <path d="M610,55 H658" class="ln" marker-end="url(#ar)"/>
+  <rect x="660" y="10" width="400" height="92" rx="6" class="inner"/>
+  <text x="680" y="34">通用助手 · A　　✓ 返回</text>
+  <text x="680" y="54" class="s">合同审查 · B　　✗ 看不到</text>
+  <text x="680" y="74">周报助手 · A　　✓ 返回</text>
+  <text x="680" y="94" class="s">案件检索 · B　　✗ 看不到</text>
+
+  <rect x="20" y="140" width="250" height="70" rx="6" class="c2"/>
+  <text x="145" y="168" text-anchor="middle" class="b">忘了设租户的后台代码</text>
+  <text x="145" y="190" text-anchor="middle" class="s">查智能体列表</text>
+  <path d="M270,175 H318" class="ln" marker-end="url(#ar)"/>
+  <rect x="320" y="140" width="290" height="70" rx="6" class="c5"/>
+  <text x="465" y="168" text-anchor="middle" class="b">直接报错</text>
+  <text x="465" y="190" text-anchor="middle" class="s">不会返回所有租户的数据</text>
+  <rect x="660" y="140" width="400" height="70" rx="6" class="inner"/>
+  <text x="680" y="166" class="b">写入</text>
+  <text x="680" y="190" class="s">新数据自动记上 A；在 A 的上下文里写 B 的数据 → 拒绝</text>
+</svg>
+</div>
+<p class="cap">图 5　上：即使没写租户条件，也只会返回 A 的数据；下：没有租户上下文就直接报错，而不是返回全部</p>
+
+<!-- ====================================================================== -->
+<h2 id="s7">7. 权限：先分租户，再看授权</h2>
+<p>判断一个人能看到什么、能做什么，按固定顺序过三道关。第一道是租户：它不看任何授权，谁都绕不过去。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 230" width="100%" role="img" aria-label="权限三道关">
+  <text x="20" y="22" class="b">例：李四（租户 A，构建者）打开智能体列表</text>
+  <rect x="20" y="40" width="230" height="86" rx="6" class="inner"/>
+  <text x="135" y="64" text-anchor="middle" class="s">全部租户合计</text>
+  <text x="135" y="88" text-anchor="middle" class="b">120 个智能体</text>
+  <text x="135" y="110" text-anchor="middle" class="s">A 40 个 · B 50 个 · C 30 个</text>
+  <rect x="290" y="40" width="230" height="86" rx="6" class="c1"/>
+  <text x="405" y="64" text-anchor="middle" class="s">① 租户</text>
+  <text x="405" y="88" text-anchor="middle" class="b">只剩 A 的 40 个</text>
+  <text x="405" y="110" text-anchor="middle" class="s">自动过滤，不看任何授权</text>
+  <rect x="560" y="40" width="230" height="86" rx="6" class="c3"/>
+  <text x="675" y="64" text-anchor="middle" class="s">② 数据权限</text>
+  <text x="675" y="88" text-anchor="middle" class="b">只剩 6 个</text>
+  <text x="675" y="110" text-anchor="middle" class="s">授给李四的 + A 里公有的</text>
+  <rect x="830" y="40" width="230" height="86" rx="6" class="c2"/>
+  <text x="945" y="64" text-anchor="middle" class="s">③ 操作码</text>
+  <text x="945" y="88" text-anchor="middle" class="b">决定能做什么</text>
+  <text x="945" y="110" text-anchor="middle" class="s">能不能新建、能不能改</text>
+  <path d="M250,83 H288" class="ln" marker-end="url(#ar)"/>
+  <path d="M520,83 H558" class="ln" marker-end="url(#ar)"/>
+  <path d="M790,83 H828" class="ln" marker-end="url(#ar)"/>
+  <rect x="20" y="148" width="1040" height="68" rx="6" class="c4"/>
+  <text x="36" y="174">租户管理员王五有「全部智能体 · 所有者」：② 这一关放行的是 A 的全部 40 个；另外 80 个在 ① 就被挡掉了。</text>
+  <text x="36" y="200" class="s">「公有」也一样：公有的智能体、知识库、MCP 服务、模型，只对本租户里的人公有。</text>
+</svg>
+</div>
+<p class="cap">图 6　顺序是租户 → 数据权限 → 操作码；「全部 X」授权和「公有」都只在本租户内有效</p>
+
+<ul>
+  <li><b>数据权限本来就是按租户存的。</b>用户中心按租户保存授权，到了 Atlas 又先按租户过滤过一遍，所以「全部智能体 · 所有者」自然只覆盖本租户，不需要任何特殊处理。</li>
+  <li><b>数字员工建在智能体所在的租户里。</b>它只能拿到本租户的授权，所以以 Agent 为权限的智能体，也只能碰到本租户的资源。</li>
+  <li><b>业务系统和用户中心里只有租户权限。</b>不再有「平台级操作码」「平台级菜单」，也不再有「这个人是不是在平台租户」的判断。用户中心的超级管理员也只管本租户。平台的事只在运营中心里，用运营角色来判断（3.2）。</li>
+</ul>
+<table>
+  <tr><th>租户里的角色</th><th>能做什么</th></tr>
+  <tr><td>成员</td><td>用授权给自己的智能体对话；管理自己的会话、记忆、工作空间</td></tr>
+  <tr><td>构建者</td><td>成员能做的，再加上新建智能体、知识库，上传技能</td></tr>
+  <tr><td>租户管理员</td><td>登记模型、MCP 服务；审核技能；修改租户设置和租户指令；在份额内设定每人上限；查看本租户的份额和用量；再配合「全部 X · 所有者」管理本租户的全部智能体和知识库</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s8">8. 模型、MCP、技能由租户自己管</h2>
+
+<h3>模型</h3>
+<p>租户管理员用自己的供应商账号登记模型，费用直接记在租户自己的账号上。访问 Key（用户 Key、智能体 Key）也属于租户，只能用本租户的模型。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 175" width="100%" role="img" aria-label="一次模型调用怎么找到租户自己的模型">
+  <rect x="20" y="30" width="180" height="64" rx="6" class="c1"/>
+  <text x="110" y="56" text-anchor="middle" class="b">租户 A 的智能体</text>
+  <text x="110" y="78" text-anchor="middle" class="s">这一轮要用 minimax-m3</text>
+  <rect x="230" y="30" width="180" height="64" rx="6" class="inner"/>
+  <text x="320" y="56" text-anchor="middle" class="b">模型网关</text>
+  <text x="320" y="78" text-anchor="middle" class="s">带着 A 的 Key</text>
+  <rect x="440" y="30" width="180" height="64" rx="6" class="c1"/>
+  <text x="530" y="56" text-anchor="middle" class="b">只在 A 的模型里找</text>
+  <text x="530" y="78" text-anchor="middle" class="m">minimax-m3</text>
+  <rect x="650" y="30" width="180" height="64" rx="6" class="c1"/>
+  <text x="740" y="56" text-anchor="middle" class="b">用 A 登记的</text>
+  <text x="740" y="78" text-anchor="middle" class="s">供应商 Key</text>
+  <rect x="860" y="30" width="180" height="64" rx="6" class="inner"/>
+  <text x="950" y="56" text-anchor="middle" class="b">MiniMax</text>
+  <text x="950" y="78" text-anchor="middle" class="s">费用记在 A 的账号上</text>
+  <path d="M200,62 H228" class="ln" marker-end="url(#ar)"/>
+  <path d="M410,62 H438" class="ln" marker-end="url(#ar)"/>
+  <path d="M620,62 H648" class="ln" marker-end="url(#ar)"/>
+  <path d="M830,62 H858" class="ln" marker-end="url(#ar)"/>
+  <text x="20" y="130" class="s">租户 B 的 Key 找不到 A 的模型，即使名字一样也不行；B 有自己的 minimax-m3，指向 B 自己的供应商账号。</text>
+  <text x="20" y="154" class="s">租户填写的上游地址（模型、MCP）不能指向平台内部服务：登记时检查一次，每次连接前再按解析出来的地址检查一次。</text>
+</svg>
+</div>
+<p class="cap">图 7　Key 属于哪个租户，就只在那个租户的模型里查找</p>
+
+<ul>
+  <li><b>系统功能用的模型也由租户自己选。</b>会话标题、自动模式判断器、记忆补记、知识库的向量模型，都从本租户的模型里选。没选的话就降级：标题取消息的开头，判断器交给人来决定，记忆不补记。知识库必须先选好向量模型才能创建。</li>
+  <li><b>新租户一开始一个模型都没有。</b>租户管理员要先登记模型，然后才能建智能体（第 10 节）。</li>
+</ul>
+
+<h3>MCP 服务</h3>
+<p>租户自己登记 MCP 服务和它的凭据。智能体 Key 只能用本租户的服务；「公有」的服务也只对本租户公有。</p>
+
+<h3>技能</h3>
+<p>租户自己上传技能，由本租户的审核人审核，版本号也在各租户内各自编排。智能体只能选本租户的技能和产品自带的技能。</p>
+
+<h3>租户填写的地址不能指向平台内部</h3>
+<p>模型和 MCP 的上游地址是租户自己填的，平台的网关会替它去连接。平台内部服务之间是凭请求上写的身份互相信任的，如果租户能让网关去连平台内部的地址，就等于借网关冒充别人。所以登记时要检查一次地址；每次真正连接之前，还要按解析出来的 IP 再检查一次，防止域名先指向外网、事后又改成指向内网。</p>
+
+<h3>智能体只能引用本租户的东西</h3>
+<p>保存智能体时，会检查它引用的模型、技能、MCP 服务、知识集是否都在本租户里（技能也可以是产品自带的），沙箱模板是否是运营中心发布的。运行时也按本租户去解析这些引用。即使有人直接改配置、写进了别的租户的名字，也只会得到「找不到」。</p>
+
+<!-- ====================================================================== -->
+<h2 id="s9">9. 配额：运营中心管总量，按租户分份额</h2>
+<p>共用设施分三层来管：</p>
+<ol>
+  <li><b>总容量：</b>部署了多少执行能力和集群资源，总量就是多少。运营中心显示总量和当前的占用情况。</li>
+  <li><b>租户份额：</b>运营人员在运营中心给每个租户定一份；新租户先用默认份额。</li>
+  <li><b>每人上限：</b>租户管理员在本租户份额以内自己设定；不设就用默认值。</li>
+</ol>
+<p>按这三层管的资源有三种：<b>同时运行的 run</b>、<b>同时存在的沙箱和会话 Pod</b>、<b>存储</b>（工作空间文件、知识库文件）。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 290" width="100%" role="img" aria-label="配额算例">
+  <text x="40" y="28">总容量：同时运行 64 个 run（部署的执行能力）· 现在有 50 个在跑</text>
+  <rect x="40" y="36" width="1000" height="22" rx="4" class="inner"/>
+  <rect x="40" y="36" width="781" height="22" rx="4" class="c4"/>
+
+  <text x="40" y="88">租户 A：份额 30，在跑 30（每人上限 3）</text>
+  <rect x="40" y="96" width="469" height="22" rx="4" class="inner"/>
+  <rect x="40" y="96" width="469" height="22" rx="4" class="c5"/>
+  <text x="525" y="112" class="s">满了：A 的新 run 先排队，等 A 自己的 run 空出位置就接着跑</text>
+
+  <text x="40" y="148">租户 B：份额 20，在跑 8</text>
+  <rect x="40" y="156" width="312" height="22" rx="4" class="inner"/>
+  <rect x="40" y="156" width="125" height="22" rx="4" class="c3"/>
+  <text x="368" y="172" class="s">照常运行，不受 A 影响</text>
+
+  <text x="40" y="208">租户 C：份额 30，在跑 12</text>
+  <rect x="40" y="216" width="469" height="22" rx="4" class="inner"/>
+  <rect x="40" y="216" width="188" height="22" rx="4" class="c3"/>
+  <text x="525" y="232" class="s">照常运行</text>
+
+  <text x="40" y="274" class="s">三个租户的份额加起来是 80，比总容量 64 多：允许多分。总容量 64 个全部占满时，所有租户按先来后到排队。</text>
+</svg>
+</div>
+<p class="cap">图 8　算例：A 用满了自己的份额，只有 A 自己排队，B 和 C 照常运行</p>
+
+<table>
+  <tr><th>资源</th><th>满了怎么办</th></tr>
+  <tr><td>同时运行的 run</td><td>新的 run 排队，不算失败；有空位后自动接着跑。界面上提示「排队中：本租户同时运行的任务已满」</td></tr>
+  <tr><td>沙箱、会话 Pod</td><td>新开会话时提示「本租户的沙箱已满」；空闲的沙箱会被回收，回收后再试就能用</td></tr>
+  <tr><td>存储</td><td>拒绝上传，并说明是哪一层满了：是个人上限，还是租户份额</td></tr>
+</table>
+<ul>
+  <li><b>模型用量不设份额。</b>模型走的是租户自己的供应商账号，花的是租户自己的钱。用量按租户统计，给租户管理员看。</li>
+  <li><b>谁能看到什么：</b>租户管理员能看到本租户的份额和用量；运营中心能看到每个租户的用量数字，但看不到内容。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s10">10. 租户的一生</h2>
+
+<div class="fig">
+<svg viewBox="0 0 1080 220" width="100%" role="img" aria-label="租户的一生">
+  <rect x="16" y="30" width="186" height="120" rx="6" class="c2"/>
+  <text x="109" y="54" text-anchor="middle" class="b">开通</text>
+  <text x="109" y="78" text-anchor="middle" class="s">运营中心建租户</text>
+  <text x="109" y="98" text-anchor="middle" class="s">在用户中心建租户和管理员</text>
+  <text x="109" y="118" text-anchor="middle" class="s">开通应用、定份额</text>
+  <text x="109" y="138" text-anchor="middle" class="s">租户里还是空的</text>
+
+  <rect x="231" y="30" width="186" height="120" rx="6" class="c1"/>
+  <text x="324" y="54" text-anchor="middle" class="b">准备</text>
+  <text x="324" y="78" text-anchor="middle" class="s">租户管理员登记模型</text>
+  <text x="324" y="98" text-anchor="middle" class="s">登记 MCP、上传技能</text>
+  <text x="324" y="118" text-anchor="middle" class="s">选系统功能用的模型</text>
+  <text x="324" y="138" text-anchor="middle" class="s">然后才能建智能体</text>
+
+  <rect x="446" y="30" width="186" height="120" rx="6" class="c3"/>
+  <text x="539" y="54" text-anchor="middle" class="b">使用中</text>
+  <text x="539" y="78" text-anchor="middle" class="s">人只在本租户里活动</text>
+  <text x="539" y="98" text-anchor="middle" class="s">建智能体、知识库</text>
+  <text x="539" y="118" text-anchor="middle" class="s">用量计入本租户份额</text>
+
+  <rect x="661" y="30" width="186" height="120" rx="6" class="c4"/>
+  <text x="754" y="54" text-anchor="middle" class="b">停用 / 到期</text>
+  <text x="754" y="78" text-anchor="middle" class="s">运营中心先停用户中心</text>
+  <text x="754" y="98" text-anchor="middle" class="s">再通知各系统</text>
+  <text x="754" y="118" text-anchor="middle" class="s">run 挂起、沙箱回收</text>
+  <text x="754" y="138" text-anchor="middle" class="s">数据都留着</text>
+
+  <rect x="876" y="30" width="186" height="120" rx="6" class="c5"/>
+  <text x="969" y="54" text-anchor="middle" class="b">关闭</text>
+  <text x="969" y="78" text-anchor="middle" class="s">运营中心依次通知各系统</text>
+  <text x="969" y="98" text-anchor="middle" class="s">删表、文件、向量、Pod</text>
+  <text x="969" y="118" text-anchor="middle" class="s">最后删用户中心里的租户</text>
+  <text x="969" y="138" text-anchor="middle" class="s">（人、授权、数字员工）</text>
+
+  <path d="M202,90 H229" class="ln" marker-end="url(#ar)"/>
+  <path d="M417,90 H444" class="ln" marker-end="url(#ar)"/>
+  <path d="M632,90 H659" class="ln" marker-end="url(#ar)"/>
+  <path d="M847,90 H874" class="ln" marker-end="url(#ar)"/>
+  <path d="M754,150 V180 H539 V152" class="ln dash" marker-end="url(#ar)"/>
+  <text x="646" y="200" text-anchor="middle" class="s">恢复后接着跑（挂起的 run 继续执行）</text>
+</svg>
+</div>
+<p class="cap">图 9　开通 → 准备 → 使用中 ⇄ 停用 → 关闭；每一步都由运营中心发起，按顺序通知各系统</p>
+
+<ul>
+  <li><b>新租户是空的。</b>平台不提供任何模型、技能或智能体。租户管理员第一次进来时，界面引导他先登记一个模型。</li>
+  <li><b>停用分两步。</b>运营中心先在用户中心停用这个租户，这样所有新请求在核对身份时就被挡住了；然后通知 Atlas 等系统，把在跑的 run 挂起、把沙箱回收。到期也走同一个流程，由运营中心的系统任务在到期时发起。</li>
+  <li><b>停用时 run 是挂起，不是失败。</b>租户恢复后，挂起的 run 会接着跑，就像断联之后恢复一样。沙箱虽然被回收了，但工作空间里的文件都在对象存储里，不会丢。</li>
+  <li><b>关闭时显式删除。</b>由运营中心依次让各系统删除这个租户的数据，最后再删除用户中心里的租户。因为每张表都记着租户，对象存储也按租户分了目录，所以能删干净，不会漏。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s11">11. 已有数据和功能怎么过渡</h2>
+
+<div class="fig">
+<svg viewBox="0 0 1080 320" width="100%" role="img" aria-label="已有数据和功能怎么过渡">
+  <rect x="20" y="20" width="350" height="56" rx="6" class="inner"/>
+  <text x="195" y="43" text-anchor="middle" class="b">现有业务数据</text>
+  <text x="195" y="63" text-anchor="middle" class="s">智能体、会话、知识库、技能、模型、MCP……</text>
+  <rect x="420" y="20" width="640" height="56" rx="6" class="c1"/>
+  <text x="740" y="43" text-anchor="middle" class="b">全部归原来的平台租户，它变成普通租户</text>
+  <text x="740" y="63" text-anchor="middle" class="s">企业代码、名字、引用都不变；文件挪进它的目录；现有沙箱退役，用到时再重建</text>
+  <path d="M370,48 H418" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="20" y="90" width="350" height="56" rx="6" class="inner"/>
+  <text x="195" y="113" text-anchor="middle" class="b">平台管理功能</text>
+  <text x="195" y="133" text-anchor="middle" class="s">用户中心的租户管理、应用接入；Atlas 的系统菜单</text>
+  <rect x="420" y="90" width="640" height="56" rx="6" class="c4"/>
+  <text x="740" y="113" text-anchor="middle" class="b">搬到运营中心</text>
+  <text x="740" y="133" text-anchor="middle" class="s">现在做平台管理的人，在运营中心开运营账号；他们原来的租户账号保留为租户管理员</text>
+  <path d="M370,118 H418" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="20" y="160" width="350" height="56" rx="6" class="inner"/>
+  <text x="195" y="183" text-anchor="middle" class="b">平台设置</text>
+  <text x="195" y="203" text-anchor="middle" class="s">默认智能体、平台指令、系统功能用的模型</text>
+  <rect x="420" y="160" width="640" height="56" rx="6" class="c3"/>
+  <text x="740" y="183" text-anchor="middle" class="b">变成原平台租户的租户设置</text>
+  <text x="740" y="203" text-anchor="middle" class="s">别的租户各自设置自己的</text>
+  <path d="M370,188 H418" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="20" y="230" width="350" height="56" rx="6" class="inner"/>
+  <text x="195" y="253" text-anchor="middle" class="b">浏览器、computer use 技能</text>
+  <text x="195" y="273" text-anchor="middle" class="s">现在放在技能库里</text>
+  <rect x="420" y="230" width="640" height="56" rx="6" class="c2"/>
+  <text x="740" y="253" text-anchor="middle" class="b">改为产品自带</text>
+  <text x="740" y="273" text-anchor="middle" class="s">随版本发布；所有租户都有，谁都不能改</text>
+  <path d="M370,258 H418" class="ln" marker-end="url(#ar)"/>
+  <text x="20" y="310" class="s">之后新建的租户都从空开始；原平台租户的份额先给足，不影响现在的使用。</text>
+</svg>
+</div>
+<p class="cap">图 10　现有数据整体归到原平台租户（它改成普通租户）；平台管理功能搬到运营中心；平台设置变成租户设置</p>
+
+</main>
+</body>
+</html>

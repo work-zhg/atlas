@@ -25,6 +25,7 @@ from . import CallContext, DiscoveryFailed, UpstreamUnavailable
 from . import grpc as grpc_up
 from . import rest as rest_up
 from .credentials import Credential, TokenCache
+from .guard import AddressGuard, upstream_targets
 from .mcp import McpUpstream
 
 __all__ = ["Discovered", "Upstreams"]
@@ -64,6 +65,8 @@ class Upstreams:
         self.tokens = TokenCache(self.http)
         self.channels = grpc_up.Channels()
         self.pools = grpc_up.Pools()
+        #: 租户填的上游地址不能指向平台内部：每次连接前按解析出来的 IP 检查（guard.py）
+        self.guard = AddressGuard(settings.upstream_allow_cidrs)
 
     async def aclose(self) -> None:
         await self.http.aclose()
@@ -97,6 +100,10 @@ class Upstreams:
         service: str,
         descriptor: bytes | None,
     ) -> Discovered:
+        if kind != "grpc" or descriptor is None:  # 上传了描述文件的 gRPC 不用连
+            await self.guard.check_all(
+                upstream_targets(kind, connection, {"token_url": credential.get("token_url")})
+            )
         if kind == "mcp":
             headers, _ = await self._http_auth(credential)
             upstream = McpUpstream(
@@ -145,6 +152,7 @@ class Upstreams:
         """
         credential = Credential.of(svc.credential, svc.credential_secret)
         identity = ctx.identity()
+        await self.guard.check_all(upstream_targets(svc.kind, svc.connection, svc.credential))
         if svc.kind == "mcp":
             headers, _ = await self._http_auth(credential)
             upstream = McpUpstream(

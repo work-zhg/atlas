@@ -4,6 +4,9 @@
 ★ 授权快照（操作码 / 菜单 / 能否访问）按用户进程内缓存 authz_snapshot_ttl_s；
   多副本时撤销经 Redis 广播（authz:invalidate），各实例清本地缓存；TTL 仍是兜底。
 ★ 角色不存库：来自用户中心快照（存一份就会出现「用户中心已收回、Atlas 还写着有」）。
+★ 租户以用户中心快照里用户所属的租户为准（c4-model/agent/dynamic/dynamic-tenant-context.html）：
+  请求头写了 X-Tenant-Id 却对不上 → 401；没写的（漏带的内部调用方）照样能定下租户。定下后进入
+  这个租户的上下文：本请求之后的查询、写入、出站请求都属于它。
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+from atlas_tenancy import TenantScope, parse_tenant
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
@@ -144,8 +148,16 @@ class AuthService:
     async def resolve(
         self, uid: UUID, auth_uid: UUID, *, caller_app: str, tenant_id: str | None
     ) -> Principal:
-        """请求头身份 → 主体。操作码、数据编码级授权按 auth_uid（按谁的权限判）取。"""
+        """请求头身份 → 主体。操作码、数据编码级授权按 auth_uid（按谁的权限判）取。
+
+        返回前已进入用户所属租户的上下文。
+        """
         snap = await self._snapshot(auth_uid)
+        tenant: UUID = snap["tenant"]
+        claimed = parse_tenant(tenant_id)
+        if tenant_id and claimed != tenant:
+            raise Unauthorized("请求上的租户和用户所属的租户不一致")
+        TenantScope.bind(tenant)
         if snap.get("disabled"):
             raise Unauthorized("账号已停用")
         if not snap.get("can_access"):
@@ -159,7 +171,7 @@ class AuthService:
             uid=uid,
             auth_uid=auth_uid,
             caller_app=caller_app,
-            tenant_id=tenant_id,
+            tenant_id=str(tenant),
             name=user.name if user is not None else "",
             operations=frozenset(snap.get("permissions") or []),
             menus=tuple(snap.get("menus") or []),
@@ -172,7 +184,17 @@ class AuthService:
         if snap is not None:
             return snap
         uc = self._uc()
-        snap = dict(await uc.authz(user_id))
+        try:
+            snap = dict(await uc.authz(user_id))
+        except UCError as exc:
+            if exc.status_code == 404:  # 用户中心在请求上写的租户里找不到这个人
+                raise Unauthorized("用户不存在，或不在这个租户里") from exc
+            raise
+        tenant = parse_tenant((snap.get("user") or {}).get("tenant_id"))
+        if tenant is None:
+            raise Unauthorized("用户中心没有给出用户所属的租户")
+        snap["tenant"] = tenant
+        TenantScope.bind(tenant)  # 下面写的本地投影 app_user 是租户表
         try:
             user = await self.upsert_user(await uc.user(user_id))
             snap["disabled"] = user.status != "active"

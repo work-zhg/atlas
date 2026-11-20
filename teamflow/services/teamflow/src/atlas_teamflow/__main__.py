@@ -3,8 +3,6 @@
 python -m atlas_teamflow serve          起 HTTP 服务（默认 :8040）
 python -m atlas_teamflow migrate        升级 TeamFlow 库
 python -m atlas_teamflow worker         独立的 Agent 监督器进程（多实例部署；可起多个）
-python -m atlas_teamflow register-uc --account admin
-                                        登记应用编码 / 操作 / 菜单 / 角色 / 数据编码
 python -m atlas_teamflow export-thread-owners > map.json
                                         节点会话 → 流程发起人（Atlas reassign-threads 用，§14）
 """
@@ -12,7 +10,6 @@ python -m atlas_teamflow export-thread-owners > map.json
 from __future__ import annotations
 
 import argparse
-import getpass
 import logging
 import os
 import sys
@@ -111,16 +108,6 @@ def migrate(revision: str = "head") -> None:
     command.upgrade(cfg, revision)
 
 
-def register_uc(args: argparse.Namespace) -> int:
-    from .register import register
-
-    password = os.environ.get("UC_ADMIN_PASSWORD") or getpass.getpass(
-        f"用户中心账号 {args.account} 的密码："
-    )
-    register(args.uc_url or get_settings().uc_base_url, args.account, password)
-    return 0
-
-
 def export_thread_owners() -> int:
     """去服务账号的存量迁移（内网身份传递 §14）：节点的 Atlas 会话 → 流程发起人，JSON 输出到
     标准输出，交给 `python -m atlas_agent reassign-threads` 改写会话所有者。"""
@@ -154,11 +141,6 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("serve")
     sub.add_parser("migrate")
     sub.add_parser("worker")
-    reg = sub.add_parser("register-uc")
-    reg.add_argument(
-        "--account", required=True, help="用户中心管理员账号（需 app:manage、role:manage）"
-    )
-    reg.add_argument("--uc-url", default=None)
     sub.add_parser("export-thread-owners")
     return parser
 
@@ -177,8 +159,6 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "worker":
             worker()
             return 0
-        if args.command == "register-uc":
-            return register_uc(args)
         if args.command == "export-thread-owners":
             return export_thread_owners()
     except TFError as exc:

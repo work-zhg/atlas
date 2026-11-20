@@ -113,6 +113,8 @@ def role_view(r: Role, **extra: Any) -> dict[str, Any]:
         "name": r.name,
         "description": r.description,
         "is_builtin": r.is_builtin,
+        #: 应用内置（所有租户共用，运营中心维护）；否则是本租户自定义的
+        "shared": r.tenant_uuid is None,
         "version": r.version,
         **extra,
     }

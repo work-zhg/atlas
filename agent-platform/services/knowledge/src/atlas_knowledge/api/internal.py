@@ -1,6 +1,7 @@
 """/internal/v1：atlas-server 调用，不对浏览器开放（网关返回 404）。
 
 内网免令牌（内网身份传递 §3）：调用方带身份请求头，X-Uid 谁在用、X-Auth-Uid 按谁判。
+要带 X-Tenant-Id：带了 X-Uid 的经用户中心核对，之后只看得到这个租户的库（auth.verified_tenant）。
 
 POST /internal/v1/retrieve            智能体运行时检索（库级、文档级权限都按 X-Auth-Uid；
                                       读不到的库跳过，返回的 skipped 里列出）
@@ -16,10 +17,11 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from ..auth import verified_tenant
 from ..db.models import Dataset
 from ..services.cards import dataset_cards
 from ..services.permission import visible_clause
@@ -27,7 +29,9 @@ from ..services.retrieval import KnowledgeRetrieval, RetrieveOptions
 from ..services.sets import KnowledgeSetService
 from .deps import PrincipalDep, RuntimeDep, SessionDep
 
-router = APIRouter(prefix="/internal/v1", include_in_schema=False)
+router = APIRouter(
+    prefix="/internal/v1", include_in_schema=False, dependencies=[Depends(verified_tenant)]
+)
 
 
 class InternalRetrieveBody(BaseModel):

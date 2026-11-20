@@ -9,21 +9,25 @@
 
 ★ 每个请求先经 ConfigGuard 鉴权、拿到操作人（记进修订历史）。库不认识用户中心和操作码。
 ★ 值以明文存储、接口里看得到：不能放机密。
+★ 宿主挂两份：scope=SYSTEM（默认）列出全部 key 的系统值，守卫只认运营中心；scope=TENANT 只列
+  租户设置、显示本租户的值，守卫多实现一个 tenant(request) 回答「这是哪个租户」。
 """
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
+from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from .key import ConfigScope
 from .model import ConfigRevision, VersionConflict
-from .service import AppConfig, ConfigEntry, UnknownKey
+from .service import AppConfig, ConfigEntry, ScopeMismatch, UnknownKey
 from .types import TypeMismatch
 
-__all__ = ["ConfigGuard", "ConfigRoutes"]
+__all__ = ["ConfigGuard", "ConfigRoutes", "TenantConfigGuard"]
 
 
 class ConfigGuard(Protocol):
@@ -33,12 +37,22 @@ class ConfigGuard(Protocol):
     async def edit(self, request: Request) -> str: ...
 
 
+class TenantConfigGuard(ConfigGuard, Protocol):
+    """租户设置那一份的守卫：再回答这个请求是哪个租户。库不从请求头推断租户。"""
+
+    async def tenant(self, request: Request) -> UUID: ...
+
+
 class ConfigOut(BaseModel):
     key: str
     type: str
+    scope: str = Field(description="system = 系统参数；tenant = 租户设置")
     description: str
     default: Any
-    value: Any | None = Field(description="库里覆盖的值；null = 用默认值")
+    value: Any | None = Field(description="库里覆盖的值；null = 用默认值（租户设置：用系统值）")
+    inherited: Any | None = Field(
+        default=None, description="租户设置的系统值（看某个租户的值时才有）"
+    )
     effective: Any
     overridden: bool
     version: int
@@ -70,9 +84,11 @@ def _out(entry: ConfigEntry) -> ConfigOut:
     return ConfigOut(
         key=item.name,
         type=item.type.describe(),
+        scope=entry.key.scope.value,
         description=item.description,
         default=entry.key.default,
         value=item.value,
+        inherited=entry.inherited.value if entry.inherited is not None else None,
         effective=entry.effective,
         overridden=entry.overridden,
         version=item.version,
@@ -92,9 +108,19 @@ def _rev(r: ConfigRevision) -> RevisionOut:
 
 
 class ConfigRoutes:
-    def __init__(self, config: AppConfig, guard: ConfigGuard, *, prefix: str = "/configs") -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        guard: ConfigGuard,
+        *,
+        scope: ConfigScope = ConfigScope.SYSTEM,
+        prefix: str = "/configs",
+    ) -> None:
+        if scope is ConfigScope.TENANT and not hasattr(guard, "tenant"):
+            raise TypeError("租户设置的管理接口要用 TenantConfigGuard（多一个 tenant(request)）")
         self._config = config
         self._guard = guard
+        self._scope = scope
         self.router = APIRouter(prefix=prefix, tags=["app-config"])
         self.router.add_api_route("", self.list, methods=["GET"], response_model=list[ConfigOut])
         self.router.add_api_route("/{key}", self.get, methods=["GET"], response_model=ConfigOut)
@@ -106,32 +132,51 @@ class ConfigRoutes:
             "/{key}/rollback", self.rollback, methods=["POST"], response_model=ConfigOut
         )
 
+    async def _tenant(self, request: Request) -> UUID | None:
+        if self._scope is not ConfigScope.TENANT:
+            return None
+        return await cast(TenantConfigGuard, self._guard).tenant(request)
+
     async def list(self, request: Request) -> list[ConfigOut]:
         await self._guard.view(request)
-        return [_out(e) for e in await self._config.list()]
+        tenant = await self._tenant(request)
+        return [_out(e) for e in await self._config.list(tenant_uuid=tenant)]
 
     async def get(self, key: str, request: Request) -> ConfigOut:
         await self._guard.view(request)
-        return _out(await _call(self._config.entry(key)))
+        tenant = await self._tenant(request)
+        return _out(await _call(self._config.entry(key, tenant_uuid=tenant)))
 
     async def put(self, key: str, body: SetIn, request: Request) -> ConfigOut:
         by = await self._guard.edit(request)
+        tenant = await self._tenant(request)
         entry = await _call(
             self._config.set(
-                key, body.value, expected_version=body.expected_version, by=by, note=body.note
+                key,
+                body.value,
+                tenant_uuid=tenant,
+                expected_version=body.expected_version,
+                by=by,
+                note=body.note,
             )
         )
         return _out(entry)
 
     async def revisions(self, key: str, request: Request) -> list[RevisionOut]:
         await self._guard.view(request)
-        return [_rev(r) for r in await _call(self._config.history(key))]
+        tenant = await self._tenant(request)
+        return [_rev(r) for r in await _call(self._config.history(key, tenant_uuid=tenant))]
 
     async def rollback(self, key: str, body: RollbackIn, request: Request) -> ConfigOut:
         by = await self._guard.edit(request)
+        tenant = await self._tenant(request)
         entry = await _call(
             self._config.rollback(
-                key, body.to_version, expected_version=body.expected_version, by=by
+                key,
+                body.to_version,
+                tenant_uuid=tenant,
+                expected_version=body.expected_version,
+                by=by,
             )
         )
         return _out(entry)
@@ -144,5 +189,5 @@ async def _call(coro: Any) -> Any:
         raise HTTPException(404, str(exc)) from exc
     except VersionConflict as exc:
         raise HTTPException(409, str(exc)) from exc
-    except TypeMismatch as exc:
+    except (TypeMismatch, ScopeMismatch) as exc:
         raise HTTPException(422, str(exc)) from exc

@@ -1,7 +1,13 @@
 """两张表（建在宿主自己的库里，表名带 app_config 前缀，以免和宿主的表重名）和跨方言的列类型。
 
-    app_config            一个 key 一行：类型（value_kind、element_kind）、当前值、版本
+    app_config            一个 key 一行系统值，再加改过它的每个租户各一行：类型（value_kind、
+                          element_kind）、作用域、当前值、版本
     app_config_revision   每个版本一行，只追加；(config_uuid, version) 唯一，是 CAS 之外的第二道防线
+                          （每一行配置 —— 系统值或某个租户的值 —— 有自己的 config_uuid）
+
+★ 系统值的 tenant_uuid 存成全零 UUID（SYSTEM_ROW），不存 NULL：唯一约束 (key, tenant_uuid) 在
+  PG 和 MySQL 上都要把系统值当成一个值，NULL 做不到（PG 的 NULLS NOT DISTINCT MySQL 没有）。
+  这个约定只在仓储读写时出现，代码里一律用 ConfigItem.tenant_uuid is None 表示系统值。
 
 ★ 库不依赖宿主：UUID、时间、JSON 列在这里各写一份（与本仓各服务同一约定：PG 上 JSONB、UUID 原生，
   MySQL 上 JSON、CHAR(32)；时间进出都是 aware 的 UTC）。
@@ -21,6 +27,7 @@ from sqlalchemy.engine import Dialect
 from sqlalchemy.types import TypeDecorator
 
 __all__ = [
+    "SYSTEM_ROW",
     "JSONType",
     "UTCDateTime",
     "UUIDType",
@@ -76,6 +83,9 @@ class UTCDateTime(TypeDecorator[datetime]):
         return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
+#: 系统值那一行的 tenant_uuid（见模块说明）
+SYSTEM_ROW = uuid.UUID(int=0)
+
 metadata = sa.MetaData()
 
 config_table = sa.Table(
@@ -89,6 +99,8 @@ config_table = sa.Table(
     ),
     sa.Column("config_uuid", UUIDType, nullable=False),
     sa.Column("key", sa.String(128), nullable=False),
+    sa.Column("scope", sa.String(16), nullable=False),
+    sa.Column("tenant_uuid", UUIDType, nullable=False),
     sa.Column("value_kind", sa.String(16), nullable=False),
     sa.Column("element_kind", sa.String(16), nullable=True),
     sa.Column("value", JSONType, nullable=True),
@@ -98,7 +110,7 @@ config_table = sa.Table(
     sa.Column("created_at", UTCDateTime(), nullable=False),
     sa.Column("updated_at", UTCDateTime(), nullable=False),
     sa.UniqueConstraint("config_uuid", name="uk_app_config_uuid"),
-    sa.UniqueConstraint("key", name="uk_app_config_key"),
+    sa.UniqueConstraint("key", "tenant_uuid", name="uk_app_config_key_tenant"),
 )
 
 revision_table = sa.Table(

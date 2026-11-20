@@ -148,7 +148,7 @@ export const agentGrantsApi = {
   revoke: (agentId: string, aclId: string) => http.del(`/v1/agents/${agentId}/grants/${aclId}`),
 };
 
-// ---------- 默认智能体（平台配置 platform.default_agent；首页输入框默认用它）
+// ---------- 默认智能体（租户设置 tenant.default_agent；首页输入框默认用它）
 
 /** 没设、没启用、或我看不到它 → null（首页退回让用户自己选） */
 export function useDefaultAgent() {
@@ -166,7 +166,7 @@ export function useDefaultAgent() {
   });
 }
 
-/** 设为默认（只有平台管理员）。agentId 为 null = 取消默认 */
+/** 设为默认（只有租户管理员：settings:manage）。agentId 为 null = 取消默认 */
 export function useSetDefaultAgent() {
   const qc = useQueryClient();
   return useMutation({

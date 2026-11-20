@@ -24,6 +24,8 @@ if [ -z "${ATLAS_KUBECONFIG:-}" ] && [ -r /etc/kubernetes/admin.conf ]; then ATL
 export KUBECONFIG="${ATLAS_KUBECONFIG:-$HOME/.kube/atlas-${SERVER_IP}.yaml}"
 export NO_PROXY="${NO_PROXY:+${NO_PROXY},}${SERVER_IP}" no_proxy="${no_proxy:+${no_proxy},}${SERVER_IP}"
 [ -n "${SERPAPI_KEY:-}" ] || { echo "✗ .env 没有 SERPAPI_KEY"; exit 1; }
+# 服务归租户（多租户）：登记到哪个租户。用户中心里 SELECT uuid FROM uc_tenant WHERE code = 'default'
+[ -n "${TENANT_BACKFILL_UUID:-}" ] || { echo "✗ .env 没有 TENANT_BACKFILL_UUID（登记到哪个租户）"; exit 1; }
 
 echo "── 登记 serpapi（REST 转换，直连 serpapi.com）"
 # ★ key 经标准输入进 Pod：不出现在命令行参数里
@@ -32,6 +34,6 @@ import os, sys
 sys.stdout.write(open("deploy/server/mcp-serpapi.yaml", encoding="utf-8").read()
                  .replace("__SERPAPI_KEY__", os.environ["SERPAPI_KEY"]))' |
   kubectl -n atlas-system exec -i deploy/atlas-mcpgateway -- \
-    python -m atlas_mcpgateway service add --file - --owner-account admin
+    python -m atlas_mcpgateway service --tenant "$TENANT_BACKFILL_UUID" add --file - --owner-account admin
 
 echo "✓ 完成。到 MCP 管理端给智能体的 Key 分配 serpapi：${ATLAS_PUBLIC_SCHEME:-http}://${ATLAS_PUBLIC_HOST:-atlas.${SERVER_IP}.nip.io}/atlas/mcp"

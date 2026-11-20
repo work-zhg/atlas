@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from atlas_jobs import JobScheduler
+from atlas_tenancy import TenantScope
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -17,8 +18,8 @@ from ..settings import get_settings
 from ..storage import StorageNotConfigured
 from ..telemetry import setup_telemetry, shutdown_telemetry, trace_requests
 from . import datasets, internal, sets
-from .jobs import jobs_router
 from .mcp import build_mcp, mcp_app
+from .ops import mount_ops
 
 __all__ = ["create_app"]
 
@@ -29,13 +30,25 @@ def create_app(*, runtime: Runtime | None = None, cors_origins: list[str] | None
     """runtime 可注入 —— 测试用内存 Qdrant、假模型、内联投递。"""
 
     mcp = build_mcp(lambda: app.state.runtime)
-    # 定时任务（入库巡检）：lifespan 里注册、启动；/v1/jobs 看运行情况
+    # 定时任务（入库巡检）：lifespan 里注册、启动；运营接口 /ops/v1/jobs 看运行情况
     jobs = JobScheduler()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # 后台任务（入库巡检）不继承启动方的租户：它在系统范围里取待办，再逐个进入租户
+        with TenantScope.isolated():
+            async with _lifespan(app):
+                yield
+
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         owned = runtime is None
         app.state.runtime = runtime or build_runtime(get_settings())
+        # 和运营接口用同一个：停用后本进程的入库巡检立刻跳过它
+        app.state.runtime.tenant_gate = app.state.tenant_gate
+        # 存储份额：上传前判，和运营接口改份额用同一个；系统参数在这里登记（没有的补默认值）
+        app.state.runtime.capacity = app.state.capacity
+        await app.state.capacity.config.register()
         if owned:
             setup_telemetry(app.state.runtime.settings)
         interval = app.state.runtime.settings.ingest_sweep_interval_s
@@ -85,7 +98,8 @@ def create_app(*, runtime: Runtime | None = None, cors_origins: list[str] | None
     app.include_router(internal.router)
     app.include_router(datasets.router)
     app.include_router(sets.router)
-    app.include_router(jobs_router(jobs))
+    # 运营接口：租户的停用、恢复、删除，系统任务
+    mount_ops(app, jobs)
     # Pod 里的 ACP CLI 经它调 knowledge_search（令牌鉴权，见 api/mcp.py）
     app.mount("/mcp", mcp_app(mcp))
     return app

@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 from uuid import UUID
 
+from atlas_tenancy import TenantScope
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from pydantic import SecretStr
@@ -339,6 +340,8 @@ class LoginRepository:
             "captured_at": login.captured_at,
             "captured_from": login.captured_from,
             "expires_at": login.expires_at,
+            # Core 的 upsert 不经过 flush，租户要自己写（atlas_tenancy）
+            "tenant_uuid": TenantScope.require(),
         }
         table = BrowserLogin.__table__
         dialect = self._session.bind.dialect.name if self._session.bind else "postgresql"

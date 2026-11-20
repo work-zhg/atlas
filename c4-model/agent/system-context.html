@@ -21,58 +21,215 @@
 <script type="application/json" id="c4-model">
 {
   "title": "系统上下文图：Agent 平台",
-  "description": "范围是 agent-platform/services/agent（atlas_agent）；模型平台、MCP 网关等同级服务按外部系统画",
+  "description": "范围是 agent-platform/services/agent（atlas_agent）；模型平台、MCP 网关等同级服务按外部系统画；所有业务数据按租户隔离，平台本身由运营中心管（见 ../opscenter/design-tenant-isolation.html）",
   "elements": [
-    { "id": "employee", "kind": "person", "tag": "员工", "at": [1, 0],
+    {
+      "id": "employee",
+      "kind": "person",
+      "tag": "员工",
+      "at": [
+        1,
+        0
+      ],
       "name": "员工",
-      "description": "在控制台创建和配置智能体、与智能体对话，管理自己的记忆和持久指令。" },
-    { "id": "agent", "kind": "system", "scope": true, "at": [1, 1.1],
+      "description": "在控制台创建和配置智能体、与智能体对话，管理自己的记忆和持久指令。"
+    },
+    {
+      "id": "agent",
+      "kind": "system",
+      "scope": true,
+      "at": [
+        1,
+        1.1
+      ],
       "name": "Agent 平台",
-      "description": "智能体的配置、会话与执行：跑每一轮对话，实时推送模型、工具和子智能体的执行过程。" },
-    { "id": "teamflow", "kind": "system", "at": [0, 0],
+      "description": "智能体的配置、会话与执行：跑每一轮对话，实时推送模型、工具和子智能体的执行过程。"
+    },
+    {
+      "id": "teamflow",
+      "kind": "system",
+      "at": [
+        0,
+        0
+      ],
       "name": "AI TeamFlow",
-      "description": "让 AI 智能体作为团队成员参与研发流程的产品。" },
-    { "id": "usercenter", "kind": "system", "at": [2, 0],
+      "description": "让 AI 智能体作为团队成员参与研发流程的产品。"
+    },
+    {
+      "id": "usercenter",
+      "kind": "system",
+      "at": [
+        2,
+        0
+      ],
       "name": "用户中心",
-      "description": "用户、组织与权限的唯一数据源，负责统一登录。" },
-    { "id": "model", "kind": "system", "tag": "同级服务", "at": [-1, 2.3],
+      "description": "用户、组织与权限的唯一数据源，负责统一登录。"
+    },
+    {
+      "id": "model",
+      "kind": "system",
+      "tag": "同级服务",
+      "at": [
+        -1,
+        2.3
+      ],
       "name": "模型平台",
-      "description": "管理模型和调用 Key，把模型调用转发给 DeepSeek 等供应商。" },
-    { "id": "mcp", "kind": "system", "tag": "同级服务", "at": [0, 2.3],
+      "description": "管理模型和调用 Key，把模型调用转发给 DeepSeek 等供应商。"
+    },
+    {
+      "id": "mcp",
+      "kind": "system",
+      "tag": "同级服务",
+      "at": [
+        0,
+        2.3
+      ],
       "name": "MCP 网关",
-      "description": "统一接入 MCP 服务和外部 API，如 SerpApi 搜索，按 Key 授权。" },
-    { "id": "skill", "kind": "system", "tag": "同级服务", "at": [1, 2.3],
+      "description": "统一接入 MCP 服务和外部 API，如 SerpApi 搜索，按 Key 授权。"
+    },
+    {
+      "id": "skill",
+      "kind": "system",
+      "tag": "同级服务",
+      "at": [
+        1,
+        2.3
+      ],
       "name": "技能应用",
-      "description": "技能包的上传、审查与发布。" },
-    { "id": "knowledge", "kind": "system", "tag": "同级服务", "at": [2, 2.3],
+      "description": "技能包的上传、审查与发布。"
+    },
+    {
+      "id": "knowledge",
+      "kind": "system",
+      "tag": "同级服务",
+      "at": [
+        2,
+        2.3
+      ],
       "name": "知识库服务",
-      "description": "文档入库与检索，按文档权限过滤结果。" },
-    { "id": "memory", "kind": "system", "tag": "同级服务", "at": [3, 2.3],
+      "description": "文档入库与检索，按文档权限过滤结果。"
+    },
+    {
+      "id": "memory",
+      "kind": "system",
+      "tag": "同级服务",
+      "at": [
+        3,
+        2.3
+      ],
       "name": "记忆服务",
-      "description": "存储用户的跨会话记忆。" },
-    { "id": "sandbox", "kind": "system", "at": [0, 1.1],
+      "description": "存储用户的跨会话记忆。"
+    },
+    {
+      "id": "sandbox",
+      "kind": "system",
+      "at": [
+        0,
+        1.1
+      ],
       "name": "OpenSandbox",
-      "description": "开源沙箱平台，在集群里按需创建隔离的沙箱和 Pod。" },
-    { "id": "gitee", "kind": "system", "at": [2, 1.1],
+      "description": "开源沙箱平台，在集群里按需创建隔离的沙箱和 Pod。"
+    },
+    {
+      "id": "gitee",
+      "kind": "system",
+      "at": [
+        2,
+        1.1
+      ],
       "name": "Gitee",
-      "description": "代码托管平台，存放智能体提交的代码和产物。" },
-    { "id": "website", "kind": "system", "color": "#6b4f2a", "at": [3, 0.2],
+      "description": "代码托管平台，存放智能体提交的代码和产物。"
+    },
+    {
+      "id": "website",
+      "kind": "system",
+      "color": "#6b4f2a",
+      "at": [
+        3,
+        0.2
+      ],
       "name": "外部网站",
-      "description": "智能体用浏览器访问的互联网站点，如电商、政务网站、企业 SaaS；登录要人来完成。" }
+      "description": "智能体用浏览器访问的互联网站点，如电商、政务网站、企业 SaaS；登录要人来完成。"
+    },
+    {
+      "id": "ops",
+      "kind": "system",
+      "name": "运营中心",
+      "color": "#8a6d00",
+      "description": "管平台本身的独立系统：开通、停用、关闭租户，分份额，维护运行环境和系统参数；看不到租户的业务内容。",
+      "at": [
+        -1,
+        -0.1
+      ]
+    }
   ],
   "relationships": [
-    { "from": "employee", "to": "agent", "description": "配置智能体并与之对话" },
-    { "from": "employee", "to": "usercenter", "description": "登录" },
-    { "from": "teamflow", "to": "agent", "description": "引用智能体，经会话下发任务并取回输出" },
-    { "from": "agent", "to": "usercenter", "description": "读取用户的授权和组织信息" },
-    { "from": "agent", "to": "sandbox", "description": "创建和回收沙箱、会话 Pod" },
-    { "from": "agent", "to": "gitee", "description": "在会话 Pod 里拉取和提交代码" },
-    { "from": "agent", "to": "model", "description": "取智能体的模型 Key，调用大模型" },
-    { "from": "agent", "to": "mcp", "description": "读取工具定义，代智能体调用工具" },
-    { "from": "agent", "to": "skill", "description": "拉取已发布的技能" },
-    { "from": "agent", "to": "knowledge", "description": "检索智能体绑定的知识库", "labelAt": 0.7 },
-    { "from": "agent", "to": "memory", "description": "读写用户记忆" },
-    { "from": "agent", "to": "website", "description": "在沙箱的浏览器里代用户浏览网页，用人接管时登录的状态" }
+    {
+      "from": "employee",
+      "to": "agent",
+      "description": "配置智能体并与之对话"
+    },
+    {
+      "from": "employee",
+      "to": "usercenter",
+      "description": "登录"
+    },
+    {
+      "from": "teamflow",
+      "to": "agent",
+      "description": "引用智能体，经会话下发任务并取回输出"
+    },
+    {
+      "from": "agent",
+      "to": "usercenter",
+      "description": "读取用户的授权和组织信息"
+    },
+    {
+      "from": "agent",
+      "to": "sandbox",
+      "description": "创建和回收沙箱、会话 Pod"
+    },
+    {
+      "from": "agent",
+      "to": "gitee",
+      "description": "在会话 Pod 里拉取和提交代码"
+    },
+    {
+      "from": "agent",
+      "to": "model",
+      "description": "取智能体的模型 Key，调用大模型"
+    },
+    {
+      "from": "agent",
+      "to": "mcp",
+      "description": "读取工具定义，代智能体调用工具"
+    },
+    {
+      "from": "agent",
+      "to": "skill",
+      "description": "拉取已发布的技能"
+    },
+    {
+      "from": "agent",
+      "to": "knowledge",
+      "description": "检索智能体绑定的知识库",
+      "labelAt": 0.7
+    },
+    {
+      "from": "agent",
+      "to": "memory",
+      "description": "读写用户记忆"
+    },
+    {
+      "from": "agent",
+      "to": "website",
+      "description": "在沙箱的浏览器里代用户浏览网页，用人接管时登录的状态"
+    },
+    {
+      "from": "ops",
+      "to": "agent",
+      "description": "维护沙箱模板、系统参数和租户份额，查看用量；停用时挂起 run、回收沙箱；关闭时删除租户数据"
+    }
   ]
 }
 </script>

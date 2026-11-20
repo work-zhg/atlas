@@ -2,7 +2,7 @@
 与 uc.UCClient、atlas.AtlasClient、RepoHost 的方法签名一致。
 
 规则按用户中心的真实行为简化：
-- 授权快照 = 角色 → 操作码（取自 catalog），菜单从略；
+- 授权快照 = 角色 → 操作码（下面的 ROLE_OPS，和 README 里建议的内置角色一致），菜单从略；
 - 数据权限：用户直授或所在部门授权（include_sub 按部门树判断），取最高级别；
 - 数据编码级授权（「全部团队」）：对每个团队的有效级别 = max(团队授权, 全部团队授权)；
   不算团队成员（member_only 不含它），不计入「至少保留一个 Owner」；
@@ -23,7 +23,6 @@ from typing import Any
 from uuid import UUID
 
 import httpx
-from atlas_teamflow import catalog
 from atlas_teamflow.atlas import AtlasEvent
 from atlas_teamflow.errors import Conflict, Forbidden, Invalid, NotFound, Upstream
 from atlas_teamflow.outbound import outbound_headers
@@ -31,7 +30,37 @@ from atlas_teamflow.process.repo_host import CommitInfo, RepoFile, RepoInfo
 
 LEVELS = {"NONE": 0, "READ": 1, "WRITE": 2, "OWNER": 3}
 NAMES = {v: k for k, v in LEVELS.items()}
-ROLE_OPS = {r["code"]: set(r["operations"]) for r in catalog.ROLES}
+#: 测试用的角色 → 操作码（代码不登记角色；运营人员按 README 的建议在运营中心录入）
+ROLE_OPS = {
+    "TF_PLATFORM_ADMIN": {
+        "flow_template:view",
+        "flow_template:manage",
+        "file_template:view",
+        "file_template:manage",
+        "team:create",
+        "team:member",
+        "settings:manage",
+    },
+    "TF_TEAM_ADMIN": {
+        "team:edit",
+        "team:member",
+        "team:agent",
+        "project:create",
+        "project:configure",
+        "project:archive",
+        "flow_template:view",
+        "file_template:view",
+        "process:view",
+    },
+    "TF_TEAM_MEMBER": {
+        "process:view",
+        "process:start",
+        "process:handle",
+        "process:review",
+        "process:terminate",
+        "file_template:view",
+    },
+}
 
 
 class FakeUC:

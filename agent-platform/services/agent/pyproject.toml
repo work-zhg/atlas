@@ -12,10 +12,12 @@ dependencies = [
   # Run 执行器的兜底和续租是它的实例任务（c4-model/agent/executor/design-run-dispatch.html）
   "atlas-jobs",
   "atlas-jsonrpc",
+  "atlas-opsapi",
   # 沙箱 ensure 的会话级锁（doc/sandbox-opensandbox-design.html §13）
   "atlas-redislock",
   # 只用 atlas_skill.schemas（对外契约）—— import-linter 守着
   "atlas-skill",
+  "atlas-tenancy",
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
   "sqlalchemy[asyncio]>=2.0.36",

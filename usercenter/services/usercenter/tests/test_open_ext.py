@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from uc_testkit import Client, admin_client, make_dept, make_user, root_id
+from uc_testkit import Client, OpsClient, admin_client, make_app, make_dept, make_user, root_id
 
 
 async def _app(c: Client) -> tuple[str, dict[str, str]]:
-    r = await c.post("/api/v1/apps", {"name": "AI TeamFlow", "code": "teamflow"})
-    app_id = r.json()["app"]["id"]
+    app_id = (await make_app("AI TeamFlow", "teamflow"))["app"]["id"]
     await c.put(f"/api/v1/apps/{app_id}/scope", {"all": True, "dept_ids": []})
     return app_id, {"X-Caller-App": "teamflow"}
 
@@ -33,15 +32,17 @@ async def test_open_api_identity_headers() -> None:
     assert r.status_code == 200 and r.json()["account"] == "zhang.ming"
     r = await c.http.get("/open/v1/depts/tree", headers={**h, "X-Tenant-Id": "not-a-uuid"})
     assert r.status_code == 400 and r.json()["code"] == "TENANT_NOT_FOUND"
-    # 应用停用 → 403
-    assert (await c.post(f"/api/v1/apps/{app_id}/disable")).status_code == 200
+    # 应用停用 → 403（运营中心启停）
+    ops = OpsClient()
+    assert (await ops.post(f"/ops/v1/apps/{app_id}/disable")).status_code == 200
     assert (await c.http.get("/open/v1/depts/tree", headers=h)).status_code == 403
-    assert (await c.post(f"/api/v1/apps/{app_id}/enable")).status_code == 200
+    assert (await ops.post(f"/ops/v1/apps/{app_id}/enable")).status_code == 200
     # 编码校验与唯一
-    r = await c.post("/api/v1/apps", {"name": "另一个", "code": "teamflow"})
+    r = await ops.post("/ops/v1/apps", {"name": "另一个", "code": "teamflow"})
     assert r.json()["code"] == "APP_CODE_EXISTS"
-    r = await c.post("/api/v1/apps", {"name": "另一个", "code": "Bad Code"})
+    r = await ops.post("/ops/v1/apps", {"name": "另一个", "code": "Bad Code"})
     assert r.json()["code"] == "APP_CODE_INVALID"
+    await ops.close()
     await c.close()
 
 
@@ -53,13 +54,14 @@ async def test_batch_acl_holders_operator_type_owner_rename() -> None:
     he, _ = await make_user(c, "he.chao", rd)
     wang, _ = await make_user(c, "wang.ce", root)
     app_id, h = await _app(c)
+    ops = OpsClient()
     op = (
-        await c.post(
-            f"/api/v1/apps/{app_id}/operations",
+        await ops.post(
+            f"/ops/v1/apps/{app_id}/operations",
             {"module": "团队", "code": "team:member", "name": "管理团队成员"},
         )
     ).json()["id"]
-    r = await c.post(f"/api/v1/apps/{app_id}/data-types", {"code": "Team", "name": "团队"})
+    r = await ops.post(f"/ops/v1/apps/{app_id}/data-types", {"code": "Team", "name": "团队"})
     assert r.status_code == 201 and "admin_operation_code" not in r.json()
     team_type = r.json()["id"]
 
@@ -165,13 +167,14 @@ async def test_batch_acl_holders_operator_type_owner_rename() -> None:
     )
     assert r.json()["code"] == "NOT_DATA_OWNER"
 
-    # ★ 角色不影响数据权限：王测拿到平台管理员角色（含操作码）后，仍然改不了
+    # ★ 角色不影响数据权限：王测拿到团队管理员角色（含操作码）后，仍然改不了
     role = (
-        await c.post(
-            f"/api/v1/apps/{app_id}/roles", {"name": "平台管理员", "code": "TF_PLATFORM_ADMIN"}
+        await ops.post(
+            f"/ops/v1/apps/{app_id}/roles", {"name": "团队管理员", "code": "TF_TEAM_ADMIN"}
         )
     ).json()["id"]
-    await c.put(f"/api/v1/roles/{role}/operations", {"ids": [op]})
+    await ops.put(f"/ops/v1/roles/{role}/operations", {"ids": [op]})
+    await ops.close()
     await c.post(
         "/api/v1/grants",
         {"kind": "role", "target_ids": [role], "subjects": [{"type": "user", "id": wang}]},
@@ -245,7 +248,9 @@ async def test_type_acl_is_managed_in_the_data_domain() -> None:
     li, _ = await make_user(c, "li.gong", sub)
     wang, wang_temp = await make_user(c, "wang.ce", root)
     app_id, h = await _app(c)
-    r = await c.post(f"/api/v1/apps/{app_id}/data-types", {"code": "Team", "name": "团队"})
+    ops = OpsClient()
+    r = await ops.post(f"/ops/v1/apps/{app_id}/data-types", {"code": "Team", "name": "团队"})
+    await ops.close()
     dt = r.json()
 
     async def level(uid: str) -> str:

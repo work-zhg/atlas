@@ -1,8 +1,8 @@
 """持久指令（doc/context-management-design.html §10）。
 
     GET|PUT /instructions/me         当前用户的个人指令
-    GET     /instructions/platform   平台指令（登录即可读）
-    PUT     /instructions/platform   平台指令                                 model:manage
+    GET     /instructions/tenant     本租户的租户指令（登录即可读）
+    PUT     /instructions/tenant     本租户的租户指令                         settings:manage
 
 ★ 修改从下一轮生效：运行时每轮开始时读一次（executor/context.py），本轮内不变。
 """
@@ -20,11 +20,11 @@ from ...auth.authz import require
 from ...auth.principal import Principal
 from ...db.models import Instruction
 from ...deps import CurrentUserDep, SessionDep
-from ...services.instruction import MAX_CHARS, PLATFORM, USER, InstructionService, owner_of
+from ...services.instruction import MAX_CHARS, TENANT, USER, InstructionService, owner_of
 
 router = APIRouter(prefix="/instructions", tags=["instructions"])
 
-PlatformAdmin = Annotated[Principal, Depends(require("model:manage"))]
+TenantAdmin = Annotated[Principal, Depends(require("settings:manage"))]
 
 
 class InstructionIn(BaseModel):
@@ -65,13 +65,13 @@ async def put_mine(body: InstructionIn, session: SessionDep, uid: CurrentUserDep
     return await _put(session, USER, uid, body.content)
 
 
-@router.get("/platform", response_model=InstructionOut)
-async def get_platform(session: SessionDep) -> InstructionOut:
-    return _out(PLATFORM, await InstructionService(session).get(PLATFORM, ""))
+@router.get("/tenant", response_model=InstructionOut)
+async def get_tenant(session: SessionDep) -> InstructionOut:
+    return _out(TENANT, await InstructionService(session).get(TENANT, ""))
 
 
-@router.put("/platform", response_model=InstructionOut)
-async def put_platform(
-    body: InstructionIn, session: SessionDep, principal: PlatformAdmin
+@router.put("/tenant", response_model=InstructionOut)
+async def put_tenant(
+    body: InstructionIn, session: SessionDep, principal: TenantAdmin
 ) -> InstructionOut:
-    return await _put(session, PLATFORM, principal.uid, body.content)
+    return await _put(session, TENANT, principal.uid, body.content)

@@ -20,6 +20,8 @@
 彻底删除实例  DELETE …                                    Owner：连同用户中心里的授权
 
 列出实例      GET    /v1/scopes/{scope}/instances?字段=值  按部分关联主键过滤
+
+★ 都要带 X-Tenant-Id：实例归租户，同一个关联主键在每个租户里各是一个实例。
 """
 
 from __future__ import annotations
@@ -29,9 +31,9 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 
-from ..auth import caller_of
+from ..auth import caller_of, verified_tenant
 from ..errors import Invalid, Unauthorized
 from ..keys import parse_key, validate_key
 from ..perms import LEVEL_RANK
@@ -48,7 +50,10 @@ from .schemas import (
     WriteIn,
 )
 
-router = APIRouter(prefix="/v1/scopes/{scope}", tags=["instances"])
+# ★ 先核对租户、进入它（auth.verified_tenant），之后找实例、读写都按它自动过滤
+router = APIRouter(
+    prefix="/v1/scopes/{scope}", tags=["instances"], dependencies=[Depends(verified_tenant)]
+)
 
 _BASE = "/instances/{key}"
 

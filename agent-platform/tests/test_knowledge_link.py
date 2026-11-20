@@ -34,6 +34,8 @@ from atlas_engine.contracts import InvalidSpec
 from atlas_engine.contracts.events import EventType
 from atlas_engine.contracts.spec import KnowledgeSpec
 
+from tests.fake_uc import TEST_TENANT
+
 RECORDS = [
     {
         "dataset_name": "客服",
@@ -431,6 +433,8 @@ def test_mcp_token_matches_knowledge_service() -> None:
     assert entry["headers"][1]["value"] == token
     claims = verify_token("s3cret", token)
     assert claims["u"] == str(auth_uid) and claims["o"] == str(uid) and claims["t"] == str(thread)
+    # 租户取会话所在的租户：知识库按它进入，Pod 发来的请求头不认
+    assert claims["tenant"] == TEST_TENANT
     assert token_sets(claims) == [
         {"n": "人事制度", "d": ["hr", "manual"], "k": 2},
         {"n": "财务", "d": ["fin", "trip"], "k": 4},

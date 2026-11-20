@@ -7,10 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.session import get_session
 from ..settings import SkillSettings, get_settings
+from ..skill.market import MarketService
 from ..skill.service import SkillService
 from ..storage import SkillStorage, StorageNotConfigured, make_storage
 
-__all__ = ["SessionDep", "SkillServiceDep"]
+__all__ = ["MarketServiceDep", "SessionDep", "SkillServiceDep", "StorageDep"]
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
@@ -38,3 +39,17 @@ def get_skill_service(
 
 
 SkillServiceDep = Annotated[SkillService, Depends(get_skill_service)]
+
+
+StorageDep = Annotated[SkillStorage, Depends(get_storage)]
+
+
+def get_market_service(
+    session: SessionDep,
+    storage: StorageDep,
+    settings: Annotated[SkillSettings, Depends(get_settings)],
+) -> MarketService:
+    return MarketService(session=session, storage=storage, settings=settings)
+
+
+MarketServiceDep = Annotated[MarketService, Depends(get_market_service)]

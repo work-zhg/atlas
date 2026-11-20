@@ -21,7 +21,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "容器图：Agent 平台",
-  "description": "范围是 agent-platform/services/agent；控制台里知识库、技能、模型、MCP 几个页面直连对应服务，图中未画；本机 CLI 的设备网关、连接器、本机会话和本机项目目录见 device/design-device-cli.html",
+  "description": "范围是 agent-platform/services/agent；控制台里知识库、技能、模型、MCP 几个页面直连对应服务，图中未画；本机 CLI 的设备网关、连接器、本机会话和本机项目目录见 device/design-device-cli.html；所有业务数据按租户隔离，平台本身由运营中心经 Agent 服务的运营接口管（见 ../opscenter/design-tenant-isolation.html）",
   "system": "Agent 平台",
   "elements": [
     {
@@ -284,6 +284,17 @@
         -1.1,
         7.3
       ]
+    },
+    {
+      "id": "ops",
+      "kind": "system",
+      "name": "运营中心",
+      "color": "#8a6d00",
+      "description": "管平台本身的独立系统：开通、停用、关闭租户，分份额，维护运行环境和系统参数；看不到租户的业务内容。",
+      "at": [
+        -1.8,
+        0.1
+      ]
     }
   ],
   "relationships": [
@@ -512,6 +523,12 @@
       "to": "website",
       "description": "浏览网页（电脑自己的网络）",
       "technology": "HTTPS"
+    },
+    {
+      "from": "ops",
+      "to": "server",
+      "description": "维护沙箱模板、系统参数和租户份额，查看用量；停用时挂起 run、回收沙箱；关闭时删除租户数据",
+      "technology": "JSON/HTTP（运营接口，签名）"
     }
   ]
 }

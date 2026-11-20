@@ -10,6 +10,7 @@ from typing import Any
 from uuid import UUID
 
 from atlas_engine.contracts.events import EventType, TraceEvent
+from atlas_tenancy import TenantScope
 from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -142,6 +143,10 @@ class EventArchive:
             )
         if not rows:
             return
+        # ORM 批量 INSERT 不经过 flush，租户要自己写（atlas_tenancy）
+        tenant = TenantScope.require()
+        for row in rows:
+            row["tenant_uuid"] = tenant
         await self._session.execute(insert(RunEvent), rows)
 
     async def thread_seq_floor(self, thread_id: UUID) -> int:

@@ -36,7 +36,7 @@ router = APIRouter(prefix="/open/v1", tags=["open"])
 class TokenBody(BaseModel):
     app_key: str
     app_secret: str
-    #: 企业代码：令牌绑定到这个租户。缺省 = 平台租户（兼容期）
+    #: 企业代码：令牌绑定到这个租户。只有一个租户时可省
     tenant_code: str | None = None
 
 
@@ -351,7 +351,14 @@ async def authz(user_id: UUID, app: OpenAppDep, session: SessionDep) -> dict[str
     from ..db.types import utcnow
 
     return {
-        "user": {"id": str(u.uuid), "account": u.account, "name": u.name, "status": u.status},
+        # tenant_id：各应用以它为准建立租户上下文，并核对请求头里的 X-Tenant-Id
+        "user": {
+            "id": str(u.uuid),
+            "account": u.account,
+            "name": u.name,
+            "status": u.status,
+            "tenant_id": str(u.tenant_uuid),
+        },
         **snap,
         "computed_at": iso(utcnow()),
     }

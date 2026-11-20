@@ -11,6 +11,7 @@ c4-model/agent/sandbox/code-sandbox-provisioning.html。
     confirm_gone(biz, ref)  向基座确认确实不在了才去掉记录；问不到就当它还在
     describe · of_user      登记的模板、镜像、状态、服务的业务
     retire(ref, reason)     不管有没有业务直接退役：先标 RETIRING 并保存，再交基座删，删完去掉记录
+    retire_tenant           当前租户名下的全部退役（租户停用、删除）
     release(biz, reason)    解绑；沙箱没有业务了，就以这个原因退役（失败只记日志，对账兜底）
     serving(biz_type)       这个业务类型里已绑定、且 READY 的业务和沙箱
     reap_orphans            业务不在名单上的绑定一律释放（reason=orphan）
@@ -24,8 +25,9 @@ c4-model/agent/sandbox/code-sandbox-provisioning.html。
 ★ 不含任何业务类型特有的逻辑：准入、创建规格、共享方式、附加配置、就绪判断都由 SandboxKind 给出。
 ★ 共享：一个沙箱可以服务同一个人的多个业务（共享键相同、没满）。最后一个业务释放时才退役；建失败、
   坏了退役时，绑在上面的业务一起换到新沙箱。
-★ 配额可以是固定的，也可以每次分配时现取（运行期配置 sandbox.quota_per_user，runtime_config.py）：
-  管理员改了上限，下一次分配就按新的判。
+★ 配额可以是固定的，也可以每次分配时现取（每人上限是租户设置 capacity.sandboxes_per_person，
+  runtime_config.py）：管理员改了上限，下一次分配就按新的判。要登记新沙箱时再判租户份额
+  （tenant_quota，容量组件给的；同一个事务里判，复用已有的沙箱不判）。
 ★ 附加件（SandboxAddon）：沙箱建好、就绪之后，按登记顺序回调 on_created（只对它认的请求）；退役前
   回调 before_retire。供给不认识它们（如浏览器）：依赖只有附加件 → 供给一个方向。
   on_created 失败按建沙箱失败处理（退役，下次 ensure 换一个重建）；before_retire 失败只记日志，
@@ -47,6 +49,7 @@ from .model import (
     AllocationPolicy,
     BizRef,
     BizType,
+    QuotaExceeded,
     QuotaPolicy,
     SandboxAccount,
     SandboxRef,
@@ -65,6 +68,10 @@ T = TypeVar("T")
 
 #: 保存时版本冲突后重读重试的次数
 _MAX_ATTEMPTS = 8
+
+
+#: 租户份额的准入：(会话, 沙箱的主人) → 不行时的说明，行就返回空
+TenantSandboxQuota = Callable[["AsyncSession", UUID], Awaitable[str | None]]
 
 
 class SandboxUnavailableError(RuntimeError):
@@ -121,10 +128,12 @@ class SandboxProvisioning:
         quota: QuotaPolicy | Callable[[], Awaitable[QuotaPolicy]],
         allocation: AllocationPolicy | None = None,
         cache_s: float = 2.0,
+        tenant_quota: TenantSandboxQuota | None = None,
     ) -> None:
         self._runtime = runtime
         self._sessions = sessions
         self._quota = quota
+        self._tenant_quota = tenant_quota
         self._allocation = allocation or AllocationPolicy()
         self._cache_s = cache_s
         self._kinds: dict[BizType, SandboxKind] = {}
@@ -181,9 +190,15 @@ class SandboxProvisioning:
             if stale is not None and stale.status is SandboxStatus.RETIRING:
                 # 绑着一个正在退役的沙箱：解绑，给它分配新的（退役那边删完自己收尾）
                 account.unbind(biz)
+            existing = {s.sandbox_uuid for s in account.sandboxes}
             sandbox = account.allocate(
                 biz, spec, policy=self._allocation, quota=quota, sharing=sharing
             )
+            if self._tenant_quota is not None and sandbox.sandbox_uuid not in existing:
+                # 要登记一个新的：再判租户份额（同一个事务里锁住份额行再数，见 code-capacity.html）
+                refused = await self._tenant_quota(session, biz.user_uuid)
+                if refused:
+                    raise QuotaExceeded(refused)
             await repo.save(account)
             await session.commit()
             return sandbox
@@ -300,6 +315,24 @@ class SandboxProvisioning:
                 await self.retire(vacant.ref, reason=reason)
         except Exception:
             logger.warning("释放业务 %s 失败，交给对账", biz, exc_info=True)
+
+    async def retire_tenant(self, *, limit: int | None = None) -> tuple[int, bool]:
+        """当前租户名下的沙箱全部退役（租户停用、删除；reason=tenant），不管有没有业务。
+
+        → (退役了几个, 还有没有剩)。一个失败不挡别的，留到下一次（运营中心会重做）。
+        """
+        retired, left = 0, False
+        for user in await self._read(lambda repo: repo.users()):
+            for sandbox in await self.of_user(user):
+                if limit is not None and retired >= limit:
+                    return retired, True
+                try:
+                    await self.retire(sandbox.ref, reason="tenant")
+                    retired += 1
+                except Exception:
+                    left = True
+                    logger.warning("退役沙箱 %s 失败", sandbox.sandbox_uuid, exc_info=True)
+        return retired, left
 
     async def reap_orphans(self, biz_type: BizType, live_ids: Iterable[UUID]) -> int:
         """这个业务类型的绑定里，业务不在活名单上的一律释放（reason=orphan）。名单由业务领域给。"""

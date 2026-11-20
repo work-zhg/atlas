@@ -2,14 +2,14 @@
  * 导航：一级放顶部，二级放左侧（可收缩）—— 与 Atlas 的 components/shell/nav.ts 同一种结构。
  *
  * ★ 显不显示只是体验，权限在服务端。可见条件沿用后端给的两样东西：
- *   - 菜单编码（/auth/me 的 menus，由内置应用的菜单 + 登录人的角色算出）：org、users、apps、tenants；
+ *   - 菜单编码（/auth/me 的 menus，由内置应用的菜单 + 登录人的角色算出）：org、users、apps；
  *   - 操作码（/auth/me 的 permissions）：「权限」下的角色、岗位、数据、授权各看各的查看权限。
  * ★ 个人中心人人可见（个人资料、账号安全、我的应用、我的数据）。
  */
 import type { IconName } from "@/components/Icon";
 import type { Me, MenuNode } from "@/lib/types";
 
-export type PlatformId = "org" | "perm" | "apps" | "tenants" | "me";
+export type PlatformId = "org" | "perm" | "apps" | "me";
 
 export interface Access {
   menus: Set<string>;
@@ -64,13 +64,7 @@ export const PLATFORMS: Platform[] = [
     id: "apps",
     label: "应用",
     icon: "box",
-    items: [{ href: "/apps", icon: "grid", label: "应用目录", match: under("/apps"), visible: menu("apps") }],
-  },
-  {
-    id: "tenants",
-    label: "租户",
-    icon: "building",
-    items: [{ href: "/tenants", icon: "building", label: "租户", match: under("/tenants"), visible: menu("tenants") }],
+    items: [{ href: "/apps", icon: "grid", label: "已开通的应用", match: under("/apps"), visible: menu("apps") }],
   },
   {
     id: "me",

@@ -12,6 +12,7 @@ from typing import Any
 from uuid import UUID
 
 from atlas_engine.contracts.messages import KIND_CHAT
+from atlas_tenancy import TenantScope
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -167,7 +168,12 @@ class RunRecordRepository:
         if not values:
             return
         table = RunState.__table__
-        rows = [{"run_uuid": run_id, "key": key, "value": value} for key, value in values.items()]
+        # Core 的批量 upsert 不经过 flush，租户要自己写（atlas_tenancy）
+        tenant = TenantScope.require()
+        rows = [
+            {"run_uuid": run_id, "key": key, "value": value, "tenant_uuid": tenant}
+            for key, value in values.items()
+        ]
         dialect = self._session.bind.dialect.name if self._session.bind else "postgresql"
         if dialect in ("mysql", "mariadb"):
             from sqlalchemy.dialects.mysql import insert as mysql_insert

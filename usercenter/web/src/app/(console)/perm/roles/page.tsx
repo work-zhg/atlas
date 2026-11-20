@@ -85,7 +85,7 @@ function RolesInner() {
                     <div className="uc-grow">
                       <div className="uc-row" style={{ gap: 6 }}>
                         <b style={{ fontSize: 13.5 }}>{r.name}</b>
-                        {r.is_builtin && <Tag style={{ marginInlineEnd: 0 }}>内置</Tag>}
+                        {(r.is_builtin || r.shared) && <Tag style={{ marginInlineEnd: 0 }}>内置</Tag>}
                       </div>
                       <div className="uc-sub uc-mono">{r.code}</div>
                     </div>

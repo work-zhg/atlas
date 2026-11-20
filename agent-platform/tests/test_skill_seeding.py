@@ -56,6 +56,19 @@ async def test_l1_instructions_only(env) -> None:
     assert fs.read(path).file_data["content"] == "# 写作口径"
 
 
+async def test_copies_from_the_storage_key_the_skill_app_gave(env) -> None:
+    """多租户以后源仓库在租户目录下：按技能应用给的 storage_key 拷，不自己拼路径。"""
+    s3 = env
+    fs = _ws(s3, ("style", 1))
+    key = "00000000-0000-0000-0000-00000000000a/_skills/style/1/"
+    s3.put_object(Bucket=BUCKET, Key=f"{key}SKILL.md", Body="# 租户的口径".encode())
+    _publish(s3, "style", 1, {"SKILL.md": "# 桶根的旧版"})
+
+    await seed_session_skills(fs, [SkillMeta("style", 1, "写作口径", storage_key=key)])
+
+    assert fs.read("/data/skills/style/1/SKILL.md").file_data["content"] == "# 租户的口径"
+
+
 async def test_l2_with_references(env) -> None:
     s3 = env
     fs = _ws(s3, ("dataviz", 2))

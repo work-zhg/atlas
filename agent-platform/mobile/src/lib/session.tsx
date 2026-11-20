@@ -6,6 +6,8 @@
  *   网关照常校验、写 X-Uid —— 后端不用为 App 改任何东西。
  * ★ 写请求要带 CSRF 双提交头：值等于 uc_csrf Cookie。App 读不到 Cookie 存储，登录时从 Set-Cookie 里取出来存好。
  * ★ 服务器地址让用户填（企业自己部署），记在 SecureStore 里；CSRF 值也在那里。
+ * ★ 企业代码（多租户）：和网页登录页同一套规则 —— 部署里只有一家企业时不用填，多家时要填，
+ *   记住上次填的（GET /uc/api/v1/auth/tenant-required 判断）。
  */
 import * as SecureStore from "expo-secure-store";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
@@ -15,6 +17,7 @@ import type { AtlasClientConfig } from "@atlas/chat-ui/src/lib/http";
 const KEY_SERVER = "atlas.server";
 const KEY_CSRF = "atlas.csrf";
 const KEY_ACCOUNT = "atlas.account";
+const KEY_TENANT = "atlas.tenant";
 
 export const DEFAULT_SERVER = "https://atlas.techstz.com";
 /** 0.1.0 的默认地址是 HTTP；App 已不允许明文，装过 0.1.0 的手机里记着它，读出来换成 DEFAULT_SERVER */
@@ -26,10 +29,13 @@ export interface Session {
   server: string;
   /** 上次登录用的账号（登录页预填） */
   account: string;
+  /** 上次登录用的企业代码（登录页预填；只有一家企业时为空） */
+  tenant: string;
   signedIn: boolean;
   /** Atlas 接口（chat-ui 的 hooks 用它） */
   client: AtlasClientConfig;
-  login: (server: string, account: string, password: string) => Promise<{ mustChangePassword: boolean }>;
+  /** tenant：企业代码，只有一家企业时不传 */
+  login: (server: string, account: string, password: string, tenant?: string) => Promise<{ mustChangePassword: boolean }>;
   logout: () => Promise<void>;
   /** 接口回 401：会话过期，回登录页 */
   expire: () => void;
@@ -56,6 +62,23 @@ function cookieFrom(setCookie: string | null, name: string): string | null {
   return m ? m[1]! : null;
 }
 
+export interface TenantRequired {
+  /** 要不要填企业代码 */
+  required: boolean;
+  /** 只有一家企业时是它（只给名称）；多家时为空（登录前不透露有哪些企业） */
+  tenant: { name: string } | null;
+}
+
+/** 登录页要不要显示企业代码。连不上返回 null（登录时照常提交，由用户中心报错） */
+export async function fetchTenantRequired(rawServer: string): Promise<TenantRequired | null> {
+  try {
+    const res = await fetch(`${normalizeServer(rawServer)}/uc/api/v1/auth/tenant-required`);
+    return res.ok ? ((await res.json()) as TenantRequired) : null;
+  } catch {
+    return null;
+  }
+}
+
 async function errorMessage(res: Response): Promise<string> {
   try {
     const body = (await res.json()) as { error?: { message?: string }; detail?: string };
@@ -69,28 +92,33 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [server, setServer] = useState(DEFAULT_SERVER);
   const [account, setAccount] = useState("");
+  const [tenant, setTenant] = useState("");
   const [csrf, setCsrf] = useState<string | null>(null);
 
   useEffect(() => {
     void (async () => {
-      const [s, c, a] = await Promise.all([
+      const [s, c, a, t] = await Promise.all([
         SecureStore.getItemAsync(KEY_SERVER),
         SecureStore.getItemAsync(KEY_CSRF),
         SecureStore.getItemAsync(KEY_ACCOUNT),
+        SecureStore.getItemAsync(KEY_TENANT),
       ]);
       if (s) setServer(s === LEGACY_DEFAULT_SERVER ? DEFAULT_SERVER : s);
       if (a) setAccount(a);
+      if (t) setTenant(t);
       setCsrf(c);
       setLoading(false);
     })();
   }, []);
 
-  const login = useCallback(async (rawServer: string, acct: string, password: string) => {
+  const login = useCallback(async (rawServer: string, acct: string, password: string, rawTenant?: string) => {
     const base = normalizeServer(rawServer);
+    // 企业代码不分大小写（用户中心按小写存）
+    const code = rawTenant?.trim().toLowerCase() || undefined;
     const res = await fetch(`${base}/uc/api/v1/auth/login`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ account: acct.trim(), password }),
+      body: JSON.stringify({ account: acct.trim(), password, tenant: code }),
       credentials: "include",
     });
     if (!res.ok) throw new Error(await errorMessage(res));
@@ -101,9 +129,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       SecureStore.setItemAsync(KEY_SERVER, base),
       SecureStore.setItemAsync(KEY_CSRF, token),
       SecureStore.setItemAsync(KEY_ACCOUNT, acct.trim()),
+      code ? SecureStore.setItemAsync(KEY_TENANT, code) : SecureStore.deleteItemAsync(KEY_TENANT),
     ]);
     setServer(base);
     setAccount(acct.trim());
+    setTenant(code ?? "");
     setCsrf(token);
     return { mustChangePassword: Boolean(body.must_change_password) };
   }, []);
@@ -136,8 +166,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   );
 
   const value = useMemo<Session>(
-    () => ({ loading, server, account, signedIn: Boolean(csrf), client, login, logout, expire }),
-    [loading, server, account, csrf, client, login, logout, expire],
+    () => ({ loading, server, account, tenant, signedIn: Boolean(csrf), client, login, logout, expire }),
+    [loading, server, account, tenant, csrf, client, login, logout, expire],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

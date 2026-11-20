@@ -381,7 +381,13 @@ class SegmentExecution:
                 #   按 run 行重建。auth_uid 与发起人不同只会出现在这里：以 Agent 为权限时
                 #   是数字员工（建 run 时按 Agent 的权限类型取好，数字员工设计 §7.3）。
                 initiator = run.created_by_uuid or thread.created_by_uuid
-                use_identity(CallIdentity(uid=initiator, auth_uid=run.auth_uid or initiator))
+                use_identity(
+                    CallIdentity(
+                        uid=initiator,
+                        auth_uid=run.auth_uid or initiator,
+                        tenant_id=str(run.tenant_uuid),
+                    )
+                )
                 parent_run_id = run.parent_run_uuid
                 # ★ 事件流归属**根会话**：子 run 的事件也进父会话那条流，
                 #   否则「一个会话看到所有事」不成立（见 Thread.stream_thread_id）。

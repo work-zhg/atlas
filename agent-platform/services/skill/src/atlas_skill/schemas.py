@@ -17,6 +17,10 @@ from pydantic import BaseModel, Field
 __all__ = [
     "SKILL_SLUG_PATTERN",
     "AuditOut",
+    "MarketInstallIn",
+    "MarketInstalled",
+    "MarketSkillOut",
+    "MarketVersionOut",
     "ReviewDecisionIn",
     "RevokedSkill",
     "SkillCatalogItem",
@@ -33,7 +37,8 @@ SKILL_SLUG_PATTERN = r"^[a-z][a-z0-9-]{0,62}$"
 
 SkillStatus = Literal["pending_review", "rejected", "published", "disabled", "revoked"]
 RuntimeSkillStatus = Literal["published", "disabled", "revoked"]
-SkillSource = Literal["builtin", "tenant", "imported"]
+#: market = 从技能市场安装的（产品自带的技能，版本号与市场一致）
+SkillSource = Literal["builtin", "tenant", "imported", "market"]
 
 
 # ───────────────────────────────────────────── 技能 · 运行时视角
@@ -68,6 +73,9 @@ class SkillVersionOut(BaseModel):
     published_by: str | None = None
     published_at: datetime | None = None
     status_reason: str | None = None
+    #: 对象存储里的目录（运行时从这里拷进使用者的技能目录）。多租户以后第一层是租户，
+    #: 运行时不再自己拼路径。旧缓存里没有它：为空时按多租户之前的 _skills/{slug}/{version}/
+    storage_key: str | None = None
 
 
 class SkillVersionBrief(BaseModel):
@@ -147,3 +155,47 @@ class AuditOut(BaseModel):
     target_kind: str
     target_id: str
     detail: dict[str, Any] = Field(default_factory=dict)
+
+
+# ───────────────────────────────────────────── 技能市场
+
+
+class MarketVersionOut(BaseModel):
+    """技能市场里的一个版本。"""
+
+    slug: str
+    version: int
+    status: Literal["published", "revoked"]
+    description: str
+    content_hash: str
+    size_bytes: int
+    file_count: int
+    has_scripts: bool
+    files: list[SkillFile] = Field(default_factory=list)
+    scan_result: dict[str, Any] = Field(default_factory=dict)
+    status_reason: str | None = None
+    published_by: str
+    published_at: datetime
+
+
+class MarketSkillOut(BaseModel):
+    slug: str
+    install_by_default: bool
+    latest: int | None = None
+    description: str | None = None
+    versions: list[MarketVersionOut] = Field(default_factory=list)
+    #: 本租户已经装了哪些版本（租户视角才有）
+    installed: list[int] = Field(default_factory=list)
+
+
+class MarketInstallIn(BaseModel):
+    """要装的技能，写成 slug 或 slug@版本（缺版本 = 最新的已发布版本）。空 = 装全部默认安装的。"""
+
+    skills: list[str] = Field(default_factory=list)
+
+
+class MarketInstalled(BaseModel):
+    slug: str
+    version: int
+    #: 这次拷进来的；False = 本租户早就装过这个版本
+    copied: bool

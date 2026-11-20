@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 import pytest
-from memory_testkit import FakePermissions, add_scope
+from memory_testkit import TEST_TENANT, USERS_ELSEWHERE, FakePermissions, add_scope, ops_request
 
 U = "/v1/scopes/user/instances/uid=u1"
 
@@ -560,19 +560,76 @@ async def test_list_instances_filtered_by_permission(
     assert [i["key"]["project"] for i in r.json()["data"]] == ["a"]
 
 
-# ───────────────────────────── 作用域管理
+# ───────────────────────────── 作用域管理（运营接口）
 
 
-async def test_scope_admin_requires_operation(client: httpx.AsyncClient) -> None:
+async def test_scope_admin_is_for_the_ops_center_only(client: httpx.AsyncClient) -> None:
     body = {"code": "team", "key_fields": ["team"], "check_permission": True}
-    r = await client.post("/v1/admin/scopes", json=body, headers=as_user("bob"))
-    assert r.status_code == 403
     r = await client.post("/v1/admin/scopes", json=body, headers=as_user("admin"))
+    assert r.status_code == 404, "租户里没有了"
+    r = await client.post("/ops/v1/scopes", json=body, headers=as_user("admin"))
+    assert r.status_code == 401, "没有运营中心的签名"
+    r = await client.request(
+        "POST", "/ops/v1/scopes", **ops_request("POST", "/ops/v1/scopes", body)
+    )
     assert r.status_code == 201, r.text
     assert r.json()["data_code"] == "MemoryTeam"
     r = await client.get("/v1/scopes")
     assert [s["code"] for s in r.json()["data"]] == ["team"]
-    r = await client.patch(
-        "/v1/admin/scopes/team", json={"description": "团队"}, headers=as_user("admin")
-    )
+    path = "/ops/v1/scopes/team"
+    r = await client.request("PATCH", path, **ops_request("PATCH", path, {"description": "团队"}))
     assert r.json()["description"] == "团队"
+
+
+# ───────────────────────────── 租户
+
+
+OTHER = "00000000-0000-0000-0000-00000000000b"
+
+
+async def test_the_same_key_is_a_different_instance_in_each_tenant(
+    client: httpx.AsyncClient, user_scope: None
+) -> None:
+    await topic(client, "偏好")
+    await write(client, topic="偏好", content="默认中文", occurred_at=at(9))
+    theirs = {"X-Tenant-Id": OTHER}
+    r = await client.get(f"{U}/topics", headers=theirs)
+    assert r.status_code == 200 and r.json()["topics"] == [], "别的租户里同一个 uid 是另一个实例"
+    assert (await client.get(f"{U}/topics", headers={"X-Tenant-Id": ""})).status_code == 401
+
+
+async def test_a_user_cannot_claim_another_tenant(
+    client: httpx.AsyncClient, user_scope: None
+) -> None:
+    USERS_ELSEWHERE["mallory"] = OTHER
+    r = await client.get(f"{U}/topics", headers=as_user("mallory"))
+    assert r.status_code == 401, "用户中心在请求头的租户里找不到他"
+    r = await client.get(f"{U}/topics", headers={**as_user("mallory"), "X-Tenant-Id": OTHER})
+    assert r.status_code == 200
+
+
+async def test_suspended_tenants_are_shut_out_and_purge_deletes_their_data(
+    client: httpx.AsyncClient, user_scope: None
+) -> None:
+    await topic(client, "偏好")
+    await write(client, topic="偏好", content="默认中文", occurred_at=at(9))
+    await client.post(f"{U}/topics", json={"code": "别人的"}, headers={"X-Tenant-Id": OTHER})
+
+    def ops(action: str) -> dict[str, object]:
+        return ops_request("POST", f"/ops/v1/tenants/{TEST_TENANT}/{action}")
+
+    path = f"/ops/v1/tenants/{TEST_TENANT}"
+    assert (await client.post(f"{path}/purge", **ops("purge"))).status_code == 409
+    assert (await client.post(f"{path}/suspend", **ops("suspend"))).status_code == 200
+    r = await client.get(f"{U}/topics")
+    assert r.status_code == 403
+    r = await client.post(f"{path}/purge", **ops("purge"))
+    assert r.status_code == 200 and r.json()["remaining"] is False
+    assert r.json()["deleted"] == {
+        "mem_revision": 1,
+        "mem_entry": 1,
+        "mem_topic": 1,
+        "mem_instance": 1,
+    }
+    r = await client.get(f"{U}/topics", headers={"X-Tenant-Id": OTHER})
+    assert [t["code"] for t in r.json()["topics"]] == ["别人的"], "别的租户的不动"

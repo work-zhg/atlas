@@ -13,19 +13,19 @@
 #     不经 ssh（ATLAS_SERVER=local 同义；集群用 deploy/server/cluster-setup.sh 搭）
 #   · 镜像已导入服务器：deploy/server/images.sh。app、frontends 默认用服务器上最新的构建标签，
 #     ATLAS_APP_IMAGE / ATLAS_FRONTENDS_IMAGE 可指定（回退到上一版就指定它的标签）
-#   · 仓库根 .env（模型 key、Gitee 令牌、OSS 口令等 —— 与本机部署同一份）；有 UC_ADMIN_PASSWORD
-#     （用户中心 admin 的密码）时最后自动登记到用户中心（register.sh），没有就跳过并提示。
+#   · 仓库根 .env（模型 key、Gitee 令牌、OSS 口令等 —— 与本机部署同一份）。
 #     部署参数也可以写在 .env 里（都有默认值）：
 #       ATLAS_SERVER_IP       服务器 IP（默认 192.168.0.112）
 #       ATLAS_PUBLIC_HOST     对外域名（默认 atlas.<服务器 IP>.nip.io）；ATLAS_PUBLIC_SCHEME 默认 http，
 #                             https 要先给 traefik 配证书（deploy/server/traefik-https.yaml）
 #       ATLAS_LANGFUSE_HOST   Langfuse 的域名（默认 langfuse.<服务器 IP>.nip.io）
 #       ATLAS_OBSERVABILITY   full（默认）| none：none 不装 Jaeger、Langfuse（11-observability.yaml），小机器用
+#       TENANT_BACKFILL_UUID  多租户迁移把已有数据归到哪个租户（用户中心里原平台租户的 uuid）；
+#                             库里已有数据又没给，各服务的迁移会失败。新部署、已迁移过的不需要
 #   · OpenSandbox 源码 release-1.1.1（OPENSANDBOX_SRC=…；不给就 clone 到 ~/.cache/atlas/opensandbox）
 #
 # 步骤：前置检查 → 依赖服务（10-infra）→ OpenSandbox（opensandbox.sh）→ server 迁移 → 后端（apply.sh）
 #   → 前端（frontends.sh）→ Ingress → 用户中心首个超级管理员（只第一次）
-#   → 登记到用户中心（register.sh）
 #
 # ★ 复用 deploy/local 的清单与脚本：依赖服务的地址经 ATLAS_*_ADDR 换成集群内的服务名（apply.sh 的 render）。
 # ★ 幂等：重复执行只更新有变化的部分；随机生成的密钥已存在就沿用。
@@ -75,7 +75,7 @@ if [ "$TARGET" = local ] || ssh -o BatchMode=yes -o ConnectTimeout=5 "$TARGET" t
     ssh "$TARGET" cat /etc/kubernetes/admin.conf > "$KCFG"
     chmod 600 "$KCFG"
   fi
-  export KUBECONFIG="$KCFG" ATLAS_KUBECONFIG="$KCFG"  # 后者给 register.sh
+  export KUBECONFIG="$KCFG" ATLAS_KUBECONFIG="$KCFG"
   kubectl get nodes >/dev/null 2>&1 || missing+=("kubectl 连不上 ${SERVER_IP}（kubeconfig：${KCFG}）")
   # 配置服务改为技能应用：库要先改名、持久指令要先搬到 Atlas，否则 atlas-skill 起不来（库不存在）
   if [ "$MODE" != infra ] && kubectl -n atlas-infra exec statefulset/postgres -- psql -U atlas -d atlas -tAc \
@@ -191,6 +191,7 @@ kubectl -n atlas-system run atlas-migrate --image="$APP_IMAGE" --image-pull-poli
   --restart=Never --attach --rm --quiet \
   --env="DATABASE_URL=postgresql+asyncpg://atlas:atlas@postgres.${INFRA}:5432/atlas" \
   --env="REDIS_URL=redis://redis.${INFRA}:6379/0" --env="LITELLM_KEY=unused" \
+  --env="TENANT_BACKFILL_UUID=${TENANT_BACKFILL_UUID:-}" \
   -- sh -c 'alembic upgrade head && python -m atlas_agent migrate-appconfig'
 
 # ── 4. 后端与前端 ───────────────────────────────────────────────────
@@ -216,17 +217,10 @@ else
   cat /tmp/uc-bootstrap.err; exit 1
 fi
 
-# ── 6. 登记到用户中心（幂等：应用、操作码、角色、数据编码随代码变化，每次部署都同步一遍）──────
-# ★ 首次部署时 admin 还是临时密码，register-uc 会拒绝：登录改密码后单独跑 register.sh
-if [ -z "${UC_ADMIN_PASSWORD:-}" ]; then
-  echo "⚠ .env 没有 UC_ADMIN_PASSWORD：跳过登记到用户中心，需要时手动运行 deploy/server/register.sh"
-elif ! deploy/server/register.sh </dev/null; then
-  echo "⚠ 登记到用户中心失败（见上）。首次部署要先用 admin 登录改密码，再运行 deploy/server/register.sh"
-fi
-
+# ★ 应用目录（应用、操作码、菜单、数据编码、内置角色）不由代码登记：运营人员在运营中心录入
+#   （各服务 README「用户中心登记」）。没录之前各应用调用户中心会 403
 echo
-echo "★ 首次部署：admin 登录 ${PUBLIC_SCHEME}://${PUBLIC_HOST}/uc/login 改密码后，运行 deploy/server/register.sh"
-echo "  （把 Atlas、TeamFlow 登记到用户中心；不做的话两者调用户中心会 403）"
+echo "★ 首次部署：admin 登录 ${PUBLIC_SCHEME}://${PUBLIC_HOST}/uc/login 改密码；应用目录在运营中心录入"
 echo "Atlas     → ${PUBLIC_SCHEME}://${PUBLIC_HOST}/atlas"
 echo "用户中心  → ${PUBLIC_SCHEME}://${PUBLIC_HOST}/uc"
 echo "TeamFlow  → ${PUBLIC_SCHEME}://${PUBLIC_HOST}/teamflow"

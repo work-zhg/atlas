@@ -1,6 +1,6 @@
-"""沙箱模板的管理接口（改造计划 B2）。
+"""沙箱模板的管理接口（改造计划 B2；c4-model/agent/code-ops.html · RuntimeEnvOps）。
 
-只有 sandbox:manage 能用；提交前校验；修订不生效、发布才生效。
+在运营接口里（/ops/v1/sandbox-templates），只给运营中心；提交前校验；修订不生效、发布才生效。
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from httpx import ASGITransport
 from sqlalchemy import delete
 
 from tests.fake_uc import FakeUC
+from tests.ops_env import OPERATOR, ops_call
 
 GOOD = """spec:
   template:
@@ -41,7 +42,7 @@ class FakePublisher:
 
 
 @pytest.fixture
-def app() -> FastAPI:
+def app(ops_key: str) -> FastAPI:
     return create_app()
 
 
@@ -53,10 +54,7 @@ async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
 
 @pytest.fixture
 def users(fake_user_center: FakeUC) -> dict[str, dict[str, str]]:
-    return {
-        "member": {"X-Uid": fake_user_center.add("member", ["chat:use"])},
-        "admin": {"X-Uid": fake_user_center.add("admin", ["chat:use", "sandbox:manage"])},
-    }
+    return {"admin": {"X-Uid": fake_user_center.add("admin", ["chat:use", "settings:manage"])}}
 
 
 @pytest.fixture
@@ -68,11 +66,13 @@ async def code() -> AsyncIterator[str]:
         await session.commit()
 
 
-async def test_only_sandbox_admins_see_templates(
+async def test_only_the_ops_center_sees_templates(
     client: httpx.AsyncClient, users: dict[str, dict[str, str]]
 ) -> None:
-    assert (await client.get("/v1/sandbox-templates", headers=users["member"])).status_code == 403
-    r = await client.get("/v1/sandbox-templates", headers=users["admin"])
+    admin = users["admin"]  # 租户管理员也不行：模板影响所有租户
+    assert (await client.get("/v1/sandbox-templates", headers=admin)).status_code == 404
+    assert (await client.get("/ops/v1/sandbox-templates", headers=admin)).status_code == 401
+    r = await ops_call(client, "GET", "/ops/v1/sandbox-templates")
     assert r.status_code == 200, r.text
     seeded = {t["code"]: t for t in r.json()}
     # 迁移 0035 的种子：已发布的第 1 版
@@ -82,40 +82,35 @@ async def test_only_sandbox_admins_see_templates(
     assert "yaml" not in seeded["sbx-strict"]
 
 
-async def test_create_revise_publish(
-    app: FastAPI, client: httpx.AsyncClient, users: dict[str, dict[str, str]], code: str
-) -> None:
-    admin = users["admin"]
+async def test_create_revise_publish(app: FastAPI, client: httpx.AsyncClient, code: str) -> None:
+    base = "/ops/v1/sandbox-templates"
     body = {"code": code, "description": "测试", "server": f"srv-{code}", "yaml": GOOD}
     bad = body | {"yaml": GOOD + "      hostNetwork: true\n"}
-    r = await client.post("/v1/sandbox-templates", json=bad, headers=admin)
+    r = await ops_call(client, "POST", base, bad)
     assert r.status_code == 422 and "宿主命名空间" in r.json()["error"]["message"]
 
-    r = await client.post("/v1/sandbox-templates", json=body, headers=admin)
+    r = await ops_call(client, "POST", base, body)
     assert r.status_code == 201, r.text
     assert (r.json()["version"], r.json()["published_version"]) == (1, None)
-    assert (await client.post("/v1/sandbox-templates", json=body, headers=admin)).status_code == 409
+    assert r.json()["updated_by"] == str(OPERATOR), "操作人记运营账号"
+    assert (await ops_call(client, "POST", base, body)).status_code == 409
 
     revised = {"yaml": GOOD + "      enableServiceLinks: false\n"}
-    r = await client.put(f"/v1/sandbox-templates/{code}", json=revised, headers=admin)
+    r = await ops_call(client, "PUT", f"{base}/{code}", revised)
     assert r.status_code == 200 and r.json()["version"] == 2
 
     # 不在集群里：发布报依赖不可用，模板照样能查、能改
-    r = await client.post(f"/v1/sandbox-templates/{code}/publish", headers=admin)
+    r = await ops_call(client, "POST", f"{base}/{code}/publish")
     assert r.status_code == 503, r.text
 
     app.state.template_publisher = FakePublisher()
-    r = await client.post(f"/v1/sandbox-templates/{code}/publish", headers=admin)
+    r = await ops_call(client, "POST", f"{base}/{code}/publish")
     assert r.status_code == 200, r.text
     assert r.json()["published_version"] == 2 and r.json()["drifted"] is False
-    detail = (await client.get(f"/v1/sandbox-templates/{code}", headers=admin)).json()
+    detail = (await ops_call(client, "GET", f"{base}/{code}")).json()
     assert detail["yaml"] == revised["yaml"] and detail["drifted"] is False
 
 
-async def test_unknown_template_is_404(
-    client: httpx.AsyncClient, users: dict[str, dict[str, str]]
-) -> None:
-    r = await client.get("/v1/sandbox-templates/no-such", headers=users["admin"])
+async def test_unknown_template_is_404(client: httpx.AsyncClient) -> None:
+    r = await ops_call(client, "GET", "/ops/v1/sandbox-templates/no-such")
     assert r.status_code == 404
-    r = await client.get(f"/v1/sandboxes/{uuid4()}/events", headers=users["admin"])
-    assert r.status_code == 200 and r.json() == []

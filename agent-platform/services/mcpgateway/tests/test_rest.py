@@ -4,15 +4,18 @@
 from __future__ import annotations
 
 from typing import Any
+from uuid import UUID
 
 import httpx
 import pytest
 from atlas_mcpgateway.perms import DATA_SERVER, DATA_TOOL
+from atlas_tenancy import TenantScope
 from fake_upstreams import REST_KEY, FakeRest
 from gateway_testkit import (
     ADMIN,
     ALICE,
     BOB,
+    TEST_TENANT,
     FakePermissions,
     apply_user_key,
     as_user,
@@ -298,10 +301,12 @@ async def test_add_service_from_spec_file(
     }
     spec["connection"]["spec_url"] = ""
     for expected in (True, False):
-        async with get_sessionmaker()() as session:
-            registry = Registry(session, get_settings(), perms, app.state.upstreams)
-            row = await add_service(registry, spec, owner=ADMIN)
-            await session.commit()
+        # 命令行登记时写明租户（service --tenant …）
+        with TenantScope.enter(UUID(TEST_TENANT)):
+            async with get_sessionmaker()() as session:
+                registry = Registry(session, get_settings(), perms, app.state.upstreams)
+                row = await add_service(registry, spec, owner=ADMIN)
+                await session.commit()
         assert (row is not None) is expected
     assert perms.owners_of(DATA_SERVER, "search") == {ADMIN}
 

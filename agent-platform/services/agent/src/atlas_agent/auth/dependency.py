@@ -3,10 +3,10 @@
 内网免令牌：前端 → 网关（只在这里校验登录）→ 本服务。身份在请求头里：
   X-Uid         谁在用（必填；网关按登录态写入，业务应用调用时写它的用户）
   X-Auth-Uid    按谁的权限判，缺省 = X-Uid
-  X-Tenant-Id   租户，原样透传给下游
+  X-Tenant-Id   租户：以用户中心快照里用户所属的租户为准，写了却对不上 → 401
   X-Caller-App  直接调用方：gateway / teamflow / bench …；缺省 unknown
 
-缺 X-Uid 一律 401；操作码、数据编码级授权按 X-Auth-Uid 取用户中心快照。
+缺 X-Uid 一律 401；操作码、数据编码级授权按 X-Auth-Uid 取用户中心快照。租户已停用 403。
 没有免鉴权的模式（原 dev 模式已删除）：本机与测试也走用户中心（测试里是替身）。
 
 ★ 登录、Cookie、CSRF 都在网关 + 用户中心（/api/v1/auth/verify）；这里不再处理。
@@ -18,12 +18,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Annotated
 from uuid import UUID
 
+from atlas_tenancy import TenantScope
 from fastapi import Depends, Request
 from starlette.requests import HTTPConnection
 
 from ..config import Settings, get_settings
 from ..db.session import SessionDep
-from ..errors import Unauthorized
+from ..errors import Forbidden, Unauthorized
 from ..outbound import CallIdentity, use_identity
 from .principal import Principal
 from .service import AuthService
@@ -70,6 +71,13 @@ async def principal_of(
     caller = (h.get("x-caller-app") or "").strip() or "unknown"
     # ★ 先设出站身份：下面取授权快照调用户中心时就要带上
     use_identity(CallIdentity(uid=uid, auth_uid=auth_uid, tenant_id=tenant))
-    return await AuthService(session, settings, uc_client(conn)).resolve(
+    principal = await AuthService(session, settings, uc_client(conn)).resolve(
         uid, auth_uid, caller_app=caller, tenant_id=tenant
     )
+    # 解析时已进入用户所属的租户；出站身份也换成核对过的租户（请求头可能没带）
+    use_identity(CallIdentity(uid=uid, auth_uid=auth_uid, tenant_id=principal.tenant_id))
+    # 运营中心停用了这个租户（运营接口）：用户中心挡登录，这里挡住已经在用的
+    gate = getattr(conn.app.state, "tenant_gate", None)
+    if gate is not None and not await gate.is_active(TenantScope.require()):
+        raise Forbidden("所在的组织已停用")
+    return principal

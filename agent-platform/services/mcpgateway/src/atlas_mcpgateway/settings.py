@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 __all__ = ["GatewaySettings", "get_settings"]
@@ -43,6 +43,9 @@ class GatewaySettings(BaseSettings):
     discovery_timeout_s: float = 15.0
     #: 调上游时建连接的超时。★ 不设读超时：工具调用可能要很久（超时属于流量治理，单独设计）
     connect_timeout_s: float = 10.0
+    #: 允许连的内部网段（CIDR）。上游地址由租户填写，默认不许指向回环、私有网段、链路本地等
+    #: 内部地址（upstreams/guard.py）；私有化部署里上游确实在内网的，把网段加在这里
+    upstream_allow_cidrs: list[str] = Field(default_factory=list)
 
     # ── MCP 代理：定期重新拉取工具定义 ───────────────────────────────
     #: 多久重新拉一次
@@ -60,6 +63,8 @@ class GatewaySettings(BaseSettings):
     perm_cache_ttl_s: float = 30.0
     #: 管理接口的授权快照（操作码）缓存时间
     authz_ttl_s: float = 30.0
+    #: 运营接口（/ops/v1）的签名密钥，和运营中心里登记本服务时的一致。空 = 没启用（一律 403）
+    ops_api_key: SecretStr | None = None
 
     # ── 智能体 Key ────────────────────────────────────────────────────
     #: 客户端类型 → 能创建、获取、删除这一类型 Key 的应用（用户中心应用编码，即 X-Caller-App）。

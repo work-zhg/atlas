@@ -12,7 +12,7 @@ import asyncio
 import os
 from collections.abc import AsyncIterator
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -21,6 +21,8 @@ from atlas_appconfig import (
     AppConfig,
     ConfigKey,
     ConfigRoutes,
+    ConfigScope,
+    ScopeMismatch,
     TypeChanged,
     TypeMismatch,
     UnknownKey,
@@ -236,9 +238,11 @@ async def test_routes_list_edit_conflict_and_roll_back(
         assert mine | {"updated_at": None} == {
             "key": key.name,
             "type": "int",
+            "scope": "system",
             "description": "每人几个沙箱",
             "default": 10,
             "value": None,
+            "inherited": None,
             "effective": 10,
             "overridden": False,
             "version": 1,
@@ -260,3 +264,109 @@ async def test_routes_list_edit_conflict_and_roll_back(
             (2, "admin"),
             (1, "system"),
         ]
+
+
+# ──────────────────────────────────────────────── 租户设置
+
+T1 = uuid4()
+T2 = uuid4()
+
+
+async def test_tenant_settings_fall_back_to_system_value_then_default(
+    sessions: async_sessionmaker[AsyncSession], prefix: str
+) -> None:
+    """租户设置按「本租户的值 → 系统值 → 代码默认值」取；运营中心改系统值，没改过的租户跟着变。"""
+    per_person = ConfigKey(f"{prefix}.runs", int, default=3, scope=ConfigScope.TENANT)
+    images = ConfigKey(f"{prefix}.images", list[str], default=["a/"])
+    config = AppConfig(sessions, [per_person, images])
+    await config.register()
+    assert await config.get(per_person, tenant_uuid=T1) == 3
+    await config.set(per_person.name, 5, expected_version=1, by="ops")  # 系统值
+    assert await config.get(per_person, tenant_uuid=T1) == 5
+    entry = await config.set(per_person.name, 2, tenant_uuid=T1, expected_version=0, by="admin")
+    assert (entry.item.version, entry.effective, entry.inherited.value) == (1, 2, 5)
+    assert await config.get(per_person, tenant_uuid=T1) == 2
+    assert await config.get(per_person, tenant_uuid=T2) == 5  # 别的租户不受影响
+    # 系统参数不看租户；混在一起一次取
+    assert await config.get_many(per_person, images, tenant_uuid=T1) == (2, ["a/"])
+    await config.set(per_person.name, None, tenant_uuid=T1, expected_version=1, by="admin")
+    assert await config.get(per_person, tenant_uuid=T1) == 5  # 恢复默认 = 跟着系统值
+    assert [r.version for r in await config.history(per_person.name, tenant_uuid=T1)] == [2, 1]
+    assert [r.version for r in await config.history(per_person.name)] == [2, 1]
+
+
+async def test_scope_and_tenant_must_match(
+    sessions: async_sessionmaker[AsyncSession], prefix: str
+) -> None:
+    per_person = ConfigKey(f"{prefix}.runs", int, default=3, scope=ConfigScope.TENANT)
+    images = ConfigKey(f"{prefix}.images", list[str], default=[])
+    config = AppConfig(sessions, [per_person, images])
+    await config.register()
+    with pytest.raises(ScopeMismatch, match="要给出租户"):
+        await config.get(per_person)
+    with pytest.raises(ScopeMismatch, match="系统参数"):
+        await config.set(images.name, ["x/"], tenant_uuid=T1, expected_version=1, by="admin")
+
+
+async def test_first_write_of_a_tenant_value_conflicts_when_two_people_do_it(
+    sessions: async_sessionmaker[AsyncSession], prefix: str
+) -> None:
+    key = ConfigKey(f"{prefix}.agent", str, default="", scope=ConfigScope.TENANT)
+    config = AppConfig(sessions, [key])
+    await config.register()
+    results = await asyncio.gather(
+        config.set(key.name, "a", tenant_uuid=T1, expected_version=0, by="alice"),
+        config.set(key.name, "b", tenant_uuid=T1, expected_version=0, by="bob"),
+        return_exceptions=True,
+    )
+    assert sorted(type(r).__name__ for r in results) == ["ConfigEntry", "VersionConflict"]
+
+
+async def test_a_changed_scope_fails_registration(
+    sessions: async_sessionmaker[AsyncSession], prefix: str
+) -> None:
+    await AppConfig(sessions, [ConfigKey(f"{prefix}.x", int, default=1)]).register()
+    with pytest.raises(TypeChanged, match="作用域"):
+        await AppConfig(
+            sessions, [ConfigKey(f"{prefix}.x", int, default=1, scope=ConfigScope.TENANT)]
+        ).register()
+
+
+class TenantGuard(Guard):
+    def __init__(self, tenant: UUID) -> None:
+        super().__init__(edit=True)
+        self._tenant = tenant
+
+    async def tenant(self, request: Request) -> UUID:
+        return self._tenant
+
+
+async def test_tenant_routes_show_only_tenant_settings_of_that_tenant(
+    sessions: async_sessionmaker[AsyncSession], prefix: str
+) -> None:
+    per_person = ConfigKey(f"{prefix}.runs", int, default=3, scope=ConfigScope.TENANT)
+    images = ConfigKey(f"{prefix}.images", list[str], default=[])
+    config = AppConfig(sessions, [per_person, images])
+    await config.register()
+    await config.set(per_person.name, 5, expected_version=1, by="ops")
+    with pytest.raises(TypeError, match="TenantConfigGuard"):
+        ConfigRoutes(config, Guard(edit=True), scope=ConfigScope.TENANT)
+    app = FastAPI()
+    app.include_router(
+        ConfigRoutes(config, TenantGuard(T1), scope=ConfigScope.TENANT, prefix="/t").router
+    )
+    app.include_router(ConfigRoutes(config, Guard(edit=True), prefix="/s").router)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        mine = [i for i in (await c.get("/t")).json() if i["key"].startswith(prefix)]
+        assert [(i["key"], i["version"], i["inherited"], i["effective"]) for i in mine] == [
+            (per_person.name, 0, 5, 5)
+        ]
+        r = await c.put(f"/t/{per_person.name}", json={"value": 1, "expected_version": 0})
+        assert r.status_code == 200 and r.json()["effective"] == 1
+        r = await c.put(f"/t/{images.name}", json={"value": [], "expected_version": 1})
+        assert r.status_code == 422  # 系统参数不在租户设置里
+        system = [i for i in (await c.get("/s")).json() if i["key"].startswith(prefix)]
+        assert {i["key"]: (i["scope"], i["effective"]) for i in system} == {
+            per_person.name: ("tenant", 5),
+            images.name: ("system", []),
+        }

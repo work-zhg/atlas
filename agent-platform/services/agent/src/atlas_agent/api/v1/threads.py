@@ -47,7 +47,7 @@ from ...schemas.thread import (
 from ...services.context import ContextService
 from ...services.preview import PreviewService
 from ...services.workspace import WorkspaceService
-from .workspace import read_upload, workspace_limits
+from .workspace import capacity, read_upload, workspace_limits
 
 router = APIRouter(prefix="/threads", tags=["threads"])
 
@@ -250,7 +250,8 @@ async def upload_file(
         select(Thread.created_by_uuid).where(Thread.thread_uuid == thread_id)
     )
     if owner is not None:
-        await WorkspaceService(session, settings).check_upload(owner, len(data), limits)
+        workspace = WorkspaceService(session, settings, capacity(request))
+        await workspace.check_upload(owner, len(data), limits)
     size = await service.put_file(thread_id, path, data)
     return {"path": path, "size": size}
 

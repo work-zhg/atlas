@@ -2,29 +2,34 @@
 
 from __future__ import annotations
 
-from uc_testkit import STRONG, Client, admin_client, make_user, root_id
+from uc_testkit import STRONG, Client, OpsClient, admin_client, make_user, root_id
 
 
 async def test_app_home_url_validated_and_listed_in_my_apps() -> None:
     c = await admin_client()
+    ops = OpsClient()
     # 挡住 javascript: 与协议相对地址（// 开头会跳到别的域名）
     for bad in ("javascript:alert(1)", "//evil.example.com", "crm"):
-        r = await c.post("/api/v1/apps", {"name": f"坏地址-{bad}", "home_url": bad})
+        r = await ops.post("/ops/v1/apps", {"name": f"坏地址-{bad}", "home_url": bad})
         assert r.status_code == 422 and r.json()["code"] == "APP_HOME_URL_INVALID", bad
-    r = await c.post("/api/v1/apps", {"name": "客户管理", "home_url": "/crm"})
+    r = await ops.post("/ops/v1/apps", {"name": "客户管理", "home_url": "/crm"})
     assert r.status_code == 201, r.text
     app = r.json()["app"]
     assert app["home_url"] == "/crm"
-    # 默认无人可访问；开放给全员后出现在「我的应用」，带入口地址
+    tenant = (await c.get("/api/v1/auth/me")).json()["tenant"]["id"]
+    r = await ops.put(f"/ops/v1/tenants/{tenant}/apps/{app['id']}", {"enabled": True})
+    assert r.status_code == 200, r.text
+    # 开通后默认无人可访问；开放给全员后出现在「我的应用」，带入口地址
     assert all(a["id"] != app["id"] for a in (await c.get("/api/v1/me/apps")).json())
     await c.put(f"/api/v1/apps/{app['id']}/scope", {"all": True})
     mine = {a["id"]: a for a in (await c.get("/api/v1/me/apps")).json()}
     assert mine[app["id"]]["home_url"] == "/crm"
     # 改成完整地址；清空 = 不提供入口
-    r = await c.patch(f"/api/v1/apps/{app['id']}", {"home_url": "https://crm.xinghai.com"})
+    r = await ops.patch(f"/ops/v1/apps/{app['id']}", {"home_url": "https://crm.xinghai.com"})
     assert r.json()["home_url"] == "https://crm.xinghai.com"
-    r = await c.patch(f"/api/v1/apps/{app['id']}", {"home_url": "  "})
+    r = await ops.patch(f"/ops/v1/apps/{app['id']}", {"home_url": "  "})
     assert r.json()["home_url"] is None
+    await ops.close()
     await c.close()
 
 

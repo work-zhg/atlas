@@ -44,6 +44,11 @@ dependencies = [
   "atlas-redislock",
   # 入库巡检是它的实例任务（jobs.py）
   "atlas-jobs",
+  # 多租户（c4-model/opscenter/design-tenant-isolation.html）：按租户自动过滤、运营接口
+  "atlas-tenancy",
+  "atlas-opsapi",
+  # 系统参数（如知识库存储的默认份额）：经运营接口 /ops/v1/configs 改
+  "atlas-appconfig",
 ]
 
 [build-system]

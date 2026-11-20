@@ -16,15 +16,24 @@ __all__ = ["Actor", "mask_email", "mask_phone", "record"]
 
 
 class Actor:
-    """操作人：管理台用户、接入应用或系统。
+    """操作人：管理台用户、接入应用、运营中心或系统。
 
     接入应用经内网请求头调用时，on_behalf = 请求头 X-Uid（谁在用），写进审计 detail.uid。
+    运营中心经运营接口调用时，uuid = 运营账号（不是任何租户里的人），detail 里记运营人员的名字
+    和运营中心的租户操作，两边的审计能对上。
     """
 
-    def __init__(self, kind: str, uuid: UUID | None = None, on_behalf: str | None = None) -> None:
+    def __init__(
+        self,
+        kind: str,
+        uuid: UUID | None = None,
+        on_behalf: str | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
         self.kind = kind
         self.uuid = uuid
         self.on_behalf = on_behalf
+        self.extra = extra or {}
 
     @classmethod
     def user(cls, uuid: UUID) -> Actor:
@@ -37,6 +46,11 @@ class Actor:
     @classmethod
     def system(cls) -> Actor:
         return cls("system")
+
+    @classmethod
+    def ops(cls, operator: UUID | None, name: str = "", operation: UUID | None = None) -> Actor:
+        extra = {"operator": name or None, "operation": operation}
+        return cls("ops", operator, extra={k: v for k, v in extra.items() if v is not None})
 
     @property
     def user_uuid(self) -> UUID | None:
@@ -55,6 +69,8 @@ def record(
     clean = {k: _jsonable(v) for k, v in detail.items() if v is not None}
     if actor.on_behalf:
         clean.setdefault("uid", actor.on_behalf)
+    for k, v in actor.extra.items():
+        clean.setdefault(k, _jsonable(v))
     session.add(
         AuditEvent(
             actor_type=actor.kind,

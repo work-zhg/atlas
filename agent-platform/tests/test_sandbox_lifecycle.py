@@ -42,9 +42,11 @@ from atlas_agent.sandbox.base.lifecycle.templates import (
     TemplateRejected,
 )
 from atlas_agent.sandbox.base.network.policy import NetworkPolicy, policy_json
+from atlas_tenancy import SystemReason, TenantScope
 from pydantic import SecretStr
 from sqlalchemy import delete, select
 
+from tests.fake_uc import TEST_TENANT
 from tests.opensandbox_fake import LIFECYCLE_URL, FakeOpenSandbox
 
 ADMIN = UUID(int=7)
@@ -459,23 +461,38 @@ async def test_destroy_takes_a_reason_and_is_idempotent(
 async def test_reconcile_deletes_unregistered_sandboxes_including_legacy_ones(
     fake: FakeOpenSandbox, redis: Any, template: SandboxTemplate
 ) -> None:
-    """验收（B2）：对账删掉没有登记的实例，存量沙箱（旧标签、没有 atlas.sandbox）也在其中。"""
+    """验收（B2）：对账删掉没有登记的实例，存量沙箱（旧标签、没有 atlas.sandbox）也在其中。
+
+    生命周期日志是租户表：带租户标签的孤儿记一条；多租户之前建的存量沙箱不知道租户，照删、不记。
+    """
     rt = _runtime(fake, redis, template)
     keep = await rt.launch(uuid7(), _spec(template.code))
+    assert fake.sandboxes[keep.external_id].metadata["atlas.tenant"] == TEST_TENANT
     legacy = fake.add(
         {"metadata": {"atlas.managed": "true", "atlas.kind": "sbx", "atlas.thread": "t"}}
     )
-    stray = fake.add({"metadata": {"atlas.managed": "true", "atlas.sandbox": str(uuid7())}})
+    stray = fake.add(
+        {
+            "metadata": {
+                "atlas.managed": "true",
+                "atlas.sandbox": str(uuid7()),
+                "atlas.tenant": TEST_TENANT,
+            }
+        }
+    )
     other = fake.add({"metadata": {"app": "not-ours"}})
 
-    report = await rt.reconcile()
+    with TenantScope.system(SystemReason.SWEEP):  # 维护者在系统范围里对账
+        report = await rt.reconcile()
     assert sorted(report.removed_remote) == sorted([legacy.id, stray.id])
     assert set(fake.sandboxes) == {keep.external_id, other.id}
     async with get_sessionmaker()() as session:
-        logged = await session.scalars(
-            select(SandboxEvent).where(SandboxEvent.external_id.in_([legacy.id, stray.id]))
-        )
-        assert {e.reason for e in logged} == {"reconcile"}
+        logged = (
+            await session.scalars(
+                select(SandboxEvent).where(SandboxEvent.external_id.in_([legacy.id, stray.id]))
+            )
+        ).all()
+        assert [(e.external_id, e.reason) for e in logged] == [(stray.id, "reconcile")]
 
 
 async def test_reconcile_adopts_a_registration_whose_sandbox_was_built(

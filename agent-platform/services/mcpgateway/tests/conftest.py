@@ -19,14 +19,21 @@ from typing import Any
 import httpx
 import pytest
 from fake_upstreams import FakeGrpc, FakeMcp, FakeRest, http_upstreams, serve_in_thread
-from gateway_testkit import ADMIN, FakePermissions
+from gateway_testkit import ADMIN, OPS_KEY, TEST_TENANT, USERS_ELSEWHERE, FakePermissions
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 TEST_DB = "atlas_mcpgateway_test"
 _ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
 TEST_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{TEST_DB}"
-_TABLES = ("mcp_service", "mcp_tool", "mcp_api_key", "mcp_audit")
+_TABLES = (
+    "mcp_service",
+    "mcp_tool",
+    "mcp_api_key",
+    "mcp_audit",
+    "app_tenant_state",
+    "app_ops_request",
+)
 
 # 本机的服务不走代理：开着 HTTP(S)_PROXY 时，httpx2（FastMCP）会把发往 127.0.0.1 的请求也送进代理
 os.environ["NO_PROXY"] = os.environ["no_proxy"] = ",".join(
@@ -68,6 +75,9 @@ def _environment() -> Iterator[str]:
             "ATLAS_MCPGW_UC_BASE_URL": "http://uc.invalid",
             "ATLAS_MCPGW_DISCOVERY_TIMEOUT_S": "5",
             "ATLAS_MCPGW_PERM_CACHE_TTL_S": "0",
+            # 上游替身都在本机：放开回环（默认不许连内部地址，见 upstreams/guard.py）
+            "ATLAS_MCPGW_UPSTREAM_ALLOW_CIDRS": '["127.0.0.0/8", "::1/128"]',
+            "ATLAS_MCPGW_OPS_API_KEY": OPS_KEY,
         }
         saved = {k: os.environ.get(k) for k in overrides}
         os.environ.update(overrides)
@@ -149,19 +159,25 @@ def perms() -> FakePermissions:
 
 
 @pytest.fixture(autouse=True)
-def _fake_authz(monkeypatch: pytest.MonkeyPatch) -> None:
-    """管理接口的授权快照：ADMIN 有 mcp:manage，其他人没有。"""
+def _fake_authz(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """管理接口的授权快照：ADMIN 有 mcp:manage，其他人没有。人都在请求头写的租户里，除了
+    USERS_ELSEWHERE 里登记过的（用户中心在别的租户里找不到他 → 404）。"""
     from atlas_mcpgateway import auth
 
     def handler(request: httpx.Request) -> httpx.Response:
         uid = request.url.path.split("/")[-2]
+        tenant = request.headers.get("x-tenant-id")
+        home = USERS_ELSEWHERE.get(uid)
+        if home is not None and home != tenant:
+            return httpx.Response(404, json={"message": "用户不存在"})
         ops = ["mcp:manage"] if uid == ADMIN else []
-        return httpx.Response(
-            200, json={"can_access": True, "permissions": ops, "user": {"status": "active"}}
-        )
+        user = {"id": uid, "status": "active", "tenant_id": tenant}
+        return httpx.Response(200, json={"can_access": True, "permissions": ops, "user": user})
 
     monkeypatch.setattr(auth, "_transport", httpx.MockTransport(handler))
     monkeypatch.setattr(auth, "_cache", auth._Cache())
+    yield
+    USERS_ELSEWHERE.clear()
 
 
 @pytest.fixture
@@ -176,6 +192,8 @@ async def app(perms: FakePermissions) -> AsyncIterator[Any]:
 @pytest.fixture
 async def client(app: Any) -> AsyncIterator[httpx.AsyncClient]:
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://gateway"
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://gateway",
+        headers={"X-Tenant-Id": TEST_TENANT},
     ) as c:
         yield c

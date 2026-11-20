@@ -16,9 +16,9 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Header, Query
+from fastapi import APIRouter, Depends, Header, Query
 
-from ..auth import use_outbound
+from ..auth import use_outbound, verified_tenant
 from ..dataplane import callable_tool
 from ..db.models import McpApiKey
 from ..errors import Forbidden, Invalid, NotFound
@@ -33,7 +33,8 @@ from .schemas import (
 )
 from .views import metadata_out
 
-router = APIRouter(prefix="/internal", tags=["internal"])
+# ★ 应用替自己的租户调：同样先核对、进入租户（auth.verified_tenant）
+router = APIRouter(prefix="/internal", tags=["internal"], dependencies=[Depends(verified_tenant)])
 
 #: 缺了按「未知应用」处理（403），不回 422
 CallerApp = Annotated[str, Header(alias="X-Caller-App")]

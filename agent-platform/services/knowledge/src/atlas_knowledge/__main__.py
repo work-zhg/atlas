@@ -3,15 +3,20 @@
 python -m atlas_knowledge serve      起 HTTP 服务（默认 :8050）
 python -m atlas_knowledge worker     起 Celery worker（队列 dataset）
 python -m atlas_knowledge migrate    升级知识库库到最新
-python -m atlas_knowledge sync-uc    一次性：把旧的可见范围 / 成员写进用户中心（库级权限接入）
+python -m atlas_knowledge sync-uc --tenant <租户 uuid>
+                                     一次性：把旧的可见范围 / 成员写进用户中心（库级权限接入）
+
+★ 库归租户（多租户）：sync-uc 要写明是哪个租户的库，在它里面处理。
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
 from pathlib import Path
+from uuid import UUID
 
 from .settings import get_settings
 
@@ -66,10 +71,27 @@ def migrate(revision: str = "head") -> None:
     cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
     cfg.set_main_option("sqlalchemy.url", get_settings().database_url)
     command.upgrade(cfg, revision)
+    asyncio.run(_upgrade_opsapi())
 
 
-def sync_uc(service_owner: str | None = None) -> None:
-    import asyncio
+async def _upgrade_opsapi() -> None:
+    """嵌入的公共库的表：运营接口（租户状态、运营请求）、应用配置（系统参数）；各自的版本表。"""
+    from atlas_appconfig import upgrade as upgrade_appconfig
+    from atlas_opsapi import upgrade
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(upgrade)
+            await conn.run_sync(upgrade_appconfig)
+    finally:
+        await engine.dispose()
+
+
+def sync_uc(tenant: str, service_owner: str | None = None) -> None:
+    from atlas_tenancy import TenantScope
 
     from .auth import use_identity
     from .db.session import get_engine, get_sessionmaker
@@ -77,8 +99,8 @@ def sync_uc(service_owner: str | None = None) -> None:
     from .sync_uc import sync_uc as run
 
     async def _go() -> dict[str, int]:
-        # 调用户中心的身份：给了接收人就以他的名义（租户也按他推）；否则单租户部署取唯一租户
-        use_identity(service_owner)
+        # 调用户中心的身份：给了接收人就以他的名义，租户是命令行写明的那个
+        use_identity(service_owner, tenant=tenant)
         perms = make_data_permissions(get_settings())
         try:
             async with get_sessionmaker()() as session:
@@ -88,7 +110,8 @@ def sync_uc(service_owner: str | None = None) -> None:
                 await perms.aclose()
             await get_engine().dispose()
 
-    out = asyncio.run(_go())
+    with TenantScope.enter(UUID(tenant)):
+        out = asyncio.run(_go())
     print(
         f"已写入 {out['synced']} 个库，跳过（已在用户中心）{out['skipped']} 个，"
         f"认定为服务账号的库 {out['service']} 个，成员写入失败 {out['member_failed']} 条，"
@@ -103,6 +126,7 @@ def main() -> None:
     sub.add_parser("serve")
     sub.add_parser("migrate")
     su = sub.add_parser("sync-uc")
+    su.add_argument("--tenant", required=True, help="库所属租户的 uuid")
     su.add_argument(
         "--service-owner",
         default=None,
@@ -117,7 +141,7 @@ def main() -> None:
     elif args.command == "migrate":
         migrate()
     elif args.command == "sync-uc":
-        sync_uc(args.service_owner)
+        sync_uc(args.tenant, args.service_owner)
     elif args.command == "worker":
         worker(args.concurrency, args.queues)
 

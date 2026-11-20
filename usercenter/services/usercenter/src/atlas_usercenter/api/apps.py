@@ -1,4 +1,9 @@
-"""应用接入接口：应用、凭据、可访问范围、操作、菜单、角色、数据编码。"""
+"""应用接入接口（租户视角）：已开通的应用、可访问范围，操作 / 菜单 / 数据编码（只读），角色。
+
+★ 应用目录（接入应用、凭据、启停、操作、菜单、数据编码、应用内置角色）归运营中心，
+  经运营接口维护（api/ops.py，租户隔离设计 §3.3）；这里只读，租户里谁都改不了。
+  租户能改的只有本租户的可访问范围和本租户自定义的角色。
+"""
 
 from __future__ import annotations
 
@@ -20,64 +25,14 @@ router = APIRouter(prefix="/api/v1", tags=["apps"])
 
 
 def _can_view_meta(p: Principal) -> None:
-    """操作目录、菜单、角色：app:manage 或 role:view 可看（维护角色需要看到它们）。"""
-    if not (p.has("app:manage") or p.has("role:view") or p.has("tenant_app:manage")):
-        raise Forbidden(
-            "PERMISSION_DENIED", "缺少操作权限：app:manage、role:view 或 tenant_app:manage"
-        )
-
-
-class AppCreate(BaseModel):
-    name: str
-    #: 应用编码：内网调用开放接口时 X-Caller-App 写它（如 atlas、teamflow）
-    code: str | None = None
-    description: str | None = None
-    icon: str | None = None
-    #: 入口地址：「应用切换」「我的应用」点开去这里
-    home_url: str | None = None
-
-
-class AppUpdate(BaseModel):
-    name: str | None = None
-    code: str | None = None
-    description: str | None = None
-    icon: str | None = None
-    home_url: str | None = None
-    version: int | None = None
+    """操作目录、菜单、角色：role:view 或 tenant_app:manage 可看（维护角色需要看到它们）。"""
+    if not (p.has("role:view") or p.has("tenant_app:manage")):
+        raise Forbidden("PERMISSION_DENIED", "缺少操作权限：role:view 或 tenant_app:manage")
 
 
 class ScopeBody(BaseModel):
     all: bool
     dept_ids: list[UUID] = []
-
-
-class OpCreate(BaseModel):
-    module: str
-    code: str
-    name: str
-
-
-class OpUpdate(BaseModel):
-    module: str | None = None
-    name: str | None = None
-
-
-class MenuCreate(BaseModel):
-    type: str
-    code: str
-    name: str
-    icon: str | None = None
-    path: str | None = None
-    is_public: bool = False
-    parent_id: UUID | None = None
-
-
-class MenuUpdate(BaseModel):
-    name: str | None = None
-    icon: str | None = None
-    path: str | None = None
-    is_public: bool | None = None
-    parent_id: UUID | None = None
 
 
 class RoleCreate(BaseModel):
@@ -96,31 +51,20 @@ class IdsBody(BaseModel):
     ids: list[UUID]
 
 
-class DataTypeCreate(BaseModel):
-    code: str
-    name: str
-    description: str | None = None
-
-
-class DataTypeUpdate(BaseModel):
-    name: str | None = None
-    description: str | None = None
-
-
 # ───────────────────────────── 应用
 
 
 async def _tenant_view(svc: AppService, a: Any, p: Principal) -> dict[str, Any] | None:
-    """本租户视角：是否开通、范围。客户租户看不到没开通的应用（返回 None）。"""
+    """本租户视角：是否开通、范围。看不到本租户没开通的应用（返回 None）。"""
     opened = await svc.tenant_app(a.uuid)
     enabled = a.is_builtin or (opened is not None and opened.status == "active")
-    if not enabled and p.tenant.kind != "platform":
+    if not enabled:
         return None
     extra: dict[str, Any] = {
         "enabled": enabled,
         "scope_all": a.is_builtin or bool(opened and opened.scope_all),
     }
-    if p.has("app:manage") or p.has("tenant_app:manage"):
+    if p.has("tenant_app:manage"):
         extra["accessible_users"] = await svc.accessible_users(a)
         extra["scope_dept_ids"] = [str(d) for d in await svc.scope_depts(a.uuid)]
     return extra
@@ -136,22 +80,9 @@ async def list_apps(session: SessionDep, p: PrincipalDep) -> list[dict[str, Any]
         if tv is None:
             continue
         extra: dict[str, Any] = {**await svc.counts(a.uuid), **tv}
-        out.append(
-            app_view(a, **extra)
-            if p.has("app:manage")
-            else {**app_view(a, **extra), "app_key": None, "secret_tail": None}
-        )
+        # 应用凭据只给运营中心
+        out.append({**app_view(a, **extra), "app_key": None, "secret_tail": None})
     return out
-
-
-@router.post("/apps", status_code=201)
-async def create_app(
-    body: AppCreate, session: SessionDep, p: Principal = require("app:manage")
-) -> dict[str, Any]:
-    app, secret = await AppService(session, p.actor).create(
-        body.name, body.description, body.icon, body.code, body.home_url
-    )
-    return {"app": app_view(app), "app_secret": secret}
 
 
 @router.get("/apps/{app_id}")
@@ -163,40 +94,7 @@ async def get_app(app_id: UUID, session: SessionDep, p: PrincipalDep) -> dict[st
     if tv is None:
         raise NotFound("APP_NOT_FOUND", "应用不存在")
     view = app_view(app, **await svc.counts(app.uuid), **tv)
-    if not p.has("app:manage"):
-        view["app_key"] = view["secret_tail"] = None
-    return view
-
-
-@router.patch("/apps/{app_id}")
-async def update_app(
-    app_id: UUID, body: AppUpdate, session: SessionDep, p: Principal = require("app:manage")
-) -> dict[str, Any]:
-    data = body.model_dump(exclude_unset=True)
-    version = data.pop("version", None)
-    return app_view(await AppService(session, p.actor).update(app_id, data, version))
-
-
-@router.post("/apps/{app_id}/disable")
-async def disable_app(
-    app_id: UUID, session: SessionDep, p: Principal = require("app:manage")
-) -> dict[str, Any]:
-    return app_view(await AppService(session, p.actor).set_status(app_id, False))
-
-
-@router.post("/apps/{app_id}/enable")
-async def enable_app(
-    app_id: UUID, session: SessionDep, p: Principal = require("app:manage")
-) -> dict[str, Any]:
-    return app_view(await AppService(session, p.actor).set_status(app_id, True))
-
-
-@router.post("/apps/{app_id}/rotate-secret")
-async def rotate_secret(
-    app_id: UUID, session: SessionDep, p: Principal = require("app:manage")
-) -> dict[str, Any]:
-    app, secret = await AppService(session, p.actor).rotate_secret(app_id)
-    return {"app": app_view(app), "app_secret": secret}
+    return {**view, "app_key": None, "secret_tail": None}
 
 
 @router.put("/apps/{app_id}/scope")
@@ -221,36 +119,6 @@ async def list_ops(app_id: UUID, session: SessionDep, p: PrincipalDep) -> list[d
     return [op_view(o, roles=await svc.op_roles(o.uuid)) for o in await svc.operations(app_id)]
 
 
-@router.post("/apps/{app_id}/operations", status_code=201)
-async def create_op(
-    app_id: UUID, body: OpCreate, session: SessionDep, p: Principal = require("app:manage")
-) -> dict[str, Any]:
-    return op_view(
-        await AppService(session, p.actor).create_operation(
-            app_id, body.module, body.code, body.name
-        ),
-        roles=[],
-    )
-
-
-@router.patch("/operations/{op_id}")
-async def update_op(
-    op_id: UUID, body: OpUpdate, session: SessionDep, p: Principal = require("app:manage")
-) -> dict[str, Any]:
-    return op_view(
-        await AppService(session, p.actor).update_operation(
-            op_id, body.model_dump(exclude_unset=True)
-        )
-    )
-
-
-@router.delete("/operations/{op_id}")
-async def delete_op(
-    op_id: UUID, session: SessionDep, dry_run: bool = False, p: Principal = require("app:manage")
-) -> dict[str, Any]:
-    return await AppService(session, p.actor).delete_operation(op_id, dry_run)
-
-
 # ───────────────────────────── 菜单
 
 
@@ -260,40 +128,6 @@ async def list_menus(app_id: UUID, session: SessionDep, p: PrincipalDep) -> list
     svc = AppService(session, p.actor)
     counts = await svc.menu_role_counts(app_id)
     return [menu_view(m, role_count=counts.get(m.uuid, 0)) for m in await svc.menus(app_id)]
-
-
-@router.post("/apps/{app_id}/menus", status_code=201)
-async def create_menu(
-    app_id: UUID, body: MenuCreate, session: SessionDep, p: Principal = require("app:manage")
-) -> dict[str, Any]:
-    data = body.model_dump()
-    data["parent_uuid"] = data.pop("parent_id")
-    return menu_view(await AppService(session, p.actor).create_menu(app_id, data), role_count=0)
-
-
-@router.patch("/menus/{menu_id}")
-async def update_menu(
-    menu_id: UUID, body: MenuUpdate, session: SessionDep, p: Principal = require("app:manage")
-) -> dict[str, Any]:
-    data = body.model_dump(exclude_unset=True)
-    if "parent_id" in data:
-        data["parent_uuid"] = data.pop("parent_id")
-    return menu_view(await AppService(session, p.actor).update_menu(menu_id, data))
-
-
-@router.post("/menus/{menu_id}/move-up")
-async def move_menu_up(
-    menu_id: UUID, session: SessionDep, p: Principal = require("app:manage")
-) -> dict[str, bool]:
-    await AppService(session, p.actor).move_menu_up(menu_id)
-    return {"ok": True}
-
-
-@router.delete("/menus/{menu_id}")
-async def delete_menu(
-    menu_id: UUID, session: SessionDep, dry_run: bool = False, p: Principal = require("app:manage")
-) -> dict[str, Any]:
-    return await AppService(session, p.actor).delete_menu(menu_id, dry_run)
 
 
 @router.get("/apps/{app_id}/menus/preview")
@@ -418,37 +252,6 @@ async def list_data_types(
 async def all_data_types(session: SessionDep, p: PrincipalDep) -> list[dict[str, Any]]:
     """数据授权页的筛选项：所有登录用户可见（只返回编码与名称）。"""
     return [data_type_view(d) for d in await AppService(session, p.actor).data_types()]
-
-
-@router.post("/apps/{app_id}/data-types", status_code=201)
-async def create_data_type(
-    app_id: UUID, body: DataTypeCreate, session: SessionDep, p: Principal = require("app:manage")
-) -> dict[str, Any]:
-    return data_type_view(
-        await AppService(session, p.actor).create_data_type(
-            app_id, body.code, body.name, body.description
-        ),
-        data_count=0,
-    )
-
-
-@router.patch("/data-types/{dt_id}")
-async def update_data_type(
-    dt_id: UUID, body: DataTypeUpdate, session: SessionDep, p: Principal = require("app:manage")
-) -> dict[str, Any]:
-    return data_type_view(
-        await AppService(session, p.actor).update_data_type(
-            dt_id, body.model_dump(exclude_unset=True)
-        )
-    )
-
-
-@router.delete("/data-types/{dt_id}")
-async def delete_data_type(
-    dt_id: UUID, session: SessionDep, p: Principal = require("app:manage")
-) -> dict[str, bool]:
-    await AppService(session, p.actor).delete_data_type(dt_id)
-    return {"ok": True}
 
 
 _ = SettingsDep

@@ -18,6 +18,8 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from atlas_tenancy import TenantScope
+
 __all__ = [
     "CallIdentity",
     "IdentityScopeMiddleware",
@@ -64,8 +66,12 @@ def current_identity() -> CallIdentity | None:
 
 
 def outbound_headers() -> dict[str, str]:
+    """出站身份请求头。身份里没写租户（后台任务没有请求可继承）就用当前的租户上下文。"""
     ident = _current.get()
-    return {**(ident.headers() if ident else {}), "X-Caller-App": caller_app()}
+    h = {**(ident.headers() if ident else {}), "X-Caller-App": caller_app()}
+    if "X-Tenant-Id" not in h and (tenant := TenantScope.current()) is not None:
+        h["X-Tenant-Id"] = str(tenant)
+    return h
 
 
 class IdentityScopeMiddleware:
@@ -75,11 +81,13 @@ class IdentityScopeMiddleware:
         self.app = app
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
-        if scope["type"] != "http":
+        if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
         token = _current.set(None)
         try:
-            await self.app(scope, receive, send)
+            # 租户上下文同理：同一个任务里跑多个请求（测试的 ASGITransport）时不能串
+            with TenantScope.isolated():
+                await self.app(scope, receive, send)
         finally:
             _current.reset(token)

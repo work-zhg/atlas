@@ -1,6 +1,6 @@
 # SerpApi Google 搜索：在 MCP 网关登记成 REST 转换（mcp-cutover.sh 用）。
 #
-#   python -m atlas_mcpgateway service add --file - --owner-account admin < 本文件（填好 key）
+#   python -m atlas_mcpgateway service --tenant <租户 uuid> add --file - --owner-account admin < 本文件（填好 key）
 #
 # ★ __SERPAPI_KEY__ 由 mcp-cutover.sh 从 .env 替换后经标准输入传进 Pod —— 本文件入库，key 不入库。
 #   网关调 serpapi.com 时把它放进查询参数 api_key；调用方（Atlas、Pod）拿不到。

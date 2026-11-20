@@ -14,6 +14,8 @@
 ★ 进程被杀（部署、OOM）：锁一个 TTL 内自然释放，文档停在中间状态 —— 由巡检 recover_stalled
   重新投递，从已完成的阶段之后续跑。不靠 Celery 重新投递：整个 Pod 被杀时，消息要等
   visibility_timeout（7 天）才回到队列。
+★ 多租户：任务消息里只有文档 id，租户从文档这一行取（run_queued），进入它再入库；租户已停用的
+  不开始，过一会儿再看（tasks/indexing.py），恢复后接着入、删除后就查不到了。
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from typing import Any
 from uuid import UUID
 
 from atlas_redislock import LockBusy, LockLost, RedisLock
+from atlas_tenancy import SystemReason, TenantScope, TenantSweep
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -46,7 +49,14 @@ from ..telemetry import tracer
 from .loader import index_segments, sync_doc_payload
 from .versions import stores
 
-__all__ = ["DocumentPaused", "IndexingRunner", "is_paused", "pause_key", "recover_stalled"]
+__all__ = [
+    "DocumentPaused",
+    "IndexingRunner",
+    "is_paused",
+    "pause_key",
+    "recover_stalled",
+    "run_queued",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -83,17 +93,56 @@ async def recover_stalled(rt: Runtime, sm: async_sessionmaker[AsyncSession]) -> 
     redis = rt.redis
     if redis is None:
         return []
-    async with sm() as s:
-        uuids = (
-            await s.scalars(select(Document.uuid).where(Document.indexing_status.in_(IN_PROGRESS)))
-        ).all()
-    stalled = [str(u) for u in uuids if not await redis.exists(lock_key(u))]
+    # 跨租户巡检：系统范围里只取 (文档, 租户)；投递出去的任务再按文档行进入各自的租户
+    with TenantScope.system(SystemReason.SWEEP):
+        async with sm() as s:
+            rows = (
+                await s.execute(
+                    select(Document.uuid, Document.tenant_uuid).where(
+                        Document.indexing_status.in_(IN_PROGRESS)
+                    )
+                )
+            ).all()
+    stalled = [
+        str(u)
+        for u, tenant in rows
+        if not await redis.exists(lock_key(u)) and await rt.gate.is_active(tenant)
+    ]
     if stalled:
         logger.warning("%d 个文档的入库任务已中断，重新投递：%s", len(stalled), stalled)
         # 一个文档一个任务：分散到各个 worker，不在一个任务里串行续跑
         for doc_uuid in stalled:
             rt.dispatcher.indexing([doc_uuid])
     return stalled
+
+
+async def run_queued(
+    rt: Runtime, sm: async_sessionmaker[AsyncSession], document_uuids: list[str]
+) -> list[str]:
+    """worker 的入口：逐份文档进入它所属的租户再入库（租户从文档行取，不认任何自称的）。
+
+    已删的文档查不到，直接跳过；租户已停用的不开始（文档留在原状态）。→ 因租户停用没入的文档。
+    """
+    runner = IndexingRunner(rt, sm)
+    wanted = [UUID(str(u)) for u in document_uuids]
+    suspended: list[str] = []
+
+    async def fetch() -> list[tuple[UUID, UUID]]:
+        async with sm() as s:
+            rows = await s.execute(
+                select(Document.uuid, Document.tenant_uuid).where(Document.uuid.in_(wanted))
+            )
+            return [(u, t) for u, t in rows]
+
+    async def handle(doc_uuid: UUID) -> None:
+        if not await rt.gate.is_active(TenantScope.require()):
+            logger.info("文档 %s 所在的租户已停用，暂不入库", doc_uuid)
+            suspended.append(str(doc_uuid))
+            return
+        await runner.run(doc_uuid)
+
+    await TenantSweep.each(fetch, handle)
+    return suspended
 
 
 class IndexingRunner:
@@ -174,7 +223,7 @@ class IndexingRunner:
                 span.set_attribute("knowledge.parser", str(ir.meta.get("parser", "")))
                 span.set_attribute("knowledge.blocks", len(ir.blocks))
                 span.set_attribute("knowledge.images", len(ir.images))
-                docir_key = await self._store_docir(doc, ir)
+                docir_key = await self._store_docir(ds, doc, ir)
             review: dict[str, Any] = {}
             report = ir.report or {}
             if (
@@ -293,12 +342,12 @@ class IndexingRunner:
         data = await asyncio.to_thread(self._rt.storage.get, info["object_key"])
         return await asyncio.to_thread(parse, info.get("filename") or doc.name, data, parser)
 
-    async def _store_docir(self, doc: Document, ir: DocIR) -> str:
+    async def _store_docir(self, ds: Dataset, doc: Document, ir: DocIR) -> str:
         """图片写对象存储（块上填 asset），再把 DocIR 存下来（解析预览、换分段规则时复用）。
 
-        ★ 与原文件同一前缀（{oss_prefix}/{库}/{文档}/）：删文档时一并清掉。
+        ★ 与原文件同一前缀（{库的目录}/{文档}/）：删文档时一并清掉。
         """
-        base = f"{self._rt.settings.oss_prefix}/{doc.dataset_uuid}/{doc.uuid}"
+        base = f"{ds.storage_prefix}/{doc.uuid}"
         storage = self._rt.storage
         for block in ir.blocks:
             image_id = block.attrs.get("image_id")

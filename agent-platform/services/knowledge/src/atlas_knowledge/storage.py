@@ -1,6 +1,8 @@
 """原始文件的对象存储。
 
-布局：{oss_prefix}/{dataset_uuid}/{document_uuid}/{文件名}
+布局：{库的目录}/{document_uuid}/{文件名}，库的目录记在 kb_dataset.storage_prefix：
+    {租户}/{oss_prefix}/{dataset_uuid}   多租户以后建的库（第一层是租户，删租户时整个删）
+    {oss_prefix}/{dataset_uuid}          之前建的库（对象原地不动）
 
 ★ 同步接口（boto3 是同步的）；调用方用 asyncio.to_thread 包。
 ★ 与 atlas-skill 各自实现，不抽公共包（同 auth.py 的理由）。

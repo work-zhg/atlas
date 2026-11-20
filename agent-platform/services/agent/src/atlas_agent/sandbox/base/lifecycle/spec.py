@@ -25,6 +25,7 @@ __all__ = [
     "LABEL_PREFIX",
     "SANDBOX_LABEL",
     "TEMPLATE_CODE",
+    "TENANT_LABEL",
     "CreateSpec",
     "Labels",
     "Resources",
@@ -35,6 +36,8 @@ __all__ = [
 LABEL_PREFIX = "atlas."
 #: 建沙箱时由基座加上：对账靠它把 OpenSandbox 上的沙箱和登记对上
 SANDBOX_LABEL = "atlas.sandbox"
+#: 和 atlas_tenancy.TenantNaming.LABEL 是同一个键
+TENANT_LABEL = "atlas.tenant"
 _MANAGED = {"atlas.managed": "true"}
 
 #: K8s label 值：≤ 63 个字符，字母数字开头结尾，中间可有 -_.
@@ -66,6 +69,11 @@ class Labels:
     def with_sandbox(self, sandbox_uuid: str) -> Labels:
         value = _checked_value("sandbox", sandbox_uuid)
         return Labels(MappingProxyType({**self.pairs, SANDBOX_LABEL: value}))
+
+    def with_tenant(self, tenant_uuid: str) -> Labels:
+        """atlas.tenant：对账删到没登记的孤儿时还知道它属于哪个租户；按租户统计 Pod 也靠它。"""
+        value = _checked_value("tenant", tenant_uuid)
+        return Labels(MappingProxyType({**self.pairs, TENANT_LABEL: value}))
 
     def as_dict(self) -> dict[str, str]:
         return dict(self.pairs)

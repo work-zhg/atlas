@@ -44,8 +44,9 @@ from atlas_engine.contracts.events import EventType
 from atlas_engine.contracts.spec import AgentSpec, ModelSpec, SkillRefSpec
 from atlas_engine.runtime.skill_events import SkillLoadTracker, skill_slug_of
 from atlas_skill.schemas import SkillCatalogItem, SkillVersionBrief, SkillVersionOut
+from atlas_tenancy import TenantScope
 
-from tests.fake_uc import AS_USER
+from tests.fake_uc import AS_USER, TEST_TENANT
 
 
 def _settings(**kw: Any) -> Settings:
@@ -124,6 +125,8 @@ async def test_runner_emits_notices_right_after_run_started() -> None:
 
 # ═══════════════════════════════════════════════ HttpSkillDirectory 的两层缓存
 
+OTHER_TENANT = "00000000-0000-0000-0000-00000000000b"
+
 
 def _version(slug: str = "demo", version: int = 1, **kw: Any) -> SkillVersionOut:
     return SkillVersionOut(
@@ -144,6 +147,8 @@ class _Server:
 
     def __init__(self) -> None:
         self.versions = {("demo", 1): _version()}
+        #: 别的租户的同名技能（X-Tenant-Id 不是测试租户时给这些）
+        self.elsewhere: dict[tuple[str, int], SkillVersionOut] = {}
         self.catalog_status = "published"
         self.down = False
         self.calls: list[str] = []
@@ -152,6 +157,9 @@ class _Server:
         self.calls.append(request.url.path)
         if self.down:
             raise httpx.ConnectError("down", request=request)
+        versions = self.versions
+        if request.headers.get("x-tenant-id") != TEST_TENANT:
+            versions = self.elsewhere
         if request.url.path == "/internal/skills/catalog":
             item = SkillCatalogItem(
                 slug="demo",
@@ -161,7 +169,7 @@ class _Server:
             )
             return httpx.Response(200, json=[item.model_dump(mode="json")])
         parts = request.url.path.split("/")
-        found = self.versions.get((parts[3], int(parts[5])))
+        found = versions.get((parts[3], int(parts[5])))
         if found is None:
             return httpx.Response(404, json={"detail": "not found"})
         return httpx.Response(200, json=found.model_dump(mode="json"))
@@ -203,6 +211,28 @@ async def test_stale_catalog_is_used_when_skill_app_goes_down(tmp_path: Path) ->
     assert [c.slug for c in await directory.catalog()] == ["demo"]
 
 
+async def test_caches_are_per_tenant(tmp_path: Path) -> None:
+    """两个租户的 demo@v1 是两份内容：内存、磁盘缓存都不能串。"""
+    server = _Server()
+    server.elsewhere = {("demo", 1): _version(description="别的租户的 demo")}
+    directory = server.directory(tmp_path)
+    assert (await directory.get("demo", 1)).description == "demo 的描述"
+    with TenantScope.enter(uuid.UUID(OTHER_TENANT)):
+        assert (await directory.get("demo", 1)).description == "别的租户的 demo"
+        restarted = server.directory(tmp_path)
+        server.down = True  # 进程重启 + 技能应用宕机：磁盘缓存也按租户
+        assert (await restarted.get("demo", 1)).description == "别的租户的 demo"
+    assert (await restarted.get("demo", 1)).description == "demo 的描述"
+
+
+async def test_resolve_skills_always_carries_the_storage_key() -> None:
+    """不要描述（建会话、子智能体、CLI）也要查版本：拷贝要按它的 storage_key。"""
+    fake = FakeSkillDirectory()
+    fake.add("demo", 1, storage_key=f"{TEST_TENANT}/_skills/demo/1/")
+    [meta], _ = await resolve_skills([SkillRefSpec("demo", 1)], fake, with_descriptions=False)
+    assert (meta.description, meta.storage_key) == ("demo", f"{TEST_TENANT}/_skills/demo/1/")
+
+
 async def test_first_fetch_failure_and_not_found() -> None:
     server = _Server()
     directory = server.directory(None)
@@ -233,16 +263,13 @@ async def real_skill_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    # 技能应用没有免鉴权模式：授权快照接替身（能上传技能即可）
-    monkeypatch.setattr(
-        skill_auth,
-        "_transport",
-        httpx.MockTransport(
-            lambda req: httpx.Response(
-                200, json={"can_access": True, "permissions": ["skill:upload"]}
-            )
-        ),
-    )
+    # 技能应用没有免鉴权模式：授权快照接替身（能上传、审核技能即可；人在请求头写的租户里）
+    def snapshot(req: httpx.Request) -> httpx.Response:
+        user = {"status": "active", "tenant_id": req.headers.get("x-tenant-id")}
+        ops = ["skill:upload", "skill:review"]
+        return httpx.Response(200, json={"can_access": True, "permissions": ops, "user": user})
+
+    monkeypatch.setattr(skill_auth, "_transport", httpx.MockTransport(snapshot))
     monkeypatch.setattr(skill_auth, "_cache", skill_auth._Cache())
     test_db = "atlas_skill_test"
     saved = os.environ.get("ATLAS_SKILL_DATABASE_URL")
@@ -263,7 +290,9 @@ async def real_skill_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
 
     await asyncio.to_thread(skill_main.migrate)
     async with skill_sessions()() as session:
-        await session.execute(text("TRUNCATE skill, skill_version, skill_audit"))
+        await session.execute(
+            text("TRUNCATE skill, skill_version, skill_audit, app_tenant_state, app_ops_request")
+        )
         await session.commit()
     try:
         with mock_aws():
@@ -285,7 +314,8 @@ async def real_skill_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
 async def test_contract_against_real_skill_app(real_skill_app: Any) -> None:
     app, _storage = real_skill_app
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://sk", headers=AS_USER) as c:
+    headers = {**AS_USER, "X-Tenant-Id": TEST_TENANT}
+    async with httpx.AsyncClient(transport=transport, base_url="http://sk", headers=headers) as c:
         import io
         import zipfile
 
@@ -295,9 +325,13 @@ async def test_contract_against_real_skill_app(real_skill_app: Any) -> None:
         resp = await c.post(
             "/api/v1/skills",
             files={"file": ("s.zip", buf.getvalue(), "application/zip")},
-            data={"source": "builtin"},
+            data={"source": "tenant"},
         )
         assert resp.status_code == 201, resp.text
+        # 租户的技能一律经另一个人审核
+        approve = f"/api/v1/skill-uploads/{resp.json()['id']}/approve"
+        ok = await c.post(approve, json={"note": "ok"}, headers={"X-Uid": str(uuid.uuid4())})
+        assert ok.status_code == 200, ok.text
 
     directory = HttpSkillDirectory(
         SkillClient("http://skill", transport=transport), cache_dir=None, status_ttl_s=60
@@ -306,6 +340,8 @@ async def test_contract_against_real_skill_app(real_skill_app: Any) -> None:
     assert latest is not None
     assert (latest.version, latest.description) == (1, "契约测试用的技能")
     assert latest.files[0].path == "SKILL.md"
+    # 源仓库在租户目录下：运行时按它拷（SkillMeta.storage_key）
+    assert latest.storage_key == f"{TEST_TENANT}/_skills/demo/1/"
 
 
 # ═══════════════════════════════════════════════ 保存时钉死技能版本（G1）

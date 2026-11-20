@@ -19,7 +19,6 @@
     "@ant-design/v5-patch-for-react-19": "^1.0.3",
     "@atlas/appconfig-ui": "workspace:*",
     "@atlas/chat-ui": "workspace:*",
-    "@atlas/jobs-ui": "workspace:*",
     "@tanstack/react-query": "^5.62.0",
     "antd": "^5.22.0",
     "next": "^15.1.0",

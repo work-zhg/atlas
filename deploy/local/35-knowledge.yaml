@@ -26,6 +26,9 @@ spec:
           command: ["python", "-m", "atlas_knowledge", "migrate"]
           env: &kb-env
             - {name: ATLAS_KB_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_knowledge"}
+            # 多租户迁移把已有数据归到原平台租户（apply.sh 按 .env 的 TENANT_BACKFILL_UUID 建；只有迁移读它）
+            - name: TENANT_BACKFILL_UUID
+              valueFrom: {configMapKeyRef: {name: atlas-tenancy, key: backfill_uuid, optional: true}}
             - {name: ATLAS_KB_REDIS_URL, value: "redis://__HOST_IP__:6380/3"}
             - {name: ATLAS_KB_QDRANT_URL, value: "http://__HOST_IP__:6333"}
             - {name: ATLAS_KB_OSS_ENDPOINT, value: "http://__HOST_IP__:9000"}

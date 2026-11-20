@@ -2,7 +2,7 @@
 
 /**
  * 每一轮对话都会带给智能体的指令（doc/context-management-design.html §10）。
- * 个人的在「个性化」里，平台的在「系统 › 平台设置」里（影响所有人）。
+ * 个人的在「个性化」里，租户的在「租户设置」里（影响本租户所有人）。
  */
 import { Alert, App, Button, Input } from "antd";
 import { useEffect, useState } from "react";
@@ -14,7 +14,7 @@ export function InstructionEditor({
   placeholder,
   hint,
 }: {
-  scope: "me" | "platform";
+  scope: "me" | "tenant";
   placeholder: string;
   hint: string;
 }) {

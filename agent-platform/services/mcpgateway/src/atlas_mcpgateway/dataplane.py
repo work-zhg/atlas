@@ -2,8 +2,9 @@
 
     /mcp/{服务名}   POST（JSON-RPC）。GET、DELETE 回 405：无状态，没有推送流、没有会话可关
 
-    ① 服务        存在且启用                                  -32040 / -32041
-    ② 认 Key      Authorization: Bearer <Key>（查库，停用、重置立即生效）  -32042 / -32043
+    ① 认 Key      Authorization: Bearer <Key>（查库，停用、重置立即生效）  -32042 / -32043
+                  Key 说明了是哪个租户：之后都在这个租户里（停用的租户的 Key 无效）
+    ② 服务        在这个租户里存在且启用                      -32040 / -32041
     ③ 判权        公开服务不判；私有服务以 Key 的主体 uid 问用户中心（短缓存），
                   这把 Key 在这个服务上一点权限都没有就拒绝          -32044 / -32045
                   ①–③ 在交给 SDK 之前做：回 HTTP 401 / 403 / 404 / 503 + JSON-RPC 错误体
@@ -30,8 +31,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
+from uuid import UUID
 
 import mcp.types as mt
+from atlas_opsapi import TenantGate
+from atlas_tenancy import SystemReason, TenantScope, tenant_headers
 from mcp.server.lowlevel import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.shared.exceptions import MCPError
@@ -213,11 +217,14 @@ class DataPlane:
         perms: Permissions,
         access: AccessCache,
         upstreams: Upstreams,
+        gate: TenantGate | None = None,
     ) -> None:
         self.sessionmaker = sessionmaker
         self.perms = perms
         self.access = access
         self.upstreams = upstreams
+        #: 租户状态（运营接口）：停用的租户的 Key 一律无效
+        self.gate = gate
         server: Server[Any, Any] = Server(
             "mcp-gateway", on_list_tools=self._list_tools, on_call_tool=self._call_tool
         )
@@ -259,51 +266,66 @@ class DataPlane:
         user_uid: str | None,
         audit: Mapping[str, str] | None = None,
     ) -> Caller:
+        """先认 Key（它说明了是哪个租户），再在这个租户里找服务、判权。
+
+        ★ 别的租户的服务即使同名也找不到（SERVICE_NOT_FOUND）。停用的租户的 Key 一律无效。
+        """
+        if secret is None:
+            raise Rejection(
+                Reason.KEY_MISSING,
+                "缺少 API Key：请求头要带 Authorization: Bearer <MCP 网关的 API Key>",
+            )
         async with self.sessionmaker() as session:
-            svc = await session.scalar(select(McpService).where(McpService.name == service))
+            # 还不知道是哪个租户：按全局唯一的 Key 原文在系统范围里只查这一行
+            with TenantScope.system(SystemReason.CREDENTIAL):
+                key = await KeyService(session, self.perms).authenticate(secret)
+        if key is None or not await self._tenant_active(key.tenant_uuid):
+            raise Rejection(Reason.KEY_INVALID, "API Key 无效或已停用")
+        with TenantScope.enter(key.tenant_uuid):
+            async with self.sessionmaker() as session:
+                svc = await session.scalar(select(McpService).where(McpService.name == service))
             if svc is None:
                 raise Rejection(Reason.SERVICE_NOT_FOUND, f"MCP 服务 {service} 不存在")
             if svc.status != "enabled":
                 raise Rejection(Reason.SERVICE_DISABLED, f"MCP 服务 {service} 已被停用")
-            if secret is None:
-                raise Rejection(
-                    Reason.KEY_MISSING,
-                    "缺少 API Key：请求头要带 Authorization: Bearer <MCP 网关的 API Key>",
+            tracing.mark(service=service, key_uid=str(key.subject_uid), key_type=key.key_type)
+            access: KeyAccess | None = None
+            if svc.visibility == "private":
+                # ★ 调用户中心判权时 X-Auth-Uid = Key 的主体：数据面没有别的身份可透传
+                subject = str(key.subject_uid)
+                use_outbound(
+                    {"X-Uid": subject, "X-Auth-Uid": subject, **tenant_headers(key.tenant_uuid)}
                 )
-            key = await KeyService(session, self.perms).authenticate(secret)
-            if key is None:
-                raise Rejection(Reason.KEY_INVALID, "API Key 无效或已停用")
-        tracing.mark(service=service, key_uid=str(key.subject_uid), key_type=key.key_type)
-        access: KeyAccess | None = None
-        if svc.visibility == "private":
-            # ★ 调用户中心判权时 X-Auth-Uid = Key 的主体：数据面没有别的身份可透传
-            subject = str(key.subject_uid)
-            use_outbound({"X-Uid": subject, "X-Auth-Uid": subject})
-            try:
-                access = await self.access.get(str(key.subject_uid))
-            except Unavailable as exc:
-                raise Rejection(
-                    Reason.AUTHZ_UNAVAILABLE,
-                    f"暂时无法确认 MCP 服务 {service} 的授权（用户中心不可用），请稍后重试",
-                ) from exc
-            if not access.touches(service):
-                raise Rejection(
-                    Reason.FORBIDDEN,
-                    f"这把 API Key 没有被授权使用 MCP 服务 {service}，"
-                    "请联系服务所有者或 MCP 管理员",
-                    key_uid=str(key.subject_uid),
-                )
+                try:
+                    access = await self.access.get(str(key.subject_uid))
+                except Unavailable as exc:
+                    raise Rejection(
+                        Reason.AUTHZ_UNAVAILABLE,
+                        f"暂时无法确认 MCP 服务 {service} 的授权（用户中心不可用），请稍后重试",
+                    ) from exc
+                if not access.touches(service):
+                    raise Rejection(
+                        Reason.FORBIDDEN,
+                        f"这把 API Key 没有被授权使用 MCP 服务 {service}，"
+                        "请联系服务所有者或 MCP 管理员",
+                        key_uid=str(key.subject_uid),
+                    )
         holder = str(key.user_uuid) if key.key_type == "user" else (user_uid or None)
         return Caller(svc, key, access, holder, dict(audit or {}))
+
+    async def _tenant_active(self, tenant: UUID) -> bool:
+        return self.gate is None or await self.gate.is_active(tenant)
 
     # ------------------------------------------------------------------ ④⑤
 
     async def tools(self, svc: McpService) -> list[McpTool]:
-        async with self.sessionmaker() as session:
-            rows = await session.scalars(
-                select(McpTool).where(McpTool.service_uuid == svc.uuid).order_by(McpTool.name)
-            )
-            return [t for t in rows if callable_tool(t)]
+        # ★ SDK 的处理函数跑在会话管理器自己的任务里，拿不到请求的上下文：按服务所属的租户进入
+        with TenantScope.enter(svc.tenant_uuid):
+            async with self.sessionmaker() as session:
+                rows = await session.scalars(
+                    select(McpTool).where(McpTool.service_uuid == svc.uuid).order_by(McpTool.name)
+                )
+                return [t for t in rows if callable_tool(t)]
 
     async def visible(self, caller: Caller) -> list[McpTool]:
         return [t for t in await self.tools(caller.service) if caller.allows(t.name)]

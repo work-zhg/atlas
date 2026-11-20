@@ -27,9 +27,10 @@ async def test_first_login_must_change_password_then_me() -> None:
     me = (await c.get("/api/v1/auth/me")).json()
     assert me["must_change_password"] is False
     assert "user:create" in me["permissions"]
-    # 平台租户的超级管理员还能看到「租户管理」
-    assert [m["code"] for m in me["menus"]] == ["org", "users", "grants", "apps", "tenants"]
-    assert me["tenant"]["kind"] == "platform" and me["tenant"]["code"] == "default"
+    # 没有平台租户：第一个租户的超级管理员也只管本租户，没有「租户管理」
+    assert [m["code"] for m in me["menus"]] == ["org", "users", "grants", "apps"]
+    assert "kind" not in me["tenant"] and me["tenant"]["code"] == "default"
+    assert not {"app:manage", "tenant:manage", "tenant:view"} & set(me["permissions"])
     assert me["user"]["status"] == "active"
     await c.close()
 

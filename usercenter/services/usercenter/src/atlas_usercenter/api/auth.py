@@ -135,7 +135,6 @@ async def me(principal: PrincipalDep, session: SessionDep, settings: SettingsDep
             "id": str(principal.tenant.uuid),
             "code": principal.tenant.code,
             "name": principal.tenant.name,
-            "kind": principal.tenant.kind,
         },
         "password_policy": policy_text(settings),
         #: 与 password_policy 同一份规则的结构化形式：前端逐条打勾用

@@ -95,9 +95,10 @@ async def set_default_agent(
     payload: DefaultAgentIn,
     request: Request,
     service: AgentServiceDep,
-    principal: Annotated[Any, Depends(require("config:manage"))],
+    principal: Annotated[Any, Depends(require("settings:manage"))],
 ) -> DefaultAgentOut:
-    """设为默认智能体（agent_id 为空 = 取消默认）。只有平台管理员能改：它影响所有人的首页。"""
+    """设为本租户的默认智能体（agent_id 为空 = 取消默认）。只有租户管理员能改：它影响本租户
+    所有人的首页。"""
     if payload.agent_id is not None:
         agent = await service.agent(payload.agent_id)
         if agent.status != "enabled":

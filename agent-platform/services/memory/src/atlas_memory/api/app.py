@@ -3,10 +3,14 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from atlas_opsapi import NoExternal, OpsGuard, OpsRoutes, TenantGate, TenantLifecycleService
+from atlas_tenancy import TenantDataPurge
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from ..auth import IdentityHeadersMiddleware
+from ..db.models import Base, Entry, Instance, Revision, Topic
+from ..db.session import get_sessionmaker
 from ..errors import MemoryServiceError
 from ..perms import CachedPermissions, DataPermissions, UCDataPermissions
 from ..settings import get_settings
@@ -55,4 +59,21 @@ def create_app(*, perms: DataPermissions | None = None) -> FastAPI:
 
     app.include_router(scopes.router)
     app.include_router(instances.router)
+    _mount_ops(app)
     return app
+
+
+def _mount_ops(app: FastAPI) -> None:
+    """运营接口（/ops/v1）：租户停用、恢复、删除，作用域定义。
+
+    记忆服务没有数据库之外的东西要删、也没有后台工作要停（NoExternal）；停用后数据接口按
+    TenantGate 一律 403。用户中心里登记的数据权限随租户在用户中心里一起删。
+    """
+    settings = get_settings()
+    key = settings.ops_api_key.get_secret_value() if settings.ops_api_key else None
+    sessions = get_sessionmaker()
+    app.state.ops_guard = guard = OpsGuard(key)
+    app.state.tenant_gate = gate = TenantGate(sessions)
+    purge = TenantDataPurge((Revision, Entry, Topic, Instance), base=Base)
+    lifecycle = TenantLifecycleService(sessions, NoExternal(), gate, purge)
+    app.include_router(OpsRoutes(guard, lifecycle).router)

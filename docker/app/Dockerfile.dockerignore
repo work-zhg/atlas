@@ -16,6 +16,8 @@
 !infra-platform/libs/redislock/
 !infra-platform/libs/appconfig/
 !infra-platform/libs/jobs/
+!infra-platform/libs/tenancy/
+!infra-platform/libs/opsapi/
 !agent-platform/services/skill/
 !agent-platform/services/knowledge/
 !agent-platform/services/memory/

@@ -14,11 +14,13 @@ import pytest
 from atlas_skill import auth
 from atlas_skill.api.app import create_app
 from atlas_skill.settings import get_settings
+from skill_testkit import OTHER_TENANT, TEST_TENANT
 
+_IN_TENANT = {"status": "active", "tenant_id": TEST_TENANT}
 SNAPSHOTS = {
-    "u-reviewer": {"can_access": True, "permissions": ["skill:review"]},
-    "u-member": {"can_access": True, "permissions": ["chat:use"]},
-    "u-outsider": {"can_access": False, "permissions": []},
+    "u-reviewer": {"can_access": True, "permissions": ["skill:review"], "user": _IN_TENANT},
+    "u-member": {"can_access": True, "permissions": ["chat:use"], "user": _IN_TENANT},
+    "u-outsider": {"can_access": False, "permissions": [], "user": _IN_TENANT},
 }
 
 
@@ -46,7 +48,9 @@ def uc_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[dict[str, str | No
 async def client(storage, uc_mode) -> AsyncIterator[httpx.AsyncClient]:  # type: ignore[no-untyped-def]
     app = create_app(storage=storage)
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://skill"
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://skill",
+        headers={"X-Tenant-Id": TEST_TENANT},
     ) as c:
         yield c
 
@@ -64,9 +68,9 @@ async def test_uc_identity_headers_and_operations(
     assert r.status_code == 403
 
     # 在可访问范围内就能看目录，不要操作码；审计、审查要操作码
-    reviewer = {"X-Uid": "u-reviewer", "X-Tenant-Id": "t-1"}
+    reviewer = {"X-Uid": "u-reviewer"}
     assert (await client.get("/api/v1/skills", headers=reviewer)).status_code == 200
-    assert uc_mode[-1] == {"auth_uid": "u-reviewer", "x-tenant-id": "t-1"}
+    assert uc_mode[-1] == {"auth_uid": "u-reviewer", "x-tenant-id": TEST_TENANT}
     member = {"X-Uid": "u-member"}
     assert (await client.get("/api/v1/skills", headers=member)).status_code == 200
     assert (await client.get("/api/v1/audit", headers=member)).status_code == 403
@@ -92,3 +96,14 @@ async def test_uc_identity_headers_and_operations(
 
     # 快照有缓存：同一个人只问一次用户中心
     assert sum(1 for c in uc_mode if c["auth_uid"] == "u-reviewer") == 1
+
+
+async def test_tenant_header_is_checked_against_user_center(client: httpx.AsyncClient) -> None:
+    """请求头的租户以用户中心为准：没写 → 401；写的和用户所属的不一致 → 401。"""
+    bare = httpx.AsyncClient(transport=client._transport, base_url="http://skill")
+    async with bare:
+        r = await bare.get("/api/v1/skills", headers={"X-Uid": "u-member"})
+        assert r.status_code == 401 and "X-Tenant-Id" in r.json()["detail"]
+    elsewhere = {"X-Uid": "u-member", "X-Tenant-Id": OTHER_TENANT}
+    r = await client.get("/api/v1/skills", headers=elsewhere)
+    assert r.status_code == 401 and "不一致" in r.json()["detail"]

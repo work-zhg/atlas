@@ -402,6 +402,18 @@ def test_trace_id_is_the_run_id_and_segments_share_it(traced) -> None:
     assert [s.attributes[sc.RESUMED] for s in roots] == [False, True]
 
 
+def test_the_root_carries_the_tenant(traced) -> None:
+    """多租户：调用链里的对话内容属于租户 —— 根上记租户，按租户能筛、能清。"""
+    from atlas_tenancy import TenantScope
+
+    tenant = UUID("00000000-0000-0000-0000-0000000000c1")
+    with TenantScope.enter(tenant), RunTrace.start(_Run(make_spec()), run_id=str(RUN_ID)):
+        pass
+    attrs = traced.get_finished_spans()[0].attributes
+    assert attrs[sc.TENANT_ID] == str(tenant)
+    assert attrs[f"{sc.LF_TRACE_METADATA}tenant_id"] == str(tenant)
+
+
 def test_session_is_the_root_thread_and_user_is_the_owner(traced) -> None:
     """★ 子 run 在子会话上，但归到根会话那个 Session（P1）；用户 = 会话所有者（P9）。"""
     parent_run = "12121212-1212-1212-1212-121212121212"

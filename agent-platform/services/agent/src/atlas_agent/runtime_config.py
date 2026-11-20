@@ -2,12 +2,18 @@
 
 c4-model/infra-platform/code-appconfig.html。
 
-    sandbox.quota_per_user              每人同时几个沙箱 / 会话 Pod（原生沙箱与会话 Pod 合计）
+  系统参数（只有运营中心能改，经运营接口 /ops/v1/configs）
     sandbox.image_allow_prefixes        strict 档可用的镜像前缀
     sandbox.bench_image_allow_prefixes  评测档可用的镜像前缀
-    platform.default_agent              首页输入框默认用的智能体（空 = 没有默认）
     workspace.upload_max_mb             单个文件上传的上限（工作空间、对话里添加文件）
-    workspace.quota_mb                  每人工作空间的存储配额（0 = 不限）
+    capacity.default_running_runs       没单独定份额的租户：同时运行的 run（0 = 不限）
+    capacity.default_sandboxes          同上：同时存在的沙箱和会话 Pod（0 = 不限）
+    capacity.default_storage_mb         同上：工作空间存储（MB，0 = 不限）
+  租户设置（每个租户一份，租户管理员改；没改过的用系统值）
+    tenant.default_agent                首页输入框默认用的智能体（空 = 没有默认）
+    capacity.runs_per_person            每人同时运行的 run（0 = 不限）
+    capacity.sandboxes_per_person       每人同时几个沙箱 / 会话 Pod（原生沙箱与会话 Pod 合计）
+    capacity.storage_mb_per_person      每人工作空间的存储配额（0 = 不限）
     device.preview_max_mb               网页上预览本机文件的大小上限
     device.download_max_mb              网页上下载本机文件的大小上限
     browser.sandbox_image               开了浏览器的原生智能体用的沙箱镜像
@@ -26,7 +32,8 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from atlas_appconfig import AppConfig, ConfigKey
+from atlas_appconfig import AppConfig, ConfigKey, ConfigScope
+from atlas_tenancy import TenantScope
 
 from .browser.plan import BrowserConfig, parse_skill_ref
 from .device.files import FileLimits
@@ -52,6 +59,10 @@ class RuntimeKeys:
     default_agent: ConfigKey[str]
     upload_max_mb: ConfigKey[int]
     quota_mb: ConfigKey[int]
+    runs_per_person: ConfigKey[int]
+    default_running_runs: ConfigKey[int]
+    default_sandboxes: ConfigKey[int]
+    default_storage_mb: ConfigKey[int]
     device_preview_max_mb: ConfigKey[int]
     device_download_max_mb: ConfigKey[int]
     browser_sandbox_image: ConfigKey[str]
@@ -62,11 +73,15 @@ class RuntimeKeys:
     @classmethod
     def of(cls, settings: Settings) -> RuntimeKeys:
         return cls(
+            # ★ 每人上限是租户设置（多租户设计 §9）：租户管理员在本租户份额内定，没定的用系统值。
+            #   由原来的系统参数 sandbox.quota_per_user、workspace.quota_mb 换名而来（作用域登记后
+            #   不能改），旧值由 migrate-appconfig 搬过来（config_carryover.py）
             sandbox_quota=ConfigKey(
-                "sandbox.quota_per_user",
+                "capacity.sandboxes_per_person",
                 int,
                 default=settings.sandbox_quota_per_user,
-                description="每人同时几个沙箱 / 会话 Pod（原生沙箱与会话 Pod 合计）",
+                description="每人同时几个沙箱 / 会话 Pod（原生沙箱与会话 Pod 合计，0 = 不限）",
+                scope=ConfigScope.TENANT,
             ),
             sandbox_images=ConfigKey(
                 "sandbox.image_allow_prefixes",
@@ -82,10 +97,11 @@ class RuntimeKeys:
             ),
             # ★ 只是一个指针：默认智能体是普通智能体，权限、共享、编辑与其他智能体完全一样
             default_agent=ConfigKey(
-                "platform.default_agent",
+                "tenant.default_agent",
                 str,
                 default="",
                 description="首页输入框默认用的智能体 id（空 = 没有默认）",
+                scope=ConfigScope.TENANT,
             ),
             upload_max_mb=ConfigKey(
                 "workspace.upload_max_mb",
@@ -94,12 +110,39 @@ class RuntimeKeys:
                 description="单个文件上传的上限（MB）：工作空间上传、对话里添加文件都按它",
             ),
             quota_mb=ConfigKey(
-                "workspace.quota_mb",
+                "capacity.storage_mb_per_person",
                 int,
                 default=settings.workspace_quota_mb,
                 description=(
                     "每人工作空间的存储配额（MB，0 = 不限）：上传时检查，智能体写的文件也算在内"
                 ),
+                scope=ConfigScope.TENANT,
+            ),
+            runs_per_person=ConfigKey(
+                "capacity.runs_per_person",
+                int,
+                default=0,
+                description="每人同时运行的 run（0 = 不限）；多出来的排队，不算失败",
+                scope=ConfigScope.TENANT,
+            ),
+            # 租户份额的默认值：运营中心没单独给某个租户定份额时用（0 = 不限）
+            default_running_runs=ConfigKey(
+                "capacity.default_running_runs",
+                int,
+                default=0,
+                description="没单独定份额的租户：同时运行的 run（0 = 不限）",
+            ),
+            default_sandboxes=ConfigKey(
+                "capacity.default_sandboxes",
+                int,
+                default=0,
+                description="没单独定份额的租户：同时存在的沙箱和会话 Pod（0 = 不限）",
+            ),
+            default_storage_mb=ConfigKey(
+                "capacity.default_storage_mb",
+                int,
+                default=0,
+                description="没单独定份额的租户：工作空间存储（MB，0 = 不限）",
             ),
             # 本机文件经设备网关现读，内容多经过 Atlas 一次（本机 CLI 方案 §5.4）
             device_preview_max_mb=ConfigKey(
@@ -154,6 +197,10 @@ class RuntimeKeys:
             self.default_agent,
             self.upload_max_mb,
             self.quota_mb,
+            self.runs_per_person,
+            self.default_running_runs,
+            self.default_sandboxes,
+            self.default_storage_mb,
             self.device_preview_max_mb,
             self.device_download_max_mb,
             self.browser_sandbox_image,
@@ -177,25 +224,52 @@ class RuntimeConfig:
     def __init__(self, settings: Settings, sessions: async_sessionmaker[AsyncSession]) -> None:
         self.keys = RuntimeKeys.of(settings)
         self.config = AppConfig(sessions, self.keys.all())
+        self._settings = settings
 
     async def sandbox_quota(self) -> int:
-        return await self.config.get(self.keys.sandbox_quota)
+        """当前租户的每人沙箱上限。"""
+        return await self.config.get(self.keys.sandbox_quota, tenant_uuid=TenantScope.require())
 
     async def default_agent(self) -> str:
-        return await self.config.get(self.keys.default_agent)
+        """当前租户的默认智能体。"""
+        return await self.config.get(self.keys.default_agent, tenant_uuid=TenantScope.require())
 
     async def set_default_agent(self, agent_id: str, *, by: str) -> None:
-        entry = await self.config.entry(self.keys.default_agent.name)
+        tenant = TenantScope.require()
+        entry = await self.config.entry(self.keys.default_agent.name, tenant_uuid=tenant)
         await self.config.set(
             self.keys.default_agent.name,
             agent_id or None,
+            tenant_uuid=tenant,
             expected_version=entry.item.version,
             by=by,
         )
 
     async def workspace_limits(self) -> WorkspaceLimits:
-        upload, quota = await self.config.get_many(self.keys.upload_max_mb, self.keys.quota_mb)
+        """上传的硬上限（系统参数）和当前租户的每人存储配额（租户设置）。"""
+        upload, quota = await self.config.get_many(
+            self.keys.upload_max_mb, self.keys.quota_mb, tenant_uuid=TenantScope.require()
+        )
         return WorkspaceLimits(upload_max=max(upload, 0) * _MB, quota=max(quota, 0) * _MB)
+
+    async def capacity_defaults(self) -> tuple[int, int, int]:
+        """没单独定份额的租户用的份额：(同时运行的 run, 沙箱, 存储字节)，0 = 不限。"""
+        runs, sandboxes, storage = await self.config.get_many(
+            self.keys.default_running_runs,
+            self.keys.default_sandboxes,
+            self.keys.default_storage_mb,
+        )
+        return max(runs, 0), max(sandboxes, 0), max(storage, 0) * _MB
+
+    async def per_person(self) -> tuple[int, int, int]:
+        """当前租户的每人上限：(同时运行的 run, 沙箱, 存储字节)，0 = 不限。"""
+        runs, sandboxes, storage = await self.config.get_many(
+            self.keys.runs_per_person,
+            self.keys.sandbox_quota,
+            self.keys.quota_mb,
+            tenant_uuid=TenantScope.require(),
+        )
+        return max(runs, 0), max(sandboxes, 0), max(storage, 0) * _MB
 
     async def device_file_limits(self) -> FileLimits:
         preview, download = await self.config.get_many(
@@ -204,7 +278,8 @@ class RuntimeConfig:
         return FileLimits(preview_max_mb=max(preview, 0), download_max_mb=max(download, 0))
 
     async def browser_config(self) -> BrowserConfig:
-        """浏览器镜像和技能。技能写错了（不是 slug@版本）当作不带，记日志，不挡住这一轮。"""
+        """浏览器镜像和技能。技能写错了（不是 slug@版本）、当前租户没装这个版本（技能市场
+        没拷过来），都当作不带，记日志，不挡住这一轮。"""
         sandbox_image, cli_image, skill, computer_use = await self.config.get_many(
             self.keys.browser_sandbox_image,
             self.keys.browser_cli_image,
@@ -214,9 +289,38 @@ class RuntimeConfig:
         return BrowserConfig(
             sandbox_image=sandbox_image,
             cli_image=cli_image,
-            skill=_skill_ref("browser.skill", skill),
-            computer_use_skill=_skill_ref("browser.computer_use_skill", computer_use),
+            skill=await self._installed("browser.skill", _skill_ref("browser.skill", skill)),
+            computer_use_skill=await self._installed(
+                "browser.computer_use_skill",
+                _skill_ref("browser.computer_use_skill", computer_use),
+            ),
         )
+
+    async def _installed(self, key: str, ref: SkillRefSpec | None) -> SkillRefSpec | None:
+        """系统参数指的是技能市场里的版本，租户要装过才有。没装 → 不带（记日志）。
+
+        ★ 技能应用暂时连不上时照旧带上：后面拷技能时会明确报错，不在这里吞掉。
+        """
+        if ref is None:
+            return None
+        from .skills import skill_directory
+
+        directory = skill_directory(self._settings)
+        if not directory.configured:
+            return ref
+        try:
+            await directory.get(ref.slug, ref.version)
+        except LookupError:
+            logger.warning(
+                "运行期配置 %s 指向的技能 %s@v%s 本租户没有装，当作不带",
+                key,
+                ref.slug,
+                ref.version,
+            )
+            return None
+        except Exception:  # 连不上不在这里判
+            logger.warning("查技能 %s@v%s 是否已装失败，照旧带上", ref.slug, ref.version)
+        return ref
 
     async def image_allow_prefixes(self) -> dict[str, list[str]]:
         strict, bench = await self.config.get_many(self.keys.sandbox_images, self.keys.bench_images)

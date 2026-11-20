@@ -42,10 +42,14 @@ class Taken:
 
 @dataclass(frozen=True)
 class Candidate:
-    """兜底任务的一条候选。id 是翻页游标：按 id 往后翻，一轮里每条只看一次。"""
+    """兜底任务的一条候选。id 是翻页游标：按 id 往后翻，一轮里每条只看一次。
+
+    tenant_uuid：候选是在系统范围里取的（跨租户），处理时要进入它所属的租户。
+    """
 
     id: int
     run_uuid: UUID
+    tenant_uuid: UUID
 
 
 def _orphaned(now: datetime) -> ColumnElement[bool]:
@@ -154,7 +158,7 @@ class RunQueue:
         now = _utcnow()
         waited = or_(Run.queued_at.is_(None), Run.queued_at < now - timedelta(seconds=queued_for_s))
         stmt = (
-            select(Run.id, Run.run_uuid)
+            select(Run.id, Run.run_uuid, Run.tenant_uuid)
             .where(
                 Run.id > after_id,
                 or_(and_(Run.status == "queued", waited), _orphaned(now)),
@@ -162,4 +166,5 @@ class RunQueue:
             .order_by(Run.id)
             .limit(limit)
         )
-        return [Candidate(id=i, run_uuid=u) for i, u in (await self._session.execute(stmt)).all()]
+        rows = (await self._session.execute(stmt)).all()
+        return [Candidate(id=i, run_uuid=u, tenant_uuid=t) for i, u, t in rows]

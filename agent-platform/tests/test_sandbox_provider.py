@@ -102,7 +102,7 @@ async def test_create_request_matches_the_design(
     spec = sb.spec
     assert spec["timeout"] is None
     assert spec["image"] == {"uri": get_settings().sandbox_default_image}
-    assert set(spec["metadata"]) == {"atlas.managed", "atlas.user", "atlas.sandbox"}
+    assert set(spec["metadata"]) == {"atlas.managed", "atlas.user", "atlas.sandbox", "atlas.tenant"}
     assert spec["metadata"]["atlas.user"] == str(ws.user_uuid)
     assert spec["networkPolicy"] == {"defaultAction": "allow"}
     assert spec["env"]["HOME"] == "/home/agent"

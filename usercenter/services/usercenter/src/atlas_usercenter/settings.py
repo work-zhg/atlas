@@ -51,6 +51,10 @@ class UCSettings(BaseSettings):
     # ── 开放接口 ─────────────────────────────────────────────────────
     app_token_hours: int = 2
 
+    # ── 运营接口（/ops/v1，只给运营中心）─────────────────────────────
+    #: 运营中心给本系统签名用的运营密钥（部署 Secret）。空 = 运营接口没启用，一律 403
+    ops_api_key: str = ""
+
 
 @lru_cache
 def get_settings() -> UCSettings:

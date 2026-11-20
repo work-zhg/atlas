@@ -17,6 +17,7 @@ from atlas_usercenter.db.session import get_engine, get_sessionmaker
 from atlas_usercenter.settings import get_settings
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
+from uc_testkit import OPS_KEY
 
 TEST_DB = "atlas_usercenter_test"
 _ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
@@ -27,6 +28,8 @@ TEST_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{TEST_DB}"
 def _test_database() -> Iterator[None]:
     saved = os.environ.get("ATLAS_UC_DATABASE_URL")
     os.environ["ATLAS_UC_DATABASE_URL"] = TEST_URL
+    # 运营接口的签名密钥（uc_testkit.OpsClient 用同一把）
+    os.environ["ATLAS_UC_OPS_API_KEY"] = OPS_KEY
     get_settings.cache_clear()
 
     async def _ensure() -> None:

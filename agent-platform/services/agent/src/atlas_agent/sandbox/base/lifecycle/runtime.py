@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Literal, Protocol
 from uuid import UUID
 
 from atlas_redislock import LockBusy, LockLost, RedisLock
+from atlas_tenancy import TenantNaming, parse_tenant
 from pydantic import SecretStr
 
 from ....db.models import SandboxEvent, SandboxInstance
@@ -65,8 +66,8 @@ logger = logging.getLogger(__name__)
 EXECD_PORT = 44772
 EGRESS_PORT = 18080
 
-#: 删除原因（上层给）：闲置回收、会话删除、孤儿回收、管理员退役、坏的
-DestroyReason = Literal["idle", "release", "orphan", "manual", "broken"]
+#: 删除原因（上层给）：闲置回收、会话删除、孤儿回收、管理员退役、坏的、租户停用或删除
+DestroyReason = Literal["idle", "release", "orphan", "manual", "broken", "tenant"]
 
 
 class SandboxGone(LookupError):
@@ -160,7 +161,12 @@ class OpenSandboxRuntime:
                     row = await self._with_service_token(row)
                 try:
                     remote = await server.create(
-                        replace(spec, labels=spec.labels.with_sandbox(str(sandbox_uuid))),
+                        replace(
+                            spec,
+                            labels=spec.labels.with_sandbox(str(sandbox_uuid)).with_tenant(
+                                str(row.tenant_uuid)
+                            ),
+                        ),
                         access_token=row.access_token_secret,
                         service_token=row.service_token_secret,
                     )
@@ -507,6 +513,16 @@ class OpenSandboxRuntime:
             await session.commit()
 
     async def _log_orphan(self, sb: RemoteSandbox, owner: SandboxInstance | None) -> None:
+        # 生命周期日志是租户表：租户取登记的实例，没有就看 Pod 上的租户标签；
+        # 都没有（多租户之前建的存量沙箱）就只写进程日志，沙箱照删
+        tenant = owner.tenant_uuid if owner is not None else parse_tenant(
+            sb.labels.get(TenantNaming.LABEL)
+        )
+        if tenant is None:
+            logger.warning(
+                "OpenSandbox 上有、登记里没有的沙箱 %s（不知道租户），删掉", sb.external_id
+            )
+            return
         async with self._sessions() as session:
             uuid = (
                 owner.sandbox_uuid
@@ -515,6 +531,7 @@ class OpenSandboxRuntime:
             )
             SandboxEventLog(session).append(
                 SandboxEvent(
+                    tenant_uuid=tenant,
                     sandbox_uuid=uuid,
                     external_id=sb.external_id,
                     event_type="reconciled",

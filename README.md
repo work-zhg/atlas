@@ -164,7 +164,7 @@ scripts/                   构建、验证用的零散脚本
 ```
 
 Python 是一个 uv workspace（根目录 `pyproject.toml` 列出全部成员），前端是一个 pnpm workspace（`pnpm-workspace.yaml`；用户中心前端单独安装）。
-服务目录和包同名（`services/agent` 即 `atlas_agent`），每个服务都是 `python -m atlas_xxx <子命令>`：`serve`、`migrate`、`register-uc` 等。
+服务目录和包同名（`services/agent` 即 `atlas_agent`），每个服务都是 `python -m atlas_xxx <子命令>`：`serve`、`migrate` 等。
 
 ## 技术栈
 
@@ -209,13 +209,12 @@ deploy/local/apply.sh           # 后端服务（凭据从 .env 建成 K8s Secre
 deploy/local/frontends.sh       # 三个前端 + nginx 网关 → http://localhost:8080
 ```
 
-第一次还要在用户中心建首个超级管理员，再把各应用登记到用户中心（不登记，它们调用户中心会 403）：
+第一次还要在用户中心建首个超级管理员；各应用的应用目录（操作码、菜单、数据编码、内置角色）由运营人员在运营中心录入（各服务 README「用户中心登记」，没录之前它们调用户中心会 403）：
 
 ```bash
 kubectl -n atlas-system exec deploy/atlas-usercenter -- python -m atlas_usercenter bootstrap \
   --company 星海科技 --account admin --name 管理员 --email admin@example.com   # 临时密码只输出这一次
-# 浏览器打开 http://localhost:8080/uc/login，用临时密码登录、改密码，然后：
-deploy/server/register.sh       # 用当前 kubectl 上下文，本机集群一样适用
+# 浏览器打开 http://localhost:8080/uc/login，用临时密码登录、改密码
 ```
 
 只调试单个服务时也可以在宿主上直接起（`make serve`、`make skill-serve`、`make memory-serve` 等，见 `Makefile`），这时要自己在请求里带 `X-Uid`。

@@ -3,8 +3,8 @@
 /**
  * 智能平台首页（同 ChatGPT / Claude）：一个输入框，发出第一句话就新建对话并跳过去。
  *
- * ★ 默认用平台设置里的默认智能体；?agent=<id>（智能体列表点「对话」）或输入框里临时换。
- *   都没有时退回第一个能用的智能体；一个都没有就告诉用户去哪里建。
+ * ★ 默认用租户设置里的默认智能体；?agent=<id>（智能体列表点「对话」）或输入框里临时换。
+ *   都没有时退回第一个能用的智能体；一个都没有就告诉用户去哪里建 —— 租户管理员看到新租户引导。
  * ★ 添加的文件在会话建好之后再上传（会话之前没有工作区），消息里附上它们的路径。
  * ★ 工作目录（原生、会话 Pod 里的 CLI）：输入框里选（DirPicker），默认 workspace —— 没选目录的
  *   对话都在它里面；也可以选工作空间里已有的目录。选的结果放在 ?dir=<目录>（工作空间里文件夹上的
@@ -16,6 +16,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useState } from "react";
 
 import { useAgent, useAgents, useDefaultAgent } from "@/api/agents";
+import { SETTINGS_MANAGE } from "@/api/tenant-settings";
 import { uploadThreadFile, useCreateThread, withAttachments } from "@/api/threads";
 import type { ApprovalMode } from "@/lib/events";
 import { can, useMe } from "@/lib/session";
@@ -26,6 +27,7 @@ import { ModelPicker } from "@atlas/chat-ui/src/chat/ModelPicker";
 import { ModePicker } from "@atlas/chat-ui/src/chat/ModePicker";
 import { newIdempotencyKey } from "@atlas/chat-ui/src/lib/id";
 
+import { SetupGuide } from "@/features/settings/SetupGuide";
 import { DirHint, DirPicker } from "@/features/workspace/DirPicker";
 
 import { AgentPicker } from "./AgentPicker";
@@ -128,20 +130,20 @@ export function HomePage() {
   if (!agentId) {
     return (
       <div className={styles.hero}>
-        <Result
-          status="info"
-          title="还没有可以对话的智能体"
-          subTitle={
-            can(me, "config:manage")
-              ? "在「系统 › 平台设置」里一键创建通用助手，所有人进来就能直接用。"
-              : "创建一个智能体，或者请管理员设置默认智能体。"
-          }
-          extra={
-            <Button type="primary" onClick={() => router.push(can(me, "config:manage") ? "/system" : "/agents")}>
-              {can(me, "config:manage") ? "去设置" : "去创建"}
-            </Button>
-          }
-        />
+        {can(me, SETTINGS_MANAGE) ? (
+          <SetupGuide />
+        ) : (
+          <Result
+            status="info"
+            title="还没有可以对话的智能体"
+            subTitle="创建一个智能体，或者请管理员设置默认智能体。"
+            extra={
+              <Button type="primary" onClick={() => router.push("/agents")}>
+                去创建
+              </Button>
+            }
+          />
+        )}
       </div>
     );
   }

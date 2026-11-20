@@ -232,6 +232,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/market/skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Market
+         * @description 技能市场里能装的技能（产品自带的），带上本租户已经装了哪些版本。
+         */
+        get: operations["market_api_v1_market_skills_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/market/skills/{slug}/install": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Install
+         * @description 把市场里的一个版本（缺省 = 最新的已发布版本）拷进本租户：之后就是本租户的技能。
+         */
+        post: operations["install_api_v1_market_skills__slug__install_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/audit": {
         parameters: {
             query?: never;
@@ -243,6 +283,152 @@ export interface paths {
         get: operations["list_audit_api_v1_audit_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/v1/tenants/{tenant_uuid}/suspend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Tenant Suspend */
+        post: operations["tenant_suspend_ops_v1_tenants__tenant_uuid__suspend_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/v1/tenants/{tenant_uuid}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Tenant Resume */
+        post: operations["tenant_resume_ops_v1_tenants__tenant_uuid__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/v1/tenants/{tenant_uuid}/purge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Tenant Purge */
+        post: operations["tenant_purge_ops_v1_tenants__tenant_uuid__purge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/v1/tenant-states": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** States */
+        get: operations["states_ops_v1_tenant_states_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/v1/market/skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Market */
+        get: operations["market_ops_v1_market_skills_get"];
+        put?: never;
+        /**
+         * Publish
+         * @description 表单：file（技能包 zip）、install_by_default（可选，true/false）。
+         *
+         *     ★ 表单自己解析，不声明 File/Form 参数：FastAPI 会在依赖之前先把表单读完，验签时就拿不到原始
+         *       请求体了（Stream consumed）。验签读过的请求体有缓存，之后再解析表单没问题。
+         */
+        post: operations["publish_ops_v1_market_skills_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/v1/market/skills/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Set Default */
+        patch: operations["set_default_ops_v1_market_skills__slug__patch"];
+        trace?: never;
+    };
+    "/ops/v1/market/skills/{slug}/versions/{version}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke */
+        post: operations["revoke_ops_v1_market_skills__slug__versions__version__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/ops/v1/tenants/{tenant_uuid}/market-skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Install For Tenant
+         * @description 开通租户时运营中心调（幂等）：装进这个租户的，就是这个租户自己的技能了。
+         */
+        post: operations["install_for_tenant_ops_v1_tenants__tenant_uuid__market_skills_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -287,22 +473,104 @@ export interface components {
             file: string;
             /**
              * Source
-             * @default builtin
+             * @default tenant
              * @enum {string}
              */
-            source: "builtin" | "tenant" | "imported";
+            source: "tenant" | "imported";
             /** Origin Url */
             origin_url?: string | null;
+        };
+        /** DefaultIn */
+        DefaultIn: {
+            /** Install By Default */
+            install_by_default: boolean;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /**
+         * MarketInstallIn
+         * @description 要装的技能，写成 slug 或 slug@版本（缺版本 = 最新的已发布版本）。空 = 装全部默认安装的。
+         */
+        MarketInstallIn: {
+            /** Skills */
+            skills?: string[];
+        };
+        /** MarketInstalled */
+        MarketInstalled: {
+            /** Slug */
+            slug: string;
+            /** Version */
+            version: number;
+            /** Copied */
+            copied: boolean;
+        };
+        /** MarketSkillOut */
+        MarketSkillOut: {
+            /** Slug */
+            slug: string;
+            /** Install By Default */
+            install_by_default: boolean;
+            /** Latest */
+            latest?: number | null;
+            /** Description */
+            description?: string | null;
+            /** Versions */
+            versions?: components["schemas"]["MarketVersionOut"][];
+            /** Installed */
+            installed?: number[];
+        };
+        /**
+         * MarketVersionOut
+         * @description 技能市场里的一个版本。
+         */
+        MarketVersionOut: {
+            /** Slug */
+            slug: string;
+            /** Version */
+            version: number;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "published" | "revoked";
+            /** Description */
+            description: string;
+            /** Content Hash */
+            content_hash: string;
+            /** Size Bytes */
+            size_bytes: number;
+            /** File Count */
+            file_count: number;
+            /** Has Scripts */
+            has_scripts: boolean;
+            /** Files */
+            files?: components["schemas"]["SkillFile"][];
+            /** Scan Result */
+            scan_result?: {
+                [key: string]: unknown;
+            };
+            /** Status Reason */
+            status_reason?: string | null;
+            /** Published By */
+            published_by: string;
+            /**
+             * Published At
+             * Format: date-time
+             */
+            published_at: string;
+        };
         /** ReviewDecisionIn */
         ReviewDecisionIn: {
             /** Note */
             note: string;
+        };
+        /** RevokeIn */
+        RevokeIn: {
+            /** Reason */
+            reason: string;
         };
         /** RevokedSkill */
         RevokedSkill: {
@@ -326,7 +594,7 @@ export interface components {
              * Source
              * @enum {string}
              */
-            source: "builtin" | "tenant" | "imported";
+            source: "builtin" | "tenant" | "imported" | "market";
             /** Latest */
             latest?: number | null;
             /** Description */
@@ -344,7 +612,7 @@ export interface components {
              * Source
              * @enum {string}
              */
-            source: "builtin" | "tenant" | "imported";
+            source: "builtin" | "tenant" | "imported" | "market";
             /** Origin Url */
             origin_url?: string | null;
             /** Created By */
@@ -475,7 +743,7 @@ export interface components {
              * @default builtin
              * @enum {string}
              */
-            source: "builtin" | "tenant" | "imported";
+            source: "builtin" | "tenant" | "imported" | "market";
             /** Scan Result */
             scan_result?: {
                 [key: string]: unknown;
@@ -490,11 +758,30 @@ export interface components {
             published_at?: string | null;
             /** Status Reason */
             status_reason?: string | null;
+            /** Storage Key */
+            storage_key?: string | null;
         };
         /** StatusChangeIn */
         StatusChangeIn: {
             /** Reason */
             reason?: string | null;
+        };
+        /** TenantStateOut */
+        TenantStateOut: {
+            /**
+             * Tenant Uuid
+             * Format: uuid
+             */
+            tenant_uuid: string;
+            /** Status */
+            status: string;
+            /** Operation Uuid */
+            operation_uuid: string | null;
+            /**
+             * Changed At
+             * Format: date-time
+             */
+            changed_at: string;
         };
         /** ValidationError */
         ValidationError: {
@@ -921,6 +1208,59 @@ export interface operations {
             };
         };
     };
+    market_api_v1_market_skills_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketSkillOut"][];
+                };
+            };
+        };
+    };
+    install_api_v1_market_skills__slug__install_post: {
+        parameters: {
+            query?: {
+                version?: number | null;
+            };
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketInstalled"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_audit_api_v1_audit_get: {
         parameters: {
             query?: {
@@ -941,6 +1281,273 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AuditOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tenant_suspend_ops_v1_tenants__tenant_uuid__suspend_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant_uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tenant_resume_ops_v1_tenants__tenant_uuid__resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant_uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    tenant_purge_ops_v1_tenants__tenant_uuid__purge_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant_uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    states_ops_v1_tenant_states_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TenantStateOut"][];
+                };
+            };
+        };
+    };
+    market_ops_v1_market_skills_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketSkillOut"][];
+                };
+            };
+        };
+    };
+    publish_ops_v1_market_skills_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketVersionOut"];
+                };
+            };
+        };
+    };
+    set_default_ops_v1_market_skills__slug__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DefaultIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_ops_v1_market_skills__slug__versions__version__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+                version: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevokeIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketVersionOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    install_for_tenant_ops_v1_tenants__tenant_uuid__market_skills_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenant_uuid: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarketInstallIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MarketInstalled"][];
                 };
             };
             /** @description Validation Error */

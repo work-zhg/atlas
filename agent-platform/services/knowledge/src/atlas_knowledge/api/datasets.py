@@ -10,10 +10,11 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, File, Form, Query, Response
+from fastapi import APIRouter, Depends, File, Form, Query, Response
 from fastapi import UploadFile as FastUploadFile
 from pydantic import BaseModel, Field
 
+from ..auth import verified_tenant
 from ..errors import Invalid, NotFound
 from ..perms import Grant
 from ..rag.filters import BUILTIN_FIELDS
@@ -43,7 +44,8 @@ from .serializers import (
     segment_out,
 )
 
-router = APIRouter(prefix="/v1")
+# ★ 先核对租户、进入它（auth.verified_tenant），之后的读写都按它自动过滤
+router = APIRouter(prefix="/v1", dependencies=[Depends(verified_tenant)])
 logger = logging.getLogger(__name__)
 
 Page = Annotated[int, Query(ge=1)]
@@ -146,6 +148,13 @@ class GrantBody(BaseModel):
 class GrantPatch(BaseModel):
     level: Literal["READ", "WRITE", "OWNER"] | None = None
     include_sub: bool | None = None
+
+
+@router.get("/capacity")
+async def capacity(_p: PrincipalDep, s: SessionDep, rt: RuntimeDep) -> dict[str, Any]:
+    """本租户知识库文件的存储份额和用量（只有数字；租户设置页展示）。quota_bytes null = 不限。"""
+    u = await rt.storage_capacity.usage(s)
+    return {"quota_bytes": u.quota_bytes, "used_bytes": u.used_bytes, "is_default": u.is_default}
 
 
 @router.get("/datasets")
@@ -537,7 +546,7 @@ async def get_document_asset(
     m = _ASSET_NAME.match(name)
     if m is None:
         raise NotFound("图片不存在")
-    key = f"{rt.settings.oss_prefix}/{doc.dataset_uuid}/{doc.uuid}/assets/{name}"
+    key = f"{access.ds.storage_prefix}/{doc.uuid}/assets/{name}"
     try:
         data = await asyncio.to_thread(rt.storage.get, key)
     except Exception as exc:

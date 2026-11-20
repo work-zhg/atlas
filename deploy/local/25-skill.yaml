@@ -1,6 +1,6 @@
 # 技能应用（atlas-skill）：技能包的唯一所有者 —— 上传、扫描、审查、发布、下架
 # （doc/skill-mcp-backend-design.html §16）。在用户中心是独立应用「技能」（应用编码 skill），
-# 部署后由 deploy/server/register.sh 登记（python -m atlas_skill register-uc）。
+# 应用目录（应用 skill、操作码、角色）由运营人员在运营中心录入（agent-platform/services/skill/README.md）。
 #
 # ★ 凭据（对象存储 HMAC）不在本文件里 —— 由 deploy/local/apply.sh 建成 Secret atlas-oss-creds。
 #   内网免令牌（内网身份传递 §3）：没有服务间令牌。
@@ -28,6 +28,9 @@ spec:
           command: ["python", "-m", "atlas_skill", "migrate"]
           env: &skill-env
             - {name: ATLAS_SKILL_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_skill"}
+            # 多租户迁移把已有数据归到原平台租户（apply.sh 按 .env 的 TENANT_BACKFILL_UUID 建；只有迁移读它）
+            - name: TENANT_BACKFILL_UUID
+              valueFrom: {configMapKeyRef: {name: atlas-tenancy, key: backfill_uuid, optional: true}}
             - {name: ATLAS_SKILL_OSS_ENDPOINT, value: "http://__HOST_IP__:9000"}
             - {name: ATLAS_SKILL_OSS_BUCKET, value: atlas-dev}
             - {name: ATLAS_SKILL_OSS_ADDRESSING_STYLE, value: path}

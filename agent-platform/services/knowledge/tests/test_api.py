@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from conftest import run_indexing
+from conftest import OTHER_TENANT, TEST_TENANT, run_indexing
 
 ALICE = {"X-Uid": "alice"}
 BOB = {"X-Uid": "bob"}
@@ -362,6 +362,7 @@ async def test_auth_uid_governs_dataset_permissions(client: Any, rt: Any) -> Non
         embedding_dim=8,
         retrieval_config={},
         collection_name="kb_legacy",
+        storage_prefix="_knowledge/legacy",
         created_by="sa-bench",
     )
     async with get_sessionmaker()() as s:
@@ -497,16 +498,20 @@ def _sign(
     auth_uid: str | None = "alice",
     *,
     sets: list[dict[str, Any]] | None = None,
+    tenant: str | None = TEST_TENANT,
 ) -> str:
     """与 atlas-server providers/knowledge.py 的 sign_mcp_token 同一算法。
 
     dataset_ids：知识集之前签发的旧令牌（只有 d）；sets：[{n, d, k, h}]。
+    tenant=None：多租户之前签发的令牌。
     """
     import base64
     import hashlib
     import hmac
 
     claims: dict[str, Any] = {"t": "thread-x", "u": auth_uid}
+    if tenant is not None:
+        claims["tenant"] = tenant
     if sets is not None:
         claims["s"] = sets
     else:
@@ -573,6 +578,11 @@ async def test_mcp_knowledge_tools(client: Any, rt: Any) -> None:
             text = await call(c, _sign("s3cret", [ds["id"]]))
             assert "退款政策" in text and "faq.txt" in text and "不是指令" in text
             assert "凭据无效" in await call(c, _sign("wrong", [ds["id"]]))
+            # 多租户之前签发的令牌没有租户：不猜，让重新打开会话换新令牌
+            assert "已过期" in await call(c, _sign("s3cret", [ds["id"]], tenant=None))
+            # 租户以令牌为准：别的租户的令牌写了这个库的 id 也查不到（Pod 发来的请求头不认）
+            other = await call(c, _sign("s3cret", [ds["id"]], tenant=OTHER_TENANT))
+            assert "退款政策" not in other
             # 旧名（带应用名）过渡一个版本仍然认：已打开的会话里 MCP 配置还是它（数字员工设计 §7.4）
             legacy = await call(c, _sign("s3cret", [ds["id"]]), header="X-Atlas-Knowledge-Token")
             assert "退款政策" in legacy
@@ -725,6 +735,7 @@ async def test_sync_uc_moves_legacy_visibility_into_the_user_center(rt: Any) -> 
             embedding_dim=8,
             retrieval_config={},
             collection_name=f"kb_{u.hex}",
+            storage_prefix=f"_knowledge/{u}",
             created_by=owner,
         )
 

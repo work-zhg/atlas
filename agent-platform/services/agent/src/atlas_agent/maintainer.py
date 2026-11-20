@@ -26,8 +26,13 @@ import logging
 import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
+
+from atlas_tenancy import SystemReason, TenantScope
+from sqlalchemy import select
 
 from .browser.component import BrowserComponent
+from .db.models import SandboxAccountRow
 from .instance import instance_id
 from .redisx import make_redis
 from .repositories.thread import ThreadRepository
@@ -147,16 +152,29 @@ class Maintainer:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
 
+    async def _sandbox_tenants(self) -> list[UUID]:
+        """有沙箱账户的租户。沙箱巡检按租户逐个做（跨租户巡检的固定写法，atlas_tenancy）：
+        每个租户里照常自动过滤，回收时写的行自动归这个租户。"""
+        with TenantScope.system(SystemReason.SWEEP):
+            async with self._sessionmaker() as session:
+                stmt = select(SandboxAccountRow.tenant_uuid).distinct()
+                return list((await session.execute(stmt)).scalars())
+
     async def _reap_idle(self, redis: Any) -> None:
         sandbox = SandboxComponent.build(self._settings, redis, sessions=self._sessionmaker)
         # 浏览器的附加件：退役前导出登录态（闲置回收是最常见的退役）
         BrowserComponent.attach(self._settings, sandbox, sessions=self._sessionmaker)
-        try:
-            await sandbox.pods.reap_idle()
-        except Exception:
-            logger.warning("会话 Pod 闲置回收失败", exc_info=True)
-        if self._settings.sandbox_enabled:
-            await sandbox.native.reap_idle()
+        for tenant in await self._sandbox_tenants():
+            with TenantScope.enter(tenant):
+                try:
+                    await sandbox.pods.reap_idle()
+                except Exception:
+                    logger.warning("会话 Pod 闲置回收失败 租户=%s", tenant, exc_info=True)
+                if self._settings.sandbox_enabled:
+                    try:
+                        await sandbox.native.reap_idle()
+                    except Exception:
+                        logger.warning("原生沙箱闲置回收失败 租户=%s", tenant, exc_info=True)
 
     async def _reap_pods(self, redis: Any) -> None:
         """会话已不存在（或已归档）的会话 Pod 与原生沙箱：释放它们的业务，再两层对账。
@@ -166,28 +184,40 @@ class Maintainer:
         ★ 归档的会话不算活（ThreadRepository.live_ids）：task 的 fresh=true 每丢一次子会话，
           就会留下一个再也用不上的会话 Pod。
         """
-        async with self._sessionmaker() as session:
-            live = list(await ThreadRepository(session).live_ids())
         sandbox = SandboxComponent.build(self._settings, redis, sessions=self._sessionmaker)
         browser = BrowserComponent.attach(self._settings, sandbox, sessions=self._sessionmaker)
-        steps: list[tuple[str, Any]] = [("会话 Pod 孤儿回收", sandbox.pods.reap_orphans(live))]
-        if self._settings.sandbox_enabled:
-            steps.append(("原生沙箱孤儿回收", sandbox.native.reap_orphans(live)))
-        steps += [
-            ("通用供给对账", sandbox.provisioning.reconcile()),
-            ("沙箱基座对账", sandbox.runtime.reconcile()),
-            (
-                "清理沙箱生命周期日志",
-                sandbox.runtime.purge_history(
-                    datetime.now(UTC) - timedelta(days=self._settings.sandbox_event_retention_days)
-                ),
-            ),
-        ]
-        if browser is not None:
-            # 沙箱没走退役（被驱逐、对账删掉）时留下的宿主登记
-            steps.append(("浏览器宿主对账", browser.registry.prune(sandbox.provisioning)))
-        for name, step in steps:
-            try:
-                await step
-            except Exception:
-                logger.warning("%s失败", name, exc_info=True)
+        # ① 按租户：孤儿回收、通用供给对账、浏览器宿主对账 —— 都只看这个租户自己的数据
+        for tenant in await self._sandbox_tenants():
+            with TenantScope.enter(tenant):
+                async with self._sessionmaker() as session:
+                    live = list(await ThreadRepository(session).live_ids())
+                steps: list[tuple[str, Any]] = [
+                    ("会话 Pod 孤儿回收", lambda live=live: sandbox.pods.reap_orphans(live))
+                ]
+                if self._settings.sandbox_enabled:
+                    steps.append(
+                        ("原生沙箱孤儿回收", lambda live=live: sandbox.native.reap_orphans(live))
+                    )
+                steps.append(("通用供给对账", sandbox.provisioning.reconcile))
+                if browser is not None:
+                    # 沙箱没走退役（被驱逐、对账删掉）时留下的宿主登记
+                    steps.append(
+                        ("浏览器宿主对账", lambda: browser.registry.prune(sandbox.provisioning))
+                    )
+                for name, step in steps:
+                    try:
+                        await step()
+                    except Exception:
+                        logger.warning("%s失败 租户=%s", name, tenant, exc_info=True)
+        # ② 系统范围：基座对账拿集群里实际的沙箱和全部登记比，按租户做会把别的租户的沙箱
+        #    当成没登记的删掉；清理生命周期日志按时间跨租户删
+        cutoff = datetime.now(UTC) - timedelta(days=self._settings.sandbox_event_retention_days)
+        with TenantScope.system(SystemReason.SWEEP):
+            for name, step in (
+                ("沙箱基座对账", sandbox.runtime.reconcile),
+                ("清理沙箱生命周期日志", lambda: sandbox.runtime.purge_history(cutoff)),
+            ):
+                try:
+                    await step()
+                except Exception:
+                    logger.warning("%s失败", name, exc_info=True)

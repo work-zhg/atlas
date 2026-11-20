@@ -8,13 +8,16 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
+from ..auth import verified_tenant
 from ..services.sets import MAX_MAINTAINERS, KnowledgeSetService
 from .deps import PrincipalDep, RuntimeDep, SessionDep
 
-router = APIRouter(prefix="/v1/knowledge-sets", tags=["knowledge-sets"])
+router = APIRouter(
+    prefix="/v1/knowledge-sets", tags=["knowledge-sets"], dependencies=[Depends(verified_tenant)]
+)
 
 
 class SetBody(BaseModel):

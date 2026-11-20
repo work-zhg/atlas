@@ -48,7 +48,7 @@ class ContinuationQueries:
             .exists()
         )
         stmt = (
-            select(Run.id, Run.run_uuid)
+            select(Run.id, Run.run_uuid, Run.tenant_uuid)
             .where(
                 Run.id > after_id,
                 Run.status.in_(_SUSPENDED),
@@ -59,7 +59,8 @@ class ContinuationQueries:
             .order_by(Run.id)
             .limit(limit)
         )
-        return [Candidate(id=i, run_uuid=u) for i, u in (await self._session.execute(stmt)).all()]
+        rows = (await self._session.execute(stmt)).all()
+        return [Candidate(id=i, run_uuid=u, tenant_uuid=t) for i, u, t in rows]
 
     async def has_unfinished_children(self, run_id: UUID) -> bool:
         """这个 run 还有没跑完的子 run 吗 —— 续跑的 join barrier。
