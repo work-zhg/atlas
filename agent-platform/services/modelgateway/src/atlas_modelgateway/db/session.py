@@ -31,6 +31,8 @@ async def get_session() -> AsyncIterator[AsyncSession]:
     ★ 接口里用 scope="function"（api/deps.py）：提交在响应发出之前。默认的 request 作用域会在
       响应之后才提交，写完立刻读的调用方（Atlas 建智能体后马上取 Key）就会读不到。
     """
+    from .. import notify
+
     async with get_sessionmaker()() as session:
         try:
             yield session
@@ -38,3 +40,4 @@ async def get_session() -> AsyncIterator[AsyncSession]:
         except Exception:
             await session.rollback()
             raise
+        await notify.flush(session)

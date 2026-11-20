@@ -1,17 +1,15 @@
-"""管理接口与内部接口的请求、响应形状。"""
+"""管理接口、内部接口的请求和响应体。"""
 
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from decimal import Decimal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-Visibility = Literal["public", "private"]
-
-
-# ── 模型
+# ── 共用 ────────────────────────────────────────────────────────────────
 
 
 class GrantIn(BaseModel):
@@ -20,177 +18,307 @@ class GrantIn(BaseModel):
     include_sub: bool = False
 
 
-class RouteIn(BaseModel):
-    """只交给 LiteLLM 的部分。"""
-
-    api_base: str | None = Field(default=None, max_length=500)
-    #: 供应商凭据。编辑时留空 = 不改
-    api_key: str | None = Field(default=None, max_length=500)
-    max_input_tokens: int | None = Field(default=None, ge=1)
-    max_output_tokens: int | None = Field(default=None, ge=1)
-    #: 美元 / 百万 token
-    input_price: float | None = Field(default=None, ge=0)
-    output_price: float | None = Field(default=None, ge=0)
-
-
-class ModelIn(RouteIn):
-    name: str = Field(min_length=1, max_length=128)
-    display_name: str = Field(default="", max_length=100)
-    provider: str = Field(min_length=1, max_length=64)
-    visibility: Visibility = "private"
-    description: str = Field(default="", max_length=2000)
-    #: 能看图（图片输入）：Atlas 据此给开了浏览器的智能体 computer use
-    supports_vision: bool = False
-    #: 私有模型登记时一并授权
-    grants: list[GrantIn] = Field(default_factory=list)
-
-
-class ModelUpdate(RouteIn):
-    display_name: str = Field(default="", max_length=100)
-    provider: str = Field(min_length=1, max_length=64)
-    visibility: Visibility
-    description: str = Field(default="", max_length=2000)
-    supports_vision: bool = False
-
-
-class ModelReregister(RouteIn):
-    provider: str = Field(min_length=1, max_length=64)
-
-
-class ModelAdopt(BaseModel):
-    name: str = Field(min_length=1, max_length=128)
-    display_name: str = Field(default="", max_length=100)
-    visibility: Visibility = "private"
-    description: str = Field(default="", max_length=2000)
-    supports_vision: bool = False
-    grants: list[GrantIn] = Field(default_factory=list)
-
-
-class ConnectionTestIn(RouteIn):
-    name: str = Field(min_length=1, max_length=128)
-    provider: str = Field(min_length=1, max_length=64)
-
-
-class ConnectionTestOut(BaseModel):
-    ok: bool
-    message: str
-
-
 class GrantOut(BaseModel):
     id: str
     subject_type: str
     subject_id: str
     subject_name: str = ""
-    permission: str
     include_sub: bool = False
-
-
-class ModelOut(BaseModel):
-    #: 平台记录的 id；LiteLLM 直配的为空
-    uuid: UUID | None
-    name: str
-    display_name: str
-    provider: str
-    #: LiteLLM 直配的为空
-    visibility: Visibility | None
-    description: str = ""
-    #: 能看图（LiteLLM 直配、还没纳入的为 False）
-    supports_vision: bool = False
-    #: platform = 平台登记；litellm = LiteLLM 里直接配置的（只读，可纳入）
-    source: Literal["platform", "litellm"]
-    #: ok = 可调用；missing = LiteLLM 中缺失；unknown = LiteLLM 不可达，状态未知
-    status: Literal["ok", "missing", "unknown"]
-    #: 平台在 LiteLLM 里建的部署（能改地址、凭据、规格价格）；纳入平台的为 False
-    managed: bool = False
-    #: 直配模型的来源：db = LiteLLM 管理界面；config = 配置文件
-    origin: Literal["db", "config"] | None = None
-    deployments: int = 0
-    api_base: str | None = None
-    max_input_tokens: int | None = None
-    max_output_tokens: int | None = None
-    #: 美元 / 百万 token
-    input_price: float | None = None
-    output_price: float | None = None
-    #: 管理员看：私有模型的授权
-    grants: list[GrantOut] | None = None
-    #: 普通用户看：权限来源（public = 公有；granted = 授权给了你或你所在的部门）
-    access: Literal["public", "granted"] | None = None
-    created_by: str | None = None
-    created_at: datetime | None = None
-
-
-class ModelListOut(BaseModel):
-    data: list[ModelOut]
-    litellm_reachable: bool
+    permission: str = "READ"
 
 
 class ProviderOut(BaseModel):
     code: str
     name: str
-    needs_base: bool = False
-    key_optional: bool = False
+    #: 提供哪些格式，第一个是推荐的
+    formats: list[str]
+    #: 各格式的默认地址（空串 = 必须手填）
+    endpoints: dict[str, str]
+    can_balance: bool
+    can_list_models: bool
+    key_optional: bool
+    needs_endpoint: bool
+    overseas: bool
+    hint: str = ""
 
 
-# ── Key
+# ── 账号 ────────────────────────────────────────────────────────────────
 
 
-class KeyModelOut(BaseModel):
+class AccountIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    provider: str = Field(min_length=1, max_length=64)
+    endpoints: dict[str, str]
+    #: 新建时必填（自部署可以空）；修改时不传 = 不改
+    secret: str | None = Field(default=None, max_length=4000)
+    egress: Literal["direct", "proxy"] = "direct"
+    first_content_timeout_s: int | None = Field(default=None, ge=10, le=3600)
+    balance_alert: Decimal | None = Field(default=None, ge=0)
+    remark: str = Field(default="", max_length=1000)
+    enabled: bool = True
+
+
+class AccountDraftTest(AccountIn):
+    upstream_model: str | None = None
+
+
+class AccountTestIn(BaseModel):
+    upstream_model: str | None = None
+
+
+class IssueOut(BaseModel):
+    kind: str
+    since: datetime
+    message: str = ""
+
+
+class AccountOut(BaseModel):
+    id: UUID
     name: str
-    #: ok；revoked = 授权已撤销（或不再可选）；missing = LiteLLM 中缺失；deleted = 模型已删除
-    state: Literal["ok", "revoked", "missing", "deleted"]
-
-
-class KeyOut(BaseModel):
-    uuid: UUID
-    key_type: Literal["user", "client"]
-    user_uuid: UUID | None = None
-    client_type: str | None = None
-    client_code: str | None = None
-    name: str
-    status: Literal["pending", "active", "blocked"]
-    #: sk-…后四位；待分配时为空
-    masked: str | None = None
-    models: list[KeyModelOut]
-    #: 有效模型：同步给 LiteLLM 的
-    effective: list[str]
-    #: 已分配过，但有效模型算下来为空（LiteLLM 里停用）
-    no_models: bool = False
-    sync_error: str | None = None
+    provider: str
+    provider_name: str
+    endpoints: dict[str, str]
+    secret_masked: str | None
+    egress: str
+    first_content_timeout_s: int | None
+    balance_alert: Decimal | None
+    balance: Decimal | None
+    balance_at: datetime | None
+    remark: str
+    enabled: bool
+    #: ok / cooling / abnormal / disabled
+    status: str
+    issue: IssueOut | None = None
+    cooling_routes: int = 0
+    low_balance: bool = False
+    routes: int = 0
+    checked_at: datetime | None
+    check_error: str
     created_by: str
     created_at: datetime
-    rotated_at: datetime | None = None
 
 
-class KeySecretOut(KeyOut):
-    #: 原文：只在申请、重置、第一次分配时返回一次
-    secret: str | None = None
+class ProbeStepOut(BaseModel):
+    name: str
+    ok: bool
+    message: str = ""
 
 
-class ModelsIn(BaseModel):
-    models: list[str] = Field(min_length=1)
+class ProbeOut(BaseModel):
+    ok: bool
+    steps: list[ProbeStepOut]
+    upstream_models: list[str] | None = None
+    balance: Decimal | None = None
 
 
-class ClientKeyIn(BaseModel):
+# ── 模型 ────────────────────────────────────────────────────────────────
+
+
+class CapsIO(BaseModel):
+    vision: bool = False
+    tools: bool = False
+    thinking: Literal["none", "optional", "always_on"] = "none"
+    context_window: int | None = Field(default=None, ge=1)
+    max_output: int | None = Field(default=None, ge=1)
+
+
+class PriceIO(BaseModel):
+    """元 / 百万 token。都不填 = 不计费。"""
+
+    input: Decimal = Field(default=Decimal(0), ge=0)
+    cache_hit: Decimal = Field(default=Decimal(0), ge=0)
+    output: Decimal = Field(default=Decimal(0), ge=0)
+
+
+class RouteIn(BaseModel):
+    account_id: UUID
+    #: 不填就和模型名一样
+    upstream_model: str = Field(default="", max_length=200)
+    priority: int = Field(default=1, ge=0, le=100)
+    weight: int = Field(default=1, ge=1, le=1000)
+
+
+class ModelUpdate(BaseModel):
+    display_name: str = Field(default="", max_length=100)
+    visibility: Literal["public", "private"] = "private"
+    description: str = Field(default="", max_length=2000)
+    #: 不传 = 按第一条线路的预置带出（新建时）/ 不改（修改时）
+    caps: CapsIO | None = None
+    price: PriceIO = Field(default_factory=PriceIO)
+    enabled: bool = True
+    routes: list[RouteIn] = Field(min_length=1)
+
+
+class ModelIn(ModelUpdate):
+    name: str = Field(min_length=1, max_length=128)
+    kind: Literal["chat", "embedding", "rerank"] = "chat"
+    grants: list[GrantIn] = Field(default_factory=list)
+
+
+class RouteOut(BaseModel):
+    id: UUID
+    account_id: UUID
+    account_name: str
+    provider: str
+    upstream_model: str
+    priority: int
+    weight: int
+    #: ok / cooling / abnormal / disabled
+    status: str
+
+
+class ModelOut(BaseModel):
+    id: UUID
+    name: str
+    display_name: str
+    kind: str
+    visibility: str
+    description: str
+    caps: CapsIO
+    price: PriceIO
+    enabled: bool
+    #: available / degraded（首选不可用，走备用）/ unavailable / disabled
+    status: str
+    routes: list[RouteOut] = Field(default_factory=list)
+    #: 普通用户看到的：public / granted
+    access: str | None = None
+    grants: list[GrantOut] | None = None
+    #: 多少把 Key 勾选了它
+    keys: int = 0
+
+
+class CapsSuggestOut(BaseModel):
+    caps: CapsIO
+    preset: bool
+
+
+# ── Key ─────────────────────────────────────────────────────────────────
+
+
+class KeyIn(BaseModel):
+    label: str = Field(default="", max_length=100)
+    models: list[str] = Field(default_factory=list)
+    monthly_budget: Decimal | None = Field(default=None, ge=0)
+    rpm: int | None = Field(default=None, ge=1)
+    expires_at: datetime | None = None
+
+
+class KeyUpdate(BaseModel):
+    """只改传了的字段（显式传 null = 清掉这个限额）。"""
+
+    label: str | None = Field(default=None, max_length=100)
+    models: list[str] | None = None
+    monthly_budget: Decimal | None = Field(default=None, ge=0)
+    rpm: int | None = Field(default=None, ge=1)
+    expires_at: datetime | None = None
+
+
+class ClientKeyIn(KeyIn):
     client_type: str = Field(min_length=1, max_length=64)
     client_code: str = Field(min_length=1, max_length=128)
     name: str = Field(default="", max_length=200)
 
 
+class BlockIn(BaseModel):
+    reason: str = Field(default="", max_length=200)
+
+
+class KeyModelOut(BaseModel):
+    name: str
+    display_name: str = ""
+    #: ok / disabled（模型停用）/ revoked（授权已收回）/ missing（模型已删除）
+    state: str
+
+
+class KeyOut(BaseModel):
+    id: UUID
+    key_type: str
+    label: str
+    #: 用户 Key 是持有人，客户端 Key 是对象名称
+    name: str
+    user_id: UUID | None = None
+    client_type: str | None = None
+    client_code: str | None = None
+    models: list[KeyModelOut]
+    status: str
+    block_reason: str = ""
+    masked: str | None = None
+    monthly_budget: Decimal | None = None
+    rpm: int | None = None
+    expires_at: datetime | None = None
+    spent_this_month: Decimal = Decimal(0)
+    last_used_at: datetime | None = None
+    created_at: datetime
+    rotated_at: datetime | None = None
+
+
+class KeySecretOut(KeyOut):
+    #: 原文：只在创建、重置时给这一次
+    secret: str | None = None
+
+
 class ClientTypeOut(BaseModel):
     code: str
     apps: list[str]
+    default_public: bool
 
 
-# ── 内部接口（应用）
+# ── 调用记录 ────────────────────────────────────────────────────────────
+
+
+class CallOut(BaseModel):
+    id: UUID
+    started_at: datetime
+    model: str
+    key_id: UUID | None
+    key_kind: str
+    session: str | None
+    entry_format: str
+    status: str
+    error_category: str | None
+    attempts: list[dict[str, Any]]
+    first_content_ms: int | None
+    duration_ms: int
+    input_tokens: int
+    cache_write_tokens: int
+    cache_hit_tokens: int
+    output_tokens: int
+    estimated: bool
+    cost: Decimal
+    notes: dict[str, Any]
+
+
+class CallsPage(BaseModel):
+    data: list[CallOut]
+    #: 下一页传 before=它；空 = 没有了
+    next_before: datetime | None = None
+
+
+class CallSummaryOut(BaseModel):
+    group: str
+    label: str = ""
+    calls: int
+    errors: int
+    input: int
+    cache_write: int
+    cache_hit: int
+    output: int
+    cost: Decimal
+
+
+# ── 内部接口（应用） ────────────────────────────────────────────────────
 
 
 class InternalModelOut(BaseModel):
     name: str
     display_name: str
-    provider: str
+    kind: str = "chat"
+    #: 第一条线路的供应商（只作展示）
+    provider: str = ""
     max_input_tokens: int | None = None
     max_output_tokens: int | None = None
     supports_vision: bool = False
+    capabilities: CapsIO = Field(default_factory=CapsIO)
 
 
 class InternalClientKeyOut(BaseModel):

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>自研模型网关设计</title>
+<style>
+  body { margin: 0; background: #fff; color: #333; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { max-width: 1280px; padding: 24px 32px 64px; }
+  h1 { margin: 8px 0 12px; font-size: 22px; font-weight: 600; color: #222; }
+  h2 { margin: 40px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #e3e3e3; font-size: 17px; font-weight: 600; color: #222; }
+  h3 { margin: 28px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  p { max-width: 1100px; margin: 0 0 8px; font-size: 14px; line-height: 1.8; }
+  p.lead { padding: 10px 14px; border-left: 3px solid #1168bd; background: #f4f8fc; }
+  ul { max-width: 1100px; margin: 0 0 8px; padding-left: 22px; font-size: 14px; line-height: 1.8; }
+  code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  a { color: #1168bd; }
+  table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  th, td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+  <h1>自研模型网关设计：调用方只说意图，模型之间的差异收在网关</h1>
+  <p class="lead">平台内部的调用方统一用 Anthropic 格式调模型，只说「用哪个模型、要不要思考、发什么消息」。网关认 Key、按模型整理参数、按会话选线路；请求和上游账号的格式相同就直通，不同才转换；提交点之前失败就换线路；最后记用量和调用记录。方案正文和原理图在<a href="../../agent-platform/doc/design/model-gateway-design.html" target="_blank" rel="noopener">设计稿</a>里，这一页把原理串起来，并整理各张 C4 图的链接。</p>
+
+  <h2>先认识几个词</h2>
+  <table>
+    <thead><tr><th style="width: 16%">词</th><th>意思</th><th style="width: 30%">例子</th></tr></thead>
+    <tbody>
+      <tr><td>格式</td><td>请求和回答长什么样。调用方用的叫入口格式，账号用的叫上游格式</td><td>Anthropic 格式、OpenAI 格式、Google 格式</td></tr>
+      <tr><td>直通</td><td>入口格式和上游格式相同，原样转发，只换模型名、改几个参数</td><td>Atlas 调 DeepSeek 的 Anthropic 接口</td></tr>
+      <tr><td>读写器 / 转换器</td><td>读写器每种入口格式一个，只读写少数字段；转换器在格式不同时把整个请求和回答转过去、转回来</td><td>OpenAI 读写器读用量时先减掉缓存命中</td></tr>
+      <tr><td>供应商方言</td><td>同一种格式下，某家供应商和标准写法不一样的地方：认证、地址、字段名、用量字段、报错的意思</td><td>OpenAI 额度用完回 429，意思是余额不足</td></tr>
+      <tr><td>线路</td><td>模型指向某个账号里的某个上游模型，带优先级和权重</td><td>deepseek-v4-pro 首选公司账号，备用账号兜底</td></tr>
+      <tr><td>会话落点</td><td>用会话标识算出来的固定线路，同一会话每一轮都走它</td><td>会话 S1 落在线路 1，线路 1 冷却时临时走线路 2</td></tr>
+      <tr><td>提交点</td><td>第一段内容（文字、思考或工具调用）写给调用方的那一刻；之前能换线路，之后不能</td><td>上游回了 200 又报过载：还没到提交点，换线路</td></tr>
+      <tr><td>ParamPlan</td><td>「参数怎么改」的决定，由能力与参数算出，读写器去改</td><td>温度去掉、最大输出 64000 改成 32768</td></tr>
+    </tbody>
+  </table>
+
+  <h2>原理</h2>
+  <h3>原理 1　格式相同就直通，不同才转换；各家的特殊写法交给方言</h3>
+  <p>每个请求涉及两种格式：调用方用的和账号用的。相同就原样转发，网关不认识的字段也带过去，供应商的新功能马上能用；不同才用转换器，转换器都以 Anthropic 格式为一端，因为它表达得更细，往粗的格式转丢什么事先就知道。共用的步骤（认 Key、整理参数、选线路、记用量）只和读写器打交道，所以两种入口格式只写一套流程。同一种格式下各家还有自己的写法（认证、字段名、用量字段、报错的意思），交给供应商方言翻译：能写成数据的写数据，写不成的写一小段代码；方言只翻译，换不换线路、怎么算钱仍按翻译后的结果判断。图和对照表见设计稿 <a href="../../agent-platform/doc/design/model-gateway-design.html#s5" target="_blank" rel="noopener">第 5 节</a>。</p>
+
+  <h3>原理 2　模型之间的差异分两层：能力和写法</h3>
+  <p>能力是对调用方的承诺（能看图、能思考、能调工具、上下文多长），挂在模型上，管理员可改，模型清单原样告诉调用方；写法是上游模型的脾气（收不收温度、思考怎么关、力度有几档），挂在上游模型上，网关自带。请求超出能力就在选线路之前拒绝；做得到就按选中线路的写法算出 ParamPlan——能去掉的去掉、能换写法的换写法。见设计稿 <a href="../../agent-platform/doc/design/model-gateway-design.html#s4" target="_blank" rel="noopener">第 4 节</a>。</p>
+
+  <h3>原理 3　按会话选线路，提交点之前才能换</h3>
+  <p>缓存只在同一个账号里有效，所以同一会话一直走同一条线路（加权一致性哈希，不用存映射），线路不可用才挪。上游失败先由方言归成种类，线路只看种类、不看状态码：限流、过载、超时换线路并让线路冷却，密钥失效、余额不足把整个账号标异常；冷却和异常所有网关实例共用。回答写出第一段内容之后就不再换。见设计稿 <a href="../../agent-platform/doc/design/model-gateway-design.html#s6" target="_blank" rel="noopener">第 6 节</a>。</p>
+
+  <h3>原理 4　流式回答读一段写一段，不经中继</h3>
+  <p>一个回答只有一个调用方，调用方断了就该停，两种格式也都不支持续传；所以网关在同一个请求里读一段、写一段，背压一路传回供应商，调用方断开就关上游。只限「等第一段内容」和「两段之间」，不限总时长。能恢复的能力放在调用方（比如 Atlas 重跑这一轮）。见设计稿 <a href="../../agent-platform/doc/design/model-gateway-design.html#s7" target="_blank" rel="noopener">第 7 节</a>。</p>
+
+  <h3>原理 5　调用路径上不查库：配置是内存快照，记录异步写</h3>
+  <p>账号、模型、线路、Key 是管理平台写的，网关只读一份内存快照：Key 按摘要查，租户的配置第一次用到时按租户加载，看到配置版本号变了就在后台重新加载。用量统一成四项（输入、缓存写入、缓存命中、输出），按模型价格算费用；调用记录先进内存队列，后台批量写。见设计稿 <a href="../../agent-platform/doc/design/model-gateway-design.html#s8" target="_blank" rel="noopener">第 8 节</a>、<a href="../../agent-platform/doc/design/model-gateway-design.html#s12" target="_blank" rel="noopener">第 12 节</a>。</p>
+
+  <h2>设计决策</h2>
+  <table>
+    <thead><tr><th style="width: 24%">决策</th><th>理由</th><th style="width: 18%">在哪张图</th></tr></thead>
+    <tbody>
+      <tr><td>请求格式不自己发明</td><td>官方 SDK、Claude Code、Cursor 只认现成格式；「自己的接口」体现在统一的模型名、参数含义、错误、能力清单上。</td><td><a href="component-gateway.html" target="_blank" rel="noopener">网关组件</a></td></tr>
+      <tr><td>网关和管理平台分开部署</td><td>网关在每次模型调用的路径上，要多实例、不存状态；管理平台改配置、做检查，不在调用路径上。</td><td><a href="container.html" target="_blank" rel="noopener">容器</a></td></tr>
+      <tr><td>八个领域，依赖只往下</td><td>调用编排只编排；谁能调、能做什么、走哪个账号、长什么样、各家的特殊写法、花多少各在一个领域；领域之间只传共享内核里的值对象。</td><td><a href="code-gateway-domains.html" target="_blank" rel="noopener">领域总览</a></td></tr>
+      <tr><td>供应商差异单独成一个共享包</td><td>能写成数据的（认证方式、地址模板、余额接口）不写代码；方言只覆盖和标准不一样的方法。网关和管理平台共用，不给每个供应商写一整套适配。</td><td><a href="code-gateway-provider.html" target="_blank" rel="noopener">供应商</a></td></tr>
+      <tr><td>能力与参数只出决定，不碰请求</td><td>它不认识任何格式，加一种格式不用动它。</td><td><a href="code-gateway-capability.html" target="_blank" rel="noopener">能力与参数</a></td></tr>
+      <tr><td>只按入口格式读回答</td><td>转换过的回答已经是入口格式，用量、提交点、错误都在入口一侧读；Google 只要转换器，不要读写器。</td><td><a href="code-gateway-format.html" target="_blank" rel="noopener">格式</a></td></tr>
+      <tr><td>重试只在网关做一层</td><td>换过线路还失败就告诉 SDK 不要再重试，否则一次失败会放大成十几次上游请求。</td><td><a href="code-gateway-invocation.html" target="_blank" rel="noopener">调用编排</a></td></tr>
+      <tr><td>账号恢复由管理平台检查</td><td>检查要查余额或发真实请求，放在一处做；网关只标记，调用路径上不探测。</td><td><a href="code-gateway-routing.html" target="_blank" rel="noopener">线路</a></td></tr>
+      <tr><td>预算是软上限</td><td>精确不超要按最大输出预扣，并发时额度被大量预占；月预算是防脚本跑飞的，超一点可以接受。</td><td><a href="code-gateway-admission.html" target="_blank" rel="noopener">准入</a></td></tr>
+      <tr><td>网关状态（Redis）丢了能重建</td><td>冷却、计数、花费、版本号都能从配置和调用记录重建；不可用时各领域自己降级，不挡调用。</td><td><a href="code-gateway-config.html" target="_blank" rel="noopener">配置快照</a>、<a href="code-gateway-metering.html" target="_blank" rel="noopener">计量</a></td></tr>
+    </tbody>
+  </table>
+
+  <h2>图索引</h2>
+  <p>原理在上面，各图里是具体的结构、交互和数据。链接在新标签页打开。</p>
+  <h3>系统、容器与组件</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="system-context.html" target="_blank" rel="noopener">模型平台 · 系统上下文</a></td><td>员工、模型管理员、Agent 平台、知识库、运营中心用模型平台；模型平台连用户中心和模型供应商。</td></tr>
+      <tr><td><a href="container.html" target="_blank" rel="noopener">模型平台 · 容器</a></td><td>管理平台、模型网关、运维命令行、平台库、网关状态；模型调用只经过网关，网关从平台库只读加载配置。</td></tr>
+      <tr><td><a href="component-gateway.html" target="_blank" rel="noopener">模型网关 · 组件</a></td><td>三个入口（对话、向量与重排、模型清单）和八个领域，其中「供应商」是和管理平台共用的包；只有格式连供应商，只有配置快照和计量连平台库。</td></tr>
+    </tbody>
+  </table>
+  <h3>类图</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="code-gateway-domains.html" target="_blank" rel="noopener">领域总览</a></td><td>八个领域的对外入口、依赖方向、共享内核；扩展点 FormatCodec。</td></tr>
+      <tr><td><a href="code-gateway-invocation.html" target="_blank" rel="noopener">调用编排</a></td><td>原理 3、4：AttemptLoop 换线路、CommitGate 提交点和保活、StreamPump 读一段写一段、ErrorMapper 统一错误。</td></tr>
+      <tr><td><a href="code-gateway-admission.html" target="_blank" rel="noopener">准入</a></td><td>按摘要认 Key、Grant、限额（每分钟计数、本月花费）和网关状态不可用时的放行。</td></tr>
+      <tr><td><a href="code-gateway-capability.html" target="_blank" rel="noopener">能力与参数</a></td><td>原理 2：ModelCaps 和 UpstreamRules 两层、三种处理、预置规则、思考块的来源标记。</td></tr>
+      <tr><td><a href="code-gateway-routing.html" target="_blank" rel="noopener">线路</a></td><td>原理 3：会话落点（加权一致性哈希）、按失败种类判断的 FailurePolicy、线路冷却和账号异常。</td></tr>
+      <tr><td><a href="code-gateway-format.html" target="_blank" rel="noopener">格式</a></td><td>原理 1：读写器、PathChooser 直通还是转换、转换器和流式状态机、上游连接和地址检查。</td></tr>
+      <tr><td><a href="code-gateway-provider.html" target="_blank" rel="noopener">供应商</a></td><td>原理 1、3：ProviderSpec（数据）和 ProviderDialect（方言）、默认方言、DeepSeek / OpenAI / 通义千问三个典型方言；网关和管理平台共用。</td></tr>
+      <tr><td><a href="code-gateway-metering.html" target="_blank" rel="noopener">计量</a></td><td>原理 5：四项用量、单价快照、估算、调用记录队列；model_call 表。</td></tr>
+      <tr><td><a href="code-gateway-config.html" target="_blank" rel="noopener">配置快照</a></td><td>原理 5：内存快照、按租户加载、版本号检查、整个替换、密钥解密。</td></tr>
+    </tbody>
+  </table>
+  <h3>时序图</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="dynamic/dynamic-stream-call.html" target="_blank" rel="noopener">流式调用（同格式直通）</a></td><td>一次调用的完整步骤：第 6 步看配置版本号；第 9–11 步先选线路、再按线路算参数；第 14–15 步提交点；第 18–20 步算费用、写记录、累加花费。</td></tr>
+      <tr><td><a href="dynamic/dynamic-switch-route.html" target="_blank" rel="noopener">提交点前换线路</a></td><td>原理 3：第 6–8 步压着「消息开始」只发保活注释；第 9–13 步流里报过载 → 线路冷却 → 按同一会话的排序换下一条；第 19 步两次尝试都记下。</td></tr>
+      <tr><td><a href="dynamic/dynamic-cross-format.html" target="_blank" rel="noopener">跨格式调用</a></td><td>原理 1、2：第 5 步换了上游、历史思考块去掉；第 7–8 步选路和请求转换（消息说明里有转换前后的请求体）；第 11–16 步流式状态机和用量统一。</td></tr>
+      <tr><td><a href="dynamic/dynamic-account-recovery.html" target="_blank" rel="noopener">账号异常与恢复</a></td><td>第 7–8 步 402 经方言归成「余额不足」，把账号标异常；第 12–17 步管理平台检查、通知管理员、解除异常；第 19 步同一会话回到原来的线路。</td></tr>
+    </tbody>
+  </table>
+</main>
+</body>
+</html>

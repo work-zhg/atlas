@@ -1,194 +1,73 @@
-"""模型（方案第 3 章）：平台登记的模型与 LiteLLM 里的部署按模型名合并。
+"""模型和线路：模型是对外的名字，线路决定背后走哪个账号的哪个上游模型。
 
-    listing          合并列表：平台登记的（可调用 / LiteLLM 中缺失）+ LiteLLM 直配的（只读，可纳入）
-    register         登记：先在 LiteLLM 登记，再写平台记录、用户中心；
-                     后两步失败就撤回 LiteLLM 里的登记
-    update           显示名称、供应商、可见性、描述（平台）；地址、凭据、规格价格（LiteLLM）
-    reregister       LiteLLM 中缺失时，用新填的参数重新建部署（凭据要重新填）
-    adopt            纳入 LiteLLM 直配的模型：只写平台记录和用户中心，不改 LiteLLM
-    delete           LiteLLM 里的部署、平台记录、用户中心的数据对象一起删
+    模型名      调用时传的 model，租户内唯一、不能改；Key、授权、用量都按它记
+    能力        对调用方的承诺（看图、工具、思考、上下文、最大输出），登记时按第一条线路的预置带出，
+                管理员可以改
+    价格        对内统一价（元 / 百万 token），不管走哪条线路都按它算；空 = 不计费
+    线路        至少一条；同一账号的同一上游模型不能出现两次；每条线路都要做到模型承诺的能力
+                （按预置规则查，查不到的由管理员负责）
+    公有 / 私有  公有的谁都能选；私有的授权给人或部门后才能选（授权在用户中心：数据编码 Model，
+                数据标识 = 模型名）
 
-★ 模型名 = LiteLLM 的 model_name：按名字合并，平台内（含 LiteLLM 直配的）不能重名，登记后不能改。
-★ 改可见性、删除模型会影响用户 Key 的有效模型：由接口层在这里返回后调 KeyService 重新同步。
+★ 改完把配置版本号加一（notify.mark）；公有改私有、删除、停用会影响 Key 的有效模型，由调用方
+  （接口层）接着重算受影响的 Key。
 """
 
 from __future__ import annotations
 
 import logging
 import re
-import time
 from collections.abc import Sequence
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass, field, replace
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from . import audit
-from .db.models import GwModel
-from .db.types import uuid7
-from .errors import Conflict, Invalid, NotFound, Unavailable
-from .litellm_api import Deployment, LiteLLM
+from . import audit, notify
+from .db.models import GwAccount, GwModel, GwRoute
+from .errors import Conflict, Invalid, NotFound
+from .gateway.kernel import ModelCaps, ModelKind, Price, ThinkingSupport
+from .gateway.presets import PresetRules
 from .perms import Grant, Permissions
+
+__all__ = ["MODEL_NAME_PATTERN", "ModelInput", "ModelRegistry", "RouteInput"]
 
 logger = logging.getLogger(__name__)
 
-__all__ = [
-    "MODEL_NAME_PATTERN",
-    "PROVIDERS",
-    "DeploymentsCache",
-    "ModelFields",
-    "ModelRegistry",
-    "ModelView",
-    "RouteFields",
-]
-
 MODEL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
 
-#: 供应商（= LiteLLM 的 custom_llm_provider）。
-#: needs_base：必须填 API 地址；key_optional：可以不填凭据
-PROVIDERS: dict[str, dict[str, Any]] = {
-    "deepseek": {"name": "DeepSeek"},
-    "anthropic": {"name": "Anthropic"},
-    "openai": {"name": "OpenAI / OpenAI 兼容"},
-    "azure": {"name": "Azure OpenAI", "needs_base": True},
-    "dashscope": {"name": "通义千问（DashScope）"},
-    "volcengine": {"name": "火山方舟"},
-    "moonshot": {"name": "Moonshot（Kimi）"},
-    "gemini": {"name": "Google AI Studio（Gemini）"},
-    # Anthropic 兼容接口直通；默认国际站，国内站要填 API 地址（如 https://api.minimax.cn/anthropic）
-    "minimax": {"name": "MiniMax"},
-    "hosted_vllm": {"name": "vLLM 自部署", "needs_base": True, "key_optional": True},
-}
+
+@dataclass(frozen=True)
+class RouteInput:
+    account_uuid: UUID
+    upstream_model: str = ""
+    priority: int = 1
+    weight: int = 1
 
 
 @dataclass(frozen=True)
-class ModelFields:
-    """平台保存的基本信息。"""
-
+class ModelInput:
     display_name: str
-    provider: str
-    visibility: str
+    kind: ModelKind = ModelKind.CHAT
+    visibility: str = "private"
     description: str = ""
-    #: 能看图（Atlas 据此给不给 computer use）
-    supports_vision: bool = False
-
-
-@dataclass(frozen=True)
-class RouteFields:
-    """只交给 LiteLLM 的：地址、凭据、规格价格。api_key 为空 = 不改（编辑时）。"""
-
-    api_base: str | None = None
-    api_key: str | None = None
-    max_input_tokens: int | None = None
-    max_output_tokens: int | None = None
-    #: 美元 / 百万 token
-    input_price: float | None = None
-    output_price: float | None = None
-
-    def model_info(self) -> dict[str, Any]:
-        """规格：进 LiteLLM 的 model_info。"""
-        info = {
-            "max_input_tokens": self.max_input_tokens,
-            "max_output_tokens": self.max_output_tokens,
-        }
-        return {k: v for k, v in info.items() if v is not None}
-
-    def pricing(self) -> dict[str, float]:
-        """价格：进 LiteLLM 的 litellm_params（美元 / token；放 model_info 不生效）。"""
-        prices = {
-            "input_cost_per_token": None if self.input_price is None else self.input_price / 1e6,
-            "output_cost_per_token": None if self.output_price is None else self.output_price / 1e6,
-        }
-        return {k: v for k, v in prices.items() if v is not None}
-
-
-@dataclass
-class ModelView:
-    """合并列表的一行：平台记录（可能没有）+ LiteLLM 里同名的部署（可能没有，可能多个）。"""
-
-    name: str
-    row: GwModel | None
-    deployments: list[Deployment] = field(default_factory=list)
-    #: LiteLLM 没取到（不可达）：状态未知
-    unknown: bool = False
-
-    @property
-    def source(self) -> str:
-        return "platform" if self.row is not None else "litellm"
-
-    @property
-    def missing(self) -> bool:
-        """平台登记了，LiteLLM 里却没有。"""
-        return self.row is not None and not self.deployments and not self.unknown
-
-    @property
-    def callable(self) -> bool:
-        """能放进 Key 的：平台登记的，且 LiteLLM 里有（LiteLLM 不可达时按有处理）。"""
-        return self.row is not None and not self.missing
-
-    @property
-    def primary(self) -> Deployment | None:
-        if not self.deployments:
-            return None
-        own = self.row.litellm_model_id if self.row is not None else None
-        return next((d for d in self.deployments if d.id == own), self.deployments[0])
-
-
-class DeploymentsCache:
-    """LiteLLM 里的模型部署：短时缓存。LiteLLM 不可达时沿用上一份；从没取到过返回 None。"""
-
-    def __init__(self, litellm: LiteLLM, ttl_s: float) -> None:
-        self.litellm = litellm
-        self._ttl = ttl_s
-        self._value: list[Deployment] | None = None
-        self._at = 0.0
-
-    async def get(self, *, fresh: bool = False) -> list[Deployment] | None:
-        if not fresh and self._value is not None and time.monotonic() - self._at < self._ttl:
-            return self._value
-        try:
-            self._value = await self.litellm.models()
-            self._at = time.monotonic()
-        except Unavailable as exc:
-            if self._value is not None:
-                logger.warning("LiteLLM 不可达，沿用上一份模型部署：%s", exc)
-            else:
-                logger.warning("LiteLLM 不可达，取不到模型部署：%s", exc)
-        return self._value
-
-    def forget(self) -> None:
-        self._at = 0.0
-
-
-def _check_provider(provider: str) -> None:
-    if provider not in PROVIDERS:
-        raise Invalid(f"不认识的供应商：{provider}", provider=provider)
-
-
-def _check_route(provider: str, route: RouteFields, *, need_key: bool) -> None:
-    spec = PROVIDERS[provider]
-    if spec.get("needs_base") and not route.api_base:
-        raise Invalid(f"{spec['name']} 需要填写 API 地址")
-    if need_key and not spec.get("key_optional") and not route.api_key:
-        raise Invalid("请填写供应商 API Key")
+    #: None = 按第一条线路的预置带出
+    caps: ModelCaps | None = None
+    price: Price = field(default_factory=Price)
+    enabled: bool = True
+    routes: Sequence[RouteInput] = ()
 
 
 class ModelRegistry:
     def __init__(
-        self,
-        session: AsyncSession,
-        litellm: LiteLLM,
-        deployments: DeploymentsCache,
-        perms: Permissions,
+        self, session: AsyncSession, perms: Permissions, presets: PresetRules | None = None
     ) -> None:
         self.session = session
-        self.litellm = litellm
-        self.deployments = deployments
         self.perms = perms
+        self.presets = presets or PresetRules()
 
-    # ── 查询
+    # ── 查 ─────────────────────────────────────────────────────────────
 
     async def rows(self) -> list[GwModel]:
         return list(await self.session.scalars(select(GwModel).order_by(GwModel.name)))
@@ -196,230 +75,180 @@ class ModelRegistry:
     async def get(self, uuid: UUID) -> GwModel:
         row = await self.session.scalar(select(GwModel).where(GwModel.uuid == uuid))
         if row is None:
-            raise NotFound("模型不存在", model=str(uuid))
+            raise NotFound("模型不存在")
         return row
 
     async def by_name(self, name: str) -> GwModel | None:
         return await self.session.scalar(select(GwModel).where(GwModel.name == name))
 
-    async def listing(self, *, fresh: bool = False) -> tuple[list[ModelView], bool]:
-        """→ (合并列表, LiteLLM 是否可达)。平台登记的在前，各自按名字排序。"""
-        deployments = await self.deployments.get(fresh=fresh)
-        reachable = deployments is not None
-        by_name: dict[str, list[Deployment]] = {}
-        for d in deployments or []:
-            by_name.setdefault(d.model_name, []).append(d)
-        views = [
-            ModelView(row.name, row, by_name.pop(row.name, []), unknown=not reachable)
-            for row in await self.rows()
-        ]
-        views.extend(ModelView(name, None, deps) for name, deps in sorted(by_name.items()))
-        return views, reachable
+    async def by_names(self) -> dict[str, GwModel]:
+        return {m.name: m for m in await self.rows()}
 
-    async def callable(self) -> dict[str, GwModel]:
-        """能放进 Key 的模型：平台登记的、LiteLLM 里存在的（LiteLLM 不可达时按存在处理）。"""
-        views, _ = await self.listing()
-        return {v.name: v.row for v in views if v.callable and v.row is not None}
+    async def routes(self, model_uuids: Sequence[UUID] | None = None) -> dict[UUID, list[GwRoute]]:
+        stmt = select(GwRoute).order_by(GwRoute.priority, GwRoute.created_at)
+        if model_uuids is not None:
+            stmt = stmt.where(GwRoute.model_uuid.in_(list(model_uuids)))
+        out: dict[UUID, list[GwRoute]] = {}
+        for r in await self.session.scalars(stmt):
+            out.setdefault(r.model_uuid, []).append(r)
+        return out
 
-    # ── 登记
+    async def accounts(self) -> dict[UUID, GwAccount]:
+        return {a.uuid: a for a in await self.session.scalars(select(GwAccount))}
 
-    async def test_connection(
-        self, *, name: str, provider: str, route: RouteFields
-    ) -> tuple[bool, str]:
-        _check_provider(provider)
-        _check_route(provider, route, need_key=True)
-        return await self.litellm.test_connection(
-            model_name=name, provider=provider, api_base=route.api_base, api_key=route.api_key
-        )
+    def suggest_caps(
+        self, provider: str, upstream_model: str, kind: ModelKind = ModelKind.CHAT
+    ) -> ModelCaps:
+        """登记时带出的默认能力：有预置用预置；没有的只标类型（其余按「不支持」，由管理员填）。"""
+        found = self.presets.caps_for(provider, upstream_model)
+        return found if found is not None else ModelCaps(kind=kind)
 
-    async def _ensure_unused(self, name: str) -> None:
+    # ── 改 ─────────────────────────────────────────────────────────────
+
+    async def create(
+        self, name: str, data: ModelInput, *, grants: Sequence[Grant] = (), actor: str
+    ) -> GwModel:
+        name = name.strip()
         if not MODEL_NAME_PATTERN.match(name):
-            raise Invalid("模型名只能包含字母、数字和 . _ : / -，且不超过 128 个字符")
+            raise Invalid("模型名只能用字母、数字和 . _ : / -，以字母或数字开头，最长 128 个字符")
         if await self.by_name(name) is not None:
-            raise Conflict(f"已经登记过模型 {name}", model=name)
-        deployments = await self.deployments.get(fresh=True)
-        if deployments is None:
-            raise Unavailable("LiteLLM 暂时不可用，无法登记模型", code="LITELLM_UNAVAILABLE")
-        if any(d.model_name == name for d in deployments):
-            raise Conflict(
-                f"LiteLLM 里已经有模型 {name}（直接配置的）：请用「纳入平台」", model=name
-            )
-
-    async def register(
-        self,
-        *,
-        name: str,
-        fields: ModelFields,
-        route: RouteFields,
-        grants: Sequence[Grant],
-        actor: str,
-    ) -> GwModel:
-        _check_provider(fields.provider)
-        _check_route(fields.provider, route, need_key=True)
-        await self._ensure_unused(name)
-        row = GwModel(
-            uuid=uuid7(),
-            name=name,
-            display_name=fields.display_name or name,
-            provider=fields.provider,
-            visibility=fields.visibility,
-            description=fields.description,
-            supports_vision=fields.supports_vision,
-            created_by=actor,
-            updated_by=actor,
-        )
-        row.litellm_model_id = str(row.uuid)
-        await self.litellm.add_model(
-            model_id=row.litellm_model_id,
-            model_name=name,
-            provider=fields.provider,
-            api_base=route.api_base,
-            api_key=route.api_key,
-            info=route.model_info(),
-            pricing=route.pricing(),
-        )
-        try:
-            self.session.add(row)
-            await self.session.flush()
-            await self._register_data(row, grants, actor)
-        except Exception:
-            await self._undo_add(row.litellm_model_id)
-            raise
-        self.deployments.forget()
-        audit.record(
-            self.session,
-            actor=actor,
-            action="model.register",
-            target=f"model:{name}",
-            provider=fields.provider,
-            visibility=fields.visibility,
-        )
-        return row
-
-    async def _register_data(self, row: GwModel, grants: Sequence[Grant], actor: str) -> None:
-        await self.perms.register(row.name, row.display_name, actor)
-        if row.visibility == "private" and grants:
-            await self.perms.grant(row.name, actor, list(grants))
-
-    async def _undo_add(self, model_id: str) -> None:
-        try:
-            await self.litellm.delete_model(model_id)
-        except Exception:
-            logger.exception("撤回 LiteLLM 里的模型 %s 失败：需要在 LiteLLM 里手工删除", model_id)
-
-    async def adopt(
-        self, *, name: str, fields: ModelFields, grants: Sequence[Grant], actor: str
-    ) -> GwModel:
-        """纳入 LiteLLM 直配的模型：供应商取 LiteLLM 里的，不改 LiteLLM。"""
-        if await self.by_name(name) is not None:
-            raise Conflict(f"已经登记过模型 {name}", model=name)
-        deployments = await self.deployments.get(fresh=True)
-        if deployments is None:
-            raise Unavailable("LiteLLM 暂时不可用，无法纳入", code="LITELLM_UNAVAILABLE")
-        found = [d for d in deployments if d.model_name == name]
-        if not found:
-            raise NotFound(f"LiteLLM 里没有模型 {name}", model=name)
+            raise Conflict(f"已经有叫 {name} 的模型了")
+        self._check_basics(data)
+        accounts = await self.accounts()
+        caps = data.caps or self._default_caps(data, accounts)
         row = GwModel(
             name=name,
-            display_name=fields.display_name or name,
-            provider=found[0].provider or fields.provider,
-            visibility=fields.visibility,
-            description=fields.description,
-            supports_vision=fields.supports_vision,
-            litellm_model_id=None,
+            display_name=(data.display_name or name)[:100],
+            kind=data.kind.value,
+            visibility=data.visibility,
+            description=data.description,
+            caps=replace(caps, kind=data.kind).to_json(),
+            price=data.price.to_json(),
+            enabled=data.enabled,
             created_by=actor,
             updated_by=actor,
         )
         self.session.add(row)
         await self.session.flush()
-        await self._register_data(row, grants, actor)
-        audit.record(self.session, actor=actor, action="model.adopt", target=f"model:{name}")
+        await self._set_routes(row, data.routes, accounts)
+        # 用户中心里登记成一条数据（登记人成为所有者）；私有模型顺带授权
+        await self.perms.register(row.name, row.display_name, actor)
+        if grants:
+            await self.perms.grant(row.name, actor, list(grants))
+        audit.record(self.session, actor=actor, action="model.create", target=f"model:{row.name}")
+        notify.mark(self.session)
         return row
 
-    # ── 修改
-
-    async def update(
-        self, row: GwModel, *, fields: ModelFields, route: RouteFields | None, actor: str
-    ) -> bool:
-        """→ 可见性有没有变（变了要重新同步用户 Key）。
-
-        route 为 None：只改平台信息（纳入平台的模型，平台不改 LiteLLM）。
-        """
-        if row.litellm_model_id is not None and route is not None:
-            _check_provider(fields.provider)
-            _check_route(fields.provider, route, need_key=False)
-            await self.litellm.update_model(
-                model_id=row.litellm_model_id,
-                model_name=row.name,
-                provider=fields.provider,
-                api_base=route.api_base,
-                api_key=route.api_key,
-                info=route.model_info(),
-                pricing=route.pricing(),
-            )
-            row.provider = fields.provider
-            self.deployments.forget()
-        renamed = bool(fields.display_name) and fields.display_name != row.display_name
-        visibility_changed = fields.visibility != row.visibility
-        if fields.display_name:
-            row.display_name = fields.display_name
-        row.visibility = fields.visibility
-        row.description = fields.description
-        row.supports_vision = fields.supports_vision
+    async def update(self, row: GwModel, data: ModelInput, *, actor: str) -> bool:
+        """→ 公有 / 私有、启用状态有没有变（变了要重算 Key 的有效模型）。"""
+        self._check_basics(data)
+        if data.kind.value != row.kind:
+            raise Invalid("模型类型建好后不能改")
+        accounts = await self.accounts()
+        affects_keys = row.visibility != data.visibility or row.enabled != data.enabled
+        renamed = row.display_name != (data.display_name or row.name)
+        row.display_name = (data.display_name or row.name)[:100]
+        row.visibility = data.visibility
+        row.description = data.description
+        row.caps = replace(data.caps or ModelCaps.from_json(row.caps), kind=data.kind).to_json()
+        row.price = data.price.to_json()
+        row.enabled = data.enabled
         row.updated_by = actor
-        await self.session.flush()
+        await self._set_routes(row, data.routes, accounts)
         if renamed:
             await self.perms.rename(row.name, row.display_name)
+        audit.record(self.session, actor=actor, action="model.update", target=f"model:{row.name}")
+        notify.mark(self.session)
+        return affects_keys
+
+    async def set_enabled(self, row: GwModel, enabled: bool, *, actor: str) -> None:
+        row.enabled = enabled
+        row.updated_by = actor
         audit.record(
             self.session,
             actor=actor,
-            action="model.update",
+            action="model.enable" if enabled else "model.disable",
             target=f"model:{row.name}",
-            visibility=row.visibility,
-            route=route is not None and row.litellm_model_id is not None,
-            new_api_key=bool(route and route.api_key),
         )
-        return visibility_changed
-
-    async def reregister(
-        self, row: GwModel, *, provider: str, route: RouteFields, actor: str
-    ) -> GwModel:
-        """LiteLLM 中缺失：用新的参数重新建部署。可见性和授权不变。"""
-        _check_provider(provider)
-        _check_route(provider, route, need_key=True)
-        views, reachable = await self.listing(fresh=True)
-        if not reachable:
-            raise Unavailable("LiteLLM 暂时不可用", code="LITELLM_UNAVAILABLE")
-        view = next(v for v in views if v.row is not None and v.row.uuid == row.uuid)
-        if not view.missing:
-            raise Conflict(f"LiteLLM 里还有模型 {row.name}，不需要重新登记", model=row.name)
-        model_id = str(row.uuid)
-        await self.litellm.add_model(
-            model_id=model_id,
-            model_name=row.name,
-            provider=provider,
-            api_base=route.api_base,
-            api_key=route.api_key,
-            info=route.model_info(),
-            pricing=route.pricing(),
-        )
-        row.litellm_model_id = model_id
-        row.provider = provider
-        row.updated_by = actor
-        self.deployments.forget()
-        audit.record(
-            self.session, actor=actor, action="model.reregister", target=f"model:{row.name}"
-        )
-        return row
+        notify.mark(self.session)
 
     async def delete(self, row: GwModel, *, actor: str) -> None:
-        if row.litellm_model_id is not None:
-            try:
-                await self.litellm.delete_model(row.litellm_model_id)
-            except NotFound:
-                logger.info("LiteLLM 里已经没有模型 %s，只删平台记录", row.name)
-        await self.perms.remove(row.name)
+        await self.session.execute(delete(GwRoute).where(GwRoute.model_uuid == row.uuid))
+        audit.record(self.session, actor=actor, action="model.delete", target=f"model:{row.name}")
         await self.session.delete(row)
         await self.session.flush()
-        self.deployments.forget()
-        audit.record(self.session, actor=actor, action="model.delete", target=f"model:{row.name}")
+        await self.perms.remove(row.name)
+        notify.mark(self.session)
+
+    # ── 线路 ───────────────────────────────────────────────────────────
+
+    async def _set_routes(
+        self, row: GwModel, routes: Sequence[RouteInput], accounts: dict[UUID, GwAccount]
+    ) -> None:
+        if not routes:
+            raise Invalid("至少要有一条线路")
+        seen: set[tuple[UUID, str]] = set()
+        caps = ModelCaps.from_json(row.caps)
+        for r in routes:
+            account = accounts.get(r.account_uuid)
+            if account is None:
+                raise Invalid("线路里的账号不存在")
+            upstream = (r.upstream_model or row.name).strip()
+            if (r.account_uuid, upstream) in seen:
+                raise Invalid(f"同一账号「{account.name}」的同一上游模型 {upstream} 出现了两次")
+            seen.add((r.account_uuid, upstream))
+            if r.weight < 1 or r.priority < 0:
+                raise Invalid("权重至少是 1，优先级不能是负数")
+            if missing := self._missing_caps(caps, account.provider, upstream):
+                raise Invalid(
+                    f"线路「{account.name} · {upstream}」做不到模型承诺的能力：{'、'.join(missing)}"
+                )
+        await self.session.execute(delete(GwRoute).where(GwRoute.model_uuid == row.uuid))
+        for r in routes:
+            self.session.add(
+                GwRoute(
+                    model_uuid=row.uuid,
+                    account_uuid=r.account_uuid,
+                    upstream_model=(r.upstream_model or row.name).strip()[:200],
+                    priority=r.priority,
+                    weight=r.weight,
+                )
+            )
+        await self.session.flush()
+
+    def _missing_caps(self, promised: ModelCaps, provider: str, upstream: str) -> list[str]:
+        """按预置查这条线路做不做得到；查不到预置的不拦（由管理员负责）。"""
+        preset = self.presets.caps_for(provider, upstream)
+        if preset is None:
+            return []
+        missing = []
+        if promised.vision and not preset.vision:
+            missing.append("看图")
+        if promised.tools and not preset.tools:
+            missing.append("调用工具")
+        if (
+            promised.thinking is not ThinkingSupport.NONE
+            and preset.thinking is ThinkingSupport.NONE
+        ):
+            missing.append("思考")
+        if (
+            promised.context_window
+            and preset.context_window
+            and promised.context_window > preset.context_window
+        ):
+            missing.append(f"上下文 {promised.context_window}")
+        return missing
+
+    def _default_caps(self, data: ModelInput, accounts: dict[UUID, GwAccount]) -> ModelCaps:
+        first = data.routes[0] if data.routes else None
+        account = accounts.get(first.account_uuid) if first else None
+        if account is None or first is None:
+            return ModelCaps(kind=data.kind)
+        return self.suggest_caps(account.provider, first.upstream_model or "", data.kind)
+
+    @staticmethod
+    def _check_basics(data: ModelInput) -> None:
+        if data.visibility not in ("public", "private"):
+            raise Invalid("可见范围只能是公有或私有")
+        if any(p < 0 for p in (data.price.input, data.price.cache_hit, data.price.output)):
+            raise Invalid("价格不能是负数")

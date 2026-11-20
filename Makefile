@@ -1,7 +1,7 @@
 .PHONY: up down sync lint types arch test migrate serve check smoke regress skill-migrate skill-serve \
         memory-migrate memory-serve mcpgw-migrate mcpgw-serve modelgw-migrate modelgw-serve memory-scopes \
         uc-migrate uc-serve uc-bootstrap uc-web-install uc-web-dev uc-dev \
-        tf-migrate tf-serve tf-worker tf-register-uc tf-web-install tf-web-dev tf-dev \
+        tf-migrate tf-serve tf-worker tf-web-install tf-web-dev tf-dev \
         web-install web-dev web-build web-check web-gen dev
 
 # ---------- 后端 ----------
@@ -16,24 +16,24 @@ test:    ; uv run pytest -q
 migrate: ; cd agent-platform/services/agent && uv run alembic upgrade head && uv run python -m atlas_agent migrate-appconfig
 serve:   ; uv run uvicorn atlas_agent.main:app --reload --port 8000
 # 技能应用（技能包的上传、审查、发布）。库是同一 PG 上的 atlas_skill（make up 会建）。
-#   用户中心里是独立应用「技能」：首次要 python -m atlas_skill register-uc --account admin
+#   用户中心里是独立应用「技能」：操作码、角色由运营人员在运营中心录入应用目录（见各服务 README「用户中心登记」）
 skill-migrate: ; uv run python -m atlas_skill migrate
 skill-serve:   ; ATLAS_SKILL_ALLOW_SELF_REVIEW=true uv run python -m atlas_skill serve
 # 记忆服务（doc/memory-design.html §3）。库是同一 PG 上的 atlas_memory（make up 会建）。
 #   首次：make memory-migrate && make memory-scopes；atlas-server 配 MEMORY_BASE_URL=http://127.0.0.1:8060
-#   ★ 「用户」作用域打开了数据权限开关：要先 python -m atlas_memory register-uc --account admin
+#   ★ 「用户」作用域打开了数据权限开关：数据编码 MemoryUser 由运营人员在运营中心录入应用目录（见各服务 README「用户中心登记」）
 memory-migrate: ; uv run python -m atlas_memory migrate
 memory-serve:   ; uv run python -m atlas_memory serve
 memory-scopes:  ; uv run python -m atlas_memory scope add user --key uid --description 用户 --check-permission --if-missing
 # MCP 网关（doc/mcp-design.html 第二版）。库是同一 PG 上的 atlas_mcpgateway（make up 会建）。
-#   首次：make mcpgw-migrate；python -m atlas_mcpgateway register-uc --account admin
+#   首次：make mcpgw-migrate；应用目录由运营人员在运营中心录入应用目录（见各服务 README「用户中心登记」）
 #   atlas-server 配 MCP_GATEWAY_URL=http://127.0.0.1:8070（Atlas 只经网关调 MCP）
 mcpgw-migrate: ; uv run python -m atlas_mcpgateway migrate
 mcpgw-serve:   ; uv run python -m atlas_mcpgateway serve
 # 模型管理平台（agent-platform/doc/design/model-design.html）。库是同一 PG 上的 atlas_modelgateway
 #   （make up 会建）。模型网关是 LiteLLM（deploy/local/39-litellm.yaml），平台只调它的管理接口：
 #   要配 ATLAS_MODELGW_LITELLM_BASE_URL、ATLAS_MODELGW_LITELLM_MASTER_KEY。
-#   首次：make modelgw-migrate；python -m atlas_modelgateway register-uc --account admin；
+#   首次：make modelgw-migrate；应用目录由运营人员在运营中心录入应用目录（见各服务 README「用户中心登记」）；
 #   在模型管理端登记模型、给客户端 Key 分配模型。
 #   atlas-server 配 MODEL_PLATFORM_URL + MODEL_LITELLM_URL 才经平台（不配照旧直连 LITELLM_BASE_URL）
 modelgw-migrate: ; uv run python -m atlas_modelgateway migrate
@@ -49,11 +49,10 @@ uc-dev:
 	@echo "用户中心后端 → http://127.0.0.1:8030   前端 → http://127.0.0.1:3100"
 	@$(MAKE) -j2 uc-serve uc-web-dev
 # AI TeamFlow（独立系统，prototype/teamflow/docs/）。库是同一 PG 上的 atlas_teamflow（make up 会建）。
-#   首次：make tf-migrate && make tf-register-uc ACCOUNT=admin（把输出的 App Key / Secret 写进 .env）
+#   首次：make tf-migrate；应用目录由运营人员在运营中心录入应用目录（见各服务 README「用户中心登记」）
 tf-migrate:     ; uv run python -m atlas_teamflow migrate
 tf-serve:       ; uv run uvicorn atlas_teamflow.api.app:create_app --factory --reload --port 8040
 tf-worker:      ; uv run python -m atlas_teamflow worker   # 多实例：独立的 Agent 监督器，可起多个
-tf-register-uc: ; uv run python -m atlas_teamflow register-uc --account "$(ACCOUNT)"
 tf-web-install: ; pnpm install   # 前端 workspace（根 pnpm-workspace.yaml），与 Atlas 前端共用依赖
 tf-web-dev:     ; cd teamflow/web && pnpm dev
 tf-dev:

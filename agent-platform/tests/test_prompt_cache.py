@@ -116,13 +116,16 @@ def _dump(messages: list[Any]) -> list[Any]:
 # ── assembly：spec 开关 × 模型目录 ────────────────────────────────────────────
 
 
-async def _ttl(spec: AgentSpec, ttl: str = "1h") -> str | None:
+async def _ttl(spec: AgentSpec, ttl: str = "1h", gateway: str | None = None) -> str | None:
     from atlas_agent.db.session import get_sessionmaker
     from atlas_agent.executor.assembly import CapabilityAssembly
 
-    host = SimpleNamespace(
-        _sessionmaker=get_sessionmaker(), _settings=SimpleNamespace(prompt_cache_ttl=ttl)
+    settings = SimpleNamespace(
+        prompt_cache_ttl=ttl,
+        model_gateway_url=gateway,
+        model_platform_url=gateway and "http://platform.test",
     )
+    host = SimpleNamespace(_sessionmaker=get_sessionmaker(), _settings=settings)
     return await CapabilityAssembly._prompt_cache_ttl(host, SimpleNamespace(spec=spec))  # type: ignore[arg-type]
 
 
@@ -142,6 +145,11 @@ async def test_assembly_skips_models_measured_without_cache_support() -> None:
 
 async def test_assembly_treats_models_missing_from_the_catalog_as_unsupported() -> None:
     assert await _ttl(_spec("no-such-model")) is None
+
+
+async def test_assembly_always_marks_cache_through_the_model_gateway() -> None:
+    """经模型网关不查本地目录：上游不支持缓存时由网关去掉标记。"""
+    assert await _ttl(_spec("no-such-model"), gateway="http://gw.test") == "1h"
 
 
 # ── 配置：TTL 只有一个来源 ─────────────────────────────────────────────────────

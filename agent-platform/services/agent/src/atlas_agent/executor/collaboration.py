@@ -167,10 +167,12 @@ class Collaboration:
             )
             async with sessionmaker() as session:
                 instructions = await _judge_instructions(RunRepository(session), thread)
-                # 显式缓存标记只对 Anthropic 有用；DeepSeek 这类自己做前缀缓存
-                cache = found.provider == "anthropic" and await ModelCatalogRepository(
-                    session
-                ).supports_cache(found.model)
+                # 显式缓存标记只对 Anthropic 有用；DeepSeek 这类自己做前缀缓存。
+                # 经模型网关时照打：转成 OpenAI 格式的上游时网关会去掉
+                cache = found.provider == "anthropic" and (
+                    bool(settings.model_gateway_url)
+                    or await ModelCatalogRepository(session).supports_cache(found.model)
+                )
             return JudgeSetup(model=model, instructions=instructions, cache=cache)
 
         return JudgePort(setup=setup, timeout_s=settings.approval_judge_timeout_s)

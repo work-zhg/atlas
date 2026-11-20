@@ -2,7 +2,7 @@
 
 ★ 独立测试库 atlas_modelgateway_test，不碰开发库。
 ★ 用户中心是替身：数据权限用内存实现（FakePermissions），授权快照用 httpx.MockTransport。
-★ LiteLLM 是替身（FakeLiteLLM），经 httpx.MockTransport 在进程内应答，不起端口。
+★ 供应商是替身（gw_testkit.FakeUpstream），经 httpx.MockTransport 在进程内应答，不起端口。
 ★ 平台本身经 ASGITransport 跑在测试的 event loop 里（库连接绑定 event loop）。
 """
 
@@ -15,14 +15,16 @@ from typing import Any
 
 import httpx
 import pytest
-from modelgw_testkit import ADMIN, MASTER_KEY, FakeLiteLLM, FakePermissions
+from modelgw_testkit import ADMIN, TENANT, FakePermissions
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 TEST_DB = "atlas_modelgateway_test"
 _ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
 TEST_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{TEST_DB}"
-_TABLES = ("gw_model", "gw_api_key", "gw_audit")
+_TABLES = ("gw_model", "gw_api_key", "gw_audit", "gw_account", "gw_route", "gw_model_call")
+#: 账号密钥的主密钥（测试专用）
+SECRET_KEY = "x3Gq2b6P0W9cJmUoq6a7mMb7aT1x0sQhYc8yFv0J3nE="
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -31,13 +33,13 @@ def _environment() -> Iterator[None]:
 
     overrides = {
         "ATLAS_MODELGW_DATABASE_URL": TEST_URL,
-        "ATLAS_MODELGW_LITELLM_BASE_URL": "http://litellm.test",
-        "ATLAS_MODELGW_LITELLM_MASTER_KEY": MASTER_KEY,
-        "ATLAS_MODELGW_RECONCILE_INTERVAL_S": "0",
         "ATLAS_MODELGW_UC_BASE_URL": "http://uc.invalid",
         # 测试里每次都看最新的：授权改了立刻算
         "ATLAS_MODELGW_PERM_CACHE_TTL_S": "0",
-        "ATLAS_MODELGW_LITELLM_MODELS_TTL_S": "0",
+        "ATLAS_MODELGW_ACCOUNT_CHECK_INTERVAL_S": "0",
+        "ATLAS_MODELGW_KEY_REFRESH_INTERVAL_S": "0",
+        "ATLAS_MODELGW_SECRET_KEYS": SECRET_KEY,
+        "ATLAS_MODELGW_REDIS_URL": "",
     }
     saved = {k: os.environ.get(k) for k in overrides}
     os.environ.update(overrides)
@@ -83,11 +85,6 @@ async def _clean_tables() -> AsyncIterator[None]:
 
 
 @pytest.fixture
-def litellm() -> FakeLiteLLM:
-    return FakeLiteLLM()
-
-
-@pytest.fixture
 def perms() -> FakePermissions:
     return FakePermissions()
 
@@ -101,7 +98,15 @@ def _fake_authz(monkeypatch: pytest.MonkeyPatch) -> None:
         uid = request.url.path.split("/")[-2]
         ops = ["model:manage"] if uid == ADMIN else []
         return httpx.Response(
-            200, json={"can_access": True, "permissions": ops, "user": {"status": "active"}}
+            200,
+            json={
+                "can_access": True,
+                "permissions": ops,
+                "user": {
+                    "status": "active",
+                    "tenant_id": request.headers.get("x-tenant-id", TENANT),
+                },
+            },
         )
 
     monkeypatch.setattr(auth, "_transport", httpx.MockTransport(handler))
@@ -109,12 +114,30 @@ def _fake_authz(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-async def app(perms: FakePermissions, litellm: FakeLiteLLM) -> AsyncIterator[Any]:
+def upstream() -> Any:
+    from gw_testkit import FakeUpstream
+
+    return FakeUpstream()
+
+
+@pytest.fixture
+async def app(perms: FakePermissions, upstream: Any) -> AsyncIterator[Any]:
     from atlas_modelgateway.api.app import create_app
 
-    application = create_app(perms=perms, litellm_transport=litellm.transport())
+    application = create_app(perms=perms, probe_transport=upstream.transport())
+    application.state.guard = _OpenGuard()
     async with application.router.lifespan_context(application):
         yield application
+
+
+class _OpenGuard:
+    """测试里供应商是替身（*.test 解析不了）：地址检查一律放行。"""
+
+    async def check(self, url: str) -> None:
+        return None
+
+    def validate_static(self, url: str) -> str | None:
+        return None
 
 
 @pytest.fixture

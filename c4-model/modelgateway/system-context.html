@@ -21,7 +21,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "系统上下文图：模型平台",
-  "description": "范围是 agent-platform/services/modelgateway（atlas_modelgateway）和它管的 LiteLLM。控制台的模型页面属于 Agent 平台的前端，但浏览器经 nginx 直接调本服务，所以员工和管理员直接连到本系统",
+  "description": "目标模型：自研模型网关取代 LiteLLM，方案见 agent-platform/doc/design/model-gateway-design.html。范围是 agent-platform/services/modelgateway。控制台的模型页面属于 Agent 平台的前端，但浏览器经 nginx 直接调本服务，所以员工和管理员直接连到本系统。账号、模型、Key、调用记录都属于租户",
   "elements": [
     {
       "id": "employee",
@@ -29,7 +29,7 @@
       "tag": "员工",
       "name": "员工",
       "color": "#297e06",
-      "description": "在控制台的模型页面申请自己的用户 Key，从能用的模型里选，在本机工具里用它调模型。",
+      "description": "申请自己的个人 Key，在 Claude Code、Cursor、脚本里用它调模型。",
       "at": [
         0.55,
         0
@@ -41,7 +41,7 @@
       "tag": "模型管理员",
       "name": "模型管理员",
       "color": "#1a849c",
-      "description": "登记模型、设公有私有、给私有模型授权，给智能体和平台服务的 Key 分配模型；在 LiteLLM 界面看日志和花费、配预算。",
+      "description": "租户里管模型的人：登记供应商账号、模型和线路，设公有私有并授权，给智能体和平台服务的 Key 分配模型，看调用记录和花费。",
       "at": [
         1.65,
         0
@@ -56,7 +56,7 @@
         1.25
       ],
       "name": "模型平台",
-      "description": "所有模型调用的唯一入口：LiteLLM 做模型网关，自研的管理平台管模型登记、私有模型授权和 API Key，日志、花费、限额在 LiteLLM。"
+      "description": "租户的模型调用都经过它：自研的模型网关认 Key、按模型整理参数、选线路、转发给供应商、记用量；管理平台管账号、模型、线路、Key 和授权。"
     },
     {
       "id": "usercenter",
@@ -66,7 +66,18 @@
       "description": "用户、组织与权限的唯一数据源，负责统一登录。",
       "at": [
         -0.15,
-        1.25
+        0.75
+      ]
+    },
+    {
+      "id": "ops",
+      "kind": "system",
+      "name": "运营中心",
+      "color": "#8a6d00",
+      "description": "管理平台本身的独立系统：租户的开通和关闭、系统参数、系统任务；看不到租户的业务内容。",
+      "at": [
+        -0.15,
+        1.8
       ]
     },
     {
@@ -96,7 +107,7 @@
       "kind": "system",
       "name": "模型供应商",
       "color": "#5b6770",
-      "description": "DeepSeek、Anthropic、OpenAI、通义千问等的模型接口，以及自部署的 vLLM。",
+      "description": "DeepSeek、Anthropic、MiniMax、Kimi、Gemini 等的模型接口，以及自部署的 vLLM。",
       "at": [
         1.1,
         2.5
@@ -107,22 +118,27 @@
     {
       "from": "employee",
       "to": "mp",
-      "description": "申请用户 Key，选能用的模型，用它调模型"
+      "description": "申请个人 Key，用它调模型"
     },
     {
       "from": "admin",
       "to": "mp",
-      "description": "登记模型、授权、给 Key 分配模型，看花费"
+      "description": "登记账号、模型、线路，授权，分配模型，看调用记录和花费"
     },
     {
       "from": "agent",
       "to": "mp",
-      "description": "申请、获取智能体和平台服务的 Key，带 Key 调模型"
+      "description": "取智能体和平台服务的 Key、模型清单，带 Key 调模型"
     },
     {
       "from": "kb",
       "to": "mp",
       "description": "取服务级 Key，调对话、向量、重排模型"
+    },
+    {
+      "from": "ops",
+      "to": "mp",
+      "description": "改系统参数、看系统任务；关闭租户时删除它的数据"
     },
     {
       "from": "mp",
@@ -132,7 +148,7 @@
     {
       "from": "mp",
       "to": "provider",
-      "description": "转发模型调用，带供应商凭据"
+      "description": "转发模型调用，带租户的供应商凭据"
     }
   ]
 }

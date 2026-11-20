@@ -1,0 +1,881 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>自研模型网关方案设计</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --border: #d1d9e0; --head: #f6f8fa;
+    --accent: #0969da; --ok: #1a7f37; --ok-bg: #dafbe1; --warn: #9a6700; --warn-bg: #fff8c5;
+    --bad: #cf222e; --bad-bg: #ffebe9; --code-bg: #f6f8fa;
+    --b1: #ddf4ff; --b1d: #54aeff; --b2: #fbefff; --b2d: #c297ff; --b3: #dafbe1; --b3d: #4ac26b;
+    --b4: #fff8c5; --b4d: #d4a72c; --b5: #ffebe9; --b5d: #ff8182;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --border: #3d444d; --head: #151b23;
+      --accent: #4493f8; --ok: #3fb950; --ok-bg: #12261e; --warn: #d29922; --warn-bg: #2b2111;
+      --bad: #f85149; --bad-bg: #2d1214; --code-bg: #151b23;
+      --b1: #12263f; --b1d: #1f6feb; --b2: #271a36; --b2d: #8957e5; --b3: #12261e; --b3d: #2ea043;
+      --b4: #2b2111; --b4d: #9e6a03; --b5: #2d1214; --b5d: #da3633;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+         font: 14px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 4px; }
+  h2 { font-size: 19px; margin: 44px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+  h3 { font-size: 15.5px; margin: 24px 0 8px; }
+  .sub { color: var(--muted); margin: 0 0 14px; }
+  code { font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--code-bg); padding: 1px 4px; border-radius: 4px; }
+  table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; vertical-align: top; text-align: left; }
+  th { background: var(--head); white-space: nowrap; }
+  .callout { border-left: 4px solid var(--accent); background: var(--head); padding: 10px 14px; border-radius: 4px; margin: 14px 0; }
+  .tag { display: inline-block; padding: 0 7px; border-radius: 9px; font-size: 12px; font-weight: 600; border: 1px solid; white-space: nowrap; }
+  .tag.warn { color: var(--warn); background: var(--warn-bg); border-color: var(--warn); }
+  .toc { columns: 2; padding-left: 18px; }
+  .fig { border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; margin: 10px 0 6px; }
+  .cap { color: var(--muted); font-size: 12.5px; margin: 0 0 16px; text-align: center; }
+  svg text { fill: var(--fg); font-size: 12px; font-family: -apple-system, "PingFang SC", sans-serif; }
+  svg .s { font-size: 11px; fill: var(--muted); }
+  svg .b { font-weight: 600; }
+  svg .m { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+  svg .bad { font-size: 11px; fill: var(--bad); }
+  svg .c1 { fill: var(--b1); stroke: var(--b1d); } svg .c2 { fill: var(--b2); stroke: var(--b2d); }
+  svg .c3 { fill: var(--b3); stroke: var(--b3d); } svg .c4 { fill: var(--b4); stroke: var(--b4d); }
+  svg .c5 { fill: var(--b5); stroke: var(--b5d); }
+  svg .inner { fill: var(--bg); stroke: var(--border); }
+  svg .ln { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+  svg .dash { stroke-dasharray: 5 4; }
+  svg .arw { fill: var(--fg); }
+  svg .soft { fill-opacity: .55; }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path class="arw" d="M0,0 L8,4 L0,8 z"/></marker>
+</defs></svg>
+<main>
+<h1>自研模型网关方案设计</h1>
+<p class="sub">日期：2026-11-19 · 范围：模型网关（调用链路），以及它依赖的模型平台配置；调用方包括 Atlas（原生智能体、CLI 智能体、平台服务）、知识库、个人工具 · 状态：<span class="tag warn">方案设计，待评审</span></p>
+
+<ol class="toc" start="0">
+  <li><a href="#s0">方案概览</a></li>
+  <li><a href="#s1">背景与目标</a></li>
+  <li><a href="#s2">统一入口：调用方只说一种格式</a></li>
+  <li><a href="#s3">一次调用怎么走</a></li>
+  <li><a href="#s4">模型差异收进网关：能力与参数</a></li>
+  <li><a href="#s5">格式：相同就直通，只有通用入口转换</a></li>
+  <li><a href="#s6">选线路与换线路</a></li>
+  <li><a href="#s7">流式回答与超时</a></li>
+  <li><a href="#s8">用量与费用</a></li>
+  <li><a href="#s9">错误统一</a></li>
+  <li><a href="#s10">租户与安全</a></li>
+  <li><a href="#s11">调用记录</a></li>
+  <li><a href="#s12">网关自身的可靠性</a></li>
+  <li><a href="#s13">从 LiteLLM 过渡</a></li>
+</ol>
+
+<!-- ====================================================================== -->
+<h2 id="s0">0. 方案概览</h2>
+<p>一句话：<b>智能体和平台服务统一用 Anthropic 格式调网关的通用入口：模型的线路是哪种格式，网关就转成哪种，调用方不用按模型挑入口。另有 Anthropic、OpenAI 两个格式入口，给只会某一种格式的工具和知识库用：只走同格式的线路、原样转发、不转换，处理不了就报错。调用方只需要说明三件事：用哪个模型、要不要思考、发什么消息。至于这个模型的参数怎么写、哪个账号现在能用、失败了换哪条线路、费用怎么算，全部交给网关处理。网关不碰业务：它不写提示词，不跑智能体循环，不执行工具，也不会悄悄把一个模型换成另一个。</b></p>
+<p>打个比方：网关就像公司的统一采购台。各部门只填一种标准采购单，写清要什么、要多少。采购台知道每家供应商的下单格式，也知道谁家便宜、谁家缺货；缺货时会换一家买同款，账记在提需求的部门头上。但它不会把你要的 A 牌换成 B 牌，换品牌只能由你自己决定。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 450" width="100%" role="img" aria-label="方案总览：调用方、模型网关、供应商账号与模型平台">
+  <text x="20" y="30" class="b">调用方：智能体只用 Anthropic 格式</text>
+  <rect x="10" y="44" width="220" height="50" rx="6" class="inner"/>
+  <text x="120" y="66" text-anchor="middle" class="b">Atlas 原生智能体</text>
+  <text x="120" y="84" text-anchor="middle" class="s">Anthropic 格式</text>
+  <rect x="10" y="104" width="220" height="50" rx="6" class="inner"/>
+  <text x="120" y="126" text-anchor="middle" class="b">CLI 智能体（Claude Code）</text>
+  <text x="120" y="144" text-anchor="middle" class="s">Anthropic 格式</text>
+  <rect x="10" y="164" width="220" height="50" rx="6" class="inner"/>
+  <text x="120" y="186" text-anchor="middle" class="b">平台服务</text>
+  <text x="120" y="204" text-anchor="middle" class="s">会话标题、判断器、记忆补记</text>
+  <rect x="10" y="224" width="220" height="50" rx="6" class="inner"/>
+  <text x="120" y="246" text-anchor="middle" class="b">知识库</text>
+  <text x="120" y="264" text-anchor="middle" class="s">对话、向量、重排（OpenAI 格式）</text>
+  <rect x="10" y="284" width="220" height="50" rx="6" class="inner"/>
+  <text x="120" y="306" text-anchor="middle" class="b">个人工具</text>
+  <text x="120" y="324" text-anchor="middle" class="s">Cursor、脚本（两种格式都行）</text>
+  <path d="M230,69 H296" class="ln" marker-end="url(#ar)"/>
+  <path d="M230,129 H296" class="ln" marker-end="url(#ar)"/>
+  <path d="M230,189 H296" class="ln" marker-end="url(#ar)"/>
+  <path d="M230,249 H296" class="ln" marker-end="url(#ar)"/>
+  <path d="M230,309 H296" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="300" y="20" width="480" height="330" rx="8" class="c1"/>
+  <text x="316" y="44" class="b">模型网关（多个实例，不存状态）</text>
+  <rect x="316" y="58" width="448" height="44" rx="6" class="inner"/>
+  <text x="540" y="85" text-anchor="middle">入口：通用对话 · Anthropic 格式 · OpenAI 格式 · 向量 · 重排 · 模型清单</text>
+  <rect x="316" y="124" width="80" height="70" rx="6" class="inner"/>
+  <text x="356" y="154" text-anchor="middle" class="b">认 Key</text>
+  <text x="356" y="174" text-anchor="middle" class="s">查限额</text>
+  <rect x="408" y="124" width="80" height="70" rx="6" class="inner"/>
+  <text x="448" y="154" text-anchor="middle" class="b">整理参数</text>
+  <text x="448" y="174" text-anchor="middle" class="s">按模型能力</text>
+  <rect x="500" y="124" width="80" height="70" rx="6" class="inner"/>
+  <text x="540" y="154" text-anchor="middle" class="b">选线路</text>
+  <text x="540" y="174" text-anchor="middle" class="s">失败换一条</text>
+  <rect x="592" y="124" width="80" height="70" rx="6" class="inner"/>
+  <text x="632" y="154" text-anchor="middle" class="b">转格式</text>
+  <text x="632" y="174" text-anchor="middle" class="s">通用入口才转</text>
+  <rect x="684" y="124" width="80" height="70" rx="6" class="inner"/>
+  <text x="724" y="154" text-anchor="middle" class="b">记用量</text>
+  <text x="724" y="174" text-anchor="middle" class="s">算费用</text>
+  <path d="M396,159 H405" class="ln" marker-end="url(#ar)"/>
+  <path d="M488,159 H497" class="ln" marker-end="url(#ar)"/>
+  <path d="M580,159 H589" class="ln" marker-end="url(#ar)"/>
+  <path d="M672,159 H681" class="ln" marker-end="url(#ar)"/>
+  <rect x="316" y="216" width="216" height="56" rx="6" class="inner"/>
+  <text x="424" y="240" text-anchor="middle" class="b">几个实例共用的状态</text>
+  <text x="424" y="260" text-anchor="middle" class="s">线路冷却、请求计数、本月花费</text>
+  <rect x="548" y="216" width="216" height="56" rx="6" class="inner"/>
+  <text x="656" y="240" text-anchor="middle" class="b">配置（放在内存里）</text>
+  <text x="656" y="260" text-anchor="middle" class="s">账号、模型、线路、Key、能力</text>
+  <text x="316" y="302" class="s">调用方只说：用哪个模型、要不要思考、发什么消息</text>
+  <text x="316" y="324" class="s">不碰业务：不写提示词、不跑智能体循环、不执行工具、不替你换模型</text>
+
+  <path d="M656,380 V276" class="ln" marker-end="url(#ar)"/>
+  <text x="666" y="370" class="s">下发配置</text>
+  <rect x="300" y="380" width="480" height="60" rx="8" class="c4"/>
+  <text x="316" y="404" class="b">模型平台（管理）</text>
+  <text x="316" y="426" class="s">租户管理员登记账号、模型、线路，发 Key；改完后网关的下一次请求就生效</text>
+
+  <text x="860" y="30" class="b">供应商账号：各用各的格式</text>
+  <rect x="850" y="44" width="220" height="50" rx="6" class="inner"/>
+  <text x="960" y="66" text-anchor="middle" class="b">Anthropic 官方</text>
+  <text x="960" y="84" text-anchor="middle" class="s">Anthropic 格式</text>
+  <rect x="850" y="104" width="220" height="50" rx="6" class="inner"/>
+  <text x="960" y="126" text-anchor="middle" class="b">DeepSeek</text>
+  <text x="960" y="144" text-anchor="middle" class="s">Anthropic、OpenAI 两种格式</text>
+  <rect x="850" y="164" width="220" height="50" rx="6" class="inner"/>
+  <text x="960" y="186" text-anchor="middle" class="b">MiniMax</text>
+  <text x="960" y="204" text-anchor="middle" class="s">Anthropic 格式</text>
+  <rect x="850" y="224" width="220" height="50" rx="6" class="inner"/>
+  <text x="960" y="246" text-anchor="middle" class="b">自部署（vLLM 等）</text>
+  <text x="960" y="264" text-anchor="middle" class="s">OpenAI 格式</text>
+  <rect x="850" y="284" width="220" height="50" rx="6" class="inner"/>
+  <text x="960" y="306" text-anchor="middle" class="b">Gemini</text>
+  <text x="960" y="324" text-anchor="middle" class="s">Google 格式</text>
+  <path d="M780,69 H846" class="ln" marker-end="url(#ar)"/>
+  <path d="M780,129 H846" class="ln" marker-end="url(#ar)"/>
+  <path d="M780,189 H846" class="ln" marker-end="url(#ar)"/>
+  <path d="M780,249 H846" class="ln" marker-end="url(#ar)"/>
+  <path d="M780,309 H846" class="ln" marker-end="url(#ar)"/>
+</svg>
+</div>
+<p class="cap">图 1　智能体和平台服务只用 Anthropic 格式（通用入口），知识库和第三方工具可以用 OpenAI 格式；网关负责认 Key、整理参数、选线路、转发（格式相同就直通，只有通用入口转换）、记用量；配置来自模型平台</p>
+
+<!-- ====================================================================== -->
+<h2 id="s1">1. 背景与目标</h2>
+<p>现在，「模型之间有什么不同」这件事分散在每个调用方各自处理：</p>
+<ul>
+  <li><b>Atlas 的智能体引擎里按模型名写死了一串规则</b>，例如：哪些模型能用自适应思考；哪个模型的思考关不掉，传「关闭」就会 400；哪些模型不接受思考力度；哪些模型一传温度就 400；思考关闭时力度不能超过多少。上下文长度这类能力，还另外存在 Atlas 自己的一张模型表里。</li>
+  <li><b>知识库用的是另一种格式</b>（OpenAI 格式），规则也要另写一份。</li>
+  <li>新接一个模型，几个调用方都得跟着改，漏改一处就会出问题。比如会话标题在 MiniMax 上传了「关闭思考」，直接返回 400，结果所有标题都降级成了消息开头。</li>
+  <li><b>转发交给了 LiteLLM。</b>格式转换、换线路、限流冷却、用量怎么算，都按它的规则来。出了问题（比如思考内容、缓存标记在转换中丢了），我们只能等它修；流式回答开始后还能不能换线路、缓存命中怎么计价，这类规则我们也定不了。它只部署在集群内，个人 Key 在集群外用不了。它的配置还要由模型平台同步过去，两边各存一份。</li>
+</ul>
+
+<h3>目标</h3>
+<ul>
+  <li>调用方只说意图，不用管上游是哪种格式。模型之间的差异（参数写法、格式、能力）只在网关里处理一次。新接一个模型，调用方不用改代码。</li>
+  <li>网关告诉调用方每个模型能做什么，调用方不再自己维护模型能力表。</li>
+  <li>一个模型可以挂多个账号，失败时自动换，调用方感觉不到。同一个会话尽量留在同一个账号上，保住缓存命中。</li>
+  <li>用量和费用按统一口径计算，可以按租户、Key、模型查询。</li>
+  <li>个人 Key 能在集群外使用，比如 Claude Code、Cursor、脚本。</li>
+  <li>平稳替换 LiteLLM：调用方不用换 Key，可以一个模型一个模型地切换，随时能切回去。</li>
+</ul>
+<h3>不做</h3>
+<ul>
+  <li>不自己发明请求格式（原因见第 2 节）。</li>
+  <li>不碰业务逻辑：提示词、智能体循环、工具执行、上下文压缩、记忆、检索都留在调用方。</li>
+  <li>不自动换模型：同一个模型的几条线路之间可以换，但不会换成另一个模型。</li>
+  <li>不根据请求内容自动挑模型（智能路由）。</li>
+  <li>不根据供应商给的「每分钟 token 数」提前排队，只在收到限流后让线路冷却一会儿。</li>
+</ul>
+
+<h3>先认识几个词</h3>
+<table>
+  <tr><th>词</th><th>意思</th><th>例子</th></tr>
+  <tr><td>调用方</td><td>调用网关的程序</td><td>Atlas 智能体、知识库、Claude Code、Cursor</td></tr>
+  <tr><td>格式（协议）</td><td>请求和回答长什么样。不同供应商用的格式不一样</td><td>Anthropic 格式（Messages）、OpenAI 格式（Chat Completions）、Google 格式</td></tr>
+  <tr><td>标准格式</td><td>智能体和平台服务统一使用的格式；通用入口按它收请求，需要转换时只从它往外转</td><td>本方案选 Anthropic 格式</td></tr>
+  <tr><td>通用入口</td><td>按标准格式收请求，线路的账号是哪种格式就转成哪种。平台里的应用都用它，不用按模型判断该调哪个入口</td><td>Atlas 调只提供 OpenAI 格式接口的通义千问</td></tr>
+  <tr><td>格式入口</td><td>Anthropic 格式、OpenAI 格式各一个。只走同格式的线路，不转换；模型没有这种格式的线路就报错</td><td>Cursor 用 OpenAI 格式调自部署的 vLLM</td></tr>
+  <tr><td>直通</td><td>请求的格式和上游账号的格式相同时，原样转发，只改模型名和个别参数</td><td>Atlas（Anthropic 格式）调 DeepSeek 的 Anthropic 接口</td></tr>
+  <tr><td>模型</td><td>租户对外提供的名字，调用时只传这个名字</td><td>deepseek-v4-pro</td></tr>
+  <tr><td>账号</td><td>对接一个供应商接口用的凭据，包括地址、密钥、格式、出网方式</td><td>DeepSeek 公司账号、DeepSeek 备用账号</td></tr>
+  <tr><td>上游模型</td><td>供应商那边真实的模型名，和对外的模型名可以不一样</td><td>硅基流动的 deepseek-ai/…、火山方舟的接入点 ID</td></tr>
+  <tr><td>线路</td><td>从一个模型指向某个账号里的某个上游模型，带优先级和权重。一个模型可以有好几条线路</td><td>deepseek-v4-pro 首选公司账号，备用账号兜底</td></tr>
+  <tr><td>Key</td><td>调用凭据，决定能用哪些模型、限额是多少</td><td>张三的「Cursor」Key、编程助手的 Key</td></tr>
+  <tr><td>能力</td><td>模型能做什么</td><td>能看图、能思考、能调工具、上下文 256K</td></tr>
+  <tr><td>读写器</td><td>每种格式一个。从请求里读出共同信息（模型名、思考、温度、有没有图片……），按规则改参数，从回答里读出用量和错误。它不做整体的格式转换</td><td>Anthropic 读写器、OpenAI 读写器</td></tr>
+  <tr><td>转换器</td><td>只有通用入口用：账号没有标准格式的地址时，把整个请求转过去，再把回答转回来</td><td>Anthropic → OpenAI、Anthropic → Google 转换器</td></tr>
+  <tr><td>供应商方言</td><td>同一种格式下，某个供应商和标准写法不一样的地方：认证、地址、字段名、用量字段、报错的意思。网关按账号的供应商挑方言来翻译</td><td>OpenAI 额度用完回 429，意思其实是余额不足</td></tr>
+  <tr><td>流式回答</td><td>回答边生成边发，一段一段地回来，而不是全部生成完才一次给出</td><td>聊天时字一个一个冒出来</td></tr>
+  <tr><td>思考（thinking）</td><td>模型在正式回答前先写的一段推理过程。有的模型能关掉，有的关不掉</td><td>「用户要找简历，我先打开招聘网站……」</td></tr>
+  <tr><td>缓存命中</td><td>这次请求开头和上次一样的部分，供应商不重新计算，只收很低的费用</td><td>智能体每一轮都会带上前面几万字的对话，命中缓存后这部分只收一成左右</td></tr>
+  <tr><td>用量（usage）</td><td>一次调用用了多少 token，由供应商在回答里给出</td><td>输入 2,000、缓存命中 48,000、输出 800</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s2">2. 统一入口：调用方只说一种格式</h2>
+<p>调用方面对的是一套「标准接口」：一套模型名、一套参数含义、一套错误、一份能力清单。这就是网关提供的「自己的模型接口」。请求格式不重新发明，直接采用现成格式：智能体和平台服务统一用 Anthropic 格式调通用入口，知识库和第三方工具也可以用 OpenAI 格式入口。不管用哪种格式，上面这几样的含义都一样。</p>
+
+<h3>为什么不自己发明格式</h3>
+<table>
+  <tr><th></th><th>自己发明一种格式</th><th>采用现成格式</th></tr>
+  <tr><td>调用方的代码</td><td>每种语言都要自己写客户端，流式解析也要自己写</td><td>官方 SDK、LangChain 直接能用，Atlas 现有代码不用改</td></tr>
+  <tr><td>现成工具</td><td>Claude Code、Cursor 只认现成格式，接不进来。最后还得另开一个现成格式的入口，等于维护两套</td><td>直接接入</td></tr>
+  <tr><td>供应商出了新功能</td><td>每个新功能都要先在自己的格式里设计字段</td><td>格式相同的上游原样转发，新功能马上能用</td></tr>
+  <tr><td>能得到的好处</td><td>字段完全按自己的想法定</td><td>这点同样做得到：模型名、参数含义、错误、能力清单都由网关统一定义（见下表）</td></tr>
+</table>
+
+<h3>为什么智能体统一用 Anthropic 格式</h3>
+<ul>
+  <li><b>它表达得更细。</b>一次回答由一块一块的内容组成：文字块、思考块、工具调用块。思考块带签名，内容块上可以打缓存标记。OpenAI 格式里没有这些对应的东西。从细的格式转成粗的格式，会丢掉什么是确定的，可以事先写清楚；从粗的转成细的，缺的信息补不回来（图 2）。所以需要转换时，只从它往外转，不往回转。</li>
+  <li><b>现有调用方已经在用它。</b>Atlas 原生智能体、Claude Code 用的都是这种格式。国内主流供应商（DeepSeek、MiniMax、Kimi、智谱）也都提供这种格式的接口，所以大部分调用可以原样转发，不用转换。</li>
+  <li><b>但请求不必先转成它。</b>请求和上游格式相同时，转一圈只会白白丢东西：OpenAI 格式独有的结构化输出、logprobs 这类字段，在 Anthropic 格式里没有位置。所以格式相同一律直通（第 5 节）。</li>
+</ul>
+
+<div class="fig">
+<svg viewBox="0 0 1080 290" width="100%" role="img" aria-label="同一段对话在两种格式里的样子">
+  <rect x="10" y="10" width="450" height="270" rx="8" class="c1"/>
+  <text x="26" y="34" class="b">Anthropic 格式：内容分成一块一块</text>
+  <text x="26" y="58" class="s">模型的一次回答</text>
+  <rect x="26" y="66" width="130" height="40" rx="5" class="inner"/><text x="91" y="91" text-anchor="middle">思考块（带签名）</text>
+  <rect x="166" y="66" width="110" height="40" rx="5" class="inner"/><text x="221" y="91" text-anchor="middle">文字块</text>
+  <rect x="286" y="66" width="150" height="40" rx="5" class="inner"/><text x="361" y="91" text-anchor="middle">工具调用块</text>
+  <text x="26" y="136" class="s">下一轮带回工具结果</text>
+  <rect x="26" y="144" width="150" height="40" rx="5" class="inner"/><text x="101" y="169" text-anchor="middle">工具结果块</text>
+  <rect x="186" y="144" width="180" height="40" rx="5" class="inner"/><text x="276" y="169" text-anchor="middle">文字块 + 缓存标记</text>
+  <text x="26" y="222" class="s">思考内容、缓存标记都有固定的位置</text>
+  <text x="26" y="244" class="s">几块内容的先后顺序也保留下来</text>
+
+  <path d="M462,110 H616" class="ln" marker-end="url(#ar)"/>
+  <text x="539" y="100" text-anchor="middle" class="s">细 → 粗</text>
+  <text x="539" y="128" text-anchor="middle" class="s">去掉签名、缓存标记</text>
+  <text x="539" y="144" text-anchor="middle" class="s">丢什么事先就知道</text>
+  <path d="M618,200 H464" class="ln dash" marker-end="url(#ar)"/>
+  <text x="539" y="190" text-anchor="middle" class="s">粗 → 细</text>
+  <text x="539" y="218" text-anchor="middle" class="s">缺的补不回来</text>
+
+  <rect x="620" y="10" width="450" height="270" rx="8" class="c3"/>
+  <text x="636" y="34" class="b">OpenAI 格式：几个固定字段</text>
+  <text x="636" y="58" class="s">模型的一次回答</text>
+  <rect x="636" y="66" width="150" height="40" rx="5" class="inner"/><text x="711" y="91" text-anchor="middle">content：文字</text>
+  <rect x="796" y="66" width="200" height="40" rx="5" class="inner"/><text x="896" y="91" text-anchor="middle">tool_calls：工具调用</text>
+  <text x="636" y="136" class="s">下一轮带回工具结果</text>
+  <rect x="636" y="144" width="170" height="40" rx="5" class="inner"/><text x="721" y="169" text-anchor="middle">tool 消息：工具结果</text>
+  <rect x="816" y="144" width="150" height="40" rx="5" class="inner"/><text x="891" y="169" text-anchor="middle">user 消息：文字</text>
+  <text x="636" y="222" class="s">没有标准的思考字段（有的供应商自己加了 reasoning_content）</text>
+  <text x="636" y="244" class="s">没有缓存标记（由供应商自动缓存）</text>
+</svg>
+</div>
+<p class="cap">图 2　转换的中转选表达更细的那一种：往粗的格式转，丢什么事先就知道；反过来，丢掉的补不回来</p>
+
+<h3>调用方只需要知道的几件事</h3>
+<table>
+  <tr><th>统一的东西</th><th>说明</th></tr>
+  <tr><td>模型名</td><td>租户登记的名字。调用方不知道背后是哪个供应商、哪个账号</td></tr>
+  <tr><td>参数含义</td><td>思考（开 / 关 / 自动）、思考力度（低 / 中 / 高……）、温度、最大输出，都按统一的含义传。某个模型具体怎么写，由网关决定（第 4 节）</td></tr>
+  <tr><td>能力清单</td><td>网关列出这把 Key 能用的模型，以及每个模型的能力。调用方据此显示和挑选模型（第 4 节）</td></tr>
+  <tr><td>会话标识</td><td>调用方带上会话标识，网关据此把同一个会话留在同一条线路上（第 6 节）。不带就按 Key 来算</td></tr>
+  <tr><td>错误</td><td>一套错误类别，说清是谁的问题、该不该重试、对用户怎么说（第 9 节）</td></tr>
+  <tr><td>用量</td><td>统一成四项：输入、缓存写入、缓存命中、输出（第 8 节）</td></tr>
+</table>
+
+<h3>入口</h3>
+<ul>
+  <li><b>对话 · 通用：</b>按 Anthropic 格式传。Atlas 原生智能体、CLI 智能体和平台服务都用它，Claude Code 这类个人工具也推荐用它。账号有 Anthropic 格式的地址就直通，没有就转成它有的格式（OpenAI、Google）。调用方不用关心模型背后是哪种格式，也不用写「这个模型该走哪个入口」的判断。</li>
+  <li><b>对话 · Anthropic 格式、OpenAI 格式：</b>给只会某一种格式、或者要用这种格式独有字段的调用方：Cursor、OpenAI SDK、一些脚本，以及知识库（OpenAI 格式）。只走登记了同格式地址的线路，原样转发，不转换；模型没有这种格式的线路就直接报错，提示改用通用入口。认 Key、整理参数、选线路这些步骤和通用入口共用一套。知识库因此不用改格式，但它用到的模型要有 OpenAI 格式的线路。</li>
+  <li><b>向量、重排：</b>采用业界通用的格式。向量用 OpenAI 格式；重排用「一个问题加一组文档，返回每个文档的分数」这种通用格式。各家供应商在这里差别不大，基本原样转发。模型要标明类型（对话、向量、重排），各入口只认对应类型的模型。</li>
+  <li><b>模型清单：</b>列出这把 Key 能用的模型和它们的能力。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s3">3. 一次调用怎么走</h2>
+
+<div class="fig">
+<svg viewBox="0 0 1080 350" width="100%" role="img" aria-label="一次调用的八个步骤">
+  <rect x="10" y="30" width="230" height="100" rx="6" class="inner"/>
+  <text x="24" y="54" class="b">① 认 Key</text>
+  <text x="24" y="76" class="s">存在、没停用、没过期</text>
+  <text x="24" y="96" class="s">得到租户、能用的模型、限额</text>
+  <text x="24" y="118" class="bad">不通过：401</text>
+  <rect x="280" y="30" width="230" height="100" rx="6" class="inner"/>
+  <text x="294" y="54" class="b">② 查限额</text>
+  <text x="294" y="76" class="s">本月预算、每分钟请求数</text>
+  <text x="294" y="96" class="s">所有网关实例共用一个计数</text>
+  <text x="294" y="118" class="bad">超了：429，说明是哪个限额</text>
+  <rect x="550" y="30" width="230" height="100" rx="6" class="inner"/>
+  <text x="564" y="54" class="b">③ 找模型</text>
+  <text x="564" y="76" class="s">在这把 Key 里、已启用</text>
+  <text x="564" y="96" class="s">只在本租户的模型里找</text>
+  <text x="564" y="118" class="bad">不通过：403</text>
+  <rect x="820" y="30" width="230" height="100" rx="6" class="inner"/>
+  <text x="834" y="54" class="b">④ 查能力、整理参数</text>
+  <text x="834" y="76" class="s">图片、工具、长度是否支持</text>
+  <text x="834" y="96" class="s">参数按这个模型的规则写</text>
+  <text x="834" y="118" class="bad">不支持：400，说清缺什么</text>
+  <path d="M240,80 H276" class="ln" marker-end="url(#ar)"/>
+  <path d="M510,80 H546" class="ln" marker-end="url(#ar)"/>
+  <path d="M780,80 H816" class="ln" marker-end="url(#ar)"/>
+  <path d="M935,130 V186" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="820" y="190" width="230" height="100" rx="6" class="c1"/>
+  <text x="834" y="214" class="b">⑤ 选线路</text>
+  <text x="834" y="236" class="s">同一会话落在同一条线路</text>
+  <text x="834" y="256" class="s">跳过停用、异常、冷却中的</text>
+  <text x="834" y="278" class="bad">都不可用：503 或 429</text>
+  <rect x="550" y="190" width="230" height="100" rx="6" class="c1"/>
+  <text x="564" y="214" class="b">⑥ 转格式、转发</text>
+  <text x="564" y="236" class="s">格式相同就直通，通用入口才转换</text>
+  <text x="564" y="256" class="s">直连，或经出网代理</text>
+  <rect x="280" y="190" width="230" height="100" rx="6" class="c1"/>
+  <text x="294" y="214" class="b">⑦ 回答转回</text>
+  <text x="294" y="236" class="s">流式的每一段、用量、错误</text>
+  <text x="294" y="256" class="s">转回调用方用的格式</text>
+  <rect x="10" y="190" width="230" height="100" rx="6" class="c3"/>
+  <text x="24" y="214" class="b">⑧ 记用量</text>
+  <text x="24" y="236" class="s">按模型价格算费用</text>
+  <text x="24" y="256" class="s">写调用记录，不耽误回答</text>
+  <path d="M820,240 H784" class="ln" marker-end="url(#ar)"/>
+  <path d="M550,240 H514" class="ln" marker-end="url(#ar)"/>
+  <path d="M280,240 H244" class="ln" marker-end="url(#ar)"/>
+  <path d="M665,290 V318 H935 V294" class="ln dash" marker-end="url(#ar)"/>
+  <text x="680" y="338" class="s">⑥ 在提交点之前失败：这条线路冷却，回到 ⑤ 换下一条</text>
+</svg>
+</div>
+<p class="cap">图 3　一次调用的八步：前四步任何一步不通过都直接拒绝，不会碰到供应商；第 ⑥ 步在提交点之前失败，就换下一条线路</p>
+
+<ul>
+  <li><b>前四步只读内存里的配置和几个实例共用的状态</b>，不查数据库，也不连供应商。网关自己增加的耗时在毫秒级。</li>
+  <li><b>前五步只看读写器读出的共同信息，</b>不关心请求是哪种格式，所以两个对话入口共用一套。</li>
+  <li><b>第 ④ 步是把模型差异收进网关的地方</b>，见第 4 节。</li>
+  <li><b>第 ⑤ 步和第 ⑥ 步可能来回走好几次：</b>一条线路失败，就换下一条，直到成功、线路用完，或者回答已经开始输出（第 6 节）。</li>
+  <li><b>第 ⑧ 步在回答结束后进行</b>，写记录不会让调用方多等。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s4">4. 模型差异收进网关：能力与参数</h2>
+<p>模型之间的差异分成两类。一类是能做什么（能力），这是对调用方的承诺。另一类是同一件事怎么写（参数写法），这是网关自己的事，调用方不用管。</p>
+
+<h3>4.1 能力：对调用方的承诺</h3>
+<ul>
+  <li><b>每个模型都记着这几项：</b>能不能看图；能不能思考，思考能不能关；能不能调工具；上下文多长；最多输出多少。</li>
+  <li><b>能力从哪来：</b>网关自带一份常见上游模型的能力和参数规则，随网关版本一起更新。登记模型时，按线路上的供应商和上游模型名自动带出，租户管理员可以修改。自部署的模型没有预置，需要手动填写。没有预置、也没人填写的能力，一律按「不支持」处理。</li>
+  <li><b>每条线路都要做到模型承诺的能力：</b>加线路时检查，做不到的不让加。例如，承诺能看图的模型，不能挂一条不能看图的备用线路。这样换线路时能力不会缩水。</li>
+  <li><b>调用方从模型清单里拿能力：</b>Atlas 编辑智能体时，按能力显示和过滤模型，比如开了浏览器的智能体只能选能看图的模型。上下文压缩何时触发，也按清单里的上下文长度来算。Atlas 不再自己存一份能力表。</li>
+</ul>
+
+<h3>4.2 参数：同一个意思，不同的写法</h3>
+<p>调用方按统一的含义传参数，网关按这个模型的规则，选择下面三种处理方式之一。改动由读写器直接做在请求原来的格式上，不需要先转换格式。</p>
+<table>
+  <tr><th>处理方式</th><th>什么时候用</th><th>例子</th></tr>
+  <tr><td>去掉不传</td><td>不传也不影响回答对不对</td><td>某些模型显式传温度会 400，就不传温度；不支持思考力度的模型，不传力度；思考关不掉的模型收到「关闭思考」，就不传这个参数</td></tr>
+  <tr><td>换一种写法</td><td>这个上游有另一种写法表达同一个意思</td><td>「思考：自动」在支持自适应思考的模型上传自适应，在只支持固定额度的模型上传一个固定额度；「最大输出」超过模型上限时，改成上限</td></tr>
+  <tr><td>拒绝</td><td>去掉会让结果出错，而调用方还以为一切正常</td><td>给不能看图的模型发图片、给不能调工具的模型发工具、输入超过上下文长度：直接返回 400，说清缺什么</td></tr>
+</table>
+<p>最后一类绝不能悄悄去掉。模型看不到图片，也会照样给出回答，调用方根本发现不了问题。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 330" width="100%" role="img" aria-label="同一个请求发给三个模型时参数怎么整理">
+  <rect x="10" y="90" width="280" height="150" rx="8" class="c1"/>
+  <text x="26" y="116" class="b">调用方发来的（统一的含义）</text>
+  <text x="26" y="144">思考：关</text>
+  <text x="26" y="166">温度：0.2</text>
+  <text x="26" y="188">最大输出：64K</text>
+  <text x="26" y="210">消息里带一张截图</text>
+  <path d="M290,165 L376,55" class="ln" marker-end="url(#ar)"/>
+  <path d="M290,165 H376" class="ln" marker-end="url(#ar)"/>
+  <path d="M290,165 L376,275" class="ln" marker-end="url(#ar)"/>
+
+  <rect x="380" y="10" width="690" height="90" rx="8" class="c3"/>
+  <text x="396" y="34" class="b">发给模型 A（不接受温度参数）</text>
+  <text x="396" y="60">思考：传「关闭」　　温度：去掉　　最大输出：64K　　截图：原样</text>
+  <text x="396" y="84" class="s">去掉温度不影响回答对不对，所以直接去掉</text>
+
+  <rect x="380" y="120" width="690" height="90" rx="8" class="c3"/>
+  <text x="396" y="144" class="b">发给模型 B（思考关不掉，最多输出 32K）</text>
+  <text x="396" y="170">思考：不传　　温度：0.2　　最大输出：改成 32K　　截图：原样</text>
+  <text x="396" y="194" class="s">传「关闭」会 400，超过上限也会 400；这两项都不影响回答对不对</text>
+
+  <rect x="380" y="230" width="690" height="90" rx="8" class="c5"/>
+  <text x="396" y="254" class="b">模型 C（自部署，不能看图）：不发给供应商</text>
+  <text x="396" y="280">直接返回 400：「模型 C 不能看图」</text>
+  <text x="396" y="304" class="s">如果悄悄去掉截图，模型会对着一张看不见的图乱答，调用方发现不了</text>
+</svg>
+</div>
+<p class="cap">图 4　同一个请求发给三个模型：能去掉的去掉，能换写法的换写法，会让结果出错的直接拒绝</p>
+<p>思考关不掉的模型，会在模型清单里标明「思考关不掉」。会话标题这类只要很短回答的系统功能，选模型时应该避开这类模型。</p>
+
+<h3>4.3 历史里的思考内容</h3>
+<p>智能体每一轮都会把前面的对话再发一遍，其中也包括模型之前的思考块。各家对历史里的思考内容要求不一样：Anthropic 在工具调用过程中，要求把带签名的思考块原样带回；其他供应商有的要求带回，有的带回了反而报错（以各家文档和实测为准）。网关的规则是：</p>
+<ul>
+  <li>网关在回答里给每个思考块留一个来源标记，记下它来自哪个上游模型。调用方原样保存、原样带回就行，不用理解这个标记。</li>
+  <li>下一轮带回时，如果发给的是同一个上游模型，就按它的要求带回或者去掉；如果发给别的上游（比如换了线路），就去掉历史里的思考块。只去掉思考，正文和工具调用都保留。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s5">5. 格式：相同就直通，只有通用入口转换</h2>
+<p>每个请求涉及两种格式：调用方用的（入口格式），和选中的账号用的（上游格式）。两者相同就直通：原样转发，只改模型名和第 4 节说的个别参数；网关不认识的字段也原样带过去，供应商出了新功能马上能用。两者不同时，只有通用入口转换。</p>
+<p>格式入口不转换：选线路之前就只留同格式的线路，模型一条都没有就直接报错。不先试再失败，是为了不把「格式不对」当成线路故障，把好好的线路冷却掉。</p>
+<table>
+  <tr><th>入口</th><th>上游格式</th><th>怎么处理</th><th>例子</th></tr>
+  <tr><td>通用</td><td>Anthropic</td><td>直通</td><td>Atlas 调 Anthropic 官方，或 DeepSeek、MiniMax、Kimi、智谱的 Anthropic 接口</td></tr>
+  <tr><td>通用</td><td>OpenAI</td><td>转换</td><td>Atlas 调自部署的 vLLM、通义千问</td></tr>
+  <tr><td>通用</td><td>Google</td><td>转换</td><td>调 Gemini</td></tr>
+  <tr><td>Anthropic 格式</td><td>Anthropic</td><td>直通</td><td>只想走 Anthropic 接口的脚本</td></tr>
+  <tr><td>OpenAI 格式</td><td>OpenAI</td><td>直通</td><td>Cursor 调自部署的 vLLM；知识库</td></tr>
+  <tr><td>Anthropic 格式 / OpenAI 格式</td><td>其他格式</td><td>不转换，这条线路不走；一条同格式的都没有就报错</td><td>Cursor 调只有 Anthropic 接口的模型</td></tr>
+</table>
+
+<h3>读写器和转换器</h3>
+<table>
+  <tr><th>部件</th><th>有几个</th><th>做什么</th></tr>
+  <tr><td>读写器</td><td>每种格式一个</td><td>从请求里读出共同信息（模型名、会话标识、思考 / 温度 / 最大输出、有没有图片和工具、大致长度），按第 4 节的规则直接在原格式上改参数；从回答里读出用量、第一段内容和错误。认 Key、整理参数、选线路、记用量这些共用步骤只跟它打交道，所以只写一份</td></tr>
+  <tr><td>转换器</td><td>Anthropic → OpenAI、Anthropic → Google 各一个，只有通用入口用</td><td>账号没有 Anthropic 格式的地址时，把整个请求转过去，再把回答（包括流式回答的每一段）转回来</td></tr>
+</table>
+<p>读写器只碰少数几个字段，比一整套转换小得多。转换器都从 Anthropic 格式往外转：从表达更细的格式出发，丢什么事先就知道（第 2 节）；不往回转，也就没有两跳。</p>
+
+<h3>账号可以同时登记两种格式（可选）</h3>
+<p>DeepSeek、Kimi、智谱这类供应商两种格式都提供，同一把密钥通常两种都能用。账号可以同时登记两个地址；选好线路后，网关挑和入口格式相同的那个地址，这样各个入口打到这类供应商都是直通。只登记了一种格式的账号，另一种格式入口的请求不走它；通用入口照样能用（需要时转换）。</p>
+
+<h3>供应商方言：同一种格式，各家写法还不一样</h3>
+<p>很多供应商说自己兼容 Anthropic 或 OpenAI 格式，但细节各有各的写法，只按格式处理会出错。这些差异叫「供应商方言」。模型之间的差异因此分三层处理：</p>
+<table>
+  <tr><th>层</th><th>管什么</th><th>例子</th><th>怎么维护</th></tr>
+  <tr><td>格式</td><td>请求和回答的整体结构</td><td>Anthropic、OpenAI、Google</td><td>读写器、转换器（本节前面）</td></tr>
+  <tr><td>供应商方言</td><td>同一种格式下，这家和标准写法不一样的地方</td><td>认证头、地址、字段名、用量字段、报错的意思</td><td>能写成数据的写成数据，写不成的写一小段代码</td></tr>
+  <tr><td>上游模型规则</td><td>同一家的不同模型，参数取值不一样</td><td>收不收温度、最大输出上限</td><td>数据（第 4 节）</td></tr>
+</table>
+<table>
+  <tr><th>方言管的差异</th><th>例子</th><th>数据还是代码</th></tr>
+  <tr><td>认证和地址</td><td>Anthropic 用 x-api-key 加版本头；Azure 的地址里带部署名和 API 版本，认证用 api-key 头；Gemini 的模型名写在地址里；火山方舟的模型名填接入点 ID</td><td>数据：认证方式、地址模板</td></tr>
+  <tr><td>参数的字段名</td><td>同样是开关思考，通义千问用 enable_thinking，Anthropic 格式用 thinking</td><td>代码</td></tr>
+  <tr><td>用量字段</td><td>DeepSeek 的 OpenAI 格式接口把缓存命中放在自己的字段里，按标准字段读会读成 0（图 5）</td><td>代码</td></tr>
+  <tr><td>思考内容字段</td><td>DeepSeek 用 reasoning_content；自部署的 vLLM 取决于部署时开的推理解析器</td><td>代码</td></tr>
+  <tr><td>报错的意思</td><td>OpenAI 额度用完回 429（insufficient_quota），意思是余额不足而不是限流；Anthropic 过载回 529（图 5）</td><td>代码</td></tr>
+  <tr><td>查余额、拉模型列表</td><td>每家的接口不同，有的不提供</td><td>数据：接口地址；不提供的标「不支持」</td></tr>
+</table>
+<div class="fig">
+<svg viewBox="0 0 1080 330" width="100%" role="img" aria-label="供应商方言：报错归类与用量换算">
+  <rect x="10" y="10" width="520" height="310" rx="8" class="inner"/>
+  <text x="26" y="36" class="b">同一个状态码，不同供应商意思不一样</text>
+  <rect x="26" y="60" width="190" height="56" rx="6" class="c1"/><text x="121" y="83" text-anchor="middle" class="b">OpenAI 返回</text><text x="121" y="104" text-anchor="middle" class="m">429 insufficient_quota</text>
+  <path d="M216,88 H260" class="ln" marker-end="url(#ar)"/><text x="238" y="54" text-anchor="middle" class="s">OpenAI 方言</text>
+  <rect x="264" y="60" width="96" height="56" rx="6" class="c5"/><text x="312" y="93" text-anchor="middle" class="b">余额不足</text>
+  <path d="M360,88 H378" class="ln" marker-end="url(#ar)"/>
+  <rect x="382" y="60" width="134" height="56" rx="6" class="c5"/><text x="449" y="83" text-anchor="middle">账号标异常</text><text x="449" y="104" text-anchor="middle" class="s">充值后才恢复</text>
+  <rect x="26" y="140" width="190" height="56" rx="6" class="c1"/><text x="121" y="163" text-anchor="middle" class="b">DeepSeek 返回</text><text x="121" y="184" text-anchor="middle" class="m">429</text>
+  <path d="M216,168 H260" class="ln" marker-end="url(#ar)"/><text x="238" y="134" text-anchor="middle" class="s">默认</text>
+  <rect x="264" y="140" width="96" height="56" rx="6" class="c4"/><text x="312" y="173" text-anchor="middle" class="b">限流</text>
+  <path d="M360,168 H378" class="ln" marker-end="url(#ar)"/>
+  <rect x="382" y="140" width="134" height="56" rx="6" class="c4"/><text x="449" y="163" text-anchor="middle">线路冷却</text><text x="449" y="184" text-anchor="middle" class="s">1 分钟后再用</text>
+  <rect x="26" y="220" width="190" height="56" rx="6" class="c1"/><text x="121" y="243" text-anchor="middle" class="b">Anthropic 返回</text><text x="121" y="264" text-anchor="middle" class="m">529 overloaded_error</text>
+  <path d="M216,248 H260" class="ln" marker-end="url(#ar)"/><text x="238" y="214" text-anchor="middle" class="s">默认</text>
+  <rect x="264" y="220" width="96" height="56" rx="6" class="c4"/><text x="312" y="253" text-anchor="middle" class="b">过载</text>
+  <path d="M360,248 H378" class="ln" marker-end="url(#ar)"/>
+  <rect x="382" y="220" width="134" height="56" rx="6" class="c4"/><text x="449" y="243" text-anchor="middle">换线路</text><text x="449" y="264" text-anchor="middle" class="s">这条冷却 1 分钟</text>
+  <text x="26" y="304" class="s">线路领域只看归好的种类，不看状态码</text>
+
+  <rect x="550" y="10" width="520" height="310" rx="8" class="inner"/>
+  <text x="566" y="36" class="b">同一种格式，用量字段不一样</text>
+  <rect x="566" y="96" width="262" height="112" rx="6" class="c1"/>
+  <text x="580" y="120" class="b">DeepSeek（OpenAI 格式接口）报的用量</text>
+  <text x="580" y="146" class="m">prompt_tokens 50,000</text>
+  <text x="580" y="168" class="m">prompt_cache_hit_tokens 48,000</text>
+  <text x="580" y="190" class="m">completion_tokens 800</text>
+  <path d="M828,130 L872,98" class="ln" marker-end="url(#ar)"/>
+  <path d="M828,176 L872,212" class="ln" marker-end="url(#ar)"/>
+  <rect x="876" y="56" width="180" height="84" rx="6" class="c5"/>
+  <text x="890" y="80" class="b">按标准字段读</text><text x="890" y="104">输入 50,000 · 命中 0</text><text x="890" y="126" class="s">输出 800：费用多算 5 倍多</text>
+  <rect x="876" y="172" width="180" height="84" rx="6" class="c3"/>
+  <text x="890" y="196" class="b">经 DeepSeek 方言</text><text x="890" y="220">输入 2,000 · 命中 48,000</text><text x="890" y="242" class="s">输出 800：算对了</text>
+  <text x="566" y="304" class="s">方言把各家的字段换算成统一的四项，计量只认四项</text>
+</svg>
+</div>
+<p class="cap">图 5　供应商方言做翻译：把各家的报错归成统一的种类，把各家的用量字段换算成四项；换不换线路、怎么算钱，只看翻译后的结果</p>
+<ul>
+  <li><b>方言只做翻译，不做决定：</b>把报错归成统一的种类，把用量换算成四项，把参数改成这家的字段名。换不换线路、怎么算钱，仍由线路和计量按翻译后的结果判断（第 6、8 节）。</li>
+  <li><b>默认就是标准写法：</b>新接一个供应商，先只登记它的数据（认证方式、地址、余额接口）；遇到和标准不一样的地方，再给它补一段方言，别的部分都不用动。</li>
+  <li><b>方言按账号的供应商选，不按模型：</b>同一个上游模型，经官方接口和经转售平台（比如硅基流动），写法可能不一样。</li>
+  <li><b>网关和管理平台共用同一份：</b>管理平台测试连接、查余额、拉模型列表也用它，两边对同一家供应商的理解不会不一致。</li>
+  <li><b>不给每个供应商写一整套适配：</b>那样的数量是「供应商 × 格式」，大部分代码重复；方言只写和标准不一样的那几处。</li>
+  <li>各家具体的写法以各家文档和实测为准，补进预置的数据和方言里。</li>
+</ul>
+
+<h3>转换时，Anthropic 格式和 OpenAI 格式怎么对应</h3>
+<table>
+  <tr><th>内容</th><th>Anthropic 格式</th><th>OpenAI 格式</th><th>转换时</th></tr>
+  <tr><td>系统提示</td><td>单独一项</td><td>第一条 system 消息</td><td>一一对应</td></tr>
+  <tr><td>文字、图片</td><td>内容块</td><td>content 数组</td><td>一一对应</td></tr>
+  <tr><td>工具调用</td><td>工具调用块：id、工具名、参数（一个对象）</td><td>tool_calls：id、工具名、参数（一段 JSON 文本）</td><td>一一对应。模型吐出的参数不是合法 JSON 时，把原文放进一个专门的字段交给调用方，不让整轮失败</td></tr>
+  <tr><td>工具结果</td><td>放在用户消息里的工具结果块</td><td>单独一条 tool 消息</td><td>一一对应；一条消息里有好几个结果时，拆成好几条</td></tr>
+  <tr><td>思考</td><td>思考块（带签名）</td><td>没有标准字段，部分供应商有 reasoning_content</td><td>按第 4.3 节处理</td></tr>
+  <tr><td>缓存标记</td><td>内容块上的标记</td><td>没有（供应商自动缓存）</td><td>去掉</td></tr>
+  <tr><td>为什么停</td><td>end_turn / max_tokens / tool_use</td><td>stop / length / tool_calls</td><td>一一对应</td></tr>
+  <tr><td>用量</td><td>输入不含缓存部分，缓存另外列</td><td>输入包含缓存命中的部分</td><td>按第 8 节统一口径</td></tr>
+  <tr><td>不认识的字段</td><td colspan="2">—</td><td>去掉，并在调用记录里记下去掉了什么</td></tr>
+</table>
+
+<h3>流式回答怎么转</h3>
+<p>两种格式的流式回答，切段的方式完全不同：OpenAI 格式是一个个「增量」，每段里有什么就填什么；Anthropic 格式要求先声明「开始一个文字块」，再一段段发内容，最后「关上这个块」。转换器就像一个小记事本，记着「现在在写哪一块」。内容类型一变（比如文字写完了、开始调工具），就先把旧块关上，再开一个新块。</p>
+
+<div class="fig">
+<svg viewBox="0 0 1080 345" width="100%" role="img" aria-label="流式回答从 OpenAI 格式转成 Anthropic 格式">
+  <text x="220" y="30" text-anchor="middle" class="b">上游发来的（OpenAI 格式）</text>
+  <text x="540" y="30" text-anchor="middle" class="b">转换器：记着现在在写哪一块</text>
+  <text x="860" y="30" text-anchor="middle" class="b">转给调用方的（Anthropic 格式）</text>
+  <rect x="450" y="44" width="180" height="290" rx="8" class="c4 dash soft"/>
+
+  <rect x="10" y="56" width="420" height="30" rx="5" class="inner"/><text x="24" y="76">第一段：角色是助手</text>
+  <rect x="10" y="96" width="420" height="30" rx="5" class="inner"/><text x="24" y="116">文字「你」</text>
+  <rect x="10" y="136" width="420" height="30" rx="5" class="inner"/><text x="24" y="156">文字「好」</text>
+  <rect x="10" y="176" width="420" height="30" rx="5" class="inner"/><text x="24" y="196">工具调用开始：id、工具名</text>
+  <rect x="10" y="216" width="420" height="30" rx="5" class="inner"/><text x="24" y="236">工具参数片段：<tspan class="m">{"pa</tspan></text>
+  <rect x="10" y="256" width="420" height="30" rx="5" class="inner"/><text x="24" y="276">工具参数片段：<tspan class="m">th": "/data"}</tspan></text>
+  <rect x="10" y="296" width="420" height="30" rx="5" class="inner"/><text x="24" y="316">最后一段：停止原因 tool_calls，用量</text>
+
+  <path d="M430,71 H646" class="ln" marker-end="url(#ar)"/>
+  <path d="M430,111 H646" class="ln" marker-end="url(#ar)"/>
+  <path d="M430,151 H646" class="ln" marker-end="url(#ar)"/>
+  <path d="M430,191 H646" class="ln" marker-end="url(#ar)"/>
+  <path d="M430,231 H646" class="ln" marker-end="url(#ar)"/>
+  <path d="M430,271 H646" class="ln" marker-end="url(#ar)"/>
+  <path d="M430,311 H646" class="ln" marker-end="url(#ar)"/>
+  <text x="540" y="178" text-anchor="middle" class="s">类型变了</text>
+
+  <rect x="650" y="56" width="420" height="30" rx="5" class="c3"/><text x="664" y="76">消息开始</text>
+  <rect x="650" y="96" width="420" height="30" rx="5" class="c3"/><text x="664" y="116">开一个文字块；文字「你」</text>
+  <rect x="650" y="136" width="420" height="30" rx="5" class="c3"/><text x="664" y="156">文字「好」</text>
+  <rect x="650" y="176" width="420" height="30" rx="5" class="c3"/><text x="664" y="196">关上文字块；开一个工具调用块（id、工具名）</text>
+  <rect x="650" y="216" width="420" height="30" rx="5" class="c3"/><text x="664" y="236">参数片段：<tspan class="m">{"pa</tspan></text>
+  <rect x="650" y="256" width="420" height="30" rx="5" class="c3"/><text x="664" y="276">参数片段：<tspan class="m">th": "/data"}</tspan></text>
+  <rect x="650" y="296" width="420" height="30" rx="5" class="c3"/><text x="664" y="316">关上工具块；停止原因 tool_use、用量；消息结束</text>
+</svg>
+</div>
+<p class="cap">图 6　流式回答的转换：转换器记着「现在在写哪一块」，内容类型一变，就关上旧块、开新块；停止原因和用量在最后一段给出</p>
+<p>OpenAI 格式的上游，有的默认不在流式回答里给用量。网关在发请求时会要求它在最后一段带上用量；直通时如果调用方自己没要，网关读完这一段的用量后不再转给调用方。</p>
+
+<!-- ====================================================================== -->
+<h2 id="s6">6. 选线路与换线路</h2>
+
+<h3>6.1 按会话选线路</h3>
+<ul>
+  <li><b>一个模型的线路有优先级和权重。</b>先用优先级数字小的；同一优先级有几条线路时，按权重分配。</li>
+  <li><b>分配的单位是会话，不是单次请求。</b>同一个会话的每一轮都落在同一条线路上，原因是缓存：智能体每一轮都会把前面几万字的对话再发一遍，供应商对重复的开头只收一成左右的钱，算得也更快。但缓存只在同一个账号内有效，如果随机分到别的账号，这部分就要按原价重算一遍（算例见第 8 节）。</li>
+  <li><b>怎么做到：</b>用会话标识算出一个固定的落点（加权的一致性哈希），所以不需要在任何地方记「哪个会话对应哪条线路」。增加或减少线路时，只有原来落在变动线路上的会话会挪走。</li>
+  <li>不带会话标识的调用（个人工具、脚本）按 Key 来算落点。</li>
+</ul>
+
+<div class="fig">
+<svg viewBox="0 0 1080 262" width="100%" role="img" aria-label="按会话选线路的三种情况">
+  <!-- panel 1 -->
+  <rect x="10" y="10" width="345" height="242" rx="8" class="inner"/>
+  <text x="24" y="34" class="b">平时</text>
+  <rect x="26" y="56" width="46" height="24" rx="4" class="c4"/><text x="49" y="73" text-anchor="middle">S1</text>
+  <rect x="26" y="96" width="46" height="24" rx="4" class="c4"/><text x="49" y="113" text-anchor="middle">S2</text>
+  <rect x="26" y="136" width="46" height="24" rx="4" class="c4"/><text x="49" y="153" text-anchor="middle">S3</text>
+  <rect x="26" y="176" width="46" height="24" rx="4" class="c4"/><text x="49" y="193" text-anchor="middle">S4</text>
+  <rect x="160" y="50" width="180" height="44" rx="6" class="c3"/><text x="172" y="68" class="b">账号 A</text><text x="172" y="86" class="s">优先级 1 · 权重 3</text>
+  <rect x="160" y="110" width="180" height="44" rx="6" class="c3"/><text x="172" y="128" class="b">账号 B</text><text x="172" y="146" class="s">优先级 1 · 权重 1</text>
+  <rect x="160" y="170" width="180" height="44" rx="6" class="inner"/><text x="172" y="188" class="b">账号 C</text><text x="172" y="206" class="s">优先级 2 · 备用</text>
+  <path d="M72,68 L156,70" class="ln" marker-end="url(#ar)"/>
+  <path d="M72,108 L156,74" class="ln" marker-end="url(#ar)"/>
+  <path d="M72,148 L156,78" class="ln" marker-end="url(#ar)"/>
+  <path d="M72,188 L156,134" class="ln" marker-end="url(#ar)"/>
+  <text x="24" y="240" class="s">S1–S3 落在 A，S4 落在 B（大约 3:1），每轮都不变</text>
+
+  <!-- panel 2 -->
+  <rect x="367" y="10" width="345" height="242" rx="8" class="inner"/>
+  <text x="381" y="34" class="b">B 被限流，冷却中</text>
+  <rect x="383" y="56" width="46" height="24" rx="4" class="c4"/><text x="406" y="73" text-anchor="middle">S1</text>
+  <rect x="383" y="96" width="46" height="24" rx="4" class="c4"/><text x="406" y="113" text-anchor="middle">S2</text>
+  <rect x="383" y="136" width="46" height="24" rx="4" class="c4"/><text x="406" y="153" text-anchor="middle">S3</text>
+  <rect x="383" y="176" width="46" height="24" rx="4" class="c4"/><text x="406" y="193" text-anchor="middle">S4</text>
+  <rect x="517" y="50" width="180" height="44" rx="6" class="c3"/><text x="529" y="68" class="b">账号 A</text><text x="529" y="86" class="s">优先级 1 · 权重 3</text>
+  <rect x="517" y="110" width="180" height="44" rx="6" class="c5"/><text x="529" y="128" class="b">账号 B</text><text x="529" y="146" class="s">优先级 1 · 冷却中</text>
+  <rect x="517" y="170" width="180" height="44" rx="6" class="inner"/><text x="529" y="188" class="b">账号 C</text><text x="529" y="206" class="s">优先级 2 · 备用</text>
+  <path d="M429,68 L513,70" class="ln" marker-end="url(#ar)"/>
+  <path d="M429,108 L513,74" class="ln" marker-end="url(#ar)"/>
+  <path d="M429,148 L513,78" class="ln" marker-end="url(#ar)"/>
+  <path d="M429,188 L513,84" class="ln dash" marker-end="url(#ar)"/>
+  <text x="381" y="240" class="s">S4 先挪到同一优先级的 A；B 恢复后再回到 B</text>
+
+  <!-- panel 3 -->
+  <rect x="724" y="10" width="346" height="242" rx="8" class="inner"/>
+  <text x="738" y="34" class="b">A、B 都不可用</text>
+  <rect x="740" y="56" width="46" height="24" rx="4" class="c4"/><text x="763" y="73" text-anchor="middle">S1</text>
+  <rect x="740" y="96" width="46" height="24" rx="4" class="c4"/><text x="763" y="113" text-anchor="middle">S2</text>
+  <rect x="740" y="136" width="46" height="24" rx="4" class="c4"/><text x="763" y="153" text-anchor="middle">S3</text>
+  <rect x="740" y="176" width="46" height="24" rx="4" class="c4"/><text x="763" y="193" text-anchor="middle">S4</text>
+  <rect x="874" y="50" width="180" height="44" rx="6" class="c5"/><text x="886" y="68" class="b">账号 A</text><text x="886" y="86" class="s">余额不足 · 异常</text>
+  <rect x="874" y="110" width="180" height="44" rx="6" class="c5"/><text x="886" y="128" class="b">账号 B</text><text x="886" y="146" class="s">冷却中</text>
+  <rect x="874" y="170" width="180" height="44" rx="6" class="c3"/><text x="886" y="188" class="b">账号 C</text><text x="886" y="206" class="s">优先级 2 · 备用</text>
+  <path d="M786,68 L870,186" class="ln dash" marker-end="url(#ar)"/>
+  <path d="M786,108 L870,189" class="ln dash" marker-end="url(#ar)"/>
+  <path d="M786,148 L870,192" class="ln dash" marker-end="url(#ar)"/>
+  <path d="M786,188 L870,195" class="ln dash" marker-end="url(#ar)"/>
+  <text x="738" y="240" class="s">同一优先级都不可用，才用优先级 2 的 C</text>
+</svg>
+</div>
+<p class="cap">图 7　按会话分配线路：平时同一个会话一直走同一条线路，缓存能命中；线路不可用时才挪走，先挪到同一优先级的线路，再挪到下一优先级</p>
+
+<h3>6.2 什么时候换线路</h3>
+<p>上游的失败先由供应商方言归成统一的种类（第 5 节），线路按种类决定，不直接看状态码：同一个状态码在不同供应商那里意思不同。</p>
+<table>
+  <tr><th>失败的种类</th><th>常见的样子</th><th>算谁的问题</th><th>怎么办</th></tr>
+  <tr><td>请求有误</td><td>400</td><td>调用方（或网关转换出错）</td><td>不换，原样返回，带上供应商的说明</td></tr>
+  <tr><td>限流</td><td>429</td><td>这条线路</td><td>换下一条。这条线路冷却：供应商说了等多久就等多久，没说就等 1 分钟</td></tr>
+  <tr><td>过载、服务出错、连不上、等不到第一个字</td><td>5xx、Anthropic 的 529、超时</td><td>这条线路</td><td>换下一条；这条线路冷却 1 分钟</td></tr>
+  <tr><td>密钥失效、余额不足</td><td>401、402；OpenAI 额度用完是 429 加 insufficient_quota</td><td>整个账号</td><td>换下一条，并把账号标成异常，用到它的线路都跳过。平台每 5 分钟检查一次：能查余额的查余额，其余的发一个 1 token 的请求试试，恢复了就自动解除异常</td></tr>
+</table>
+<ul>
+  <li><b>冷却、异常这些状态，所有网关实例共用。</b>一个实例撞上限流，其他实例马上都知道，不会每个实例各撞一次。</li>
+  <li><b>全部线路都在冷却时，不直接拒绝</b>，而是试冷却最早结束的那条。全部线路都异常或停用时，直接返回「没有可用线路」，不再打到供应商。</li>
+  <li><b>只在同一个模型的线路之间换，</b>不会换成别的模型。</li>
+  <li><b>重试只在网关做一层。</b>网关换过线路仍然失败时，会在响应里告诉调用方的 SDK 不要再自动重试（官方 SDK 认这个标记）。否则 SDK 自己再重试 3 次，每次网关又换 3 条线路，一次失败就会被放大成十几次上游请求。</li>
+  <li><b>非流式请求超时后也会换线路。</b>但上游可能其实已经算完了，这时会付两次钱。两次尝试都会写进调用记录。</li>
+</ul>
+
+<h3>6.3 回答开始输出后就不再换（提交点）</h3>
+<p>流式回答一旦发给调用方，就收不回来了。所以网关设了一个「提交点」：在向调用方写出第一段内容之前，都可以换线路；写出之后就不再换。</p>
+<ul>
+  <li><b>提交点不是「上游返回了 200」。</b>有的供应商会先返回 200，紧接着在流里发一个「过载」错误。网关会先压住上游开头那几段不含内容的数据（比如「消息开始」），等第一段真正的内容（文字、思考或工具调用）到了才提交。在这之前收到错误，照样换线路，调用方什么也看不到。</li>
+  <li><b>压着的这段时间里，网关给调用方发不含内容的保活注释。</b>流式协议规定接收方会忽略这种注释，这样可以防止连接因为太久没动静，被中间的代理断开。</li>
+  <li><b>提交之后上游出错，</b>网关在流里发一个错误，结束这次回答，调用记录标为「中途中断」。调用方按自己的规则处理，比如 Atlas 会让这一轮失败并给出提示。</li>
+</ul>
+
+<div class="fig">
+<svg viewBox="0 0 1080 240" width="100%" role="img" aria-label="提交点时间线">
+  <rect x="40" y="40" width="640" height="180" class="c3 soft"/>
+  <rect x="680" y="40" width="360" height="180" class="c5 soft"/>
+  <text x="52" y="60" class="b">可以换线路（调用方还什么都没看到）</text>
+  <text x="692" y="60" class="b">不能再换（内容已经发出去了）</text>
+  <path d="M40,112 H1036" class="ln" marker-end="url(#ar)"/>
+  <circle cx="90" cy="112" r="5" class="c1"/><text x="90" y="94" text-anchor="middle">向线路 1 发请求</text>
+  <circle cx="220" cy="112" r="5" class="c1"/><text x="220" y="94" text-anchor="middle">200 + 消息开始</text><text x="220" y="136" text-anchor="middle" class="s">压着不发</text>
+  <circle cx="350" cy="112" r="5" class="c5"/><text x="350" y="94" text-anchor="middle">流里来了过载错误</text><text x="350" y="136" text-anchor="middle" class="s">冷却线路 1，换线路 2</text>
+  <circle cx="490" cy="112" r="5" class="c1"/><text x="490" y="94" text-anchor="middle">线路 2：200 + 消息开始</text><text x="490" y="136" text-anchor="middle" class="s">压着不发</text>
+  <path d="M680,72 V176" class="ln"/>
+  <text x="688" y="94" class="b">★ 提交点：第一段内容到了</text><text x="688" y="136" class="s">把压着的连同这段一起发出</text>
+  <circle cx="880" cy="112" r="5" class="c1"/><text x="880" y="94" text-anchor="middle">继续输出</text>
+  <circle cx="985" cy="112" r="5" class="c5"/><text x="985" y="94" text-anchor="middle">上游出错</text><text x="985" y="136" text-anchor="middle" class="s">只能在流里报错结束</text>
+  <path d="M40,176 H1040" class="ln dash"/>
+  <text x="52" y="204" class="s">调用方看到的：只有保活注释，不含内容</text>
+  <text x="692" y="204" class="s">调用方看到的：内容一段一段到达</text>
+</svg>
+</div>
+<p class="cap">图 8　提交点是「第一段内容到了」，而不是「上游返回了 200」：之前出的错调用方看不到，之后出的错只能在流里报告</p>
+
+<!-- ====================================================================== -->
+<h2 id="s7">7. 流式回答与超时</h2>
+<ul>
+  <li><b>只有两种超时，都不限制总时长：</b>
+    <ul>
+      <li><b>等第一个字：</b>从发出请求到第一段内容到达。上下文很长或者冷启动的模型，可能要好几分钟才出第一个字（实测见过近 3 分钟），所以默认值给得很长，也可以按账号单独调整。</li>
+      <li><b>两段之间：</b>已经开始输出后，多久没有新内容就算卡住了。</li>
+      <li>不设「一次回答最多多长时间」：只要还在持续输出，就一直等下去。</li>
+    </ul>
+  </li>
+  <li><b>调用方断开时</b>（用户点了停止，或者调用方进程退出），网关立刻断开上游，不让供应商继续生成、继续计费。</li>
+  <li><b>回答一段一段直接转发。</b>网关自己、以及它前面的反向代理都不攒批发送。</li>
+  <li><b>网关发版时，</b>旧实例先停止接收新请求，等手上的回答都结束再退出。等待时间有上限，发版不能无限期地等；超过上限的连接会被断开，调用方按「中途中断」处理。</li>
+  <li><b>流式回答不经过任何中继：</b>网关读一段、写一段，在同一个请求里直接转发，中间不放无限长的队列。调用方读得慢，网关写就会等，读上游也跟着慢下来，压力一路传回供应商；内存里最多只压着提交点前的那几段。中继要解决的是「产出事件的和看事件的不在同一个请求里、看的人断了还要能续看」。模型调用不是这样：一个回答只有一个调用方，调用方断了就该停，两种格式也都不支持续传。能恢复的能力放在上一层：网关报「中途中断」，由调用方（比如 Atlas）决定重跑这一轮。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s8">8. 用量与费用</h2>
+
+<h3>8.1 统一成四项</h3>
+<ul>
+  <li>四项是：<b>输入</b>（没命中缓存的部分）、<b>缓存写入</b>、<b>缓存命中</b>、<b>输出</b>（包含思考）。</li>
+  <li><b>两种格式的统计口径不同，转换时最容易算错：</b>Anthropic 格式的「输入」不包含缓存部分，缓存写入、缓存命中另外列出；OpenAI 格式的「输入」包含缓存命中的部分。</li>
+  <li><b>同一种格式里，有的供应商还用自己的字段：</b>比如 DeepSeek 的 OpenAI 格式接口把缓存命中放在自己的字段里（图 5），由供应商方言换算成四项。</li>
+  <li>一律以供应商回答里给出的数字为准，网关不自己数 token。</li>
+</ul>
+
+<div class="fig">
+<svg viewBox="0 0 1080 320" width="100%" role="img" aria-label="用量统一与费用算例">
+  <rect x="10" y="10" width="420" height="70" rx="8" class="c1"/>
+  <text x="26" y="34" class="b">Anthropic 格式的上游报</text>
+  <text x="26" y="62">输入 2,000 · 缓存写入 0 · 缓存命中 48,000 · 输出 800</text>
+  <rect x="10" y="95" width="420" height="70" rx="8" class="c3"/>
+  <text x="26" y="119" class="b">OpenAI 格式的上游报</text>
+  <text x="26" y="147">输入 50,000（其中缓存命中 48,000）· 输出 800</text>
+  <path d="M430,45 L556,72" class="ln" marker-end="url(#ar)"/>
+  <path d="M430,130 L556,108" class="ln" marker-end="url(#ar)"/>
+  <text x="440" y="158" class="s">先减掉命中的 48,000</text>
+  <rect x="560" y="25" width="510" height="125" rx="8" class="c4"/>
+  <text x="576" y="50" class="b">统一成四项</text>
+  <text x="576" y="80">输入 2,000　　缓存写入 0</text>
+  <text x="576" y="104">缓存命中 48,000　　输出 800</text>
+  <text x="576" y="134" class="s">一次智能体调用：前面的对话 48,000 token 命中缓存，新增 2,000 token，输出 800 token</text>
+
+  <text x="10" y="194" class="s">模型价格（每百万 token）：输入 ¥4　缓存命中 ¥0.4　输出 ¥16；缓存写入按输入价算。下面的算式先算出「token × 单价」，再除以 100 万</text>
+  <rect x="10" y="208" width="345" height="100" rx="8" class="c3"/>
+  <text x="24" y="232" class="b">缓存命中（会话留在同一个账号）</text>
+  <text x="24" y="258">2,000×4 + 48,000×0.4 + 800×16</text>
+  <text x="24" y="282">= 40,000 ÷ 100 万 → ¥0.040</text>
+  <rect x="367" y="208" width="345" height="100" rx="8" class="c5"/>
+  <text x="381" y="232" class="b">缓存没命中（换了账号）</text>
+  <text x="381" y="258">50,000×4 + 800×16</text>
+  <text x="381" y="282">= 212,800 ÷ 100 万 → ¥0.213，贵 5 倍多</text>
+  <rect x="724" y="208" width="346" height="100" rx="8" class="c5"/>
+  <text x="738" y="232" class="b">口径弄错（50,000 全按没命中算，又加一遍命中）</text>
+  <text x="738" y="258">50,000×4 + 48,000×0.4 + 800×16</text>
+  <text x="738" y="282">= 232,000 ÷ 100 万 → ¥0.232</text>
+</svg>
+</div>
+<p class="cap">图 9　算例：两种格式报上来的用量先统一成四项，再算钱；缓存没命中、或者口径弄错，费用都会差出好几倍</p>
+
+<h3>8.2 价格</h3>
+<ul>
+  <li><b>价格挂在模型上：</b>对内统一价，人民币，按每百万 token 计。不管走哪条线路，都按这个价格算钱；不填就不计费（比如自部署的模型）。</li>
+  <li><b>缓存写入的数量单独记录，但按输入价算钱。</b></li>
+  <li><b>每条调用记录都存下当时的单价。</b>以后改价，不影响已经记下的费用。</li>
+</ul>
+
+<h3>8.3 用量没拿全的时候</h3>
+<ul>
+  <li>调用方中途断开，或者回答中途出错时，最后一段（带用量的那一段）就收不到了。</li>
+  <li>Anthropic 格式的上游，在回答一开始就会给出输入用量，只需要估算输出。OpenAI 格式的上游，用量要等最后一段才给，输入和输出都得估算。估算按已经收到的内容长度来算，调用记录里标为「估算」。</li>
+</ul>
+
+<h3>8.4 Key 的限额</h3>
+<ul>
+  <li><b>月预算：</b>每次调用前，先看「本月已花 &lt; 预算」才放行；调用结束后，再把这次的费用加上去。</li>
+  <li><b>这是一个软上限。</b>几个调用同时被放行时，最后这一批可能会超出一点。比如预算只剩 ¥0.1 时，同时进来 5 个调用，每个花 ¥0.05，它们都会被放行，最后超出 ¥0.15。要做到一分钱都不超，就得在调用前按最大输出先预扣一笔、结束后多退少补，代价是并发时额度会被大量预占。权衡下来，软上限就够用：月预算是用来防止脚本失控的，不是精确记账。</li>
+  <li><b>每分钟请求数：</b>所有网关实例共用一个计数。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s9">9. 错误统一</h2>
+<p>网关按「是谁的问题、能不能换线路、要不要重试」把错误分成几类，用调用方入口的格式返回，并带上类别和一句能直接给用户看的话。调用方按类别处理就行，不用去认识每个供应商的报错。</p>
+<table>
+  <tr><th>类别</th><th>例子</th><th>换线路</th><th>返回</th><th>给用户的话</th></tr>
+  <tr><td>Key 无效</td><td>不存在、已停用、已过期</td><td>—</td><td>401</td><td>Key 失效了（附停用原因）</td></tr>
+  <tr><td>不能用这个模型</td><td>模型不在这把 Key 里、授权已收回、模型已停用</td><td>—</td><td>403</td><td>没有权限用这个模型 / 这个模型已停用</td></tr>
+  <tr><td>请求超出能力</td><td>给不能看图的模型发图片、输入超过上下文</td><td>—</td><td>400</td><td>说清缺什么，比如「这个模型不能看图」</td></tr>
+  <tr><td>模型没有这种格式的线路</td><td>用格式入口调一个只有别的格式线路的模型</td><td>—</td><td>400</td><td>这个接口不转换格式，请改用通用入口</td></tr>
+  <tr><td>请求有误</td><td>上游返回 400</td><td>不换</td><td>400，附上游说明</td><td>原样显示</td></tr>
+  <tr><td>Key 限额用完</td><td>本月预算、每分钟请求数</td><td>—</td><td>429</td><td>说明是哪个限额、什么时候恢复</td></tr>
+  <tr><td>模型繁忙</td><td>所有线路都被限流</td><td>已换过</td><td>429</td><td>模型繁忙，请稍后重试或换个模型</td></tr>
+  <tr><td>没有可用线路</td><td>所有账号余额不足、密钥失效，或者都已停用</td><td>已换过</td><td>503</td><td>这个模型暂时用不了，请换个模型（具体原因只给模型管理员看，并通知他们）</td></tr>
+  <tr><td>上游出错</td><td>5xx、连不上、等不到第一个字，所有线路都试过了</td><td>已换过</td><td>502 / 504</td><td>系统忙不过来了，请稍后再试</td></tr>
+  <tr><td>中途中断</td><td>已经开始输出后上游出错</td><td>不能换</td><td>流里的错误</td><td>回答中断了，请重试</td></tr>
+</table>
+<ul>
+  <li>给用户的话和 Atlas 现在的规则保持一致：处理不了的只说「系统忙不过来了」；限流、余额这类问题提示换个模型。</li>
+  <li><b>「Key 限额用完」和「模型繁忙」都返回 429，但类别不同：</b>前者换模型也没用，后者换个模型就能用。调用方要按类别给出不同的提示。</li>
+  <li><b>供应商返回的 402（余额不足）不原样转给调用方：</b>充值是租户账号的事，不是调用方能解决的问题。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s10">10. 租户与安全</h2>
+<ul>
+  <li><b>账号、模型、线路、Key、调用记录都属于租户。</b>Key 属于哪个租户，就只在那个租户的模型里找；模型名也只要求在租户内不重复。这一点和多租户隔离方案一致。</li>
+  <li><b>平台服务替租户调模型时，用该租户的服务 Key、选该租户的模型。</b>平台服务指会话标题、判断器、记忆补记、知识库向量这类功能。</li>
+  <li><b>网关自带的能力和参数规则属于产品知识，</b>不归任何租户，所有租户共用。</li>
+  <li><b>Key 怎么存：</b>个人 Key 只存摘要（哈希），原文只在创建时显示一次；客户端 Key 加密保存，因为应用需要取回原文。Key 是随机生成的长字符串，用普通摘要就够了，不需要慢哈希：每个请求都要验一次 Key，慢哈希会拖慢每一次调用。</li>
+  <li><b>账号密钥加密保存，</b>界面上只显示末 4 位。</li>
+  <li><b>上游地址由租户自己填，网关替它去连接，所以要防止被利用去访问平台内部：</b>登记时检查一次，地址不能指向平台内部；每次真正连接前，按解析出来的 IP 再检查一次，防止域名先指向外网、事后又改成指向内网。</li>
+  <li><b>出网：</b>海外供应商经出网代理访问，代理地址由平台统一设置。</li>
+  <li><b>个人 Key 可以在集群外使用：</b>网关在 Atlas 同一个域名下，只开放调用和模型清单，不开放任何管理功能。管理功能都在模型平台里，需要登录。</li>
+  <li><b>Key 停用或删除后，</b>几秒内所有网关实例都会生效。</li>
+  <li><b>调用记录默认不存请求和回答的内容：</b>里面可能有敏感信息，截图也很大。记录只存第 11 节列出的那些项。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s11">11. 调用记录</h2>
+<ul>
+  <li><b>每次调用写一条记录，</b>包括：时间、租户、Key、模型、会话；走过哪些线路，每次尝试的结果和原因；最终状态和错误类别；第一个字用了多久、总共用了多久；四项用量、费用、是否估算；去掉了哪些不认识的字段。</li>
+  <li><b>写记录不耽误回答：</b>记录先放进内存里的队列，再批量写入。数据库暂时写不进去时先攒着；攒满了就丢掉最旧的，并记下丢了多少条。</li>
+  <li><b>谁能看：</b>租户管理员看本租户的记录，个人看自己 Key 的记录。运营中心只看各租户的汇总数字，看不到内容。这一点和多租户隔离方案一致。</li>
+  <li><b>网关自身的指标：</b>每个模型、每条线路的第一个字用时、输出速度、错误率、换线路次数、缓存命中率。线路冷却、账号异常时，通知模型管理员。</li>
+  <li><b>自研网关全面接管前，必须先有调用记录。</b>过渡时要靠它对比新旧两条路的结果（第 13 节）。</li>
+</ul>
+
+<!-- ====================================================================== -->
+<h2 id="s12">12. 网关自身的可靠性</h2>
+<ul>
+  <li><b>网关是所有模型调用的必经之路，</b>所以要部署多个实例，实例本身不存状态。任何一个实例挂了，其他实例接着服务。</li>
+  <li><b>配置放在内存里。</b>网关把账号、模型、线路、Key 都放在内存里。平台每改一次配置，就把配置版本号加一；网关处理每个请求时顺手看一眼版本号（放在几个实例共用的状态里，读一次很快），变了才重新加载。这样既能做到「保存后下一次请求就生效」，平时又不用查数据库。</li>
+  <li><b>网关自己增加的耗时很少：</b>前四步只读内存和共用状态。回答内容也不逐段解析，只在需要的时候才看（判断提交点、取用量、做格式转换）。</li>
+</ul>
+<table>
+  <tr><th>出问题的依赖</th><th>网关怎么办</th></tr>
+  <tr><td>模型平台的数据库</td><td>用内存里最后一份配置继续服务；新改的配置要等数据库恢复后才生效</td></tr>
+  <tr><td>几个实例共用的状态</td><td>冷却、异常改由每个实例自己记；每分钟请求数暂时不限，不因为计数出问题而挡住业务；预算按最后一次知道的花费判断</td></tr>
+  <tr><td>调用记录的数据库</td><td>先攒着，恢复后补写（第 11 节）</td></tr>
+  <tr><td>某个供应商</td><td>换线路（第 6 节）</td></tr>
+</table>
+
+<!-- ====================================================================== -->
+<h2 id="s13">13. 从 LiteLLM 过渡</h2>
+
+<div class="fig">
+<svg viewBox="0 0 1080 252" width="100%" role="img" aria-label="从 LiteLLM 过渡的三步">
+  <!-- step 1 -->
+  <rect x="10" y="10" width="345" height="232" rx="8" class="inner"/>
+  <text x="24" y="34" class="b">第一步：网关接管入口</text>
+  <rect x="30" y="50" width="140" height="36" rx="6" class="inner"/><text x="100" y="73" text-anchor="middle">调用方</text>
+  <rect x="30" y="110" width="140" height="36" rx="6" class="c1"/><text x="100" y="133" text-anchor="middle">网关</text>
+  <rect x="30" y="170" width="140" height="36" rx="6" class="c4 dash"/><text x="100" y="193" text-anchor="middle">LiteLLM（过渡账号）</text>
+  <rect x="205" y="110" width="135" height="36" rx="6" class="c4"/><text x="272" y="133" text-anchor="middle">模型平台</text>
+  <path d="M100,86 V106" class="ln" marker-end="url(#ar)"/>
+  <path d="M100,146 V166" class="ln" marker-end="url(#ar)"/>
+  <path d="M205,128 H174" class="ln" marker-end="url(#ar)"/>
+  <text x="212" y="104" class="s">账号、模型、Key</text>
+  <text x="24" y="230" class="s">调用方只改地址，行为和原来一样</text>
+
+  <!-- step 2 -->
+  <rect x="367" y="10" width="345" height="232" rx="8" class="inner"/>
+  <text x="381" y="34" class="b">第二步：模型逐个切直连</text>
+  <rect x="469" y="50" width="140" height="36" rx="6" class="inner"/><text x="539" y="73" text-anchor="middle">调用方</text>
+  <rect x="469" y="110" width="140" height="36" rx="6" class="c1"/><text x="539" y="133" text-anchor="middle">网关</text>
+  <rect x="379" y="170" width="155" height="36" rx="6" class="c4 dash"/><text x="456" y="193" text-anchor="middle">模型甲：经 LiteLLM</text>
+  <rect x="545" y="170" width="155" height="36" rx="6" class="c3"/><text x="622" y="193" text-anchor="middle">模型乙：直连供应商</text>
+  <path d="M539,86 V106" class="ln" marker-end="url(#ar)"/>
+  <path d="M520,146 L470,166" class="ln" marker-end="url(#ar)"/>
+  <path d="M558,146 L608,166" class="ln" marker-end="url(#ar)"/>
+  <text x="381" y="230" class="s">逐个模型切换；把线路改回 LiteLLM 就能退回</text>
+
+  <!-- step 3 -->
+  <rect x="724" y="10" width="346" height="232" rx="8" class="inner"/>
+  <text x="738" y="34" class="b">第三步：下线 LiteLLM</text>
+  <rect x="827" y="50" width="140" height="36" rx="6" class="inner"/><text x="897" y="73" text-anchor="middle">调用方</text>
+  <rect x="827" y="110" width="140" height="36" rx="6" class="c1"/><text x="897" y="133" text-anchor="middle">网关</text>
+  <rect x="827" y="170" width="140" height="36" rx="6" class="c3"/><text x="897" y="193" text-anchor="middle">供应商（直连）</text>
+  <path d="M897,86 V106" class="ln" marker-end="url(#ar)"/>
+  <path d="M897,146 V166" class="ln" marker-end="url(#ar)"/>
+  <text x="738" y="230" class="s">调用方去掉自己那份按模型写的规则</text>
+</svg>
+</div>
+<p class="cap">图 10　过渡三步：网关先接管入口，这时 LiteLLM 退成网关后面的一个账号；再逐个模型直连；最后下线 LiteLLM。每个模型随时可以把线路改回 LiteLLM</p>
+
+<ul>
+  <li><b>第一步：网关和新的模型平台一起上线，网关接管入口。</b>
+    <ul>
+      <li>账号、模型、线路、Key 都改在模型平台上管理，不再同步给 LiteLLM。</li>
+      <li>调用方的模型地址改成指向网关，由网关认 Key、记用量。已有的 Key 原样能用，调用方不用换 Key。</li>
+      <li>每个已有模型先只有一条线路，指向 LiteLLM（把 LiteLLM 当成一个 Anthropic 格式的账号），所以行为和原来一样。</li>
+      <li>知识库取 Key 要带租户，等它按租户改造后再切；切之前照旧直连 LiteLLM，它的 Key 在 LiteLLM 里本来就有。</li>
+      <li>网关接管入口后，个人 Key 就能在集群外使用了，Anthropic 格式（比如 Claude Code）和 OpenAI 格式（比如 Cursor）都行。</li>
+    </ul>
+  </li>
+  <li><b>第二步：模型逐个切直连。</b>逐个模型把线路换成直连供应商的账号，对比调用记录里的错误率、第一个字用时和费用。哪个模型有问题，就把它的线路改回 LiteLLM。</li>
+  <li><b>第三步：全部模型都直连后，下线 LiteLLM。</b>调用方去掉自己按模型写的参数规则和模型能力表，改成只传意图，能力从网关的模型清单里取。</li>
+  <li><b>退回：</b>平时按模型退回，把线路改回 LiteLLM。整体退回是把调用方的地址改回 LiteLLM，只对切换前就有的 Key 有效（之后新建、重置的 Key 不在 LiteLLM 里），所以只作切换当天的应急手段。</li>
+</ul>
+
+</main>
+</body>
+</html>

@@ -1,7 +1,7 @@
 "use client";
 
-import { MgClientKeysPage } from "@/features/models/KeysTab";
+import { MgKeyAdminPage } from "@/features/models/KeysTab";
 
 export default function Page() {
-  return <MgClientKeysPage />;
+  return <MgKeyAdminPage />;
 }

@@ -8,6 +8,7 @@
 #   /mcp-gateway-api/*     → atlas-mcpgateway 的管理端；/mcp-gateway-api/mcp/* 是数据面（外部客户端带
 #                            自己的用户 Key 调，不经登录校验；/internal 不对外）
 #   /model-gateway-api/*   → atlas-modelgateway 的管理端（集群内；/internal、/v1 不对外）
+#   /llm/v1/*、/llm/universal/v1/* → atlas-llmgateway 模型网关（只放调用接口；不经登录校验，网关自己认 Key）
 #   /device-api/*          → atlas-devicegw（本机 CLI：连接器的控制连接 WebSocket、配对、电脑上 CLI 的能力代理；
 #                            不经登录校验，网关自己认设备令牌、会话令牌；/internal 不对外）
 #   /uc/*                → uc-web（basePath=/uc）           /uc/api/*           → 用户中心后端（atlas-usercenter）
@@ -207,6 +208,23 @@ data:
         proxy_pass http://atlas-devicegw.atlas-system.svc.cluster.local:8095/;
         proxy_buffering off;
         proxy_request_buffering off;
+        client_max_body_size 64m;
+      }
+      # 模型网关（数据面，38-modelgateway.yaml 的 atlas-llmgateway）：Claude Code、Cursor、OpenAI SDK
+      #   这类外部工具带自己的 Key 调。通用接口（按 Anthropic 格式传，网关按线路转换）填 {域名}/llm/universal；
+      #   只走同格式线路、不转换的：Anthropic 格式填 {域名}/llm，OpenAI 格式填 {域名}/llm/v1。
+      #   只放调用接口，/healthz、/readyz 不对外。不经登录校验；身份请求头按 server 级的 no-identity.inc
+      #   丢掉（这里不写 proxy_set_header，才继承得到）。流式回答不缓冲；请求体可能是带截图的大上下文
+      location ~ ^/llm/universal/v1/(messages|messages/count_tokens|models)$ {
+        rewrite ^/llm(/.*)$ $1 break;
+        proxy_pass http://atlas-llmgateway.atlas-system.svc.cluster.local:8091;
+        proxy_buffering off;
+        client_max_body_size 64m;
+      }
+      location ~ ^/llm/v1/(messages|messages/count_tokens|chat/completions|embeddings|rerank|models)$ {
+        rewrite ^/llm(/.*)$ $1 break;
+        proxy_pass http://atlas-llmgateway.atlas-system.svc.cluster.local:8091;
+        proxy_buffering off;
         client_max_body_size 64m;
       }
       location ^~ /model-gateway-api/internal/ { return 404; }

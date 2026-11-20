@@ -1,134 +1,204 @@
-"""API Key（方案第 5、6 章）。
+"""API Key：调用凭据，决定能用哪些模型、限额多少。
 
-    用户 Key     本人申请，一人一把；从「公有 + 授权给本人或所在部门的私有」里选模型
-    客户端 Key   应用调接口创建（或管理员在页面上建），按客户端类型 + 客户端编码唯一；
-                 创建后「待分配」，管理员分配模型后才在 LiteLLM 生成 Key
+    用户 Key    本人建，一人可以多把（用途名区分）；能选「公有 + 授权给自己或所在部门的私有」。
+                只存摘要，原文只在创建、重置时给一次（管理员也看不到、不能重置）
+    客户端 Key  应用（Atlas 建智能体时）或管理员建，按「类型 + 编码」幂等；
+                管理员分配模型，不看授权。
+                新智能体的 Key 建时默认分配全部公有模型（那一刻的快照，
+                settings 可改成「等管理员分配」）。
+                原文加密保存（应用要取原文）；重置后旧的再保留 10 分钟（正在跑的会话不断）
+    限额        月预算（元，软上限）、每分钟请求数、有效期，都可以不设
+    有效模型    勾选的 ∩ 此刻允许的（用户 Key 还要看用户中心的授权、持有人是否在职）。网关只认它；
+                授权收回、模型删除、改成私有时重算，用户中心那边的变化由定期任务补（jobs.py）
 
-    有效模型 = 分配的 ∩ 可选范围 ∩ LiteLLM 里存在的。同步到 LiteLLM 的就是它：
-        LiteLLM 里的可用模型 = 有效模型
-        LiteLLM 里的停用     = 状态是 blocked，或有效模型为空（空列表在 LiteLLM 里是全部模型）
-
-★ 平台是事实源，LiteLLM 跟随。同步失败记在 sync_error 上，对账任务（reconcile.py）重试。
-★ 用户在用户中心被停用（离职）：他的用户 Key 有效模型按空处理，即在 LiteLLM 里停用。
+★ 改完把配置版本号加一（notify.mark）。
 """
 
 from __future__ import annotations
 
 import logging
-import secrets
+import secrets as pysecrets
 from collections.abc import Sequence
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, type_coerce
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from . import audit
+from . import audit, notify
+from .crypto import CipherError, SecretCipher
 from .db.models import GwApiKey, GwModel
-from .db.types import utcnow, uuid7
-from .errors import Conflict, GatewayError, Invalid, NotFound
-from .litellm_api import LiteLLM
+from .db.types import uuid7
+from .errors import Forbidden, Invalid, NotFound
+from .gateway.admission import key_digest
 from .perms import SubjectsCache
 from .registry import ModelRegistry
 
+__all__ = ["KeyLimits", "KeyService", "mask"]
+
 logger = logging.getLogger(__name__)
 
-__all__ = ["KeyService", "mask"]
-
-#: 客户端编码的上限（智能体 id、知识库 id 都在这之内）
 _CODE_MAX = 128
+#: 客户端 Key 重置后旧的再保留多久
+RESET_GRACE = timedelta(minutes=10)
 
 
-def mask(secret: str | None) -> str | None:
-    return f"sk-…{secret[-4:]}" if secret else None
+def mask(tail: str | None) -> str | None:
+    return f"sk-…{tail}" if tail else None
+
+
+def _new_secret() -> str:
+    return f"sk-{pysecrets.token_urlsafe(36)}"
+
+
+@dataclass(frozen=True)
+class KeyLimits:
+    monthly_budget: Decimal | None = None
+    rpm: int | None = None
+    expires_at: datetime | None = None
 
 
 class KeyService:
     def __init__(
         self,
         session: AsyncSession,
-        litellm: LiteLLM,
         registry: ModelRegistry,
         subjects: SubjectsCache,
+        cipher: SecretCipher,
     ) -> None:
         self.session = session
-        self.litellm = litellm
         self.registry = registry
         self.subjects = subjects
+        self.cipher = cipher
 
-    # ── 查询
+    # ── 查 ─────────────────────────────────────────────────────────────
 
     async def get(self, uuid: UUID) -> GwApiKey:
-        row = await self.session.scalar(select(GwApiKey).where(GwApiKey.uuid == uuid))
-        if row is None:
-            raise NotFound("Key 不存在", key=str(uuid))
-        return row
+        key = await self.session.scalar(select(GwApiKey).where(GwApiKey.uuid == uuid))
+        if key is None:
+            raise NotFound("Key 不存在")
+        return key
 
-    async def user_key(self, uid: UUID) -> GwApiKey | None:
-        return await self.session.scalar(
-            select(GwApiKey).where(GwApiKey.key_type == "user", GwApiKey.user_uuid == uid)
+    async def user_keys(self, uid: UUID) -> list[GwApiKey]:
+        return list(
+            await self.session.scalars(
+                select(GwApiKey)
+                .where(GwApiKey.key_type == "user", GwApiKey.user_uuid == uid)
+                .order_by(GwApiKey.created_at)
+            )
         )
+
+    async def user_key(self, uid: UUID, key_uuid: UUID) -> GwApiKey:
+        key = await self.get(key_uuid)
+        if key.key_type != "user" or key.user_uuid != uid:
+            raise NotFound("Key 不存在")
+        return key
 
     async def client_key(self, client_type: str, client_code: str) -> GwApiKey | None:
         return await self.session.scalar(
             select(GwApiKey).where(
                 GwApiKey.key_type == "client",
                 GwApiKey.client_type == client_type,
-                GwApiKey.client_code == client_code,
+                GwApiKey.client_code == client_code.strip(),
             )
         )
 
-    async def client_keys(
-        self, *, client_type: str | None = None, status: str | None = None, q: str | None = None
+    async def search(
+        self,
+        *,
+        key_type: str | None = None,
+        client_type: str | None = None,
+        status: str | None = None,
+        q: str | None = None,
     ) -> list[GwApiKey]:
-        stmt = select(GwApiKey).where(GwApiKey.key_type == "client")
+        stmt = select(GwApiKey).order_by(GwApiKey.created_at.desc())
+        if key_type:
+            stmt = stmt.where(GwApiKey.key_type == key_type)
         if client_type:
             stmt = stmt.where(GwApiKey.client_type == client_type)
         if status:
             stmt = stmt.where(GwApiKey.status == status)
         if q:
             like = f"%{q.strip()}%"
-            stmt = stmt.where(GwApiKey.client_code.ilike(like) | GwApiKey.name.ilike(like))
-        return list(
-            await self.session.scalars(stmt.order_by(GwApiKey.client_type, GwApiKey.created_at))
-        )
+            stmt = stmt.where(
+                or_(
+                    GwApiKey.name.ilike(like),
+                    GwApiKey.label.ilike(like),
+                    GwApiKey.client_code.ilike(like),
+                )
+            )
+        return list(await self.session.scalars(stmt))
 
     async def containing(self, model: str) -> list[GwApiKey]:
-        """分配了这个模型的 Key（JSON 列表里有它）。"""
-        rows = await self.session.scalars(select(GwApiKey))
-        return [k for k in rows if model in (k.models or [])]
+        """勾选了这个模型的 Key（JSON 数组包含）。"""
+        jsonb = type_coerce(GwApiKey.models, postgresql.JSONB)
+        return list(await self.session.scalars(select(GwApiKey).where(jsonb.contains([model]))))
 
-    # ── 可选范围与有效模型
+    def reveal(self, key: GwApiKey) -> str | None:
+        """客户端 Key 的原文（应用取 Key 时）。旧数据可能还是明文。"""
+        if key.key_type != "client" or not key.secret:
+            return None
+        if not key.secret.startswith("v1:"):
+            return key.secret
+        try:
+            return self.cipher.decrypt(key.secret)
+        except CipherError:
+            logger.error("客户端 Key %s 的原文解不开", key.uuid)
+            return None
+
+    # ── 能选什么、此刻能用什么 ─────────────────────────────────────────
 
     async def allowed(
         self, key_type: str, user: UUID | None, *, fresh: bool = False
     ) -> dict[str, GwModel]:
-        """能分配给这把 Key 的模型（模型名 → 平台记录）。"""
-        callable_models = await self.registry.callable()
+        """能分配给这把 Key 的模型（停用的也算：网关会报「模型已停用」，不是「没分配」）。"""
+        models = await self.registry.by_names()
         if key_type == "client":
-            return callable_models
+            return models
         assert user is not None
         info = await self.subjects.info(str(user), fresh=fresh)
         if info is None or not info.active:
             return {}
         usable = await self.subjects.usable(str(user), fresh=fresh)
-        return {
-            name: row
-            for name, row in callable_models.items()
-            if row.visibility == "public" or usable.allows(name)
-        }
+        return {n: m for n, m in models.items() if m.visibility == "public" or usable.allows(n)}
 
-    async def effective(self, key: GwApiKey, *, fresh: bool = False) -> list[str]:
+    async def refresh(self, key: GwApiKey, *, fresh: bool = False) -> bool:
+        """重算有效模型。→ 变没变。"""
         allowed = await self.allowed(key.key_type, key.user_uuid, fresh=fresh)
-        return [m for m in key.models or [] if m in allowed]
+        effective = [m for m in key.models or [] if m in allowed]
+        if effective == list(key.effective_models or []):
+            return False
+        key.effective_models = effective
+        notify.mark(self.session)
+        return True
 
-    # ── 用户 Key
+    async def refresh_many(self, keys: Sequence[GwApiKey], *, fresh: bool = False) -> int:
+        changed = 0
+        for key in keys:
+            try:
+                changed += await self.refresh(key, fresh=fresh)
+            except Exception:
+                logger.warning("重算 Key %s 的有效模型失败", key.uuid, exc_info=True)
+        return changed
 
-    async def apply(self, uid: UUID, *, models: Sequence[str]) -> tuple[GwApiKey, str]:
-        """本人申请用户 Key：一人一把，申请即生成，原文只在这次返回。"""
-        if await self.user_key(uid) is not None:
-            raise Conflict("你已经有一把用户 Key，需要新的请重置")
+    async def _validate_models(self, key: GwApiKey, models: Sequence[str]) -> list[str]:
+        models = list(dict.fromkeys(m.strip() for m in models if m.strip()))
+        allowed = await self.allowed(key.key_type, key.user_uuid, fresh=True)
+        bad = [m for m in models if m not in allowed]
+        if bad:
+            raise Invalid(f"不能选这些模型：{', '.join(bad)}", models=bad)
+        return models
+
+    # ── 用户 Key ───────────────────────────────────────────────────────
+
+    async def create_user_key(
+        self, uid: UUID, *, label: str, models: Sequence[str], limits: KeyLimits | None = None
+    ) -> tuple[GwApiKey, str]:
+        """本人建一把用户 Key，原文只在这次返回。"""
         info = await self.subjects.info(str(uid), fresh=True)
         if info is None or not info.active:
             raise Invalid("用户中心里找不到你，或账号已停用")
@@ -137,26 +207,42 @@ class KeyService:
             key_type="user",
             user_uuid=uid,
             name=info.name,
+            label=(label or "我的 Key").strip()[:100],
             models=[],
             status="active",
             created_by=str(uid),
         )
-        await self._validate_models(key, models)
-        key.models = list(dict.fromkeys(models))
-        secret = await self._generate(key)
+        key.models = await self._validate_models(key, models)
+        self._apply_limits(key, limits or KeyLimits())
+        secret = self._issue(key, keep_original=False)
         self.session.add(key)
-        await self._flush_or_revoke(key)
+        await self.session.flush()
+        await self.refresh(key)
         audit.record(
-            self.session, actor=str(uid), action="key.apply", target=_target(key), models=key.models
+            self.session,
+            actor=str(uid),
+            action="key.create",
+            target=_target(key),
+            models=key.models,
         )
+        notify.mark(self.session)
         return key, secret
 
-    # ── 客户端 Key
+    # ── 客户端 Key ─────────────────────────────────────────────────────
 
     async def ensure_client(
-        self, *, client_type: str, client_code: str, name: str, actor: str
+        self,
+        *,
+        client_type: str,
+        client_code: str,
+        name: str,
+        actor: str,
+        default_public: bool = False,
     ) -> tuple[GwApiKey, bool]:
-        """→ (Key, 是否新建)。已存在就返回它（名字不同则改名）：应用重试不会重复创建。"""
+        """→ (Key, 是否新建)。已存在就返回它（名字不同则改名）：应用重试不会重复创建。
+
+        default_public：建时分配全部公有模型（那一刻的快照），马上能用；否则「待分配」。
+        """
         client_code = client_code.strip()
         if not client_code or len(client_code) > _CODE_MAX:
             raise Invalid(f"客户端编码不能为空，且不超过 {_CODE_MAX} 个字符")
@@ -175,6 +261,16 @@ class KeyService:
             status="pending",
             created_by=actor,
         )
+        if default_public:
+            models = await self.registry.by_names()
+            key.models = sorted(
+                n
+                for n, m in models.items()
+                if m.visibility == "public" and m.enabled and m.kind == "chat"
+            )
+            if key.models:
+                key.status = "active"
+                self._issue(key, keep_original=True)
         self.session.add(key)
         try:
             async with self.session.begin_nested():
@@ -185,207 +281,123 @@ class KeyService:
             if found is None:
                 raise
             return found, False
-        audit.record(self.session, actor=actor, action="key.client.create", target=_target(key))
+        await self.refresh(key)
+        audit.record(
+            self.session,
+            actor=actor,
+            action="key.client.create",
+            target=_target(key),
+            models=key.models,
+        )
+        notify.mark(self.session)
         return key, True
 
     async def rename_client(self, key: GwApiKey, name: str) -> None:
         key.name = name[:200]
 
-    # ── 共用：分配模型、重置、停用、删除
+    # ── 共用 ───────────────────────────────────────────────────────────
 
     async def assign(self, key: GwApiKey, models: Sequence[str], *, actor: str) -> str | None:
-        """改分配的模型。客户端 Key 第一次分配时在 LiteLLM 生成 Key。
-
-        → 新生成的原文（没有新生成为 None）。
-        """
-        await self._validate_models(key, models)
-        key.models = list(dict.fromkeys(models))
+        """改勾选的模型。待分配的客户端 Key 第一次分配时生成原文 → 返回它；否则 None。"""
+        key.models = await self._validate_models(key, models)
         secret: str | None = None
-        if key.status == "pending":
-            secret = await self._generate(key)
+        if key.status == "pending" and key.models:
+            secret = self._issue(key, keep_original=True)
             key.status = "active"
-            await self._flush_or_revoke(key)
-        else:
-            await self.sync(key)
+        await self.refresh(key)
         audit.record(
             self.session, actor=actor, action="key.assign", target=_target(key), models=key.models
         )
+        notify.mark(self.session)
+        return secret
+
+    async def update(
+        self,
+        key: GwApiKey,
+        *,
+        label: str | None = None,
+        models: Sequence[str] | None = None,
+        limits: KeyLimits | None = None,
+        actor: str,
+    ) -> str | None:
+        secret = None
+        if label is not None:
+            key.label = label.strip()[:100]
+        if limits is not None:
+            self._apply_limits(key, limits)
+        if models is not None:
+            secret = await self.assign(key, models, actor=actor)
+        else:
+            notify.mark(self.session)
         return secret
 
     async def reset(self, key: GwApiKey, *, actor: str) -> str:
-        """生成新 Key、删除旧 Key；分配的模型和停用状态不变。旧的删不掉就撤回新的，保持原样。"""
-        if key.secret is None:
+        """生成新原文。客户端 Key 的旧原文再保留 10 分钟；用户 Key 的旧原文立即失效。"""
+        if key.status == "pending":
             raise Invalid("这把 Key 还没有分配模型，没有可重置的 Key")
-        old, old_token, old_rotated = key.secret, key.litellm_token, key.rotated_at
-        secret = await self._generate(key)
-        try:
-            await self.litellm.delete_key(old)
-        except GatewayError:
-            await self._revoke_quietly(secret)
-            key.secret, key.litellm_token, key.rotated_at = old, old_token, old_rotated
-            raise
+        if key.key_type == "client" and key.secret_digest:
+            key.prev_digest, key.prev_until = key.secret_digest, datetime.now(UTC) + RESET_GRACE
+        secret = self._issue(key, keep_original=key.key_type == "client")
         audit.record(self.session, actor=actor, action="key.reset", target=_target(key))
+        notify.mark(self.session)
         return secret
 
-    async def block(self, key: GwApiKey, *, actor: str) -> None:
+    async def block(self, key: GwApiKey, *, reason: str = "", actor: str) -> None:
         if key.status == "pending":
             raise Invalid("这把 Key 还没有分配模型，不需要停用")
         key.status = "blocked"
-        await self.sync(key)
-        audit.record(self.session, actor=actor, action="key.block", target=_target(key))
+        key.block_reason = reason.strip()[:200]
+        key.prev_digest = key.prev_until = None
+        audit.record(
+            self.session,
+            actor=actor,
+            action="key.block",
+            target=_target(key),
+            reason=key.block_reason,
+        )
+        notify.mark(self.session)
 
     async def unblock(self, key: GwApiKey, *, actor: str) -> None:
         if key.status != "blocked":
             return
         key.status = "active"
-        await self.sync(key)
+        key.block_reason = ""
         audit.record(self.session, actor=actor, action="key.unblock", target=_target(key))
+        notify.mark(self.session)
 
     async def delete(self, key: GwApiKey, *, actor: str) -> None:
-        if key.secret is not None:
-            await self.litellm.delete_key(key.secret)
         audit.record(self.session, actor=actor, action="key.delete", target=_target(key))
         await self.session.delete(key)
         await self.session.flush()
+        notify.mark(self.session)
 
-    # ── 同步到 LiteLLM
+    def ensure_owner(self, key: GwApiKey, uid: UUID) -> None:
+        if key.key_type != "user" or key.user_uuid != uid:
+            raise Forbidden("只能操作自己的 Key")
 
-    async def sync(self, key: GwApiKey, *, verify: bool = False, fresh: bool = False) -> bool:
-        """把有效模型和停用状态推给 LiteLLM。→ 有没有改动 LiteLLM。失败记 sync_error，不抛。
+    # ── 小步骤 ─────────────────────────────────────────────────────────
 
-        verify：先问 LiteLLM 这把 Key 现在是什么样（对账用：发现有人在 LiteLLM 里改过）；
-        否则和上一次推过去的比。
-        """
-        if key.secret is None:
-            return False
-        try:
-            effective = await self.effective(key, fresh=fresh)
-            blocked = key.status == "blocked" or not effective
-            current_models, current_blocked = list(key.synced_models or []), key.synced_blocked
-            if verify:
-                info = await self.litellm.key_info(key.secret)
-                if info is None:
-                    key.sync_error = "LiteLLM 里找不到这把 Key（可能在 LiteLLM 里被删了），请重置"
-                    return False
-                current_models = list(info.get("models") or [])
-                current_blocked = bool(info.get("blocked"))
-            changed = False
-            # ★ 有效模型为空时不改可用模型（不能推空列表），只停用
-            if effective and sorted(effective) != sorted(current_models):
-                await self.litellm.update_key(key.secret, models=effective)
-                changed = True
-            if blocked != current_blocked:
-                if blocked:
-                    await self.litellm.block_key(key.secret)
-                else:
-                    await self.litellm.unblock_key(key.secret)
-                changed = True
-        except GatewayError as exc:
-            key.sync_error = exc.message[:500]
-            logger.warning("同步 Key %s 到 LiteLLM 失败：%s", _target(key), exc.message)
-            return False
-        if effective:
-            key.synced_models = effective
-        key.synced_blocked = blocked
-        key.synced_at = utcnow()
-        key.sync_error = None
-        return changed
+    def _issue(self, key: GwApiKey, *, keep_original: bool) -> str:
+        """生成原文：存摘要和末 4 位；客户端 Key 还加密存原文（应用要取）。"""
+        secret = _new_secret()
+        key.secret_digest = key_digest(secret)
+        key.secret_tail = secret[-4:]
+        key.secret = self.cipher.encrypt(secret) if keep_original else None
+        key.rotated_at = datetime.now(UTC)
+        return secret
 
-    async def resync(self, keys: Sequence[GwApiKey]) -> int:
-        """模型的可见性、授权变了，或模型被删了：重新同步受影响的 Key。→ 改动了几把。"""
-        self.subjects.forget()
-        changed = 0
-        for key in keys:
-            if await self.sync(key, fresh=True):
-                changed += 1
-        return changed
-
-    async def drop_model(self, model: str) -> list[GwApiKey]:
-        """模型删除后：从所有 Key 的分配里去掉它。→ 受影响的 Key（调用方再 resync）。"""
-        affected = await self.containing(model)
-        for key in affected:
-            key.models = [m for m in key.models if m != model]
-        return affected
-
-    # ── 内部
-
-    async def _validate_models(self, key: GwApiKey, models: Sequence[str]) -> None:
-        if not models:
-            raise Invalid("至少选择一个模型")
-        allowed = await self.allowed(key.key_type, key.user_uuid, fresh=True)
-        denied = [m for m in dict.fromkeys(models) if m not in allowed]
-        if denied:
-            why = (
-                "不是已登记且可调用的模型"
-                if key.key_type == "client"
-                else "不是公有模型，也没有授权给你或你所在的部门"
-            )
-            raise Invalid(f"这些模型{why}：{', '.join(denied)}", models=",".join(denied))
-
-    async def _generate(self, key: GwApiKey) -> str:
-        """在 LiteLLM 生成一把新 Key（模型 = 有效模型），记到 key 上。→ 原文。"""
-        effective = await self.effective(key, fresh=True)
-        generated = await self.litellm.generate_key(
-            models=effective or list(key.models),
-            alias=_alias(key, utcnow()),
-            metadata=_metadata(key),
-            user_id=str(key.user_uuid) if key.key_type == "user" else None,
-        )
-        key.secret = generated.key
-        key.litellm_token = generated.token
-        key.rotated_at = utcnow()
-        key.synced_models = effective or list(key.models)
-        key.synced_blocked = False
-        key.synced_at = utcnow()
-        key.sync_error = None
-        if key.status == "blocked" or not effective:
-            # 重置一把停用的 Key、或有效模型为空：新 Key 生成后立即停用
-            try:
-                await self.litellm.block_key(generated.key)
-                key.synced_blocked = True
-            except GatewayError as exc:
-                key.sync_error = exc.message[:500]
-        return generated.key
-
-    async def _flush_or_revoke(self, key: GwApiKey) -> None:
-        """刚在 LiteLLM 生成了 Key：写库失败就撤回，不留没人管的 Key。"""
-        try:
-            await self.session.flush()
-        except Exception:
-            if key.secret is not None:
-                await self._revoke_quietly(key.secret)
-            raise
-
-    async def _revoke_quietly(self, secret: str) -> None:
-        try:
-            await self.litellm.delete_key(secret)
-        except Exception:
-            logger.exception("撤回 LiteLLM 里刚生成的 Key 失败：需要在 LiteLLM 里手工删除")
+    @staticmethod
+    def _apply_limits(key: GwApiKey, limits: KeyLimits) -> None:
+        if limits.monthly_budget is not None and limits.monthly_budget < 0:
+            raise Invalid("月预算不能是负数")
+        if limits.rpm is not None and limits.rpm < 1:
+            raise Invalid("每分钟请求数至少是 1")
+        key.monthly_budget = limits.monthly_budget
+        key.rpm = limits.rpm
+        key.expires_at = limits.expires_at
 
 
 def _target(key: GwApiKey) -> str:
     if key.key_type == "user":
-        return f"key:user:{key.user_uuid}"
+        return f"key:user:{key.user_uuid}:{key.uuid}"
     return f"key:client:{key.client_type}:{key.client_code}"
-
-
-def _alias(key: GwApiKey, at: datetime) -> str:
-    """LiteLLM 管理界面里看到的名字。
-
-    ★ LiteLLM 要求别名全局唯一（1.106 实测），重置时新旧两把又同时存在：带上生成时间和一段随机串。
-    """
-    who = (
-        f"user:{key.name or key.user_uuid}"
-        if key.key_type == "user"
-        else f"{key.client_type}:{key.client_code}"
-    )
-    return f"{who}@{at:%Y%m%d%H%M%S}-{secrets.token_hex(3)}"
-
-
-def _metadata(key: GwApiKey) -> dict[str, str]:
-    data = {"platform_key": str(key.uuid), "key_type": key.key_type}
-    if key.key_type == "user":
-        data["user_uuid"] = str(key.user_uuid)
-    else:
-        data |= {"client_type": str(key.client_type), "client_code": str(key.client_code)}
-    return data

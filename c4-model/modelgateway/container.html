@@ -21,7 +21,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "容器图：模型平台",
-  "description": "范围是 agent-platform/services/modelgateway 和 LiteLLM。管理平台和运维命令行是同一个包、同一个镜像（atlas-app），分别以 serve 和 migrate / register-uc / model / client-key / reconcile 子命令运行；LiteLLM 是第三方镜像。模型调用不经过管理平台：应用拿着 Key 直连 LiteLLM。管理平台不用 Redis，判权结果和 LiteLLM 的部署列表在进程内短时缓存",
+  "description": "目标模型：自研模型网关取代 LiteLLM，方案见 agent-platform/doc/design/model-gateway-design.html。模型调用不经过管理平台：应用和员工拿着 Key 直连模型网关；网关从平台库只读加载配置放在内存里，靠网关状态里的配置版本号知道要重新加载。网关在 Atlas 同一个域名下只开放调用和模型清单。管理平台和网关共用「供应商」包（各家的认证、地址、报错和用量写法），测试连接和调用时对同一家供应商的理解一致",
   "system": "模型平台",
   "elements": [
     {
@@ -30,10 +30,10 @@
       "tag": "员工",
       "name": "员工",
       "color": "#297e06",
-      "description": "在控制台的模型页面申请自己的用户 Key，从能用的模型里选，在本机工具里用它调模型。",
+      "description": "申请自己的个人 Key，在 Claude Code、Cursor、脚本里用它调模型。",
       "at": [
-        1.6,
-        0.0
+        1.3,
+        0
       ]
     },
     {
@@ -42,10 +42,10 @@
       "tag": "模型管理员",
       "name": "模型管理员",
       "color": "#1a849c",
-      "description": "登记模型、设公有私有、给私有模型授权，给智能体和平台服务的 Key 分配模型；在 LiteLLM 界面看日志和花费、配预算。",
+      "description": "租户里管模型的人：登记供应商账号、模型和线路，设公有私有并授权，给智能体和平台服务的 Key 分配模型，看调用记录和花费。",
       "at": [
-        0.4,
-        0.0
+        0.0,
+        0
       ]
     },
     {
@@ -55,8 +55,8 @@
       "color": "#ed8609",
       "description": "智能体的配置、会话与执行：跑每一轮对话，实时推送模型、工具和子智能体的执行过程。",
       "at": [
-        2.9,
-        0.0
+        2.7,
+        0
       ]
     },
     {
@@ -67,7 +67,18 @@
       "description": "文档入库与检索，按文档权限过滤结果。",
       "at": [
         4.1,
-        0.0
+        0
+      ]
+    },
+    {
+      "id": "ops",
+      "kind": "system",
+      "name": "运营中心",
+      "color": "#8a6d00",
+      "description": "管理平台本身的独立系统：租户的开通和关闭、系统参数、系统任务；看不到租户的业务内容。",
+      "at": [
+        -1.3,
+        0
       ]
     },
     {
@@ -77,8 +88,8 @@
       "color": "#bf101d",
       "description": "用户、组织与权限的唯一数据源，负责统一登录。",
       "at": [
-        -1.3,
-        2.85
+        -1.4,
+        3.0
       ]
     },
     {
@@ -86,10 +97,10 @@
       "kind": "system",
       "name": "模型供应商",
       "color": "#5b6770",
-      "description": "DeepSeek、Anthropic、OpenAI、通义千问等的模型接口，以及自部署的 vLLM。",
+      "description": "DeepSeek、Anthropic、MiniMax、Kimi、Gemini 等的模型接口，以及自部署的 vLLM。",
       "at": [
-        4.7,
-        2.85
+        4.8,
+        3.0
       ]
     },
     {
@@ -98,10 +109,22 @@
       "shape": "server",
       "technology": "Python / FastAPI",
       "name": "管理平台",
-      "description": "模型登记与授权，API Key 的管理并同步到 LiteLLM，给应用的内部接口；每 5 分钟对一次账。不在模型调用的路径上。",
+      "description": "账号、模型、线路、Key 和授权的管理，给应用的内部接口和运营接口；改了配置就让配置版本号加一；每 5 分钟检查异常账号。不在模型调用的路径上。",
       "at": [
         1.3,
-        1.25
+        1.6
+      ]
+    },
+    {
+      "id": "gateway",
+      "kind": "container",
+      "shape": "server",
+      "technology": "Python / FastAPI（asyncio + httpx 流式）",
+      "name": "模型网关",
+      "description": "所有模型调用的入口：认 Key、查限额、按模型整理参数、按会话选线路，格式相同直通、不同才转换，提交点前失败换线路，记用量和调用记录。多实例，不存状态。",
+      "at": [
+        3.2,
+        1.6
       ]
     },
     {
@@ -110,10 +133,10 @@
       "shape": "server",
       "technology": "Python / argparse",
       "name": "运维命令行",
-      "description": "迁移平台库、登记到用户中心、登记模型、建平台服务的 Key、手动对账；部署时运行。",
+      "description": "迁移平台库、登记到用户中心；部署时运行。",
       "at": [
-        -0.3,
-        1.55
+        -0.1,
+        1.6
       ]
     },
     {
@@ -122,34 +145,22 @@
       "shape": "database",
       "technology": "PostgreSQL 16",
       "name": "平台库",
-      "description": "平台登记的模型、API Key（含原文和同步状态）、操作日志（gw_* 表）。",
+      "description": "账号（密钥加密）、模型、线路、Key（个人 Key 只存哈希）、授权登记、调用记录、操作日志，都带租户。",
       "at": [
-        0.5,
-        2.85
+        1.3,
+        3.0
       ]
     },
     {
-      "id": "litellm",
-      "kind": "container",
-      "shape": "server",
-      "technology": "LiteLLM 1.106（第三方）",
-      "name": "LiteLLM",
-      "description": "模型网关：认 Key，只放行 Key 分配了的模型，转成各供应商的协议；记调用日志和花费，按 Key 限额；管理界面 /ui。",
-      "at": [
-        3.1,
-        1.55
-      ]
-    },
-    {
-      "id": "ldb",
+      "id": "redis",
       "kind": "container",
       "shape": "database",
-      "technology": "PostgreSQL 16",
-      "name": "LiteLLM 库",
-      "description": "LiteLLM 自己的表：模型部署（供应商凭据用 salt key 加密）、Key 的哈希、调用和花费日志。",
+      "technology": "Redis 7",
+      "name": "网关状态",
+      "description": "几个网关实例共用的状态：线路冷却、账号异常、每分钟请求计数、Key 本月花费、配置版本号。丢了能重建。",
       "at": [
-        3.1,
-        2.85
+        3.2,
+        3.0
       ]
     }
   ],
@@ -157,61 +168,61 @@
     {
       "from": "employee",
       "to": "server",
-      "description": "申请用户 Key，选模型",
+      "description": "申请、管理自己的个人 Key",
       "technology": "JSON/HTTPS（控制台的模型页面，经 nginx 校验登录）"
     },
     {
       "from": "employee",
-      "to": "litellm",
-      "description": "用用户 Key 调模型",
-      "technology": "OpenAI / Anthropic 兼容 HTTP"
+      "to": "gateway",
+      "description": "用个人 Key 调模型",
+      "labelAt": 0.72,
+      "technology": "Anthropic / OpenAI 格式，HTTPS"
     },
     {
       "from": "admin",
       "to": "server",
-      "description": "登记模型、授权、分配模型",
+      "description": "登记账号、模型、线路，授权，分配模型，看调用记录",
       "technology": "JSON/HTTPS（同上）"
     },
     {
       "from": "admin",
-      "to": "litellm",
-      "description": "看日志和花费，配预算",
-      "technology": "HTTP（/ui）"
-    },
-    {
-      "from": "admin",
       "to": "cli",
-      "description": "部署时登记应用、模型和平台服务的 Key"
+      "description": "部署时迁移、登记应用",
+      "labelAt": 0.6
     },
     {
       "from": "agent",
       "to": "server",
-      "description": "申请、获取客户端 Key 和可用模型",
-      "technology": "JSON/HTTP（/internal）"
+      "description": "申请、获取客户端 Key",
+      "labelAt": 0.28,
+      "technology": "JSON/HTTP（内部接口）"
     },
     {
       "from": "agent",
-      "to": "litellm",
-      "description": "带客户端 Key 调模型（原生智能体、会话 Pod 的 CLI、平台服务）",
-      "technology": "Anthropic Messages/HTTP"
+      "to": "gateway",
+      "description": "带客户端 Key 调模型，取模型清单和能力",
+      "labelAt": 0.68,
+      "technology": "Anthropic 格式，HTTP + SSE"
     },
     {
       "from": "kb",
       "to": "server",
       "description": "取服务级 Key",
-      "technology": "JSON/HTTP（/internal）"
+      "labelAt": 0.28,
+      "technology": "JSON/HTTP（内部接口）"
     },
     {
       "from": "kb",
-      "to": "litellm",
+      "to": "gateway",
       "description": "对话、向量、重排",
-      "technology": "OpenAI 兼容 HTTP"
+      "technology": "Anthropic 格式 / 向量 / 重排，HTTP"
     },
     {
-      "from": "server",
-      "to": "litellm",
-      "description": "登记模型部署；生成、更新、停用 Key；对账",
-      "technology": "JSON/HTTP（管理接口，master key）"
+      "from": "ops",
+      "to": "server",
+      "description": "改系统参数、看系统任务；关闭租户时删除它的数据",
+      "labelAt": 0.35,
+      "technology": "JSON/HTTP（运营接口，带运营凭据）"
     },
     {
       "from": "server",
@@ -221,14 +232,47 @@
     },
     {
       "from": "server",
+      "to": "redis",
+      "description": "配置版本号加一，解除账号异常",
+      "labelAt": 0.3,
+      "technology": "Redis 协议"
+    },
+    {
+      "from": "server",
       "to": "usercenter",
       "description": "私有模型授权，用户能用哪些模型、是否在职，操作码",
       "technology": "JSON/HTTP（开放接口）"
     },
     {
+      "from": "server",
+      "to": "provider",
+      "description": "测试连接、查余额、检查异常账号",
+      "labelAt": 0.78,
+      "technology": "HTTPS（各供应商的格式）"
+    },
+    {
+      "from": "gateway",
+      "to": "db",
+      "description": "只读加载配置，批量写调用记录",
+      "labelAt": 0.3,
+      "technology": "SQL/TCP（asyncpg）"
+    },
+    {
+      "from": "gateway",
+      "to": "redis",
+      "description": "冷却、异常、计数、花费、配置版本号",
+      "technology": "Redis 协议"
+    },
+    {
+      "from": "gateway",
+      "to": "provider",
+      "description": "转发调用，带账号密钥",
+      "technology": "HTTPS + SSE（海外经出网代理）"
+    },
+    {
       "from": "cli",
       "to": "db",
-      "description": "迁移，登记模型，建 Key",
+      "description": "迁移",
       "technology": "SQL/TCP（asyncpg）"
     },
     {
@@ -236,24 +280,6 @@
       "to": "usercenter",
       "description": "登记应用、操作码和数据编码",
       "technology": "JSON/HTTP（管理 API，管理员账号登录）"
-    },
-    {
-      "from": "cli",
-      "to": "litellm",
-      "description": "登记模型，生成 Key",
-      "technology": "JSON/HTTP（管理接口，master key）"
-    },
-    {
-      "from": "litellm",
-      "to": "ldb",
-      "description": "部署、Key 哈希、花费日志",
-      "technology": "SQL/TCP（prisma）"
-    },
-    {
-      "from": "litellm",
-      "to": "provider",
-      "description": "转发调用，带供应商凭据",
-      "technology": "HTTPS（各供应商的协议）"
     }
   ]
 }

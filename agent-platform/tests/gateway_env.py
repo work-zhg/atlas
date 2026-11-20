@@ -48,6 +48,8 @@ from fake_upstreams import (
 )
 from gateway_testkit import ADMIN, ATLAS, FakePermissions, as_user
 
+from tests.fake_uc import TEST_TENANT
+
 __all__ = [
     "ADMIN",
     "AGENT",
@@ -99,6 +101,8 @@ def gateway_environment() -> Iterator[str]:
             "ATLAS_MCPGW_MANUAL_REFRESH_MIN_INTERVAL_S": "0",
             "ATLAS_MCPGW_UC_BASE_URL": "http://uc.invalid",
             "ATLAS_MCPGW_PERM_CACHE_TTL_S": "0",
+            # 上游替身在本机：放开回环（网关默认不许连内部地址）
+            "ATLAS_MCPGW_UPSTREAM_ALLOW_CIDRS": '["127.0.0.0/8", "::1/128"]',
         }
         saved = {k: os.environ.get(k) for k in overrides}
         os.environ.update(overrides)
@@ -153,14 +157,19 @@ async def gateway(
     def authz(request: httpx.Request) -> httpx.Response:
         uid = request.url.path.split("/")[-2]
         ops = ["mcp:manage"] if uid == ADMIN else []
-        return httpx.Response(
-            200, json={"can_access": True, "permissions": ops, "user": {"status": "active"}}
-        )
+        # 人都在请求头写的租户里（网关核对「这个人在这个租户里」）
+        user = {"id": uid, "status": "active", "tenant_id": request.headers.get("x-tenant-id")}
+        return httpx.Response(200, json={"can_access": True, "permissions": ops, "user": user})
 
     monkeypatch.setattr(gateway_auth, "_transport", httpx.MockTransport(authz))
     monkeypatch.setattr(gateway_auth, "_cache", gateway_auth._Cache())
     async with get_sessionmaker()() as session:
-        await session.execute(text("TRUNCATE mcp_service, mcp_tool, mcp_api_key, mcp_audit"))
+        await session.execute(
+            text(
+                "TRUNCATE mcp_service, mcp_tool, mcp_api_key, mcp_audit,"
+                " app_tenant_state, app_ops_request"
+            )
+        )
         await session.commit()
 
     perms = FakePermissions()
@@ -170,7 +179,9 @@ async def gateway(
         monkeypatch.setattr(GatewayClient, "transport", httpx.ASGITransport(app=app))
         monkeypatch.setattr(mcp_config, "_transport", httpx2.ASGITransport(app=app))
         async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url=GATEWAY
+            transport=httpx.ASGITransport(app=app),
+            base_url=GATEWAY,
+            headers={"X-Tenant-Id": TEST_TENANT},
         ) as client:
             yield app, perms, client
     reset_gateway_cache()

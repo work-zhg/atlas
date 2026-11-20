@@ -1,16 +1,18 @@
-"""给应用（Atlas、知识库）的内部接口（方案第 7、9 章）。网关（nginx）一律 404，内网免令牌。
+"""给应用（Atlas、知识库）的内部接口。网关（nginx）一律 404，内网免令牌。
 
-    POST   /internal/client-keys                   创建客户端 Key（按类型 + 编码幂等）：「待分配」
+    POST   /internal/client-keys                   创建客户端 Key（按类型 + 编码幂等）
     GET    /internal/client-keys?client_type&client_code
                                                     状态、Key 原文（只有 active 时）、可用模型
     PATCH  /internal/client-keys                   改名（对象改名时同步）
     DELETE /internal/client-keys?client_type&client_code
-                                                    删除（对象删除时）；LiteLLM 里的 Key 一并删除
-    GET    /internal/models                         已登记、可调用的全部模型
+                                                    删除（对象删除时）
+    GET    /internal/models                         已登记、启用的全部模型和能力
                                                     （还没分配时编辑器先列它们）
 
-★ 只有客户端类型的所属应用能调（settings.client_types，按请求头 X-Caller-App）。
-★ 可用模型 = 有效模型：分配的 ∩ 已登记 ∩ LiteLLM 里存在的。客户端 Key 不看用户中心的授权。
+★ 请求头 X-Tenant-Id 必填：应用替自己的租户调。只有客户端类型的所属应用能调
+  （settings.client_types，按请求头 X-Caller-App）。
+★ 新智能体的 Key 建时默认分配全部公有对话模型（settings.client_key_default_public），马上能用。
+★ 可用模型 = 有效模型里启用的。客户端 Key 不看用户中心的授权。
 """
 
 from __future__ import annotations
@@ -61,16 +63,15 @@ async def _view(keys: KeyService, client_type: str, client_code: str) -> Interna
         return InternalClientKeyOut(**base, status="pending_models")
     if key.status == "blocked":
         return InternalClientKeyOut(**base, status="blocked")
-    views, _ = await keys.registry.listing()
-    by_name = {v.name: v for v in views if v.callable}
-    effective = [m for m in key.models or [] if m in by_name]
-    if not effective:
+    models = await keys.registry.by_names()
+    usable = [models[m] for m in key.effective_models or [] if m in models and models[m].enabled]
+    if not usable:
         return InternalClientKeyOut(**base, status="no_models")
     return InternalClientKeyOut(
         **base,
         status="active",
-        key=key.secret,
-        models=[internal_model_out(by_name[m]) for m in effective],
+        key=keys.reveal(key),
+        models=[internal_model_out(m) for m in usable],
     )
 
 
@@ -84,6 +85,7 @@ async def create_client_key(
         client_code=body.client_code,
         name=body.name.strip(),
         actor=f"app:{caller}",
+        default_public=body.client_type in settings.client_key_default_public,
     )
     return await _view(keys, body.client_type, body.client_code.strip())
 
@@ -130,5 +132,16 @@ async def delete_client_key(
 
 @router.get("/models", response_model=InternalCatalogOut)
 async def callable_models(registry: RegistryDep) -> InternalCatalogOut:
-    views, _ = await registry.listing()
-    return InternalCatalogOut(models=[internal_model_out(v) for v in views if v.callable])
+    rows = [m for m in await registry.rows() if m.enabled]
+    routes = await registry.routes([m.uuid for m in rows])
+    accounts = await registry.accounts()
+    out = []
+    for m in rows:
+        first = (routes.get(m.uuid) or [None])[0]
+        provider = (
+            accounts[first.account_uuid].provider
+            if first and first.account_uuid in accounts
+            else ""
+        )
+        out.append(internal_model_out(m, provider))
+    return InternalCatalogOut(models=out)

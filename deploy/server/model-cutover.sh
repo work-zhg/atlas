@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# ★ 已过时：自研模型网关（m0004）之后命令行参数变了（model add 改成 --route 账号名…），这个脚本跑不了。
+#   切到自研网关用 deploy/server/gateway-cutover.sh。只留作记录。
+#
 # 模型调用切到 LiteLLM + 模型管理平台（agent-platform/doc/design/model-design.html）的一次性步骤。
 # 可重复执行。
 #

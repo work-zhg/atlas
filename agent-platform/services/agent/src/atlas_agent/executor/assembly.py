@@ -323,6 +323,9 @@ class CapabilityAssembly:
         """
         if not segment.spec.model.prompt_cache:
             return None
+        if self._settings.model_gateway_url and uses_model_platform(self._settings):
+            # 经模型网关：缓存标记照打，转成 OpenAI 格式的上游时网关会去掉
+            return self._settings.prompt_cache_ttl
         async with self._sessionmaker() as session:
             if not await ModelCatalogRepository(session).supports_cache(segment.spec.model.model):
                 return None

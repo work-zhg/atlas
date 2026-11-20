@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     uc_app_code: str = "atlas"
     #: 授权快照（操作码 / 菜单 / 账号状态）的进程内缓存
     authz_snapshot_ttl_s: float = 300.0
+    #: 运营接口（/ops/v1，c4-model/agent/code-ops.html）的签名密钥，和运营中心里登记 Atlas 时的
+    #: 一致。空 = 运营接口没启用（一律 403）：租户份额、沙箱模板、系统参数都改不了
+    ops_api_key: SecretStr | None = None
 
     default_model: str = "claude-sonnet-5"
     summarizer_model: str = "claude-haiku-4-5"  # §8 标题（压缩的摘要模型改由智能体配置决定）
@@ -404,7 +407,12 @@ class Settings(BaseSettings):
     #: 会话标题、记忆补记按库里的平台服务模型配置（service_model 表）取 Key。
     #: 空 = 没接入：照旧直连 litellm_base_url、用 litellm_key
     model_platform_url: str | None = None
-    #: LiteLLM 地址：经平台时模型调用连它。空 = 用 litellm_base_url
+    #: 模型网关通用接口的地址（agent-platform/doc/design/model-gateway-design.html），
+    #: 如 http://atlas-llmgateway:8091/universal：经平台时模型调用连它，Pod 里的 CLI 也连它
+    #: （ANTHROPIC_BASE_URL）。一律按 Anthropic 格式发，线路是哪种格式由网关转换。
+    #: 空 = 过渡期还连 LiteLLM（model_litellm_url）
+    model_gateway_url: str | None = None
+    #: LiteLLM 地址：没配模型网关时模型调用连它。空 = 用 litellm_base_url
     model_litellm_url: str | None = None
     #: 调平台的超时
     model_platform_timeout_s: float = 10.0

@@ -1,44 +1,60 @@
-"""模型管理平台的入口与运维命令。
+"""模型平台的入口与运维命令。
 
-    python -m atlas_modelgateway serve                     起 HTTP 服务（默认 :8090）
-    python -m atlas_modelgateway migrate                   升级平台库到最新
-    python -m atlas_modelgateway register-uc --account admin
-                                     把应用、操作码、角色、数据编码 Model 登记到用户中心
-    python -m atlas_modelgateway model list           平台登记的 + LiteLLM 直配的模型
-    python -m atlas_modelgateway model add deepseek-chat --provider deepseek \
-                --api-key-env DEEPSEEK_API_KEY [--display-name …] [--visibility public] \
-                [--api-base …] [--max-input N] [--max-output N] \
-                [--input-price 美元/百万] [--output-price …] --actor-account admin
-                                     登记模型（管理端页面做出来之前，部署脚本用它）
-    python -m atlas_modelgateway client-key ensure --type Service --code session-title \\
-                [--name 会话标题] [--models deepseek-flash,…] --actor-account admin
-                                     建一把客户端 Key（已有就沿用）；给了 --models 就分配模型；
-                                     --if-pending：已经分配过的不覆盖（批量给存量智能体分配时用）
-    python -m atlas_modelgateway reconcile                  对一次账（平时由服务里的对账任务定期做）
+    python -m atlas_modelgateway serve                     管理平台（默认 :8090）
+    python -m atlas_modelgateway gateway                   模型网关（默认 :8091）
+    python -m atlas_modelgateway migrate                   升级平台库到最新（含运营接口的两张表）
 
-★ 命令行和管理接口调同一套 ModelRegistry / KeyService：规则只有一份实现。
+  下面的命令都在一个租户里做（--tenant 租户 uuid），操作人用 --actor（uid）或 --actor-account：
+    account list | account add --name 公司账号 --provider deepseek --secret-env DEEPSEEK_API_KEY \
+                [--endpoint anthropic=https://… ...] [--egress proxy]
+    model list | model add deepseek-v4-pro --route 公司账号[:上游模型[:优先级[:权重]]] ... \
+                [--display-name …] [--visibility public] [--kind chat] [--price 4,0.4,16]
+    client-key ensure --type Service --code session-title [--name 会话标题] \
+                [--models a,b] [--if-pending]
+    bootstrap-litellm --url http://atlas-litellm:4000 --key-env LITELLM_MASTER_KEY
+                                     过渡：建一个指向 LiteLLM 的账号，给还没有线路的模型各加一条线路
+                                     （上游模型名 = 模型名），网关接管入口后行为和原来一样
+    smoke --client Service:session-title --model deepseek-flash [--url http://127.0.0.1:8091]
+                                     用这把客户端 Key 经网关的通用接口（Atlas 用的那个）调一次模型
+                                     （最多 16 个 token），看通不通
+
+  全部租户：
+    encrypt-secrets                  客户端 Key 的明文原文改成加密存；
+                                     用户 Key 的原文删掉（只留摘要）
+    refresh-keys                     重算全部用户 Key 的有效模型（平时由定时任务做）
+
+★ 命令行和管理接口调同一套 AccountService / ModelRegistry / KeyService：规则只有一份实现。
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import getpass
 import logging
 import os
 import sys
 from collections.abc import Awaitable, Callable
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
+from atlas_tenancy import TenantScope, TenantSweep
+from sqlalchemy import select
+
+from .accounts import AccountInput, AccountService
 from .auth import use_outbound
+from .crypto import SecretCipher
+from .db.models import GwApiKey, GwModel, GwRoute
 from .db.session import get_engine, get_sessionmaker
-from .errors import GatewayError, Invalid
+from .errors import GatewayError, Invalid, NotFound
+from .gateway.format import AddressGuard
+from .gateway.kernel import ModelKind, Price
+from .gateway.routing import RouteHealth
 from .keys import KeyService
-from .litellm_api import LiteLLM
 from .perms import SubjectsCache, UCPermissions
-from .reconcile import reconcile_once
-from .registry import DeploymentsCache, ModelFields, ModelRegistry, RouteFields
+from .provider import ProviderCatalog
+from .registry import ModelInput, ModelRegistry, RouteInput
 from .settings import get_settings
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
@@ -59,6 +75,25 @@ def serve() -> None:
     uvicorn.run(create_app(), host=os.environ.get("ATLAS_MODELGW_HOST", "0.0.0.0"), port=_port())
 
 
+def _gateway_port() -> int:
+    raw = os.environ.get("ATLAS_MODELGW_GATEWAY_PORT", "").strip()
+    return int(raw) if raw.isdigit() else 8091
+
+
+def gateway() -> None:
+    """模型网关：所有模型调用的入口（和管理平台分开部署）。"""
+    import uvicorn
+
+    from .gateway.app import create_gateway_app
+
+    uvicorn.run(
+        create_gateway_app(),
+        host=os.environ.get("ATLAS_MODELGW_HOST", "0.0.0.0"),
+        port=_gateway_port(),
+        timeout_graceful_shutdown=get_settings().drain_timeout_s,
+    )
+
+
 def migrate(revision: str = "head") -> None:
     from alembic import command
     from alembic.config import Config
@@ -67,39 +102,66 @@ def migrate(revision: str = "head") -> None:
     cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
     cfg.set_main_option("sqlalchemy.url", get_settings().database_url)
     command.upgrade(cfg, revision)
+    asyncio.run(_upgrade_opsapi())
+
+
+async def _upgrade_opsapi() -> None:
+    """运营接口库的两张表（租户状态、运营请求；各自的版本表）。"""
+    from atlas_opsapi import upgrade
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(upgrade)
+    finally:
+        await engine.dispose()
 
 
 class _Tools:
-    """命令行用的一套依赖：库会话、LiteLLM、用户中心。"""
+    """命令行用的一套依赖：库会话、用户中心、主密钥。"""
 
     def __init__(self) -> None:
         s = get_settings()
-        self.litellm = LiteLLM(
-            s.litellm_base_url,
-            s.litellm_master_key.get_secret_value() if s.litellm_master_key else None,
-            timeout_s=s.litellm_timeout_s,
-        )
-        self.deployments = DeploymentsCache(self.litellm, 0)
         self.perms = UCPermissions(s.uc_base_url)
         self.subjects = SubjectsCache(self.perms, 0, 0)
+        self.cipher = SecretCipher(s.master_keys())
+        self.catalog = ProviderCatalog()
+        self.guard = AddressGuard(s.upstream_allow_cidrs)
 
-    async def run(self, fn: Callable[[Any, KeyService], Awaitable[Any]]) -> Any:
+    async def run(self, tenant: UUID | None, fn: Callable[[Any], Awaitable[Any]]) -> Any:
         try:
-            async with get_sessionmaker()() as session:
-                registry = ModelRegistry(session, self.litellm, self.deployments, self.perms)
-                result = await fn(
-                    registry, KeyService(session, self.litellm, registry, self.subjects)
-                )
-                await session.commit()
-                return result
+            if tenant is None:
+                return await fn(None)
+            with TenantScope.enter(tenant):
+                async with get_sessionmaker()() as session:
+                    result = await fn(session)
+                    await session.commit()
+                    return result
         finally:
-            await self.litellm.aclose()
             await self.perms.aclose()
             await get_engine().dispose()
+
+    def registry(self, session: Any) -> ModelRegistry:
+        return ModelRegistry(session, self.perms)
+
+    def keys(self, session: Any) -> KeyService:
+        return KeyService(session, self.registry(session), self.subjects, self.cipher)
+
+    def accounts(self, session: Any) -> AccountService:
+        return AccountService(
+            session,
+            cipher=self.cipher,
+            catalog=self.catalog,
+            guard=self.guard,
+            health=RouteHealth(None),
+        )
 
     async def actor(self, uid: str | None, account: str | None) -> str:
         """命令行里的操作人：直接给 uid，或给用户中心账号（部署脚本只知道账号）。"""
         if uid:
+            use_outbound({"X-Uid": uid})
             return uid
         assert account is not None
         user = await self.perms.user_by_account(account)
@@ -109,154 +171,310 @@ class _Tools:
         return str(user["id"])
 
 
-def model_command(args: argparse.Namespace) -> int:
-    async def run(registry: ModelRegistry, _: KeyService) -> None:
-        views, reachable = await registry.listing(fresh=True)
-        if not reachable:
-            print("⚠ LiteLLM 不可达：状态未知")
-        for v in views:
-            if v.row is None:
-                state, label = "LiteLLM 直配", ""
-            else:
-                state = "LiteLLM 中缺失" if v.missing else "可调用"
-                label = "公有" if v.row.visibility == "public" else "私有"
-            print(f"{v.name:<40} {state:<12} {label}")
+def _secret_from_env(name: str) -> str:
+    if not name:
+        return ""
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise Invalid(f"环境变量 {name} 是空的")
+    return value
 
-    asyncio.run(_Tools().run(run))
+
+def account_command(args: argparse.Namespace) -> int:
+    tools = _Tools()
+
+    async def run(session: Any) -> None:
+        accounts = tools.accounts(session)
+        if args.action == "list":
+            for a in await accounts.list():
+                print(
+                    f"{a.name}\t{a.provider}\t{a.egress}\t"
+                    f"{'启用' if a.enabled else '停用'}\t{dict(a.endpoints)}"
+                )
+            return
+        actor = await tools.actor(args.actor, args.actor_account)
+        spec = tools.catalog.spec(args.provider)
+        endpoints = (
+            dict(e.split("=", 1) for e in args.endpoint)
+            if args.endpoint
+            else {f.value: spec.endpoints.get(f, "") for f in spec.formats[:1]}
+        )
+        found = next((a for a in await accounts.list() if a.name == args.name), None)
+        if found is not None:
+            print(f"账号「{args.name}」已经有了，跳过")
+            return
+        egress = args.egress or ("proxy" if spec.overseas else "direct")
+        row = await accounts.create(
+            AccountInput(
+                args.name, args.provider, endpoints, _secret_from_env(args.secret_env), egress
+            ),
+            actor=actor,
+        )
+        print(f"已添加账号「{row.name}」（{row.uuid}）")
+
+    asyncio.run(tools.run(UUID(args.tenant), run))
     return 0
 
 
-def model_add_command(args: argparse.Namespace) -> int:
-    tools = _Tools()
-    api_key = os.environ.get(args.api_key_env, "") if args.api_key_env else ""
-    if args.api_key_env and not api_key:
-        raise Invalid(f"环境变量 {args.api_key_env} 是空的")
+def _routes(registry_accounts: dict[str, Any], specs: list[str]) -> list[RouteInput]:
+    out = []
+    for spec in specs:
+        name, *rest = spec.split(":")
+        account = registry_accounts.get(name)
+        if account is None:
+            raise NotFound(f"没有叫「{name}」的账号")
+        upstream = rest[0] if rest else ""
+        priority = int(rest[1]) if len(rest) > 1 else 1
+        weight = int(rest[2]) if len(rest) > 2 else 1
+        out.append(RouteInput(account.uuid, upstream, priority, weight))
+    return out
 
-    async def run(registry: ModelRegistry, _: KeyService) -> None:
+
+def model_command(args: argparse.Namespace) -> int:
+    tools = _Tools()
+
+    async def run(session: Any) -> None:
+        registry = tools.registry(session)
+        if args.action == "list":
+            routes = await registry.routes()
+            accounts = await registry.accounts()
+            for m in await registry.rows():
+                lines = ", ".join(
+                    f"{accounts[r.account_uuid].name}:{r.upstream_model}"
+                    for r in routes.get(m.uuid, [])
+                    if r.account_uuid in accounts
+                )
+                print(
+                    f"{m.name}\t{m.kind}\t{m.visibility}\t"
+                    f"{'启用' if m.enabled else '停用'}\t{lines or '（没有线路）'}"
+                )
+            return
         actor = await tools.actor(args.actor, args.actor_account)
         if await registry.by_name(args.name) is not None:
-            print(f"· 已登记 {args.name}")
+            print(f"模型 {args.name} 已经登记过了，跳过")
             return
-        await registry.register(
-            name=args.name,
-            fields=ModelFields(args.display_name or args.name, args.provider, args.visibility),
-            route=RouteFields(
-                api_base=args.api_base or None,
-                api_key=api_key or None,
-                max_input_tokens=args.max_input,
-                max_output_tokens=args.max_output,
-                input_price=args.input_price,
-                output_price=args.output_price,
+        by_name = {a.name: a for a in (await registry.accounts()).values()}
+        price = Price(*(Decimal(x) for x in args.price.split(","))) if args.price else Price()
+        row = await registry.create(
+            args.name,
+            ModelInput(
+                display_name=args.display_name or args.name,
+                kind=ModelKind(args.kind),
+                visibility=args.visibility,
+                price=price,
+                routes=_routes(by_name, args.route),
             ),
-            grants=[],
             actor=actor,
         )
-        print(f"✓ 已登记 {args.name}（{args.visibility}）")
+        print(f"已登记模型 {row.name}")
 
-    asyncio.run(tools.run(run))
+    asyncio.run(tools.run(UUID(args.tenant), run))
     return 0
 
 
 def client_key_command(args: argparse.Namespace) -> int:
     tools = _Tools()
 
-    async def run(_: ModelRegistry, keys: KeyService) -> None:
-        settings = get_settings()
-        if args.type not in settings.client_types:
-            raise Invalid(f"没有登记的客户端类型：{args.type}（见 ATLAS_MODELGW_CLIENT_TYPES）")
+    async def run(session: Any) -> None:
+        keys = tools.keys(session)
         actor = await tools.actor(args.actor, args.actor_account)
         key, created = await keys.ensure_client(
-            client_type=args.type, client_code=args.code, name=args.name or "", actor=actor
+            client_type=args.type, client_code=args.code, name=args.name, actor=actor
         )
-        print(f"{'✓ 已创建' if created else '· 已存在'} 客户端 Key {args.type}:{args.code}")
-        if args.models and args.if_pending and key.status != "pending":
-            print(f"· 已经分配过模型（{', '.join(key.models)}），不覆盖")
-        elif args.models:
-            models = [m.strip() for m in args.models.split(",") if m.strip()]
+        models = [m for m in args.models.split(",") if m.strip()]
+        if models and not (args.if_pending and key.status != "pending"):
             await keys.assign(key, models, actor=actor)
-            print(f"✓ 已分配模型：{', '.join(key.models)}（状态 {key.status}）")
+        print(
+            f"{'新建' if created else '沿用'}客户端 Key {args.type}:{args.code}"
+            f"（{key.status}，模型 {key.models}）"
+        )
 
-    asyncio.run(tools.run(run))
+    asyncio.run(tools.run(UUID(args.tenant), run))
     return 0
 
 
-def reconcile_command(_: argparse.Namespace) -> int:
-    async def run() -> None:
-        tools = _Tools()
-        try:
-            report = await reconcile_once(
-                get_sessionmaker(), tools.litellm, tools.deployments, tools.perms, tools.subjects
+def bootstrap_litellm_command(args: argparse.Namespace) -> int:
+    tools = _Tools()
+
+    async def run(session: Any) -> None:
+        actor = await tools.actor(args.actor, args.actor_account)
+        accounts = tools.accounts(session)
+        account = next((a for a in await accounts.list() if a.name == args.account_name), None)
+        if account is None:
+            account = await accounts.create(
+                AccountInput(
+                    args.account_name,
+                    "custom_anthropic",
+                    {"anthropic": args.url.rstrip("/")},
+                    _secret_from_env(args.key_env),
+                    remark="过渡：网关接管入口时，已有的模型先经 LiteLLM 转发",
+                ),
+                actor=actor,
             )
-        finally:
-            await tools.litellm.aclose()
-            await tools.perms.aclose()
-            await get_engine().dispose()
-        print(f"检查 {report.checked} 把 Key，修正 {report.changed} 把，{report.failed} 把同步失败")
+        with_routes = {r.model_uuid for r in await session.scalars(select(GwRoute))}
+        added = 0
+        for m in await session.scalars(select(GwModel)):
+            if m.uuid not in with_routes:
+                session.add(
+                    GwRoute(model_uuid=m.uuid, account_uuid=account.uuid, upstream_model=m.name)
+                )
+                added += 1
+        print(f"账号「{account.name}」；给 {added} 个模型加了经 LiteLLM 的线路")
 
-    asyncio.run(run())
+    asyncio.run(tools.run(UUID(args.tenant), run))
     return 0
 
 
-def register_command(args: argparse.Namespace) -> int:
-    from .register import register
+def encrypt_secrets_command(_: argparse.Namespace) -> int:
+    tools = _Tools()
+    if not tools.cipher.configured:
+        raise Invalid("没有配置主密钥（ATLAS_MODELGW_SECRET_KEYS）")
 
-    settings = get_settings()
-    password = os.environ.get("UC_ADMIN_PASSWORD") or getpass.getpass(
-        f"用户中心账号 {args.account} 的密码："
-    )
-    register(
-        args.uc_url or settings.uc_base_url,
-        args.account,
-        password,
-        app_code=settings.uc_app_code,
-        tenant=args.tenant,
-    )
+    async def run(_: Any) -> None:
+        async def fetch() -> list[tuple[UUID, UUID]]:
+            async with get_sessionmaker()() as session:
+                rows = await session.execute(
+                    select(GwApiKey.uuid, GwApiKey.tenant_uuid).where(GwApiKey.secret.is_not(None))
+                )
+                return list(rows)
+
+        async def handle(key_uuid: UUID) -> None:
+            async with get_sessionmaker()() as session:
+                key = await session.scalar(select(GwApiKey).where(GwApiKey.uuid == key_uuid))
+                if key is None or not key.secret or key.secret.startswith("v1:"):
+                    return
+                key.secret = tools.cipher.encrypt(key.secret) if key.key_type == "client" else None
+                await session.commit()
+
+        ok, failed = await TenantSweep.each(fetch, handle)
+        print(f"处理了 {ok} 把 Key，失败 {failed} 把")
+
+    asyncio.run(tools.run(None, run))
     return 0
+
+
+def refresh_keys_command(_: argparse.Namespace) -> int:
+    tools = _Tools()
+
+    async def run(_: Any) -> None:
+        from .jobs import KeyRefresh
+
+        await KeyRefresh(get_sessionmaker(), tools.perms, tools.subjects, tools.cipher).execute(
+            None, None
+        )  # type: ignore[arg-type]
+
+    asyncio.run(tools.run(None, run))
+    return 0
+
+
+def smoke_command(args: argparse.Namespace) -> int:
+    """部署后确认通路：Key 认得、模型有线路、上游回得了话。不打印 Key 原文。"""
+    import httpx
+
+    client_type, _, code = args.client.partition(":")
+    if not code:
+        raise Invalid("--client 要写成「类型:编码」，如 Service:session-title")
+    tools = _Tools()
+
+    async def run(session: Any) -> str:
+        keys = tools.keys(session)
+        key = await keys.client_key(client_type, code)
+        secret = keys.reveal(key) if key else None
+        if not secret:
+            raise Invalid(f"没有客户端 Key {args.client}（或原文取不出来）")
+        return secret
+
+    secret = asyncio.run(tools.run(UUID(args.tenant), run))
+    resp = httpx.post(
+        f"{args.url.rstrip('/')}/universal/v1/messages",
+        headers={"x-api-key": secret, "anthropic-version": "2023-06-01"},
+        json={
+            "model": args.model,
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "回一个字：好"}],
+        },
+        timeout=args.timeout,
+    )
+    is_json = resp.headers.get("content-type", "").startswith("application/json")
+    body = resp.json() if is_json else {}
+    if resp.status_code != 200:
+        print(f"✗ {resp.status_code} {body.get('error') or resp.text[:300]}")
+        return 1
+    text = "".join(b.get("text", "") for b in body.get("content") or [] if b.get("type") == "text")
+    print(f"✓ {args.model} 回了：{text.strip()[:40]!r}，用量 {body.get('usage')}")
+    return 0
+
+
+def _actor_args(p: argparse.ArgumentParser) -> None:
+    group = p.add_mutually_exclusive_group(required=True)
+    group.add_argument("--actor", help="操作人（用户中心 uid）")
+    group.add_argument("--actor-account", help="操作人的用户中心账号")
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m atlas_modelgateway")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("serve")
+    sub.add_parser("gateway", help="模型网关：所有模型调用的入口")
     sub.add_parser("migrate")
-    sub.add_parser("reconcile", help="对一次账：把 Key 的有效模型、停用状态同步到 LiteLLM")
+    sub.add_parser("encrypt-secrets", help="客户端 Key 的原文加密存，用户 Key 的原文删掉")
+    sub.add_parser("refresh-keys", help="重算全部用户 Key 的有效模型")
+
+    account = sub.add_parser("account").add_subparsers(dest="action", required=True)
+    for action in ("list", "add"):
+        p = account.add_parser(action)
+        p.add_argument("--tenant", required=True)
+    add = account.choices["add"]
+    add.add_argument("--name", required=True)
+    add.add_argument("--provider", required=True)
+    add.add_argument(
+        "--endpoint",
+        action="append",
+        default=[],
+        help="格式=地址，可以给多个；不给用供应商默认地址",
+    )
+    add.add_argument("--secret-env", default="", help="密钥所在的环境变量（不在命令行里写原文）")
+    add.add_argument("--egress", choices=["direct", "proxy"], default=None)
+    _actor_args(add)
 
     model = sub.add_parser("model").add_subparsers(dest="action", required=True)
-    model.add_parser("list")
-    add = model.add_parser("add", help="登记模型（已登记就跳过）")
-    add.add_argument("name", help="模型名（供应商侧的名字，也是调用时传的 model）")
-    add.add_argument("--provider", required=True)
-    add.add_argument("--display-name", default="")
-    add.add_argument("--visibility", choices=["public", "private"], default="private")
-    add.add_argument("--api-base", default="")
-    add.add_argument(
-        "--api-key-env", default="", help="供应商凭据所在的环境变量（不在命令行里写原文）"
+    for action in ("list", "add"):
+        p = model.add_parser(action)
+        p.add_argument("--tenant", required=True)
+    madd = model.choices["add"]
+    madd.add_argument("name", help="模型名（调用时传的 model）")
+    madd.add_argument(
+        "--route", action="append", required=True, help="账号名[:上游模型[:优先级[:权重]]]"
     )
-    add.add_argument("--max-input", type=int, default=None)
-    add.add_argument("--max-output", type=int, default=None)
-    add.add_argument("--input-price", type=float, default=None, help="美元 / 百万 token")
-    add.add_argument("--output-price", type=float, default=None, help="美元 / 百万 token")
-    add_actor = add.add_mutually_exclusive_group(required=True)
-    add_actor.add_argument("--actor", help="操作人（用户中心 uid）")
-    add_actor.add_argument("--actor-account", help="操作人的用户中心账号")
+    madd.add_argument("--display-name", default="")
+    madd.add_argument("--visibility", choices=["public", "private"], default="private")
+    madd.add_argument("--kind", choices=["chat", "embedding", "rerank"], default="chat")
+    madd.add_argument("--price", default="", help="输入,缓存命中,输出（元 / 百万 token）")
+    _actor_args(madd)
 
     ck = sub.add_parser("client-key").add_subparsers(dest="action", required=True)
     ensure = ck.add_parser("ensure", help="建一把客户端 Key（已有就沿用），可以同时分配模型")
-    ensure.add_argument(
-        "--type", required=True, help="客户端类型（Agent、Service …）"
-    )
+    ensure.add_argument("--tenant", required=True)
+    ensure.add_argument("--type", required=True, help="客户端类型（Agent、Service …）")
     ensure.add_argument("--code", required=True, help="客户端编码")
     ensure.add_argument("--name", default="", help="展示用的名字")
     ensure.add_argument("--models", default="", help="分配的模型，逗号分隔")
     ensure.add_argument("--if-pending", action="store_true", help="已经分配过模型的不覆盖")
-    actor = ensure.add_mutually_exclusive_group(required=True)
-    actor.add_argument("--actor", help="操作人（用户中心 uid）")
-    actor.add_argument("--actor-account", help="操作人的用户中心账号")
+    _actor_args(ensure)
 
-    reg = sub.add_parser("register-uc", help="把应用、操作码、数据编码登记到用户中心")
-    reg.add_argument("--account", required=True, help="用户中心管理员账号")
-    reg.add_argument("--uc-url", default=None)
-    reg.add_argument("--tenant", default=None, help="管理员所在的企业代码（有多个租户时必填）")
+    boot = sub.add_parser("bootstrap-litellm", help="过渡：已有模型先经 LiteLLM 转发")
+    boot.add_argument("--tenant", required=True)
+    boot.add_argument("--url", required=True, help="LiteLLM 的地址（集群内）")
+    boot.add_argument("--key-env", required=True, help="LiteLLM master key 所在的环境变量")
+    boot.add_argument("--account-name", default="LiteLLM（过渡）")
+    _actor_args(boot)
+
+    smoke = sub.add_parser("smoke", help="用一把客户端 Key 经网关调一次模型")
+    smoke.add_argument("--tenant", required=True)
+    smoke.add_argument("--client", required=True, help="客户端类型:编码，如 Service:session-title")
+    smoke.add_argument("--model", required=True)
+    smoke.add_argument("--url", default="http://127.0.0.1:8091", help="模型网关地址")
+    smoke.add_argument("--timeout", type=float, default=600.0)
     return parser
 
 
@@ -264,14 +482,20 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     args = _parser().parse_args(argv)
     commands: dict[str, Callable[[argparse.Namespace], int]] = {
-        "model": lambda a: model_add_command(a) if a.action == "add" else model_command(a),
+        "account": account_command,
+        "model": model_command,
         "client-key": client_key_command,
-        "reconcile": reconcile_command,
-        "register-uc": register_command,
+        "bootstrap-litellm": bootstrap_litellm_command,
+        "encrypt-secrets": encrypt_secrets_command,
+        "refresh-keys": refresh_keys_command,
+        "smoke": smoke_command,
     }
     try:
         if args.command == "serve":
             serve()
+            return 0
+        if args.command == "gateway":
+            gateway()
             return 0
         if args.command == "migrate":
             migrate()

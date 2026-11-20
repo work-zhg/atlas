@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
 import httpx
+from atlas_engine.contracts.spec import ModelCaps
+from atlas_tenancy import TenantScope
 
 from ...errors import CapabilityUnavailable
 from ...outbound import outbound_headers
@@ -72,8 +74,10 @@ def uses_model_platform(settings: Settings) -> bool:
 
 
 def litellm_url(settings: Settings) -> str:
-    """经平台时模型调用连的 LiteLLM。没单独配就用 litellm_base_url。"""
-    return settings.model_litellm_url or str(settings.litellm_base_url)
+    """经平台时模型调用连的地址：模型网关（model_gateway_url）；过渡期没配网关时连 LiteLLM。"""
+    return (
+        settings.model_gateway_url or settings.model_litellm_url or str(settings.litellm_base_url)
+    )
 
 
 # ───────────────────────────── 平台给的数据
@@ -219,15 +223,16 @@ class ModelPlatformClient:
         return [PlatformModel.parse(m) for m in (found or {}).get("models") or ()]
 
 
-#: (客户端类型, 编码) → 上次取到的。平台暂时不可用时沿用
-_last: dict[tuple[str, str], ClientKey] = {}
-_last_catalog: list[PlatformModel] | None = None
+#: (租户, 客户端类型, 编码) → 上次取到的。平台暂时不可用时沿用。
+#: ★ 键里必须有租户：模型和客户端都属于租户，不同租户可以起同样的客户端编码
+_last: dict[tuple[UUID, str, str], ClientKey] = {}
+#: 租户 → 上次取到的平台模型目录（模型属于租户，各看各的）
+_last_catalog: dict[UUID, list[PlatformModel]] = {}
 
 
 def reset_model_platform_cache() -> None:
-    global _last_catalog
     _last.clear()
-    _last_catalog = None
+    _last_catalog.clear()
 
 
 async def client_key(
@@ -238,7 +243,7 @@ async def client_key(
     → None：平台上没有、也没让补建。
     平台不可用时沿用上次取到的，从没取到过抛 ModelPlatformUnavailable。
     """
-    slot = (client_type, client_code)
+    slot = (TenantScope.require(), client_type, client_code)
     try:
         client = ModelPlatformClient(settings)
         found = await client.get(client_type, client_code)
@@ -248,7 +253,7 @@ async def client_key(
         cached = _last.get(slot)
         if cached is None:
             raise
-        logger.warning("模型管理平台不可用，沿用上次取到的客户端 Key（%s:%s）", *slot)
+        logger.warning("模型管理平台不可用，沿用上次取到的客户端 Key（%s:%s）", *slot[1:])
         return cached
     if found is not None:
         if len(_last) > 10_000:
@@ -292,15 +297,19 @@ async def rename_agent(settings: Settings, agent_id: UUID | str, name: str) -> N
 
 
 async def platform_catalog(settings: Settings) -> list[PlatformModel]:
-    """平台上已登记、可调用的全部模型（客户端 Key 还没分配时编辑器先列它们）。"""
-    global _last_catalog
+    """本租户在平台上已登记、可调用的全部模型（客户端 Key 还没分配时编辑器先列它们）。"""
+    tenant = TenantScope.require()
     try:
-        _last_catalog = await ModelPlatformClient(settings).catalog()
+        found = await ModelPlatformClient(settings).catalog()
     except ModelPlatformUnavailable:
-        if _last_catalog is None:
+        if tenant not in _last_catalog:
             raise
         logger.warning("模型管理平台不可用，沿用上次取到的模型列表")
-    return _last_catalog
+        return _last_catalog[tenant]
+    if len(_last_catalog) > 10_000:
+        _last_catalog.clear()
+    _last_catalog[tenant] = found
+    return found
 
 
 async def sees_images(settings: Settings, model: str) -> bool:
@@ -358,6 +367,13 @@ def admit_models(key: ClientKey, names: Sequence[str]) -> None:
         raise ModelNotAllowed("暂时取不到模型 Key，请稍后重试")
 
 
+#: 经模型网关：意图（思考、力度、温度）原样发出，按上游模型整理参数是网关的事
+#: （agent-platform/doc/design/model-gateway-design.html §4），不再套引擎里按模型名写死的规则
+GATEWAY_CAPS = ModelCaps(
+    thinking=True, adaptive_thinking=True, effort=True, temperature=True, prompt_cache=True
+)
+
+
 def with_platform_model(model: Any) -> Any:
-    """模型规格换成经平台的调用方式：一律 Anthropic Messages（LiteLLM 负责转换）。"""
-    return replace(model, provider="anthropic")
+    """模型规格换成经模型网关的调用方式：一律 Anthropic 格式，参数按意图发，网关按上游整理。"""
+    return replace(model, provider="anthropic", caps=GATEWAY_CAPS)

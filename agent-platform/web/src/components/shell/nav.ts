@@ -38,8 +38,6 @@ export interface Platform {
 
 const under = (prefix: string) => (p: string) => p === prefix || p.startsWith(`${prefix}/`);
 
-const jobsVisible = (a: Access) => can(a.me, "job:manage") || !!a.gw?.can_manage || !!a.mg?.can_manage;
-
 export const PLATFORMS: Platform[] = [
   {
     id: "ai",
@@ -111,36 +109,33 @@ export const PLATFORMS: Platform[] = [
     items: [
       { href: "/models", icon: "layers", label: "模型", match: (p) => p === "/models" },
       { href: "/models/keys", icon: "key", label: "我的 Key", match: under("/models/keys") },
+      { href: "/models/calls", icon: "list", label: "调用记录", match: under("/models/calls") },
       {
+        href: "/models/accounts",
+        icon: "plug",
+        label: "账号",
+        match: under("/models/accounts"),
+        visible: (a) => !!a.mg?.can_manage,
+      },
+      {
+        // 路径沿用改版前的「客户端 Key」：现在个人 Key、客户端 Key 都在这里管
         href: "/models/client-keys",
-        icon: "bot",
-        label: "客户端 Key",
+        icon: "shield",
+        label: "Key 管理",
         match: under("/models/client-keys"),
         visible: (a) => !!a.mg?.can_manage,
       },
     ],
   },
   {
+    // 租户管理员管本租户的地方；平台的事（份额、镜像、定时任务）在运营中心
     id: "sys",
-    label: "系统",
+    label: "设置",
     icon: "sliders",
-    visible: (a) => can(a.me, "config:manage") || jobsVisible(a),
+    visible: (a) => can(a.me, "settings:manage"),
     items: [
-      {
-        href: "/system",
-        icon: "star",
-        label: "平台设置",
-        match: (p) => p === "/system",
-        visible: (a) => can(a.me, "config:manage"),
-      },
-      {
-        href: "/system/configs",
-        icon: "sliders",
-        label: "配置项",
-        match: under("/system/configs"),
-        visible: (a) => can(a.me, "config:manage"),
-      },
-      { href: "/system/jobs", icon: "clock", label: "定时任务", match: under("/system/jobs"), visible: jobsVisible },
+      { href: "/settings", icon: "star", label: "租户设置", match: (p) => p === "/settings" },
+      { href: "/settings/configs", icon: "sliders", label: "配置项", match: under("/settings/configs") },
     ],
   },
 ];
@@ -150,7 +145,7 @@ const PREFIX: [string, PlatformId][] = [
   ["/skills", "skills"],
   ["/mcp", "mcp"],
   ["/models", "models"],
-  ["/system", "sys"],
+  ["/settings", "sys"],
 ];
 
 /** 路径属于哪个平台：没有专属前缀的（首页、对话、智能体、个性化）都在智能平台 */

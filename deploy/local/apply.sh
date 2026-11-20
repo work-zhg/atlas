@@ -21,6 +21,20 @@ set -a; . ./.env; set +a
 
 kubectl apply -f deploy/local/00-namespaces.yaml
 
+# 沙箱的网络隔离（08-sandbox-network.yaml）：出站到集群外的放行要除掉 Pod 网段。
+# 探测同 egress-rules.sh：有 Calico 读它的 IP 池（不按节点的 podCIDR 分配），没有用各节点的 podCIDR；
+# 也可以用 SANDBOX_POD_CIDRS="10.42.0.0/16" 手动指定
+pod_cidrs="${SANDBOX_POD_CIDRS:-}"
+if [ -z "$pod_cidrs" ]; then
+  pod_cidrs="$(kubectl get ippools.crd.projectcalico.org \
+    -o jsonpath='{range .items[*]}{.spec.cidr}{"\n"}{end}' 2>/dev/null || true)"
+  [ -n "$pod_cidrs" ] || pod_cidrs="$(kubectl get nodes \
+    -o jsonpath='{range .items[*]}{.spec.podCIDRs[*]}{"\n"}{end}' | tr ' ' '\n')"
+fi
+pod_cidrs="$(printf '%s\n' $pod_cidrs | sed '/^$/d' | sort -u | paste -sd, -)"
+[ -n "$pod_cidrs" ] || { echo "取不到 Pod 网段，用 SANDBOX_POD_CIDRS 指定" >&2; exit 1; }
+sed "s#__POD_CIDRS__#${pod_cidrs}#" deploy/local/08-sandbox-network.yaml | kubectl apply -f -
+
 # ★ create --dry-run=client | apply：幂等。直接 create 第二次会 AlreadyExists，
 #   而 apply -f 一个 Secret 字面量又会把凭据写进临时文件。
 kubectl -n atlas-system create secret generic atlas-server-creds \
@@ -58,8 +72,27 @@ kubectl -n atlas-system create secret generic atlas-litellm-creds \
   --from-literal=master_key="${LITELLM_MASTER}" \
   --from-literal=salt_key="${LITELLM_SALT}" \
   --dry-run=client -o yaml | kubectl apply -f -
-# 自研模型网关时期的凭据：模型调用改走 LiteLLM 之后不再需要
+# 上一版自研模型网关的凭据（已不用；现在的是下面的 atlas-modelgw-creds）
 kubectl -n atlas-system delete secret atlas-modelgateway-creds --ignore-not-found
+
+# 模型管理平台 + 模型网关（38-modelgateway.yaml）：账号密钥的主密钥（Fernet，逗号分隔、第一把加密）、
+# 运营接口密钥、海外供应商的出网代理。.env 里有就用；没有就沿用集群里已有的；主密钥都没有才新生成。
+# ★ 主密钥设了就不能丢：丢了库里存的账号密钥就解不开。轮换是在前面加一把新的、旧的留着
+MODELGW_KEYS="${ATLAS_MODELGW_SECRET_KEYS:-$(secret_value atlas-modelgw-creds secret_keys)}"
+[ -n "$MODELGW_KEYS" ] || MODELGW_KEYS="$(openssl rand -base64 32 | tr '+/' '-_')"
+kubectl -n atlas-system create secret generic atlas-modelgw-creds \
+  --from-literal=secret_keys="${MODELGW_KEYS}" \
+  --from-literal=ops_api_key="${ATLAS_MODELGW_OPS_API_KEY:-$(secret_value atlas-modelgw-creds ops_api_key)}" \
+  --from-literal=egress_proxy="${ATLAS_MODELGW_EGRESS_PROXY:-$(secret_value atlas-modelgw-creds egress_proxy)}" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+# 多租户迁移把已有数据归到原平台租户（用户中心里的租户 uuid）。只在 .env 给了时建；
+# 已经迁移过的库不再需要它
+if [ -n "${TENANT_BACKFILL_UUID:-}" ]; then
+  kubectl -n atlas-system create configmap atlas-tenancy \
+    --from-literal=backfill_uuid="${TENANT_BACKFILL_UUID}" \
+    --dry-run=client -o yaml | kubectl apply -f -
+fi
 
 # 设备网关的内部令牌（atlas-server 连会话流、调 /internal 时带上）：沿用集群里已有的，没有才新生成
 DEVICEGW_TOKEN="$(secret_value atlas-devicegw internal_token)"
@@ -146,6 +179,7 @@ kubectl -n atlas-system rollout status deploy/atlas-memory --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-mcpgateway --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-litellm --timeout=600s
 kubectl -n atlas-system rollout status deploy/atlas-modelgateway --timeout=180s
+kubectl -n atlas-system rollout status deploy/atlas-llmgateway --timeout=300s
 kubectl -n atlas-system rollout status deploy/atlas-server --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-devicegw --timeout=180s
 kubectl -n atlas-system rollout status deploy/atlas-knowledge --timeout=300s

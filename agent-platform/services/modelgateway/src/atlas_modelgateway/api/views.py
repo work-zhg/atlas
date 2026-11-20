@@ -1,51 +1,164 @@
-"""库里的行、LiteLLM 的部署 → 接口里的形状。"""
+"""库里的行 → 接口的响应体。"""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from datetime import datetime
+from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
-from ..db.models import GwApiKey, GwModel
+from ..accounts import AccountStatus
+from ..db.models import GwAccount, GwApiKey, GwModel, GwModelCall, GwRoute
+from ..gateway.kernel import ModelCaps, Price
 from ..keys import mask
-from ..registry import ModelView
-from .schemas import GrantOut, InternalModelOut, KeyModelOut, KeyOut, KeySecretOut, ModelOut
+from ..provider import ProviderCatalog, ProviderSpec
+from .schemas import (
+    AccountOut,
+    CallOut,
+    CapsIO,
+    GrantOut,
+    InternalModelOut,
+    IssueOut,
+    KeyModelOut,
+    KeyOut,
+    ModelOut,
+    PriceIO,
+    ProviderOut,
+    RouteOut,
+)
+
+__all__ = [
+    "account_out",
+    "call_out",
+    "caps_io",
+    "grant_out",
+    "internal_model_out",
+    "key_out",
+    "model_out",
+    "provider_out",
+]
 
 
-def _price(per_token: float | None) -> float | None:
-    """美元 / token → 美元 / 百万 token（保留到分以下两位，避免 0.28 变成 0.27999999）。"""
-    return None if per_token is None else round(per_token * 1e6, 6)
+def provider_out(spec: ProviderSpec) -> ProviderOut:
+    return ProviderOut(
+        code=spec.name,
+        name=spec.display_name,
+        formats=[f.value for f in spec.formats],
+        endpoints={f.value: spec.endpoints.get(f, "") for f in spec.formats},
+        can_balance=bool(spec.balance_url),
+        can_list_models=spec.list_models,
+        key_optional=spec.key_optional,
+        needs_endpoint=spec.needs_endpoint,
+        overseas=spec.overseas,
+        hint=spec.model_hint,
+    )
+
+
+def account_out(
+    row: GwAccount, status: AccountStatus, routes: int, catalog: ProviderCatalog
+) -> AccountOut:
+    issue = (
+        IssueOut(
+            kind=status.issue.issue.value,
+            since=datetime.fromtimestamp(status.issue.since),
+            message=status.issue.message,
+        )
+        if status.issue
+        else None
+    )
+    return AccountOut(
+        id=row.uuid,
+        name=row.name,
+        provider=row.provider,
+        provider_name=catalog.spec(row.provider).display_name,
+        endpoints=dict(row.endpoints or {}),
+        secret_masked=f"…{row.secret_tail}" if row.secret_tail else None,
+        egress=row.egress,
+        first_content_timeout_s=row.first_content_timeout_s,
+        balance_alert=row.balance_alert,
+        balance=row.balance,
+        balance_at=row.balance_at,
+        remark=row.remark,
+        enabled=row.enabled,
+        status=status.state,
+        issue=issue,
+        cooling_routes=status.cooling,
+        low_balance=status.low_balance,
+        routes=routes,
+        checked_at=row.checked_at,
+        check_error=row.check_error,
+        created_by=row.created_by,
+        created_at=row.created_at,
+    )
+
+
+def caps_io(caps: ModelCaps) -> CapsIO:
+    return CapsIO(
+        vision=caps.vision,
+        tools=caps.tools,
+        thinking=caps.thinking.value,  # type: ignore[arg-type]
+        context_window=caps.context_window,
+        max_output=caps.max_output,
+    )
+
+
+def _price_io(price: Price) -> PriceIO:
+    return PriceIO(input=price.input, cache_hit=price.cache_hit, output=price.output)
 
 
 def model_out(
-    view: ModelView,
+    row: GwModel,
+    routes: list[GwRoute],
+    accounts: Mapping[UUID, GwAccount],
+    route_status: Mapping[UUID, str],
     *,
     admin: bool,
-    grants: list[GrantOut] | None = None,
     access: str | None = None,
+    grants: list[GrantOut] | None = None,
+    keys: int = 0,
 ) -> ModelOut:
-    row, dep = view.row, view.primary
-    status = "unknown" if view.unknown else "missing" if view.missing else "ok"
+    ordered = sorted(routes, key=lambda r: (r.priority, r.created_at))
+    states = [route_status.get(r.uuid, "ok") for r in ordered]
+    if not row.enabled:
+        status = "disabled"
+    elif not states or all(s != "ok" for s in states):
+        status = "unavailable"
+    elif states[0] != "ok":
+        status = "degraded"
+    else:
+        status = "available"
     return ModelOut(
-        uuid=row.uuid if row is not None else None,
-        name=view.name,
-        display_name=(row.display_name if row is not None else view.name) or view.name,
-        provider=(row.provider if row is not None else dep.provider if dep else "") or "",
-        visibility=row.visibility if row is not None else None,  # type: ignore[arg-type]
-        description=row.description if row is not None else "",
-        supports_vision=bool(row.supports_vision) if row is not None else False,
-        source=view.source,  # type: ignore[arg-type]
-        status=status,  # type: ignore[arg-type]
-        managed=row is not None and row.litellm_model_id is not None,
-        origin=None if row is not None or dep is None else "db" if dep.db_model else "config",
-        deployments=len(view.deployments),
-        api_base=(dep.api_base or None) if admin and dep is not None else None,
-        max_input_tokens=dep.max_input_tokens if dep else None,
-        max_output_tokens=dep.max_output_tokens if dep else None,
-        input_price=_price(dep.input_cost_per_token) if dep else None,
-        output_price=_price(dep.output_cost_per_token) if dep else None,
+        id=row.uuid,
+        name=row.name,
+        display_name=row.display_name or row.name,
+        kind=row.kind,
+        visibility=row.visibility,
+        description=row.description,
+        caps=caps_io(ModelCaps.from_json(row.caps)),
+        price=_price_io(Price.from_json(row.price)),
+        enabled=row.enabled,
+        status=status,
+        routes=[
+            RouteOut(
+                id=r.uuid,
+                account_id=r.account_uuid,
+                account_name=accounts[r.account_uuid].name
+                if r.account_uuid in accounts
+                else "（已删除）",
+                provider=accounts[r.account_uuid].provider if r.account_uuid in accounts else "",
+                upstream_model=r.upstream_model,
+                priority=r.priority,
+                weight=r.weight,
+                status=s,
+            )
+            for r, s in zip(ordered, states, strict=True)
+        ]
+        if admin
+        else [],
+        access=access,
         grants=grants,
-        access=access,  # type: ignore[arg-type]
-        created_by=row.created_by if row is not None and admin else None,
-        created_at=row.created_at if row is not None else None,
+        keys=keys,
     )
 
 
@@ -57,65 +170,88 @@ def grant_out(raw: dict[str, Any]) -> GrantOut:
         subject_type=str(raw.get("subject_type") or subject.get("type") or "").lower(),
         subject_id=str(raw.get("subject_id") or subject.get("id") or ""),
         subject_name=str(raw.get("subject_name") or subject.get("name") or ""),
-        permission=str(raw.get("permission") or raw.get("level") or ""),
         include_sub=bool(raw.get("include_sub")),
-    )
-
-
-def internal_model_out(view: ModelView) -> InternalModelOut:
-    row, dep = view.row, view.primary
-    assert row is not None
-    return InternalModelOut(
-        name=row.name,
-        display_name=row.display_name or row.name,
-        provider=row.provider,
-        max_input_tokens=dep.max_input_tokens if dep else None,
-        max_output_tokens=dep.max_output_tokens if dep else None,
-        supports_vision=bool(row.supports_vision),
+        permission=str(raw.get("permission") or raw.get("level") or ""),
     )
 
 
 def key_out(
     key: GwApiKey,
+    models: Mapping[str, GwModel],
     *,
-    allowed: set[str],
-    callable_names: set[str],
-    platform_names: set[str],
-    secret: str | None = None,
-) -> KeySecretOut | KeyOut:
-    """allowed：这把 Key 能选的模型；callable_names：平台登记且 LiteLLM 里有的；
-    platform_names：平台登记的（含 LiteLLM 中缺失的）。"""
+    spent: Decimal = Decimal(0),
+    last_used: datetime | None = None,
+) -> KeyOut:
+    effective = set(key.effective_models or [])
 
     def state(name: str) -> str:
-        if name not in platform_names:
-            return "deleted"
-        if name not in callable_names:
+        row = models.get(name)
+        if row is None:
             return "missing"
-        return "ok" if name in allowed else "revoked"
+        if name not in effective:
+            return "revoked"
+        return "ok" if row.enabled else "disabled"
 
-    models = [KeyModelOut(name=m, state=state(m)) for m in key.models or []]  # type: ignore[arg-type]
-    effective = [m.name for m in models if m.state == "ok"]
-    body = {
-        "uuid": key.uuid,
-        "key_type": key.key_type,
-        "user_uuid": key.user_uuid,
-        "client_type": key.client_type,
-        "client_code": key.client_code,
-        "name": key.name,
-        "status": key.status,
-        "masked": mask(key.secret),
-        "models": models,
-        "effective": effective,
-        "no_models": key.status != "pending" and not effective,
-        "sync_error": key.sync_error,
-        "created_by": key.created_by,
-        "created_at": key.created_at,
-        "rotated_at": key.rotated_at,
-    }
-    if secret is not None:
-        return KeySecretOut(**body, secret=secret)
-    return KeyOut(**body)
+    return KeyOut(
+        id=key.uuid,
+        key_type=key.key_type,
+        label=key.label,
+        name=key.name,
+        user_id=key.user_uuid,
+        client_type=key.client_type,
+        client_code=key.client_code,
+        models=[
+            KeyModelOut(
+                name=m, display_name=models[m].display_name if m in models else m, state=state(m)
+            )
+            for m in key.models or []
+        ],
+        status=key.status,
+        block_reason=key.block_reason,
+        masked=mask(key.secret_tail),
+        monthly_budget=key.monthly_budget,
+        rpm=key.rpm,
+        expires_at=key.expires_at,
+        spent_this_month=spent,
+        last_used_at=last_used,
+        created_at=key.created_at,
+        rotated_at=key.rotated_at,
+    )
 
 
-def model_rows_by_name(rows: list[GwModel]) -> dict[str, GwModel]:
-    return {r.name: r for r in rows}
+def internal_model_out(row: GwModel, provider: str = "") -> InternalModelOut:
+    caps = ModelCaps.from_json(row.caps)
+    return InternalModelOut(
+        name=row.name,
+        display_name=row.display_name or row.name,
+        kind=row.kind,
+        provider=provider,
+        max_input_tokens=caps.context_window,
+        max_output_tokens=caps.max_output,
+        supports_vision=caps.vision,
+        capabilities=caps_io(caps),
+    )
+
+
+def call_out(row: GwModelCall) -> CallOut:
+    return CallOut(
+        id=row.call_uuid,
+        started_at=row.started_at,
+        model=row.model,
+        key_id=row.key_uuid,
+        key_kind=row.key_kind,
+        session=row.session_key,
+        entry_format=row.entry_format,
+        status=row.status,
+        error_category=row.error_category,
+        attempts=list(row.attempts or []),
+        first_content_ms=row.first_content_ms,
+        duration_ms=row.duration_ms,
+        input_tokens=row.input_tokens,
+        cache_write_tokens=row.cache_write_tokens,
+        cache_hit_tokens=row.cache_hit_tokens,
+        output_tokens=row.output_tokens,
+        estimated=row.estimated,
+        cost=row.cost,
+        notes=dict(row.notes or {}),
+    )
