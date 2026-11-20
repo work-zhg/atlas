@@ -194,6 +194,35 @@ async def test_all_routes_rate_limited(gw, upstream: FakeUpstream) -> None:
     assert r.json()["error"]["category"] == "model_busy"
 
 
+def _empty_stream() -> list[tuple[str, Any]]:
+    """上游 200 但一个内容块都没有（MiniMax 偶发）。"""
+    return [e for e in anthropic_events() if not e[0].startswith("content_block")]
+
+
+async def test_single_route_failure_leaves_retry_to_sdk(gw, upstream: FakeUpstream) -> None:
+    client, runtime = gw
+    s = await seed(TENANT_A, routes=[RouteSpec("a.test")])
+    upstream.on("a.test", sse(_empty_stream()))
+    r = await client.post("/v1/messages", headers={"x-api-key": s.secret}, json=_msg(stream=True))
+    assert r.status_code == 502
+    assert r.json()["error"]["category"] == "upstream_error"
+    assert "x-should-retry" not in r.headers  # 没换成线路：交给 SDK 重试
+    [rec] = await _records(runtime)
+    assert [a["outcome"] for a in rec.attempts] == ["overloaded"]
+
+
+async def test_switched_routes_all_failing_tells_sdk_not_to_retry(
+    gw, upstream: FakeUpstream
+) -> None:
+    client, _ = gw
+    s = await seed(TENANT_A, routes=[RouteSpec("a.test"), RouteSpec("b.test")])
+    upstream.on("a.test", sse(_empty_stream()))
+    upstream.on("b.test", sse(_empty_stream()))
+    r = await client.post("/v1/messages", headers={"x-api-key": s.secret}, json=_msg(stream=True))
+    assert r.status_code == 502
+    assert r.headers["x-should-retry"] == "false"
+
+
 async def test_bad_request_is_not_retried_and_passes_upstream_body(
     gw, upstream: FakeUpstream
 ) -> None:

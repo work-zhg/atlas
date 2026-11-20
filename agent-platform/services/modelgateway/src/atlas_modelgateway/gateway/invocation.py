@@ -7,7 +7,8 @@
   调用方只看到保活注释；之后出的错只能在流里报错结束。
 ★ 读一段写一段，不经中继、不放队列：调用方读得慢写就等，读上游也跟着慢；调用方断开就关上游。
 ★ 只限「等第一段内容」和「两段之间」，不限总时长。
-★ 网关已经换过线路仍然失败时，告诉 SDK 不要再重试（官方 SDK 认 x-should-retry: false）。
+★ 网关已经换过线路仍然失败时，告诉 SDK 不要再重试（官方 SDK 认 x-should-retry: false）；
+  只有一条线路（没换成）时不说，交给 SDK 重试。
 """
 
 from __future__ import annotations
@@ -167,12 +168,16 @@ class ErrorMapper:
             return GatewayError(
                 ErrorCategory.NO_ROUTE, MSG_NO_ROUTE, no_retry=True, detail=last.message
             )
+        # ★ 只有真的换过线路才叫 SDK 别重试：只有一条线路时网关一次也没换成，
+        #   同一线路的偶发失败（空流、过载）交给 SDK 退避重试
+        #   （2026-11-20 MiniMax 偶发空流，单线路直接回「别重试」，长任务整个失败）
+        switched = len(failures) > 1
         if last.outcome == "timeout":
             return GatewayError(
-                ErrorCategory.UPSTREAM_TIMEOUT, MSG_UPSTREAM, no_retry=True, detail=last.message
+                ErrorCategory.UPSTREAM_TIMEOUT, MSG_UPSTREAM, no_retry=switched, detail=last.message
             )
         return GatewayError(
-            ErrorCategory.UPSTREAM_ERROR, MSG_UPSTREAM, no_retry=True, detail=last.message
+            ErrorCategory.UPSTREAM_ERROR, MSG_UPSTREAM, no_retry=switched, detail=last.message
         )
 
     @staticmethod
