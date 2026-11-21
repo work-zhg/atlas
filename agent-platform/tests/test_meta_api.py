@@ -1,6 +1,7 @@
 """GET /v1/models 与 /v1/tools —— P0 的完成标准（文档 §16）。
 
-需要 Postgres（迁移已跑）。网关不可达时应降级而非报错。
+需要 Postgres（迁移已跑）。模型列表来自模型管理平台（conftest 接的替身），能力来自
+model_catalog 表；平台不可达时应降级而非报错。
 """
 
 from __future__ import annotations
@@ -10,20 +11,8 @@ import pytest
 from atlas_agent.main import create_app
 from httpx import ASGITransport
 
+from tests.fake_model_platform import MODELS
 from tests.fake_uc import AS_USER
-
-#: 迁移种子里的全部模型（0001 的 claude-* + 0008 的 deepseek-*）。
-#:
-#: ★ 钉的是**产品知道哪些模型的能力**，不是"这个部署能用哪些" —— 后者是
-#:   is_available，由网关巡检刷新，随部署而变，不该进这个集合。
-EXPECTED_MODELS = {
-    "claude-opus-5",
-    "claude-sonnet-5",
-    "claude-fable-5",
-    "claude-haiku-4-5",
-    "deepseek-flash",
-    "deepseek-v4-pro",
-}
 
 
 @pytest.fixture
@@ -40,11 +29,13 @@ async def test_healthz(client: httpx.AsyncClient) -> None:
     assert resp.json() == {"status": "ok"}
 
 
-async def test_models_returns_seeded_catalog(client: httpx.AsyncClient) -> None:
+async def test_models_come_from_the_model_platform(client: httpx.AsyncClient) -> None:
+    """新建智能体（还没有 Key）：列平台上登记的全部模型。"""
     resp = await client.get("/v1/models")
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert {m["model"] for m in body["data"]} == EXPECTED_MODELS
+    assert [m["model"] for m in body["data"]] == list(MODELS)
+    assert body["gateway_reachable"] is True
 
 
 async def test_model_metadata_matches_measured_values(client: httpx.AsyncClient) -> None:
@@ -78,12 +69,20 @@ async def test_model_metadata_matches_measured_values(client: httpx.AsyncClient)
     assert haiku["min_cacheable_tokens"] == 4096
 
 
-async def test_models_degrades_when_gateway_unreachable(client: httpx.AsyncClient) -> None:
-    """网关不可达不该让 /models 挂 —— 只把 gateway_reachable 置 false。"""
-    body = (await client.get("/v1/models")).json()
-    assert isinstance(body["gateway_reachable"], bool)
-    # 无论巡检成败，catalog 都要整份返回（可用性可以全 false，但不能少行）
-    assert len(body["data"]) == len(EXPECTED_MODELS)
+async def test_models_degrades_when_platform_unreachable(client: httpx.AsyncClient) -> None:
+    """模型管理平台不可达不该让 /models 挂 —— gateway_reachable 置 false，并说明原因。"""
+    from atlas_agent.providers.llm.model_platform import ModelPlatformClient
+
+    def down(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("down", request=request)
+
+    ModelPlatformClient.transport = httpx.MockTransport(down)
+    resp = await client.get("/v1/models")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["gateway_reachable"] is False
+    assert body["data"] == []
+    assert body["key"]["notes"]
 
 
 async def test_tools_catalog_availability(client: httpx.AsyncClient) -> None:

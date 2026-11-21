@@ -21,6 +21,7 @@ from atlas_agent.config import Settings, get_settings
 from atlas_agent.db.session import get_engine, get_sessionmaker
 from atlas_tenancy import TenantScope
 
+from tests.fake_model_platform import FakeModelPlatform
 from tests.fake_uc import TEST_TENANT, FakeUC
 
 # MCP 网关的测试环境（进程内网关 + 上游 MCP 服务替身）：用到才起，见 tests/gateway_env.py
@@ -32,7 +33,7 @@ from tests.ops_env import ops_key  # noqa: F401
 REPO_ROOT = Path(__file__).resolve().parents[2]  # agent-platform/tests → 仓库根
 
 #: 仓库根 .env 里属于**对象存储**的那些键。
-#: 其余键（database_url / redis_url / litellm_key）测试仍然要从 .env 读 ——
+#: 其余键（database_url / redis_url）测试仍然要从 .env 读 ——
 #: 那是"连哪台开发机"，不是"被测对象的配置"。
 _OBJECT_STORAGE_KEYS = (
     "OSS_ENDPOINT",
@@ -93,7 +94,7 @@ def _object_storage_is_not_inherited_from_the_developer(tmp_path_factory) -> Ite
     踩过一次，而且是**沉默**地踩的：给 .env 配上真 GCS 之后，四条本来
     密闭的用例开始连公网 ——
 
-      - `Settings(litellm_key="x")` 明明没给 bucket，却从 .env 拿到一个，
+      - `Settings()` 明明没给 bucket，却从 .env 拿到一个，
         于是"没配 bucket 就没有文件能力"这条断言反过来了；
       - moto 的 `mock_aws()` 被 .env 里的 `oss_endpoint` 绕开，用例名写着
         内存桶，实际打的是真桶。
@@ -169,6 +170,29 @@ def fake_user_center(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeUC]:
 
 
 @pytest.fixture(autouse=True)
+def fake_model_platform() -> Iterator[FakeModelPlatform]:
+    """模型只经模型管理平台取 Key：接一个平台替身，任何智能体的 Key 都可用、分配了常用的模型。
+
+    测平台本身的用例在自己的夹具里换 ModelPlatformClient.transport。
+    """
+    import httpx
+    from atlas_agent.providers.llm.model_platform import (
+        ModelPlatformClient,
+        reset_model_platform_cache,
+    )
+    from atlas_agent.services.service_models import reset_service_model_cache
+
+    fake = FakeModelPlatform()
+    reset_model_platform_cache()
+    reset_service_model_cache()
+    ModelPlatformClient.transport = httpx.MockTransport(fake.handle)
+    yield fake
+    ModelPlatformClient.transport = None
+    reset_model_platform_cache()
+    reset_service_model_cache()
+
+
+@pytest.fixture(autouse=True)
 async def _reset_db_singletons() -> AsyncIterator[None]:
     yield
     engine = get_engine()
@@ -177,7 +201,7 @@ async def _reset_db_singletons() -> AsyncIterator[None]:
     get_sessionmaker.cache_clear()
 
 
-#: 测试会写的表，按删除顺序。model_catalog、service_model 这类迁移种子不在里面。
+#: 测试会写的表，按删除顺序。model_catalog 这类迁移种子不在里面。
 _TEST_DATA_TABLES = (
     "run_event",
     "run_state",
@@ -205,6 +229,8 @@ _TEST_DATA_TABLES = (
     # 容量：租户份额、每人存储用量（份额留下来会挡住后面的测试）
     "tenant_capacity",
     "storage_usage",
+    # 平台服务用哪个模型（判断器、会话标题）：留下来会让后面的测试去调别的模型
+    "service_model",
     "thread",
     "agent_version",
     "agent",

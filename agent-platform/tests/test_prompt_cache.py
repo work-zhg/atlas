@@ -1,4 +1,4 @@
-"""前缀缓存的开关：编辑器的 prompt_cache 与模型目录的 supports_cache 共同决定打不打 cache_control。
+"""前缀缓存的开关：编辑器的 prompt_cache 决定打不打 cache_control（上游不支持时模型网关去掉标记）。
 
 2026-10-19 之前 kernel 对所有 ChatAnthropic 无条件装缓存中间件，这两个字段运行时没人读 ——
 用户关掉开关缓存照开，DeepSeek（实测 cache_control 无效）照样被塞标记。
@@ -121,23 +121,17 @@ async def test_today_goes_last_in_the_system_prompt() -> None:
     assert seen["system"] == "你是客服助手。\n\n今天是 2026-11-21（星期六）。"
 
 
-# ── assembly：spec 开关 × 模型目录 ────────────────────────────────────────────
+# ── assembly：编辑器的开关 ─────────────────────────────────────────────────────
 
 
-async def _ttl(spec: AgentSpec, ttl: str = "1h", gateway: str | None = None) -> str | None:
-    from atlas_agent.db.session import get_sessionmaker
+async def _ttl(spec: AgentSpec, ttl: str = "1h") -> str | None:
     from atlas_agent.executor.assembly import CapabilityAssembly
 
-    settings = SimpleNamespace(
-        prompt_cache_ttl=ttl,
-        model_gateway_url=gateway,
-        model_platform_url=gateway and "http://platform.test",
-    )
-    host = SimpleNamespace(_sessionmaker=get_sessionmaker(), _settings=settings)
+    host = SimpleNamespace(_settings=SimpleNamespace(prompt_cache_ttl=ttl))
     return await CapabilityAssembly._prompt_cache_ttl(host, SimpleNamespace(spec=spec))  # type: ignore[arg-type]
 
 
-async def test_assembly_uses_the_configured_ttl_when_the_model_supports_cache() -> None:
+async def test_assembly_uses_the_configured_ttl() -> None:
     assert await _ttl(_spec("claude-sonnet-5")) == "1h"
     assert await _ttl(_spec("claude-sonnet-5"), ttl="5m") == "5m"
 
@@ -146,18 +140,10 @@ async def test_assembly_honours_the_editor_switch() -> None:
     assert await _ttl(_spec("claude-sonnet-5", prompt_cache=False)) is None
 
 
-async def test_assembly_skips_models_measured_without_cache_support() -> None:
-    """DeepSeek：cache_control 被接受但不起作用（迁移 0008），不塞。"""
-    assert await _ttl(_spec("deepseek-v4-pro")) is None
-
-
-async def test_assembly_treats_models_missing_from_the_catalog_as_unsupported() -> None:
-    assert await _ttl(_spec("no-such-model")) is None
-
-
-async def test_assembly_always_marks_cache_through_the_model_gateway() -> None:
-    """经模型网关不查本地目录：上游不支持缓存时由网关去掉标记。"""
-    assert await _ttl(_spec("no-such-model"), gateway="http://gw.test") == "1h"
+async def test_assembly_marks_cache_whatever_the_model() -> None:
+    """不查本地目录：上游不支持缓存时由模型网关去掉标记。"""
+    assert await _ttl(_spec("deepseek-v4-pro")) == "1h"
+    assert await _ttl(_spec("no-such-model")) == "1h"
 
 
 # ── 配置：TTL 只有一个来源 ─────────────────────────────────────────────────────

@@ -32,8 +32,7 @@ export interface paths {
          * List Models
          * @description 可选的模型。agent_id：编辑已有的智能体；新建时不给。
          *
-         *     经模型管理平台时按这个智能体的客户端 Key 列出（模型管理方案设计 7.2），与权限类型无关；
-         *     没接平台时：model_catalog ⋈ litellm /v1/models 巡检结果。
+         *     按这个智能体的客户端 Key 列出（模型管理方案设计 7.2），与权限类型无关。
          */
         get: operations["list_models_v1_models_get"];
         put?: never;
@@ -3236,7 +3235,7 @@ export interface components {
             data: components["schemas"]["ModelInfo"][];
             /**
              * Gateway Reachable
-             * @description false 表示取不到模型列表（巡检失败、模型管理平台不可用）
+             * @description false 表示取不到模型列表（模型管理平台不可用）
              */
             gateway_reachable: boolean;
             key?: components["schemas"]["ModelKeyOut"] | null;

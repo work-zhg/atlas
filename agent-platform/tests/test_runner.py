@@ -217,7 +217,7 @@ async def test_invalid_spec_raises_before_any_event() -> None:
         slug="x",
         name="X",
         system_prompt="p",
-        model=ModelSpec(model="claude-opus-5", temperature=0.2),  # opus-5 传 temperature 会 400
+        model=ModelSpec(model="claude-opus-5", max_output_tokens=0),
     )
     with pytest.raises(InvalidSpec):
         await collect(

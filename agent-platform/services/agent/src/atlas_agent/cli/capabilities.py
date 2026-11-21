@@ -41,14 +41,11 @@ from ..providers.knowledge import (
 from ..providers.llm.model_platform import (
     admit_models,
     agent_key,
-    litellm_url,
     sees_images,
-    uses_model_platform,
 )
 from ..providers.mcp import GatewayUnavailable, make_mcp_catalog, mcp_agent_access
 from ..providers.mcp.cli import cli_mcp_servers
 from ..providers.mcp.gateway import servers_in
-from ..repositories.model_catalog import ModelCatalogRepository
 from ..runtime_config import RuntimeConfig
 from ..sandbox.session_pod import CliModel
 from ..skills import skill_directory
@@ -201,19 +198,19 @@ class CliCapabilityAssembly:
             raise CredentialsUnavailable(str(exc)) from exc
 
     async def _model(self, segment: Segment) -> CliModel | None:
-        """经模型管理平台时 Pod 里 CLI 的模型接入（模型管理方案设计 8.1）。
+        """Pod 里 CLI 的模型接入（模型管理方案设计 8.1）。
 
-        没接平台、不是 Claude Code → None（照旧按部署配置）。Key 待分配、停用或模型没分配
+        不是 Claude Code → None（照旧按部署配置）。Key 待分配、停用或模型没分配
         抛 ModelNotAllowed：本轮不开始。
 
-        下发 LiteLLM 地址 + 智能体的客户端 Key + 模型名；Pod 里不再有供应商凭据。
-        ★ Claude Code 只会 Anthropic Messages：LiteLLM 负责转换，任何已分配的模型都能用。
+        下发模型网关地址 + 智能体的客户端 Key + 模型名；Pod 里不再有供应商凭据。
+        ★ Claude Code 只会 Anthropic Messages：线路是别的格式由网关转换，任何已分配的模型都能用。
         ★ CLI 的轻量模型也指向同一个模型：不指的话 CLI 会去找一个它默认的、Key 里未必有的模型。
-        ★ 提示词缓存与原生同一条规则（executor/assembly.py 的 _prompt_cache_ttl）：智能体开了、
-          且模型实测支持才让 CLI 发 cache_control。
+        ★ 提示词缓存与原生同一条规则（executor/assembly.py 的 _prompt_cache_ttl）：智能体开了
+          就让 CLI 发 cache_control。
         """
         spec = segment.spec
-        if not uses_model_platform(self._settings) or spec.cli is None:
+        if spec.cli is None:
             return None
         if spec.cli.model_source == "local_login":
             return None  # 本机 CLI 用电脑上自己的登录：不取 Key、不查模型分配
@@ -222,19 +219,13 @@ class CliCapabilityAssembly:
         key = await agent_key(self._settings, segment.thread.agent_uuid, spec.name)
         admit_models(key, [spec.model.model])
         assert key.key is not None
-        prompt_cache = spec.model.prompt_cache
-        if prompt_cache:
-            async with self._sessionmaker() as session:
-                prompt_cache = await ModelCatalogRepository(session).supports_cache(
-                    spec.model.model
-                )
         return CliModel(
-            base_url=litellm_url(self._settings),
+            base_url=self._settings.model_gateway_url,
             key=key.key,
             model=spec.model.model,
             small_model=spec.model.model,
             headers={},
-            prompt_cache=prompt_cache,
+            prompt_cache=spec.model.prompt_cache,
         )
 
     async def _mcp_from_gateway(

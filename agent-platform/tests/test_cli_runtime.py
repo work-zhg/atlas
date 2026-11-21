@@ -22,7 +22,7 @@ from atlas_bridge.app import BridgeApp
 from atlas_bridge.config import BridgeConfig
 from atlas_bridge.testing.fake_agent import Script
 from atlas_engine.contracts.events import EventType, TraceEvent
-from atlas_engine.contracts.spec import CliSpec, KnowledgeSpec
+from atlas_engine.contracts.spec import CliSpec, KnowledgeSpec, ModelSpec
 
 TOKEN = "tok-" + "y" * 40
 
@@ -113,6 +113,7 @@ def prepared(
         slug="cli",
         name="CLI",
         cli=cli,
+        model=ModelSpec(model="claude-sonnet-5"),
         tool_names=(),
         skills=(),
         limits=SimpleNamespace(timeout_s=timeout_s),
@@ -153,8 +154,10 @@ class Env:
             cli_ws_connect_timeout_s=5.0,
             cli_prompt_idle_timeout_s=120.0,
             cli_tool_idle_timeout_s=600.0,
-            # 没接模型管理平台：CLI 的模型照旧按部署配置
-            model_platform_url=None,
+            # 模型 Key 从模型管理平台的替身取（conftest 的 fake_model_platform）
+            model_platform_url="http://platform.test",
+            model_platform_timeout_s=5.0,
+            model_gateway_url="http://gw.test/universal",
             # 会话没选凭据档案
             credential_profiles={},
         )
@@ -189,7 +192,11 @@ class Env:
 async def env(tmp_path: Path) -> AsyncIterator[Callable[..., Awaitable[Env]]]:
     apps: list[tuple[BridgeApp, asyncio.Task[int]]] = []
     thread = SimpleNamespace(
-        thread_uuid=uuid4(), created_by_uuid=uuid4(), source_app=None, credential_profiles=[]
+        thread_uuid=uuid4(),
+        agent_uuid=uuid4(),
+        created_by_uuid=uuid4(),
+        source_app=None,
+        credential_profiles=[],
     )
 
     async def start(script: Script | None = None, **cfg: Any) -> Env:

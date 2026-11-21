@@ -144,26 +144,24 @@ async def test_persist_failure_does_not_raise() -> None:
     await hook({"summary": "x"})  # thread 不存在，UPDATE 影响 0 行，不抛
 
 
-async def test_summarizer_uses_injected_builder_and_haiku() -> None:
-    """★ 模型经 model_builder 注入，且固定用 summarizer_model。
+async def test_summarizer_uses_injected_builder_and_endpoint() -> None:
+    """★ 模型经 model_builder 注入，用给定的模型和端点（智能体的客户端 Key）。
 
     自己调 build_chat_model 会绕过注入点 —— P5 的标题生成踩过一次，
     表现是每个测试都真打网关、超时几秒再降级，测试时间从 7.7s 涨到 32.7s。
-
-    模型选择也要断言：摘要是一次**输入很大**的调用，用 opus 代价明显，
-    而它不需要 opus 的推理能力。
     """
+    from atlas_agent.providers.llm.model_platform import ModelEndpoint
     from langchain_core.messages import HumanMessage
 
-    seen: list[str] = []
+    seen: list[tuple[str, str, str]] = []
 
-    def fake_builder(model_spec, **_kw):
-        seen.append(model_spec.model)
+    def fake_builder(model_spec, *, base_url, api_key, **_kw):
+        seen.append((model_spec.model, base_url, api_key))
         return text_model("这是摘要正文")
 
-    settings = get_settings()
-    summarizer = thread_summarizer(settings, fake_builder)
+    endpoint = ModelEndpoint("http://gw/universal", "sk-agent")
+    summarizer = thread_summarizer(fake_builder, "claude-haiku-4-5", endpoint=endpoint)
     result = await summarizer([HumanMessage(content="早期对话")])
 
     assert result == "这是摘要正文"
-    assert seen == [settings.summarizer_model], f"用了 {seen}，应固定为 summarizer_model"
+    assert seen == [("claude-haiku-4-5", "http://gw/universal", "sk-agent")]

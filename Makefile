@@ -35,7 +35,7 @@ mcpgw-serve:   ; uv run python -m atlas_mcpgateway serve
 #   （make up 会建）。管理平台（:8090）登记账号、模型与线路、Key；模型网关（:8091）按 Key 选线路直连供应商。
 #   首次：make modelgw-migrate；应用目录由运营人员在运营中心录入应用目录（见各服务 README「用户中心登记」）；
 #   在模型管理端登记账号、模型与线路，给客户端 Key 分配模型。
-#   atlas-server 配 MODEL_PLATFORM_URL + MODEL_GATEWAY_URL=http://127.0.0.1:8091/universal 才经平台
+#   atlas-server 的 MODEL_PLATFORM_URL、MODEL_GATEWAY_URL 默认就指向这两个端口
 modelgw-migrate: ; uv run python -m atlas_modelgateway migrate
 modelgw-serve:   ; uv run python -m atlas_modelgateway serve
 modelgw-gateway: ; uv run python -m atlas_modelgateway gateway

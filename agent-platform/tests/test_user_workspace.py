@@ -76,9 +76,7 @@ def test_layout_puts_the_workspace_under_files() -> None:
 
 
 def test_workspace_limits_are_runtime_config_keys() -> None:
-    keys = RuntimeKeys.of(
-        Settings(litellm_key="x", workspace_upload_max_mb=7, workspace_quota_mb=0)
-    )  # type: ignore[call-arg]
+    keys = RuntimeKeys.of(Settings(workspace_upload_max_mb=7, workspace_quota_mb=0))  # type: ignore[call-arg]
     names = {k.name: k.default for k in keys.all()}
     assert names["workspace.upload_max_mb"] == 7
     assert names["capacity.storage_mb_per_person"] == 0  # 每人存储配额是租户设置
@@ -97,7 +95,7 @@ def s3() -> Iterator[Any]:
 
 @pytest.fixture
 def files(s3: Any) -> UserFiles:
-    settings = Settings(litellm_key="x", oss_bucket=BUCKET)  # type: ignore[call-arg]
+    settings = Settings(oss_bucket=BUCKET)  # type: ignore[call-arg]
     uf = make_user_files(settings, USER)
     assert uf is not None
     return uf

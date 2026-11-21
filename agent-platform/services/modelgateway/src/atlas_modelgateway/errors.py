@@ -56,7 +56,7 @@ class TooSoon(GatewayError):
 
 
 class Unavailable(GatewayError):
-    """依赖的服务（用户中心、LiteLLM）暂不可用。"""
+    """依赖的服务（用户中心）暂不可用。"""
 
     status_code = 503
     default_code = "UNAVAILABLE"

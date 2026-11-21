@@ -199,7 +199,7 @@ async def test_creating_a_thread_seeds_the_agents_skills(clean_db) -> None:
             Bucket="atlas-seed", Key="_skills/dataviz/1/scripts/plot.py", Body=b"print(1)"
         )
 
-        settings = Settings(litellm_key="x", oss_bucket="atlas-seed")
+        settings = Settings(oss_bucket="atlas-seed")
 
         async with get_sessionmaker()() as session:
             agents = AgentRepository(session)
@@ -243,7 +243,7 @@ async def test_thread_creation_without_object_storage_is_not_an_error(clean_db) 
     from atlas_agent.schemas.thread import ThreadCreate
     from atlas_agent.services.thread import ThreadService
 
-    settings = Settings(litellm_key="x")
+    settings = Settings()
     assert settings.workspace_configured is False
 
     async with get_sessionmaker()() as session:

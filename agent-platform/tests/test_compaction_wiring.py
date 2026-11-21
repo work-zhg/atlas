@@ -317,7 +317,7 @@ async def test_disabled_compaction_leaves_only_offload_and_reminders() -> None:
     from atlas_engine.runtime.context import ContextPorts
     from atlas_engine.runtime.context import context_pipeline as pipeline_for
 
-    settings = Settings(litellm_key="x")
+    settings = Settings()
     manager = ContextManager(None, settings, None)  # type: ignore[arg-type]
     # 关了压缩连窗口都不去查（sessionmaker 是 None，查了就会炸）
     assert await manager._limits_for(_Segment(), workspace=None) is None  # type: ignore[arg-type]

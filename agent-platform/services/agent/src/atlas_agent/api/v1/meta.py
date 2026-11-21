@@ -22,8 +22,7 @@ async def list_models(
 ) -> ModelListResponse:
     """可选的模型。agent_id：编辑已有的智能体；新建时不给。
 
-    经模型管理平台时按这个智能体的客户端 Key 列出（模型管理方案设计 7.2），与权限类型无关；
-    没接平台时：model_catalog ⋈ litellm /v1/models 巡检结果。
+    按这个智能体的客户端 Key 列出（模型管理方案设计 7.2），与权限类型无关。
     """
     if agent_id is None:
         return await service.list_models()

@@ -6,10 +6,8 @@
 返回 BaseChatModel 而不是裸 SDK client，是因为 kernel 基于
 LangGraph，要的就是这个类型 —— 现在建对，P4 不用重写。
 
-网关约束全部在这里落地，调用方不需要知道哪个模型能传什么（实测见 §3）：
-  · temperature：opus-5 / sonnet-5 / fable-5 传了就 400，只有 haiku-4-5 收
+意图（思考、力度、温度）原样发给模型网关，哪个模型能收什么由网关按登记的能力整理：
   · thinking：用 adaptive，绝不传 budget_tokens
-  · effort：langchain-anthropic 0.3.22 没有 output_config 字段，走 model_kwargs
   · base_url：字段名是 anthropic_api_url，不是 base_url
 """
 
@@ -105,22 +103,11 @@ def _build_anthropic(
 
     # ★ langchain-anthropic 1.5 起 output_config 是**原生字段**
     #   （0.3 时没有，只能塞 model_kwargs，那样还会告警）。
-    #   不支持的模型（haiku-4-5）必须完全不带该参数，否则 400。
-    if (effort := spec.resolve_effort()) is not None:
-        kwargs["output_config"] = {"effort": effort}
-
-    # thinking 三态：adaptive / disabled / 完全不发送。
-    # haiku-4-5 属于第三种 —— 它不认 adaptive（实测 400），而它正是摘要与
-    # 标题生成的默认模型，发错了会在 P4/P5 才炸，离病根很远。
+    kwargs["output_config"] = {"effort": spec.resolve_effort()}
     thinking_mode = spec.resolve_thinking()
-    if thinking_mode == "adaptive":
-        kwargs["thinking"] = {"type": "adaptive"}
-    elif thinking_mode == "off":
-        kwargs["thinking"] = {"type": "disabled"}
+    kwargs["thinking"] = {"type": "adaptive" if thinking_mode == "adaptive" else "disabled"}
 
-    # ★ 关键：不支持的模型必须**完全不传**该参数。
-    #   langchain 的 temperature 默认为 None 且 None 不入 payload —— 实测已验证
-    #   （opus-5 在不传时 200，显式传 0.2 时 400）。
+    # langchain 的 temperature 默认为 None 且 None 不入 payload：没设就不发
     if spec.temperature is not None:
         kwargs["temperature"] = spec.temperature
 

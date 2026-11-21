@@ -41,10 +41,8 @@ class ModelKeyOut(BaseModel):
 
 class ModelListResponse(BaseModel):
     data: list[ModelInfo]
-    gateway_reachable: bool = Field(
-        description="false 表示取不到模型列表（巡检失败、模型管理平台不可用）"
-    )
-    #: 经模型管理平台时：这个智能体的客户端 Key 的状态
+    gateway_reachable: bool = Field(description="false 表示取不到模型列表（模型管理平台不可用）")
+    #: 这个智能体的客户端 Key 的状态
     key: ModelKeyOut | None = None
 
 

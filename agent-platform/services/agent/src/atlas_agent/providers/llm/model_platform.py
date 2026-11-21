@@ -4,15 +4,13 @@
                  平台接入前建的智能体在编辑器、Run 开始时补建。
                  创建后「待分配」，管理员分配模型后可用
     可用模型     Key 的有效模型（平台算好的）：编辑器的下拉框、保存时的校验、Run 开始的检查都按它
-    端点         这一次模型调用连哪、带什么 Key：
-                 经平台 = LiteLLM + 客户端 Key；没接平台 = 直连 litellm
-    检查         Run 开始（Native）、建会话（ACP）时：Key 可用、本轮用到的模型都在可用模型里
+    端点         这一次模型调用连哪、带什么 Key：模型网关（model_gateway_url）+ 客户端 Key
+    检查         Run 开始（Native）、建会话（CLI）时：Key 可用、本轮用到的模型都在可用模型里
 
-★ 调 LiteLLM 一律用 Anthropic Messages：非 Anthropic 的模型由 LiteLLM 转换
-  （ACP 的 Claude Code 也只认
-  这一种）。思考、档位、温度等参数仍按 domain/spec.py 的规则只发给支持的模型。
+★ 调模型网关一律用 Anthropic Messages：线路是别的格式由网关转换（CLI 的 Claude Code 也只认
+  这一种）。思考、档位、温度按意图原样发，按上游模型整理参数是网关的事。
 ★ 平台暂时不可用：沿用这个进程上次取到的 Key 和可用模型
-  （最终由 LiteLLM 校验，旧 Key 失效会被拒绝）；
+  （最终由模型网关校验，旧 Key 失效会被拒绝）；
   从没取到过的才报暂时不可用。
 ★ 模型能用哪些与智能体的权限类型无关：同一个智能体对所有使用者一样。
 """
@@ -26,7 +24,6 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
 import httpx
-from atlas_engine.contracts.spec import ModelCaps
 from atlas_tenancy import TenantScope
 
 from ...errors import CapabilityUnavailable
@@ -48,14 +45,12 @@ __all__ = [
     "admit_models",
     "agent_key",
     "client_key",
-    "direct_endpoint",
     "key_endpoint",
     "platform_catalog",
     "register_agent",
     "rename_agent",
     "reset_model_platform_cache",
     "sees_images",
-    "uses_model_platform",
     "with_platform_model",
 ]
 
@@ -64,20 +59,9 @@ AGENT_CLIENT = "Agent"
 
 
 class ModelPlatformUnavailable(CapabilityUnavailable):
-    """没接模型管理平台、连不上，或平台回了错误。"""
+    """模型管理平台连不上，或平台回了错误。"""
 
     system_fault = True
-
-
-def uses_model_platform(settings: Settings) -> bool:
-    return bool(settings.model_platform_url)
-
-
-def litellm_url(settings: Settings) -> str:
-    """经平台时模型调用连的地址：模型网关（model_gateway_url）；过渡期没配网关时连 LiteLLM。"""
-    return (
-        settings.model_gateway_url or settings.model_litellm_url or str(settings.litellm_base_url)
-    )
 
 
 # ───────────────────────────── 平台给的数据
@@ -85,7 +69,7 @@ def litellm_url(settings: Settings) -> str:
 
 @dataclass(frozen=True)
 class PlatformModel:
-    """平台上登记、可调用的一个模型（规格来自 LiteLLM）。"""
+    """平台上登记、可调用的一个模型（规格是登记时填的）。"""
 
     name: str
     display_name: str
@@ -114,7 +98,7 @@ class ClientKey:
     status  pending_models  刚创建、还没分配模型
             active          可用：key 是原文，models 是有效模型
             blocked         被管理员停用
-            no_models       分配的模型都不可用了（被删、LiteLLM 中缺失）
+            no_models       分配的模型都不可用了（被删、停用）
     """
 
     client_type: str
@@ -162,8 +146,6 @@ class ModelPlatformClient:
     transport: ClassVar[httpx.AsyncBaseTransport | None] = None
 
     def __init__(self, settings: Settings) -> None:
-        if not settings.model_platform_url:
-            raise ModelPlatformUnavailable("没有配置模型管理平台（MODEL_PLATFORM_URL）")
         self.base_url = settings.model_platform_url.rstrip("/")
         self._timeout = settings.model_platform_timeout_s
 
@@ -276,8 +258,6 @@ async def register_agent(settings: Settings, agent_id: UUID | str, name: str) ->
 
     ★ 尽力而为：平台暂时不可用不挡住建智能体，编辑器、Run 开始时会补建。
     """
-    if not uses_model_platform(settings):
-        return
     try:
         await ModelPlatformClient(settings).ensure(AGENT_CLIENT, str(agent_id), name)
     except ModelPlatformUnavailable as exc:
@@ -288,8 +268,6 @@ async def register_agent(settings: Settings, agent_id: UUID | str, name: str) ->
 
 async def rename_agent(settings: Settings, agent_id: UUID | str, name: str) -> None:
     """智能体改名：同步客户端 Key 的名字（只影响平台页面上的展示，尽力而为）。"""
-    if not uses_model_platform(settings):
-        return
     try:
         await ModelPlatformClient(settings).rename(AGENT_CLIENT, str(agent_id), name)
     except ModelPlatformUnavailable as exc:
@@ -313,8 +291,8 @@ async def platform_catalog(settings: Settings) -> list[PlatformModel]:
 
 
 async def sees_images(settings: Settings, model: str) -> bool:
-    """模型平台登记时标注了能看图。没标注的、没接平台的、平台从没取到过的，都按不能。"""
-    if not uses_model_platform(settings) or not model:
+    """模型平台登记时标注了能看图。没标注的、平台从没取到过的，都按不能。"""
+    if not model:
         return False
     try:
         catalog = await platform_catalog(settings)
@@ -334,14 +312,9 @@ class ModelEndpoint:
     headers: Mapping[str, str] = field(default_factory=dict)
 
 
-def direct_endpoint(settings: Settings) -> ModelEndpoint:
-    """没接模型管理平台：直连 litellm，平台的一把 Key。"""
-    return ModelEndpoint(str(settings.litellm_base_url), settings.litellm_key.get_secret_value())
-
-
 def key_endpoint(settings: Settings, key: str) -> ModelEndpoint:
-    """经平台：LiteLLM + 客户端 Key。"""
-    return ModelEndpoint(litellm_url(settings), key)
+    """模型网关 + 客户端 Key。"""
+    return ModelEndpoint(settings.model_gateway_url, key)
 
 
 class ModelNotAllowed(CapabilityUnavailable):
@@ -367,13 +340,7 @@ def admit_models(key: ClientKey, names: Sequence[str]) -> None:
         raise ModelNotAllowed("暂时取不到模型 Key，请稍后重试")
 
 
-#: 经模型网关：意图（思考、力度、温度）原样发出，按上游模型整理参数是网关的事
-#: （agent-platform/doc/design/model-gateway-design.html §4），不再套引擎里按模型名写死的规则
-GATEWAY_CAPS = ModelCaps(
-    thinking=True, adaptive_thinking=True, effort=True, temperature=True, prompt_cache=True
-)
-
-
 def with_platform_model(model: Any) -> Any:
-    """模型规格换成经模型网关的调用方式：一律 Anthropic 格式，参数按意图发，网关按上游整理。"""
-    return replace(model, provider="anthropic", caps=GATEWAY_CAPS)
+    """模型规格换成经模型网关的调用方式：一律 Anthropic 格式。思考、力度、温度按意图原样发，
+    按上游模型整理参数是网关的事（agent-platform/doc/design/model-gateway-design.html §4）。"""
+    return replace(model, provider="anthropic")

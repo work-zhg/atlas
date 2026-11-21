@@ -29,7 +29,7 @@ from langchain_core.messages import AIMessageChunk
 from sqlalchemy import select
 
 from tests.fake_uc import AS_USER
-from tests.fakes import JUDGE_MODEL, TurnModel, allow_judge, allowing_judge, tool_call_chunk
+from tests.fakes import JUDGE_MODEL, TurnModel, allow_judge, bind_allowing_judge, tool_call_chunk
 
 pytestmark = pytest.mark.usefixtures("clean_db")
 
@@ -56,9 +56,7 @@ def make_app(parent: TurnModel, child: TurnModel):
     def builder(model_spec, **_kw):
         return models[model_spec.model]
 
-    app.state.executor = build_executor(
-        get_sessionmaker(), allowing_judge(get_settings()), model_builder=builder
-    )
+    app.state.executor = build_executor(get_sessionmaker(), get_settings(), model_builder=builder)
     return app
 
 
@@ -67,6 +65,7 @@ async def client_factory():
     clients: list[httpx.AsyncClient] = []
 
     async def make(parent: TurnModel, child: TurnModel) -> httpx.AsyncClient:
+        await bind_allowing_judge()
         transport = ASGITransport(app=make_app(parent, child))
         c = httpx.AsyncClient(transport=transport, base_url="http://test", headers=AS_USER)
         clients.append(c)

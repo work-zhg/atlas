@@ -30,10 +30,6 @@ jobs:
     env:
       DATABASE_URL: postgresql+asyncpg://atlas:atlas@localhost:5433/atlas
       REDIS_URL: redis://localhost:6380/0
-      LITELLM_BASE_URL: https://apijp.techstz.com
-      # CI 不带真 key：/models 巡检会失败并降级为 gateway_reachable=false，
-      # 这正是我们要测的降级路径（§13.2 不允许静默降级）。
-      LITELLM_KEY: sk-ci-placeholder
       DEFAULT_USER_ID: 00000000-0000-0000-0000-000000000001
 
     steps:

@@ -836,8 +836,7 @@ class ServiceModel(TenantOwned, Base):
 
     每种用途一行：用模型管理平台上的哪把客户端 Key（客户端类型 + 编码，事先在平台上建好、
     分配模型）、
-    用其中哪个模型。经平台时 Atlas 按它取 Key，带着 Key 直连 LiteLLM。
-    没接平台时不用这张表（照旧用部署配置里的 summarizer_model / memory_backfill_model）。
+    用其中哪个模型。Atlas 按它取 Key，带着 Key 调模型网关。
     """
 
     __tablename__ = "service_model"

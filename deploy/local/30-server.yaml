@@ -115,12 +115,10 @@ spec:
               valueFrom: {secretKeyRef: {name: atlas-browser, key: state_keys, optional: true}}
             - name: BROWSER_VIEW_SECRET
               valueFrom: {secretKeyRef: {name: atlas-browser, key: view_secret, optional: true}}
-            # 模型（agent-platform/doc/design/model-gateway-design.html）：ConfigMap atlas-model-platform 有
-            #   platform_url 才经模型平台（38-modelgateway.yaml）；没有时照旧直连 LITELLM_BASE_URL（本机开发）。
-            #   ★ 经平台时每个智能体一把客户端 Key，调模型网关（atlas-llmgateway）的通用接口：按 Anthropic
-            #     格式发，线路是哪种格式由网关转换；会话 Pod 里的 CLI 拿到的也是这个地址和这把 Key
-            - name: MODEL_PLATFORM_URL
-              valueFrom: {configMapKeyRef: {name: atlas-model-platform, key: platform_url, optional: true}}
+            # 模型（agent-platform/doc/design/model-gateway-design.html，38-modelgateway.yaml）：
+            #   每个智能体一把客户端 Key（管理平台 atlas-modelgateway 上取），调模型网关（atlas-llmgateway）的
+            #   通用接口：按 Anthropic 格式发，线路是哪种格式由网关转换；会话 Pod 里的 CLI 拿到的也是这个地址和这把 Key
+            - {name: MODEL_PLATFORM_URL, value: "http://atlas-modelgateway.atlas-system.svc.cluster.local:8090"}
             - {name: MODEL_GATEWAY_URL, value: "http://atlas-llmgateway.atlas-system.svc.cluster.local:8091/universal"}
             # ★ 会话文件预览的 frame-ancestors（previews.py）：经前端网关（:8080，见 40-frontends.yaml）
             #   打开的预览页要能 iframe 嵌入预览站点
@@ -133,10 +131,6 @@ spec:
               valueFrom: {secretKeyRef: {name: atlas-server-creds, key: oss_access_key_id}}
             - name: OSS_ACCESS_KEY_SECRET
               valueFrom: {secretKeyRef: {name: atlas-server-creds, key: oss_access_key_secret}}
-            - name: LITELLM_BASE_URL
-              valueFrom: {secretKeyRef: {name: atlas-server-creds, key: litellm_base_url}}
-            - name: LITELLM_KEY
-              valueFrom: {secretKeyRef: {name: atlas-server-creds, key: litellm_key}}
           # ★ /readyz 在停机交接期间返回 503，负载均衡据此摘流量
           readinessProbe:
             httpGet: {path: /readyz, port: 8000}

@@ -437,10 +437,8 @@ class Backfiller:
 
     async def _ask_json(self, prompt: str) -> Any:
         s = self.settings
-        # 经模型管理平台时按平台服务模型配置（service_model「记忆补记」）取 Key 和模型
-        found = await resolve_service_model(
-            s, "memory_backfill", legacy_model=s.memory_backfill_model or s.summarizer_model
-        )
+        # 按平台服务模型配置（service_model「记忆补记」）取 Key 和模型
+        found = await resolve_service_model(s, "memory_backfill")
         if found is None:
             raise RuntimeError("平台服务「记忆补记」没有可用的模型")
         chat = self._build_model(

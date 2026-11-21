@@ -36,7 +36,7 @@ from sqlalchemy import select
 
 from tests.fake_uc import AS_USER
 
-from .fakes import JUDGE_MODEL, TurnModel, allow_judge, allowing_judge, tool_call_chunk
+from .fakes import JUDGE_MODEL, TurnModel, allow_judge, bind_allowing_judge, tool_call_chunk
 
 pytestmark = pytest.mark.usefixtures("clean_db")
 
@@ -52,7 +52,7 @@ def _task_call(brief: str, name: str, call_id: str) -> AIMessageChunk:
 def make_app(parent: TurnModel, child: TurnModel):
     """派 SubAgent 一律挂起：spawn 立刻返回，父 run 落成 suspended，子 run 跑完叫醒它。"""
     app = create_app()
-    settings = allowing_judge(get_settings())
+    settings = get_settings()
     models = {PARENT_MODEL: parent, CHILD_MODEL: child, JUDGE_MODEL: allow_judge()}
 
     def builder(model_spec, **_kw):
@@ -76,6 +76,7 @@ async def client_factory():
     executors: list[RunWorker] = []
 
     async def make(parent: TurnModel, child: TurnModel) -> tuple[httpx.AsyncClient, RunWorker]:
+        await bind_allowing_judge()
         app = make_app(parent, child)
         c = httpx.AsyncClient(
             transport=ASGITransport(app=app), base_url="http://test", headers=AS_USER

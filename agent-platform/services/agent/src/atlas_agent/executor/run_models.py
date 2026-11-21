@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
 from atlas_engine.runtime.models import build_chat_model
 
 from atlas_agent.telemetry.model_callback import ModelSpanObserver
 
-from ..config import Settings
-from ..providers.llm.model_platform import ModelEndpoint, PlatformModel, direct_endpoint
+from ..providers.llm.model_platform import ModelEndpoint, PlatformModel
 
 if TYPE_CHECKING:
     from .segment_data import Segment
@@ -46,7 +45,7 @@ def default_model_builder(
         model_spec,
         base_url=base_url,
         api_key=api_key,
-        request_timeout_s=get_settings().litellm_timeout_s,
+        request_timeout_s=get_settings().model_timeout_s,
         observers=[ModelSpanObserver()],
         headers=headers,
     )
@@ -56,23 +55,24 @@ def default_model_builder(
 class RunModels:
     """这一轮的模型从哪来（with_models 解析好）：主模型、压缩模型都用这个端点。
 
-    endpoint  经模型管理平台时 = LiteLLM + 智能体的客户端 Key；没接时直连 litellm
-    models    经平台时：Key 的可用模型（上下文窗口、最大输出来自它）；
-              None = 没接，上限照旧读 model_catalog 表
+    endpoint  模型网关 + 智能体的客户端 Key
+    models    Key 的可用模型（上下文窗口、最大输出来自它；没登记的上限读 model_catalog 表）
     """
 
     endpoint: ModelEndpoint
-    models: Mapping[str, PlatformModel] | None = None
+    models: Mapping[str, PlatformModel] = field(default_factory=dict)
 
     def entry(self, model: str) -> PlatformModel | None:
-        return self.models.get(model) if self.models is not None else None
+        return self.models.get(model)
 
     def sees_images(self, model: str) -> bool:
-        """模型平台登记时标注了能看图（Key 的模型条目带着，不用再查平台）。没接平台的按不能。"""
+        """模型平台登记时标注了能看图（Key 的模型条目带着，不用再查平台）。"""
         entry = self.entry(model)
         return entry is not None and entry.supports_vision
 
 
-def models_of(segment: Segment, settings: Settings) -> RunModels:
-    """这一段解析好的模型端点；还没解析（没接平台）就按直连。"""
-    return segment.models or RunModels(direct_endpoint(settings))
+def models_of(segment: Segment) -> RunModels:
+    """这一段解析好的模型端点（with_models 填的）。"""
+    if segment.models is None:
+        raise RuntimeError("这一段的模型还没解析：先过 CapabilityAssembly.with_models")
+    return segment.models

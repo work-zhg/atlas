@@ -34,14 +34,3 @@ class ModelCatalogRepository:
         """请求里塞 cache_control 是否有效（实测落库）；目录里没有按不支持处理。"""
         stmt = select(ModelCatalog.supports_cache).where(ModelCatalog.model == model)
         return bool((await self._session.execute(stmt)).scalar_one_or_none())
-
-    async def sync_availability(self, available_models: set[str]) -> int:
-        """按网关巡检结果刷新 is_available。返回状态发生变化的行数。"""
-        rows = await self.list_all()
-        changed = 0
-        for row in rows:
-            desired = row.model in available_models
-            if row.is_available != desired:
-                row.is_available = desired
-                changed += 1
-        return changed

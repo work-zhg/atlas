@@ -56,17 +56,11 @@ spec:
               valueFrom: {secretKeyRef: {name: atlas-oss-creds, key: oss_access_key_secret}}
             - name: ATLAS_KB_MCP_SECRET
               valueFrom: {secretKeyRef: {name: atlas-knowledge-mcp, key: secret}}
-            # 入库增强（上下文补全、表格摘要）与查询理解用的 LLM：OpenAI 兼容的 chat/completions。
-            #   key 复用 server 的模型网关凭据（同一个 DeepSeek 账号）
-            - {name: ATLAS_KB_LLM_BASE_URL, value: "https://api.deepseek.com"}
-            - {name: ATLAS_KB_LLM_MODEL, value: deepseek-chat}
-            - name: ATLAS_KB_LLM_API_KEY
-              valueFrom: {secretKeyRef: {name: atlas-server-creds, key: litellm_key}}
-            # 模型平台（agent-platform/doc/design/model-gateway-design.html）：ConfigMap atlas-model-platform
-            #   有 platform_url 就按平台上的服务级客户端 Key 调模型网关（atlas-llmgateway）的 OpenAI 格式入口
-            #   （/v1/chat/completions、embeddings、rerank），上面的 LLM 地址、模型、Key 不再用
-            - name: ATLAS_KB_MODEL_PLATFORM_URL
-              valueFrom: {configMapKeyRef: {name: atlas-model-platform, key: platform_url, optional: true}}
+            # 模型平台（agent-platform/doc/design/model-gateway-design.html）：按平台上的服务级客户端 Key
+            #   调模型网关（atlas-llmgateway）的 OpenAI 格式入口（/v1/chat/completions、embeddings、rerank）。
+            #   入库增强（上下文补全、表格摘要）与查询理解用 ATLAS_KB_ENRICH_MODEL（ConfigMap
+            #   atlas-model-platform 的 kb_enrich_model；没有就不做增强）
+            - {name: ATLAS_KB_MODEL_PLATFORM_URL, value: "http://atlas-modelgateway.atlas-system.svc.cluster.local:8090"}
             - {name: ATLAS_KB_MODEL_GATEWAY_URL, value: "http://atlas-llmgateway.atlas-system.svc.cluster.local:8091"}
             - {name: ATLAS_KB_CHAT_CLIENT, value: "Service:knowledge-chat"}
             - name: ATLAS_KB_ENRICH_MODEL
@@ -133,17 +127,11 @@ spec:
               valueFrom: {secretKeyRef: {name: atlas-oss-creds, key: oss_access_key_secret}}
             - name: ATLAS_KB_MCP_SECRET
               valueFrom: {secretKeyRef: {name: atlas-knowledge-mcp, key: secret}}
-            # 入库增强（上下文补全、表格摘要）与查询理解用的 LLM：OpenAI 兼容的 chat/completions。
-            #   key 复用 server 的模型网关凭据（同一个 DeepSeek 账号）
-            - {name: ATLAS_KB_LLM_BASE_URL, value: "https://api.deepseek.com"}
-            - {name: ATLAS_KB_LLM_MODEL, value: deepseek-chat}
-            - name: ATLAS_KB_LLM_API_KEY
-              valueFrom: {secretKeyRef: {name: atlas-server-creds, key: litellm_key}}
-            # 模型平台（agent-platform/doc/design/model-gateway-design.html）：ConfigMap atlas-model-platform
-            #   有 platform_url 就按平台上的服务级客户端 Key 调模型网关（atlas-llmgateway）的 OpenAI 格式入口
-            #   （/v1/chat/completions、embeddings、rerank），上面的 LLM 地址、模型、Key 不再用
-            - name: ATLAS_KB_MODEL_PLATFORM_URL
-              valueFrom: {configMapKeyRef: {name: atlas-model-platform, key: platform_url, optional: true}}
+            # 模型平台（agent-platform/doc/design/model-gateway-design.html）：按平台上的服务级客户端 Key
+            #   调模型网关（atlas-llmgateway）的 OpenAI 格式入口（/v1/chat/completions、embeddings、rerank）。
+            #   入库增强（上下文补全、表格摘要）与查询理解用 ATLAS_KB_ENRICH_MODEL（ConfigMap
+            #   atlas-model-platform 的 kb_enrich_model；没有就不做增强）
+            - {name: ATLAS_KB_MODEL_PLATFORM_URL, value: "http://atlas-modelgateway.atlas-system.svc.cluster.local:8090"}
             - {name: ATLAS_KB_MODEL_GATEWAY_URL, value: "http://atlas-llmgateway.atlas-system.svc.cluster.local:8091"}
             - {name: ATLAS_KB_CHAT_CLIENT, value: "Service:knowledge-chat"}
             - name: ATLAS_KB_ENRICH_MODEL

@@ -32,102 +32,32 @@ def test_engine_import_pulls_no_server_dependency() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 把 2026-08-19 网关实测结论锁进测试（docs/backend-design.md §3）
+# 模型参数：意图原样发，模型收不收由模型网关按登记的能力整理（不按模型名猜）
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("model", ["claude-opus-5", "claude-sonnet-5", "claude-fable-5"])
-def test_temperature_rejected_on_models_that_400(model: str) -> None:
-    """实测：这些模型返回 `temperature` is deprecated for this model. (HTTP 400)"""
-    spec = ModelSpec(model=model, temperature=0.2)
-    with pytest.raises(InvalidSpec, match="temperature"):
-        spec.validate()
+def test_model_intent_is_not_judged_by_model_name() -> None:
+    """engine 不按模型名判断能收什么参数：温度、关思考、档位都原样放过。"""
+    ModelSpec(model="claude-opus-5", temperature=0.2).validate()
+    ModelSpec(model="claude-fable-5", thinking="off", effort="max").validate()
+    ModelSpec(model="claude-haiku-4-5", thinking="adaptive", effort="low").validate()
 
 
-def test_temperature_allowed_on_haiku() -> None:
-    """haiku-4-5 是唯一接受 temperature 的模型。"""
-    ModelSpec(model="claude-haiku-4-5", temperature=0.7).validate()
+def test_auto_intent_is_adaptive_thinking_at_high_effort() -> None:
+    spec = ModelSpec(model="any-model")
+    assert spec.resolve_thinking() == "adaptive"
+    assert spec.resolve_effort() == "high"
 
 
-@pytest.mark.parametrize("effort", ["xhigh", "max"])
-def test_thinking_off_conflicts_with_high_effort(effort: str) -> None:
-    """实测/文档：opus-5 上 thinking=disabled 仅 effort <= high 合法。"""
-    with pytest.raises(InvalidSpec, match="thinking"):
-        ModelSpec(model="claude-opus-5", thinking="off", effort=effort).validate()  # type: ignore[arg-type]
+def test_explicit_intent_is_kept() -> None:
+    spec = ModelSpec(model="any-model", thinking="off", effort="low")
+    assert spec.resolve_thinking() == "off"
+    assert spec.resolve_effort() == "low"
 
 
-def test_thinking_off_ok_at_high_effort() -> None:
-    ModelSpec(model="claude-opus-5", thinking="off", effort="high").validate()
-
-
-# ---------------------------------------------------------------------------
-# adaptive thinking 的模型能力门禁
-# 实测：haiku-4-5 传 adaptive → 400 "adaptive thinking is not supported on this model"
-# 它同时是摘要/标题生成的默认模型，错了会在 P4/P5 才炸。
-# ---------------------------------------------------------------------------
-
-
-def test_adaptive_thinking_rejected_on_haiku() -> None:
-    with pytest.raises(InvalidSpec, match="adaptive"):
-        ModelSpec(model="claude-haiku-4-5", thinking="adaptive").validate()
-
-
-def test_auto_resolves_to_none_on_haiku() -> None:
-    """auto 在不支持的模型上解析为 none —— 即完全不发送 thinking 参数。"""
-    spec = ModelSpec(model="claude-haiku-4-5")
-    spec.validate()
-    assert spec.thinking == "auto"
-    assert spec.resolve_thinking() == "none"
-
-
-@pytest.mark.parametrize("model", ["claude-opus-5", "claude-sonnet-5", "claude-fable-5"])
-def test_auto_resolves_to_adaptive_on_46plus(model: str) -> None:
-    assert ModelSpec(model=model).resolve_thinking() == "adaptive"
-
-
-def test_thinking_cannot_be_disabled_on_fable() -> None:
-    """fable-5 思考恒开，显式 disabled 会 400。"""
-    with pytest.raises(InvalidSpec, match="无法关闭"):
-        ModelSpec(model="claude-fable-5", thinking="off", effort="high").validate()
-
-
-# ---------------------------------------------------------------------------
-# effort 的模型能力门禁
-# 实测：haiku-4-5 传 output_config.effort → 400
-#   "This model does not support the effort parameter."
-# ---------------------------------------------------------------------------
-
-
-def test_effort_rejected_on_haiku() -> None:
-    with pytest.raises(InvalidSpec, match="effort"):
-        ModelSpec(model="claude-haiku-4-5", effort="low").validate()
-
-
-def test_effort_auto_resolves_to_none_on_haiku() -> None:
-    spec = ModelSpec(model="claude-haiku-4-5")
-    spec.validate()
-    assert spec.resolve_effort() is None
-
-
-@pytest.mark.parametrize("model", ["claude-opus-5", "claude-sonnet-5", "claude-fable-5"])
-def test_effort_auto_defaults_to_high(model: str) -> None:
-    assert ModelSpec(model=model).resolve_effort() == "high"
-
-
-def test_summarizer_default_spec_is_valid() -> None:
-    """haiku-4-5 是 §7 摘要与 §8 标题生成的默认模型 —— 开箱即用必须合法。
-
-    这条曾经是坏的：默认 spec 同时带上 adaptive thinking 和 effort，
-    两者 haiku 都不收，会在 P4/P5 才炸。
-    """
-    spec = ModelSpec(model="claude-haiku-4-5")
-    spec.validate()
-    assert spec.resolve_effort() is None
-    assert spec.resolve_thinking() == "none"
-
-
-def test_default_model_spec_is_valid() -> None:
-    ModelSpec(model="claude-opus-5").validate()
+def test_max_output_tokens_must_be_positive() -> None:
+    with pytest.raises(InvalidSpec, match="max_output_tokens"):
+        ModelSpec(model="m", max_output_tokens=0).validate()
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +105,7 @@ def test_agent_spec_propagates_subagent_model_validation() -> None:
         name="x",
         description="d",
         system_prompt="p",
-        model=ModelSpec(model="claude-opus-5", temperature=0.5),
+        model=ModelSpec(model="claude-opus-5", max_output_tokens=0),
     )
     spec = AgentSpec(
         slug="a",
@@ -184,7 +114,7 @@ def test_agent_spec_propagates_subagent_model_validation() -> None:
         model=ModelSpec(model="claude-opus-5"),
         subagents=(bad,),
     )
-    with pytest.raises(InvalidSpec):
+    with pytest.raises(InvalidSpec, match="max_output_tokens"):
         spec.validate()
 
 

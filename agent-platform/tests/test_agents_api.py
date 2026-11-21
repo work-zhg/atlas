@@ -82,30 +82,11 @@ async def test_invalid_slug_rejected(client: httpx.AsyncClient, clean_db: None) 
 # ---------------------------------------------------------------------------
 
 
-async def test_temperature_on_opus_rejected_at_save_time(
+async def test_model_intent_is_saved_whatever_the_model(
     client: httpx.AsyncClient, clean_db: None
 ) -> None:
-    """opus-5 传 temperature 网关会 400；编辑器点保存时就该拦下来（§3 D3）。"""
-    bad = spec(model={"model": "claude-opus-5", "temperature": 0.2})
-    r = await client.post("/v1/agents", json=payload(spec=bad))
-    assert r.status_code == 400, r.text
-    err = r.json()["error"]
-    assert err["kind"] == "invalid_spec"
-    assert "temperature" in err["message"]
-
-
-async def test_effort_on_haiku_rejected_at_save_time(
-    client: httpx.AsyncClient, clean_db: None
-) -> None:
-    bad = spec(model={"model": "claude-haiku-4-5", "effort": "low"})
-    r = await client.post("/v1/agents", json=payload(spec=bad))
-    assert r.status_code == 400, r.text
-    assert r.json()["error"]["kind"] == "invalid_spec"
-
-
-async def test_haiku_without_effort_is_accepted(client: httpx.AsyncClient, clean_db: None) -> None:
-    """auto 解析：haiku 不发 effort/thinking，配置本身是合法的。"""
-    ok = spec(model={"model": "claude-haiku-4-5"})
+    """温度、档位按意图保存，不按模型名拦：模型收不收由模型网关按登记的能力整理。"""
+    ok = spec(model={"model": "claude-haiku-4-5", "effort": "low", "temperature": 0.2})
     r = await client.post("/v1/agents", json=payload(slug="summarizer", spec=ok))
     assert r.status_code == 201, r.text
 
@@ -160,7 +141,8 @@ async def test_patch_with_invalid_spec_does_not_create_version(
 ) -> None:
     created = (await client.post("/v1/agents", json=payload())).json()
     aid = created["id"]
-    bad = spec(model={"model": "claude-opus-5", "temperature": 0.9})
+    sub = {"name": "research", "description": "d", "system_prompt": "p", "model": {"model": "m"}}
+    bad = spec(subagents=[sub, dict(sub)])  # 子智能体重名
     assert (await client.patch(f"/v1/agents/{aid}", json={"spec": bad})).status_code == 400
     versions = (await client.get(f"/v1/agents/{aid}/versions")).json()["data"]
     assert len(versions) == 1  # 校验失败不留半截版本

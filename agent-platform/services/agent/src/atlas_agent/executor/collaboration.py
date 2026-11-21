@@ -27,7 +27,6 @@ from ..config import Settings
 from ..db.models import Thread
 from ..providers.filesystem import make_workspace
 from ..providers.filesystem.skill_copy import resolve_skills, seed_session_skills
-from ..repositories.model_catalog import ModelCatalogRepository
 from ..repositories.run import RunRepository
 from ..services.service_models import resolve_service_model, service_model_configured
 from ..skills import skill_directory
@@ -133,8 +132,7 @@ class Collaboration:
         自动模式时不装。
 
         ★ 模型和用户消息在第一次判断时才取：多数段落用不到判断器，不该为它多一次平台请求。
-          模型按平台服务模型配置（service_model「自动模式判断器」）取 Key；没接平台时用部署配置里的
-          approval_judge_model（空 = summarizer_model）。
+          模型按平台服务模型配置（service_model「自动模式判断器」）取 Key。
         ★ 没配置 → None（PermissionMiddleware 按没有判断器处理）；
           配了但现在用不了 → 抛错（退回请示）
         """
@@ -146,13 +144,9 @@ class Collaboration:
         thread = segment.thread
 
         async def setup() -> JudgeSetup | None:
-            found = await resolve_service_model(
-                settings,
-                "approval_judge",
-                legacy_model=settings.approval_judge_model or settings.summarizer_model,
-            )
+            found = await resolve_service_model(settings, "approval_judge")
             if found is None:
-                if not await service_model_configured(settings, "approval_judge"):
+                if not await service_model_configured("approval_judge"):
                     return None
                 raise CapabilityUnavailable("自动模式判断器的模型现在用不了（原因见日志）")
             model = build_model(
@@ -167,13 +161,8 @@ class Collaboration:
             )
             async with sessionmaker() as session:
                 instructions = await _judge_instructions(RunRepository(session), thread)
-                # 显式缓存标记只对 Anthropic 有用；DeepSeek 这类自己做前缀缓存。
-                # 经模型网关时照打：转成 OpenAI 格式的上游时网关会去掉
-                cache = found.provider == "anthropic" and (
-                    bool(settings.model_gateway_url)
-                    or await ModelCatalogRepository(session).supports_cache(found.model)
-                )
-            return JudgeSetup(model=model, instructions=instructions, cache=cache)
+            # 缓存标记照打：转成别的格式的上游时网关会去掉
+            return JudgeSetup(model=model, instructions=instructions, cache=True)
 
         return JudgePort(setup=setup, timeout_s=settings.approval_judge_timeout_s)
 

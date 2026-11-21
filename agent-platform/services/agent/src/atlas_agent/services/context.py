@@ -19,12 +19,7 @@ from ..config import Settings
 from ..db.models import Agent, AgentVersion, RunEvent, Thread
 from ..db.session import fetch_one
 from ..errors import Conflict, NotFound
-from ..providers.llm.model_platform import (
-    admit_models,
-    agent_key,
-    key_endpoint,
-    uses_model_platform,
-)
+from ..providers.llm.model_platform import admit_models, agent_key, key_endpoint
 from ..repositories.run import RunRepository
 from ..repositories.thread_context import ThreadContextRepository
 from .compaction import thread_summarizer
@@ -86,28 +81,27 @@ class ContextService:
             raise Conflict("没有可压缩的新内容", thread_id=str(thread_id))
 
         agent = await fetch_one(self._s, Agent, Agent.agent_uuid == thread.agent_uuid)
-        model = ""
-        if agent is not None:
-            version = await self._s.scalar(
-                select(AgentVersion)
-                .where(AgentVersion.agent_uuid == agent.agent_uuid)
-                .order_by(AgentVersion.version.desc())
-                .limit(1)
+        if agent is None:
+            raise NotFound(
+                f"会话的智能体 {thread.agent_uuid} 不存在，不能压缩", thread_id=str(thread_id)
             )
-            spec = (version.spec if version is not None else {}) or {}
-            comp = spec.get("compaction") or {}
-            model = resolve_summarizer_model(
-                comp.get("summarizer_model"), (spec.get("model") or {}).get("model") or ""
-            )
-        endpoint = None
-        if uses_model_platform(self._settings) and agent is not None:
-            # 经模型管理平台：智能体的客户端 Key，摘要模型要在它的可用模型里（同 Run 开始的检查）
-            key = await agent_key(self._settings, agent.agent_uuid, agent.name)
-            admit_models(key, [model or self._settings.summarizer_model])
-            assert key.key is not None
-            endpoint = key_endpoint(self._settings, key.key)
+        version = await self._s.scalar(
+            select(AgentVersion)
+            .where(AgentVersion.agent_uuid == agent.agent_uuid)
+            .order_by(AgentVersion.version.desc())
+            .limit(1)
+        )
+        spec = (version.spec if version is not None else {}) or {}
+        comp = spec.get("compaction") or {}
+        model = resolve_summarizer_model(
+            comp.get("summarizer_model"), (spec.get("model") or {}).get("model") or ""
+        )
+        # 智能体的客户端 Key，摘要模型要在它的可用模型里（同 Run 开始的检查）
+        key = await agent_key(self._settings, agent.agent_uuid, agent.name)
+        admit_models(key, [model])
+        assert key.key is not None
         summarizer = thread_summarizer(
-            self._settings, self._build_model, model=model or None, endpoint=endpoint
+            self._build_model, model, endpoint=key_endpoint(self._settings, key.key)
         )
         summary = await summarizer.summarize_history(
             rows, summary=context.summary if context is not None else None, focus=focus

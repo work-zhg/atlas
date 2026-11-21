@@ -40,8 +40,6 @@ sed "s#__POD_CIDRS__#${pod_cidrs}#" deploy/local/08-sandbox-network.yaml | kubec
 kubectl -n atlas-system create secret generic atlas-server-creds \
   --from-literal=oss_access_key_id="${OSS_ACCESS_KEY_ID}" \
   --from-literal=oss_access_key_secret="${OSS_ACCESS_KEY_SECRET}" \
-  --from-literal=litellm_base_url="${LITELLM_BASE_URL}" \
-  --from-literal=litellm_key="${LITELLM_KEY}" \
   --from-literal=cli_model_base_url="${ATLAS_CLI_MODEL_BASE_URL:-${ATLAS_ACP_MODEL_BASE_URL:-${ATLAS_CLUSTER_MODEL_BASE_URL:-}}}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
@@ -65,7 +63,7 @@ secret_value() { kubectl -n atlas-system get secret "$1" -o jsonpath="{.data.$2}
 kubectl -n atlas-system delete secret atlas-modelgateway-creds --ignore-not-found
 # LiteLLM 已退役：模型调用全部经自研模型网关（38-modelgateway.yaml）直连供应商。
 # ★ 删之前先在模型管理端把经 LiteLLM 的线路换成直连账号，否则这些模型就没有线路了。
-#   库 atlas_litellm 不删（留着查旧记录；确认不要了再手动 DROP）
+#   库 atlas_litellm 由 deploy/server/deploy.sh 删（本机的库在宿主 PG 上，要删手动 DROP）
 kubectl -n atlas-system delete deployment/atlas-litellm service/atlas-litellm secret/atlas-litellm-creds \
   --ignore-not-found
 

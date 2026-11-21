@@ -240,10 +240,9 @@ class Spawner:
 
 #: 自动模式判断器在测试里用的模型名。
 #:
-#: ★ 没接模型管理平台时，判断器用 settings.approval_judge_model，空了取 summarizer_model
-#:   （claude-haiku-4-5）—— 正好和不少测试里子智能体的模型同名：判断器的请求会吃掉
-#:   子智能体的脚本，答非所问又解析不出结论，于是退回请示用户，run 停在等审批。
-#:   要放行的测试用 allowing_judge() 把判断器指到这个名字上，再在 builder 里接 ALLOW_JUDGE。
+#: ★ 别和测试里智能体、子智能体的模型同名：判断器的请求会吃掉它们的脚本，答非所问又解析不出
+#:   结论，于是退回请示用户，run 停在等审批。要放行的测试用 bind_allowing_judge() 把判断器
+#:   指到这个名字上，再在 builder 里接 allow_judge()。
 JUDGE_MODEL = "fake-judge"
 
 
@@ -252,9 +251,36 @@ def allow_judge() -> ReplyModel:
     return ReplyModel(replies=[AIMessage(content="ALLOW")])
 
 
-def allowing_judge(settings: Any) -> Any:
-    """settings 的副本，判断器指向 JUDGE_MODEL（builder 里接 allow_judge()）。"""
-    return settings.model_copy(update={"approval_judge_model": JUDGE_MODEL})
+async def bind_service_model(purpose: str, model: str) -> None:
+    """平台服务模型配置：这项用途用客户端 Key Service:{purpose} 的 model（平台替身里 Key 都可用）。
+
+    ★ 写在当前租户里（测试默认在测试租户）；clean_db 会删掉，没用 clean_db 的用
+      unbind_service_model 清掉。
+    """
+    from atlas_agent.config import get_settings
+    from atlas_agent.db.session import get_sessionmaker
+    from atlas_agent.services.service_models import ServiceModelService
+
+    async with get_sessionmaker()() as session:
+        await ServiceModelService(session, get_settings()).set(
+            purpose, client_type="Service", client_code=purpose, model=model, actor=None
+        )
+        await session.commit()
+
+
+async def unbind_service_model(purpose: str) -> None:
+    from atlas_agent.config import get_settings
+    from atlas_agent.db.session import get_sessionmaker
+    from atlas_agent.services.service_models import ServiceModelService
+
+    async with get_sessionmaker()() as session:
+        await ServiceModelService(session, get_settings()).clear(purpose)
+        await session.commit()
+
+
+async def bind_allowing_judge() -> None:
+    """平台服务模型配置里的判断器指向 JUDGE_MODEL（builder 里接 allow_judge()）。"""
+    await bind_service_model("approval_judge", JUDGE_MODEL)
 
 
 def tool_spec(tool: Any) -> ToolSpec:

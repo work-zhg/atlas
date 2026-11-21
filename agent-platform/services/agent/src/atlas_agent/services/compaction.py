@@ -20,36 +20,32 @@ from atlas_engine.contracts.spec import ModelSpec
 from atlas_engine.runtime.summarize import Summarizer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from ..config import Settings
-from ..providers.llm.model_platform import ModelEndpoint, direct_endpoint
+from ..providers.llm.model_platform import ModelEndpoint
 from ..repositories.thread_context import ThreadContextRepository
 
 logger = logging.getLogger(__name__)
 
 
 def thread_summarizer(
-    settings: Settings,
     model_builder: Any,
-    model: str | None = None,
+    model: str,
     *,
-    endpoint: ModelEndpoint | None = None,
+    endpoint: ModelEndpoint,
     provider: str = "anthropic",
 ) -> Summarizer:
     """压缩用的摘要器：模型经 model_builder 注入，与执行器、标题生成共用同一个接缝。
 
-    model：智能体配置的 summarizer_model，空则用部署配置的 summarizer_model。
+    model：智能体配置的 summarizer_model，没配就是智能体自己的模型（resolve_summarizer_model）。
     ★ 不写死 haiku：网关上未必有它，摘要一失败就只能降级丢弃早期对话。
-    endpoint：经模型管理平台时是 LiteLLM + 智能体的客户端 Key（Run 开始时已检查过）；
-    空 = 没接平台，直连 litellm。
+    endpoint：模型网关 + 智能体的客户端 Key（摘要模型已检查过在它的可用模型里）。
     """
-    target = endpoint or direct_endpoint(settings)
 
     def build(spec: ModelSpec) -> Any:
         return model_builder(
-            spec, base_url=target.base_url, api_key=target.api_key, headers=target.headers
+            spec, base_url=endpoint.base_url, api_key=endpoint.api_key, headers=endpoint.headers
         )
 
-    return Summarizer(build, model=model or settings.summarizer_model, provider=provider)
+    return Summarizer(build, model=model, provider=provider)
 
 
 def make_persist_hook(

@@ -2,16 +2,13 @@
 
 ★ 放在单独的模块：runner 属于「纯计算层」（不许依赖 DB / Redis），它只需要这一个函数。
 
-LiteLLM 的拒绝按错误体里的 error.type 分（不按报错文字猜；LiteLLM 1.106 实测）：
-    auth_error / token_not_found_in_db / expired_key
-                            Key 被停用、在本轮进行中被重置或删除 → 本轮停下，重发时取新的 Key
-    key_model_access_denied 等
-                            模型被移出了 Key → 本轮停下，找管理员
-    budget_exceeded         预算用完（在 LiteLLM 里按 Key 配的）→ 本轮停下，找管理员
-    authentication_error    供应商拒绝了 LiteLLM 的凭据（平台的配置事故）
-                            → 本轮失败，不暴露供应商细节（系统忙）
-没有 error.type 的：402（供应商余额不足）= 这个模型的额度用完了，提示换模型；
-其余交给 engine 的 classify 按状态码分类。
+模型网关的拒绝按错误体里的 error.category 分（网关统一的错误类别，
+agent-platform/doc/design/model-gateway-design.html 第 9 节；不按报错文字猜）：
+    key_invalid       Key 被停用、在本轮进行中被重置或删除 → 本轮停下，重发时取新的 Key
+    model_forbidden   模型被移出了 Key、停用 → 本轮停下，找管理员
+    key_limit         Key 的预算或每分钟次数到了上限 → 本轮停下，找管理员（换模型没用）
+    no_route          这个模型的线路都用不了（供应商余额不足、凭据失效、没配线路）→ 提示换模型
+其余（模型繁忙、上游出错、超时）交给 engine 的 classify 按状态码分类。
 """
 
 from __future__ import annotations
@@ -21,7 +18,6 @@ from typing import Any
 
 from atlas_engine.contracts import (
     MODEL_QUOTA,
-    SYSTEM_BUSY,
     EngineError,
     ModelRateLimited,
     ModelUnavailable,
@@ -29,33 +25,25 @@ from atlas_engine.contracts import (
 
 __all__ = ["ModelCallRefused", "model_call_failure"]
 
-#: LiteLLM 的 ProxyErrorTypes。★ 这是和 LiteLLM 之间的协议，升级 LiteLLM 后要复核
-_KEY_REJECTED = frozenset({"auth_error", "token_not_found_in_db", "expired_key"})
-_MODEL_DENIED = frozenset(
-    {"key_model_access_denied", "team_model_access_denied", "user_model_access_denied"}
-)
-_BUDGET = frozenset({"budget_exceeded"})
-#: LiteLLM 把供应商的拒绝按调用协议的格式转回来（Anthropic 格式里是 authentication_error）
-_PROVIDER_REJECTED = frozenset({"authentication_error"})
-
 
 class ModelCallRefused(EngineError):
-    """LiteLLM 拒绝了这一轮里的一次调用：模型被移出了 Key、预算用完。重发也没用，要找人。"""
+    """模型网关拒绝了这一轮里的一次调用：模型被移出了 Key、Key 到了限额。重发也没用，要找人。"""
 
     kind = "model_not_allowed"
 
 
-def _error_type(exc: BaseException) -> tuple[str | None, str]:
-    """→ (error.type, error.message)。
+def _category(exc: BaseException) -> str | None:
+    """→ 网关错误体里的 error.category。
 
-    Anthropic SDK 的 body 是整个错误体，OpenAI SDK 已经取出了 error 这一层。
+    Anthropic SDK 的 body 是整个错误体（流式中途出错时是 error 事件的数据），
+    OpenAI SDK 已经取出了 error 这一层。
     """
     body: Any = getattr(exc, "body", None)
     error = body.get("error", body) if isinstance(body, Mapping) else None
     if not isinstance(error, Mapping):
-        return None, ""
-    kind = error.get("type")
-    return (str(kind) if kind else None), str(error.get("message") or "")
+        return None
+    category = error.get("category")
+    return str(category) if category else None
 
 
 def model_call_failure(exc: BaseException) -> EngineError | None:
@@ -64,29 +52,29 @@ def model_call_failure(exc: BaseException) -> EngineError | None:
     ★ 走到这里时，5xx 已经由 SDK 退避重试过了：暂时性的原因只需告诉用户稍后重发。
     """
     status = getattr(exc, "status_code", None)
-    kind, _ = _error_type(exc)
-    if kind in _KEY_REJECTED:
+    category = _category(exc)
+    if category == "key_invalid":
         # Run 开始时取的是最新的 Key：重发就会换用新的；被停用的话重发会在开始前被拦下
         return ModelUnavailable(
             "模型 Key 在本轮进行中被重置或停用，本轮已停止：重发即可换用新的 Key；"
             "如果 Key 已被停用，请联系模型管理员",
             status_code=status,
-            reason=kind,
+            reason=category,
         )
-    if kind in _MODEL_DENIED:
+    if category == "model_forbidden":
         return ModelCallRefused(
             "本轮已停止：这个模型已经不在智能体的模型 Key 里，请联系模型管理员重新分配",
             status_code=status,
-            reason=kind,
+            reason=category,
         )
-    if kind in _BUDGET:
+    if category == "key_limit":
         return ModelCallRefused(
-            "本轮已停止：模型 Key 的预算已用完，请联系模型管理员", status_code=status, reason=kind
+            "本轮已停止：智能体的模型 Key 到了限额（预算或每分钟次数），请联系模型管理员",
+            status_code=status,
+            reason=category,
         )
-    if status == 402:
-        # 供应商账户余额不足：对用户就是这个模型的额度用完了，换一个模型能接着用
-        return ModelRateLimited(MODEL_QUOTA, status_code=status, reason=kind)
-    if kind in _PROVIDER_REJECTED:
-        # 供应商凭据失效：平台的配置事故，用户处理不了；不暴露供应商的细节
-        return ModelUnavailable(SYSTEM_BUSY, status_code=status, reason=kind)
+    if category == "no_route":
+        # 供应商余额不足、凭据失效：对用户就是这个模型暂时用不了，换一个模型能接着用；
+        # 不暴露供应商的细节
+        return ModelRateLimited(MODEL_QUOTA, status_code=status, reason=category)
     return None

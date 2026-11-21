@@ -28,7 +28,7 @@ from tests.fake_uc import AS_USER
 from tests.fakes import text_model
 from tests.test_runs_api import wait_for_status
 
-LITELLM = "http://litellm.test:4000"
+GATEWAY = "http://gateway.test:8091/universal"
 CATALOG = [
     {"name": "m1", "display_name": "模型一", "provider": "deepseek", "max_input_tokens": 131072, "max_output_tokens": 8192},
     {"name": "m2", "display_name": "模型二", "provider": "anthropic", "max_input_tokens": 200000, "max_output_tokens": 64000},
@@ -83,7 +83,7 @@ class FakePlatform:
 def platform(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakePlatform]:
     fake = FakePlatform()
     monkeypatch.setenv("MODEL_PLATFORM_URL", "http://platform.test")
-    monkeypatch.setenv("MODEL_LITELLM_URL", LITELLM)
+    monkeypatch.setenv("MODEL_GATEWAY_URL", GATEWAY)
     get_settings.cache_clear()
     reset_model_platform_cache()
     reset_service_model_cache()
@@ -197,7 +197,7 @@ async def test_saving_checks_new_models_against_the_key(
 
 
 @pytest.mark.usefixtures("clean_db")
-async def test_run_waits_for_assignment_then_calls_litellm_with_the_agent_key(
+async def test_run_waits_for_assignment_then_calls_the_gateway_with_the_agent_key(
     client: httpx.AsyncClient, platform: FakePlatform, calls: list[dict[str, Any]]
 ) -> None:
     agent = await _agent(client)
@@ -209,8 +209,8 @@ async def test_run_waits_for_assignment_then_calls_litellm_with_the_agent_key(
     done = await _run(client, agent["id"])
     assert done["status"] == "succeeded", done
     main = [c for c in calls if c["spec"].max_output_tokens != 64]
-    assert main and main[0]["base_url"] == LITELLM and main[0]["api_key"] == "sk-agent"
-    # 经平台一律走 Anthropic Messages（LiteLLM 转换）
+    assert main and main[0]["base_url"] == GATEWAY and main[0]["api_key"] == "sk-agent"
+    # 一律走 Anthropic Messages（线路是别的格式由网关转换）
     assert main[0]["spec"].provider == "anthropic"
 
 

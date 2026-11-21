@@ -121,12 +121,8 @@ class TitleService:
 
     async def _ask_model(self, question: str, answer: str) -> str:
         # ★ 不跟随 agent 配置：用大模型生成 20 字标题是纯浪费，effort 在这里也毫无意义。
-        #   经模型管理平台时按 Atlas 库里的平台服务模型配置（service_model「会话标题」）
-        #   取 Key 和模型；
-        #   没接平台时用部署配置里的 summarizer_model。
-        found = await resolve_service_model(
-            self._settings, "title", legacy_model=self._settings.summarizer_model
-        )
+        #   按 Atlas 库里的平台服务模型配置（service_model「会话标题」）取 Key 和模型。
+        found = await resolve_service_model(self._settings, "title")
         if found is None:
             # 没配置、Key 不可用：原因 resolve_service_model 已经记了日志；这里不再打堆栈，直接降级
             return ""
@@ -136,9 +132,8 @@ class TitleService:
                 provider=found.provider,  # type: ignore[arg-type]
                 max_output_tokens=64,
                 # ★ 显式关思考：DeepSeek 默认会思考，64 个 token 全花在思考块上、没有正文，
-                #   标题一律退回问题原文（2026-10-29 在 112 上经 LiteLLM 实测）。
-                #   模型能力不再随模型登记，没法按能力判断；
-                #   思考关不掉的模型（fable-5）会在 validate 报错 → 降级并记日志
+                #   标题一律退回问题原文（2026-10-29 在 112 上实测）。
+                #   思考关不掉的模型由网关按登记的能力处理
                 thinking="off",
             ),
             base_url=found.endpoint.base_url,

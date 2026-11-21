@@ -35,7 +35,7 @@ https://github.com/user-attachments/assets/5eb70f21-fed7-4550-ae41-092f46537028
 | 知识库服务 | `services/knowledge` · `atlas_knowledge` | 8050 | 文档入库（Celery worker）与混合检索，按库、按文档判权限 |
 | 记忆服务 | `services/memory` · `atlas_memory` | 8060 | 按作用域（目前是「用户」）保存跨会话记忆，带修订历史 |
 | MCP 网关 | `services/mcpgateway` · `atlas_mcpgateway` | 8070 | 所有 MCP 调用的唯一入口：代理 MCP Server，把 REST / gRPC 转成工具，按 API Key 授权 |
-| 模型平台 | `services/modelgateway` · `atlas_modelgateway`，加 LiteLLM | 8090 / 4000 | LiteLLM 是模型网关；平台管模型登记、私有模型授权和 API Key，不在调用路径上 |
+| 模型平台 | `services/modelgateway` · `atlas_modelgateway` | 8090 / 8091 | 管理平台管账号、模型与线路、私有模型授权和 API Key；模型网关按 Key 选线路直连供应商 |
 | bridge | `pod/bridge` · `atlas_bridge` | — | 会话 Pod 里的 1 号进程：一头连 Agent 服务（WebSocket），一头连 CLI（ACP over stdio） |
 | 评测 | `bench` · `atlas_bench` | — | RAG 评测和 Agent 评测（含 Terminal-Bench 2），只经各服务的公开接口 |
 
@@ -74,7 +74,7 @@ flowchart LR
     kb["知识库服务"]
     mem["记忆服务"]
     mcp["MCP 网关"]
-    mp["模型平台<br/>+ LiteLLM"]
+    mp["模型平台<br/>+ 模型网关"]
   end
 
   osb["OpenSandbox"]
@@ -111,7 +111,7 @@ flowchart LR
 - **身份**：只有 nginx 网关校验登录（交给用户中心），通过后写入 `X-Uid`、`X-Tenant-Id`，外部带来的身份请求头一律丢弃。
   服务之间内网免令牌，身份在请求头里透传：`X-Uid` 是谁在用，`X-Auth-Uid` 是按谁的权限判，`X-Caller-App` 是哪个应用在调。
   权限都在用户中心：操作码管「能不能做这类事」，数据权限管「对哪些数据」。
-- **外部能力都是独立服务，Agent 服务只经 HTTP 调用**：模型只经 LiteLLM（每个智能体一把客户端 Key，由模型平台分配模型）；
+- **外部能力都是独立服务，Agent 服务只经 HTTP 调用**：模型只经模型网关（每个智能体一把客户端 Key，由模型平台分配模型）；
   MCP 只经 MCP 网关（上游凭据只在网关里）；技能、知识库、记忆各是一个服务。
 - **隔离执行**：Shell 沙箱和会话 Pod 都由 [OpenSandbox](https://github.com/opensandbox-group/OpenSandbox) 创建，平台的服务都不持有 K8s 权限。
   会话工作区在对象存储里，经 S3 CSI 挂进 Pod 的 `/workspace`；Git 之类的凭据经 Credential Vault 注入，Pod 里看不到。
@@ -169,7 +169,7 @@ Python 是一个 uv workspace（根目录 `pyproject.toml` 列出全部成员）
 ## 技术栈
 
 Python 3.13 · FastAPI · SQLAlchemy（async）· Alembic · LangGraph · Celery · PostgreSQL 16 · Redis 7 · Qdrant · MinIO / S3 ·
-LiteLLM · MCP · OpenSandbox · Kubernetes · OpenTelemetry · Next.js · React · Ant Design
+MCP · OpenSandbox · Kubernetes · OpenTelemetry · Next.js · React · Ant Design
 
 ---
 

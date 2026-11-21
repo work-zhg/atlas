@@ -1,30 +1,25 @@
 """元数据服务：编辑器里可选的模型、工具、知识库。
 
-模型：经模型管理平台时按智能体的客户端 Key 列出（模型管理方案设计 7.2）；没接平台时
-model_catalog ⋈ litellm 巡检结果（文档 §11.4）。取不到时**不报错**，把 gateway_reachable 置 false，
-让前端能提示（§13.2「不允许静默降级」）。
+模型：按智能体的客户端 Key 列出（模型管理方案设计 7.2）。平台取不到时**不报错**，
+把 gateway_reachable 置 false，让前端能提示（§13.2「不允许静默降级」）。
 """
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import UUID
 
 import redis.asyncio as aioredis
-from atlas_engine.contracts import ModelUnavailable
 from atlas_engine.runtime.tool_registry import BASH_TOOL, BUILTIN_TOOLS, MEMORY_TOOL
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from atlas_agent.providers.llm.gateway import GatewayConfig, list_models
 from atlas_agent.providers.llm.model_platform import (
     ModelPlatformUnavailable,
     PlatformModel,
     agent_key,
     platform_catalog,
-    uses_model_platform,
 )
 
 from ..config import Settings
@@ -71,8 +66,6 @@ class McpAgent:
     owner: UUID
 
 
-_MODELS_CACHE_KEY = "models:available"
-
 # 内置工具目录从 engine 的注册表派生（tool_registry.py）——
 # 此前这里手写一份，与 SUPPORTED_TOOLS / _middleware_for 三处人肉同步，
 # 目录「说谎」（标可用但 build_agent 不认）就是那时产生的。
@@ -101,71 +94,13 @@ class MetaService:
         self._redis = redis
         self._settings = settings
 
-    async def _available_models(self) -> set[str] | None:
-        """网关可用模型集合。None 表示巡检失败。"""
-        try:
-            cached = await self._redis.get(_MODELS_CACHE_KEY)
-        except Exception:  # Redis 挂了不该让 /models 挂
-            logger.warning("redis unavailable while reading models cache", exc_info=True)
-            cached = None
-
-        if cached:
-            return set(json.loads(cached))
-
-        cfg = GatewayConfig(
-            base_url=str(self._settings.litellm_base_url),
-            api_key=self._settings.litellm_key.get_secret_value(),
-            timeout_s=self._settings.litellm_timeout_s,
-        )
-        try:
-            models = await list_models(cfg)
-        except ModelUnavailable:
-            logger.warning("litellm gateway probe failed", exc_info=True)
-            return None
-
-        try:
-            await self._redis.set(
-                _MODELS_CACHE_KEY, json.dumps(models), ex=self._settings.models_cache_ttl_s
-            )
-        except Exception:
-            logger.warning("redis unavailable while writing models cache", exc_info=True)
-        return set(models)
-
     async def list_models(
         self, *, agent_id: UUID | None = None, agent_name: str = ""
     ) -> ModelListResponse:
-        """agent_id：编辑已有的智能体；新建时不给。"""
-        if uses_model_platform(self._settings):
-            return await self._platform_models(agent_id, agent_name)
-        available = await self._available_models()
-        if available is not None:
-            await self._repo.sync_availability(available)
+        """agent_id：编辑已有的智能体；新建时不给。
 
-        rows = await self._repo.list_all()
-        return ModelListResponse(
-            data=[
-                ModelInfo(
-                    model=r.model,
-                    provider=r.provider,
-                    display_name=r.display_name,
-                    context_window=r.context_window,
-                    max_output_tokens=r.max_output_tokens,
-                    supports_thinking=r.supports_thinking,
-                    supports_adaptive_thinking=r.supports_adaptive_thinking,
-                    supports_effort=r.supports_effort,
-                    supports_cache=r.supports_cache,
-                    supports_temperature=r.supports_temperature,
-                    min_cacheable_tokens=r.min_cacheable_tokens,
-                    is_available=r.is_available,
-                )
-                for r in rows
-            ],
-            gateway_reachable=available is not None,
-        )
-
-    async def _platform_models(self, agent_id: UUID | None, agent_name: str) -> ModelListResponse:
-        """经模型管理平台（模型管理方案设计 7.2）：智能体的客户端 Key 分配了模型就只列它们；
-        还没分配（新建、待分配、停用）就先列平台上登记的全部模型，并说明分配之前不能运行。
+        模型管理方案设计 7.2：智能体的客户端 Key 分配了模型就只列它们；还没分配（新建、待分配、
+        停用）就先列平台上登记的全部模型，并说明分配之前不能运行。
 
         ★ 与权限类型无关：同一个智能体对所有使用者能用的模型相同。
         ★ 思考、档位、温度等能力仍按 model_catalog 表（平台不登记能力）；表里没有的按不支持处理。
@@ -330,10 +265,10 @@ class MetaService:
 
 
 def _platform_info(m: PlatformModel, row: Any) -> ModelInfo:
-    """平台上的模型 → 编辑器认的形状。规格先看平台（LiteLLM 里登记的），能力看 model_catalog 表。"""
+    """平台上的模型 → 编辑器认的形状。规格先看平台（登记时填的），能力看 model_catalog 表。"""
     return ModelInfo(
         model=m.name,
-        # 经平台一律走 Anthropic Messages（LiteLLM 转换）
+        # 一律走 Anthropic Messages（线路是别的格式由网关转换）
         provider="anthropic",
         display_name=m.display_name,
         context_window=m.max_input_tokens or (row.context_window if row else 0),

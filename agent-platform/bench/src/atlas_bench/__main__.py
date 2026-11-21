@@ -43,9 +43,7 @@ logger = logging.getLogger("atlas_bench")
 
 def _llm(settings: BenchSettings, concurrency: int = 4) -> LlmClient:
     if settings.llm_api_key is None:
-        raise SystemExit(
-            "缺少大模型密钥：设置 ATLAS_BENCH_LLM_API_KEY（或 MEMORY_LLM_API_KEY / LITELLM_KEY）"
-        )
+        raise SystemExit("缺少大模型密钥：设置 ATLAS_BENCH_LLM_API_KEY（或 MEMORY_LLM_API_KEY）")
     return LlmClient(
         settings.llm_base_url,
         settings.llm_api_key.get_secret_value(),

@@ -1,8 +1,8 @@
 """模型管理平台在 Atlas 这一侧：调用中途失败怎么告诉用户、客户端 Key 怎么取、Run 开始的检查
 （agent-platform/doc/design/model-design.html 7.3、7.5）。
 
-不碰 DB、不起服务：LiteLLM 的拒绝用 SDK 的真实异常类型构造（错误体照 LiteLLM 1.106 实测），
-平台的内部接口用 MockTransport 顶替。
+不碰 DB、不起服务：模型网关的拒绝用 SDK 的真实异常类型构造（错误体照网关 Anthropic 格式入口的
+error_body），平台的内部接口用 MockTransport 顶替。
 """
 
 from __future__ import annotations
@@ -37,17 +37,26 @@ RUN_ID = UUID("22222222-2222-2222-2222-222222222222")
 AGENT = "33333333-3333-3333-3333-333333333333"
 
 
-def _litellm_refusal(
-    cls: type[anthropic.APIStatusError], status: int, error_type: str, message: str
+def _gateway_refusal(
+    cls: type[anthropic.APIStatusError], status: int, category: str, message: str
 ) -> anthropic.APIStatusError:
-    """LiteLLM 的拒绝（/v1/messages 上也是 {"error": {"type": …}}）。"""
+    """模型网关的拒绝：Anthropic 格式的错误体，error.category 是网关统一的错误类别。"""
     return cls(
         f"Error code: {status}",
-        response=httpx.Response(
-            status, request=httpx.Request("POST", "http://litellm/v1/messages")
-        ),
-        body={"error": {"message": message, "type": error_type, "param": "None", "code": str(status)}},
+        response=httpx.Response(status, request=httpx.Request("POST", "http://gw/v1/messages")),
+        body={
+            "type": "error",
+            "error": {"type": _ANTHROPIC_TYPE[status], "message": message, "category": category},
+        },
     )
+
+
+_ANTHROPIC_TYPE = {
+    401: "authentication_error",
+    403: "permission_error",
+    429: "rate_limit_error",
+    503: "overloaded_error",
+}
 
 
 async def _failed(exc: Exception) -> dict[str, Any]:
@@ -66,60 +75,37 @@ async def _failed(exc: Exception) -> dict[str, Any]:
 
 
 async def test_model_removed_from_key_stops_the_run() -> None:
-    exc = _litellm_refusal(
-        anthropic.PermissionDeniedError,
-        403,
-        "key_model_access_denied",
-        "The requested model 'm1' is not available for this API key",
+    exc = _gateway_refusal(
+        anthropic.PermissionDeniedError, 403, "model_forbidden", "这把 Key 不能用模型 m1"
     )
     data = await _failed(exc)
     assert data["error_kind"] == "model_not_allowed"
     assert data["retryable"] is False
     assert "不在智能体的模型 Key 里" in data["message"]
-    assert data["reason"] == "key_model_access_denied"
+    assert data["reason"] == "model_forbidden"
 
 
-@pytest.mark.parametrize("error_type", ["auth_error", "token_not_found_in_db", "expired_key"])
-async def test_key_blocked_or_reset_mid_run_tells_the_user_to_resend(error_type: str) -> None:
-    exc = _litellm_refusal(anthropic.AuthenticationError, 401, error_type, "Authentication Error")
+async def test_key_blocked_or_reset_mid_run_tells_the_user_to_resend() -> None:
+    exc = _gateway_refusal(anthropic.AuthenticationError, 401, "key_invalid", "这把 Key 已停用")
     data = await _failed(exc)
     assert data["error_kind"] == "model_unavailable"
     assert "重发" in data["message"]
 
 
-def test_budget_exceeded_is_refused() -> None:
-    exc = _litellm_refusal(anthropic.BadRequestError, 400, "budget_exceeded", "Budget has been exceeded")
+def test_key_limit_is_refused() -> None:
+    """Key 的预算或每分钟次数到了上限：换模型没用（同一把 Key），找管理员。"""
+    exc = _gateway_refusal(anthropic.RateLimitError, 429, "key_limit", "本月的预算已经用完")
     found = model_call_failure(exc)
     assert found is not None and found.kind == "model_not_allowed"
-    assert "预算" in found.message
+    assert "限额" in found.message
 
 
-def test_provider_rejections_do_not_leak_provider_details() -> None:
-    """供应商凭据失效（LiteLLM 按 Anthropic 格式转回 authentication_error）= 系统忙；
-    余额不足（402）= 这个模型的额度用完了，提示换模型。都不露供应商的原文。"""
-    bad_credential = anthropic.AuthenticationError(
-        "Error code: 401",
-        response=httpx.Response(401, request=httpx.Request("POST", "http://litellm/v1/messages")),
-        body={
-            "type": "error",
-            "error": {
-                "type": "authentication_error",
-                "message": "DeepseekException - Authentication Fails, Your api key: ****ider",
-            },
-        },
-    )
-    out_of_credit = anthropic.APIStatusError(
-        "Error code: 402",
-        response=httpx.Response(402, request=httpx.Request("POST", "http://litellm/v1/messages")),
-        body={"error": {"message": "Insufficient Balance"}},
-    )
-    found = model_call_failure(bad_credential)
-    assert found is not None and found.kind == "model_unavailable"
-    assert found.message == "系统忙不过来了，请稍后再试"
-    found = model_call_failure(out_of_credit)
+def test_no_route_suggests_another_model_without_provider_details() -> None:
+    """模型的线路都用不了（供应商余额不足、凭据失效）：提示换模型，不露供应商的原文。"""
+    exc = _gateway_refusal(anthropic.APIStatusError, 503, "no_route", "这个模型暂时用不了")
+    found = model_call_failure(exc)
     assert found is not None and found.kind == "model_rate_limited"
     assert "换一个模型" in found.message
-    assert "Insufficient" not in found.message
 
 
 def test_platform_outage_at_run_start_only_says_busy() -> None:
@@ -138,13 +124,10 @@ def test_platform_outage_at_run_start_only_says_busy() -> None:
 
 
 def test_other_failures_are_left_to_engine_classify() -> None:
+    """模型繁忙、上游出错：交给 engine 的 classify 按状态码分。"""
     assert model_call_failure(RuntimeError("boom")) is None
-    exc = anthropic.RateLimitError(
-        "Error code: 429",
-        response=httpx.Response(429, request=httpx.Request("POST", "http://litellm/v1/messages")),
-        body={"type": "error", "error": {"type": "rate_limit_error", "message": "slow down"}},
-    )
-    assert model_call_failure(exc) is None
+    busy = _gateway_refusal(anthropic.RateLimitError, 429, "model_busy", "模型繁忙")
+    assert model_call_failure(busy) is None
 
 
 # ───────────────────────────── 客户端 Key
@@ -152,9 +135,8 @@ def test_other_failures_are_left_to_engine_classify() -> None:
 
 _SETTINGS = SimpleNamespace(
     model_platform_url="http://platform",
-    model_litellm_url="http://litellm",
+    model_gateway_url="http://gw/universal",
     model_platform_timeout_s=5.0,
-    litellm_base_url="http://unused",
 )
 
 

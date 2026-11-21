@@ -377,7 +377,7 @@ async def run(
     watch.start()
 
     try:
-        # ★ 一轮没有时间上限：在干活就不中断。单次模型调用（litellm_timeout_s）与
+        # ★ 一轮没有时间上限：在干活就不中断。单次模型调用（model_timeout_s）与
         #   单次工具调用（如 mcp_call_timeout_s）各有超时，不会无限挂住；
         #   结束只由完成、出错、用户取消、token 上限（max_total_tokens）决定。
         # ★ subgraphs=True：子智能体的内部步骤会以带命名空间的形式流出来。

@@ -77,9 +77,7 @@ class BenchSettings(BaseSettings):
     llm_base_url: str = "https://api.deepseek.com/v1"
     llm_api_key: SecretStr | None = Field(
         default=None,
-        validation_alias=AliasChoices(
-            "ATLAS_BENCH_LLM_API_KEY", "MEMORY_LLM_API_KEY", "LITELLM_KEY"
-        ),
+        validation_alias=AliasChoices("ATLAS_BENCH_LLM_API_KEY", "MEMORY_LLM_API_KEY"),
     )
     llm_timeout_s: float = 300.0
 

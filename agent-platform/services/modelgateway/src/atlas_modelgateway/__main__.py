@@ -11,9 +11,6 @@
                 [--display-name …] [--visibility public] [--kind chat] [--price 4,0.4,16]
     client-key ensure --type Service --code session-title [--name 会话标题] \
                 [--models a,b] [--if-pending]
-    bootstrap-litellm --url http://atlas-litellm:4000 --key-env LITELLM_MASTER_KEY
-                                     过渡：建一个指向 LiteLLM 的账号，给还没有线路的模型各加一条线路
-                                     （上游模型名 = 模型名），网关接管入口后行为和原来一样
     smoke --client Service:session-title --model deepseek-flash [--url http://127.0.0.1:8091]
                                      用这把客户端 Key 经网关的通用接口（Atlas 用的那个）调一次模型
                                      （最多 16 个 token），看通不通
@@ -45,7 +42,7 @@ from sqlalchemy import select
 from .accounts import AccountInput, AccountService
 from .auth import use_outbound
 from .crypto import SecretCipher
-from .db.models import GwApiKey, GwModel, GwRoute
+from .db.models import GwApiKey
 from .db.session import get_engine, get_sessionmaker
 from .errors import GatewayError, Invalid, NotFound
 from .gateway.format import AddressGuard
@@ -293,38 +290,6 @@ def client_key_command(args: argparse.Namespace) -> int:
     return 0
 
 
-def bootstrap_litellm_command(args: argparse.Namespace) -> int:
-    tools = _Tools()
-
-    async def run(session: Any) -> None:
-        actor = await tools.actor(args.actor, args.actor_account)
-        accounts = tools.accounts(session)
-        account = next((a for a in await accounts.list() if a.name == args.account_name), None)
-        if account is None:
-            account = await accounts.create(
-                AccountInput(
-                    args.account_name,
-                    "custom_anthropic",
-                    {"anthropic": args.url.rstrip("/")},
-                    _secret_from_env(args.key_env),
-                    remark="过渡：网关接管入口时，已有的模型先经 LiteLLM 转发",
-                ),
-                actor=actor,
-            )
-        with_routes = {r.model_uuid for r in await session.scalars(select(GwRoute))}
-        added = 0
-        for m in await session.scalars(select(GwModel)):
-            if m.uuid not in with_routes:
-                session.add(
-                    GwRoute(model_uuid=m.uuid, account_uuid=account.uuid, upstream_model=m.name)
-                )
-                added += 1
-        print(f"账号「{account.name}」；给 {added} 个模型加了经 LiteLLM 的线路")
-
-    asyncio.run(tools.run(UUID(args.tenant), run))
-    return 0
-
-
 def encrypt_secrets_command(_: argparse.Namespace) -> int:
     tools = _Tools()
     if not tools.cipher.configured:
@@ -462,13 +427,6 @@ def _parser() -> argparse.ArgumentParser:
     ensure.add_argument("--if-pending", action="store_true", help="已经分配过模型的不覆盖")
     _actor_args(ensure)
 
-    boot = sub.add_parser("bootstrap-litellm", help="过渡：已有模型先经 LiteLLM 转发")
-    boot.add_argument("--tenant", required=True)
-    boot.add_argument("--url", required=True, help="LiteLLM 的地址（集群内）")
-    boot.add_argument("--key-env", required=True, help="LiteLLM master key 所在的环境变量")
-    boot.add_argument("--account-name", default="LiteLLM（过渡）")
-    _actor_args(boot)
-
     smoke = sub.add_parser("smoke", help="用一把客户端 Key 经网关调一次模型")
     smoke.add_argument("--tenant", required=True)
     smoke.add_argument("--client", required=True, help="客户端类型:编码，如 Service:session-title")
@@ -485,7 +443,6 @@ def main(argv: list[str] | None = None) -> int:
         "account": account_command,
         "model": model_command,
         "client-key": client_key_command,
-        "bootstrap-litellm": bootstrap_litellm_command,
         "encrypt-secrets": encrypt_secrets_command,
         "refresh-keys": refresh_keys_command,
         "smoke": smoke_command,

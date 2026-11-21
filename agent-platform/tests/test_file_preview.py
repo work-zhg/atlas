@@ -51,7 +51,7 @@ class FakeRedis:
 
 
 def _settings(**kw) -> Settings:
-    return Settings(litellm_key="x", oss_bucket=BUCKET, **kw)  # type: ignore[call-arg]
+    return Settings(oss_bucket=BUCKET, **kw)  # type: ignore[call-arg]
 
 
 @pytest.fixture

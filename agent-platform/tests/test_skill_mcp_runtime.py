@@ -50,7 +50,7 @@ from tests.fake_uc import AS_USER, TEST_TENANT
 
 
 def _settings(**kw: Any) -> Settings:
-    return Settings(litellm_key="x", **kw)  # type: ignore[call-arg]
+    return Settings(**kw)  # type: ignore[call-arg]
 
 
 @pytest.fixture

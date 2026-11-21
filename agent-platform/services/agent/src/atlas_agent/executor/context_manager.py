@@ -121,8 +121,8 @@ class ContextManager:
         """(窗口, 模型的最大输出)。来自 model_catalog —— 实测落库（§3 D3），不能硬编码：
         opus/sonnet/fable 是 1M，haiku 只有 200k，差 5 倍。"""
         model = segment.spec.model.model
-        # 经平台时上限来自 LiteLLM 里登记的规格；没登记、没接平台时读 model_catalog 表
-        entry = models_of(segment, self._settings).entry(model)
+        # 上限来自模型平台里登记的规格；没登记的读 model_catalog 表
+        entry = models_of(segment).entry(model)
         if entry is not None and entry.max_input_tokens and entry.max_output_tokens:
             return entry.max_input_tokens, entry.max_output_tokens
         async with self._sessionmaker() as session:
@@ -138,10 +138,9 @@ class ContextManager:
         spec = segment.spec
         name = resolve_summarizer_model(spec.compaction.summarizer_model, spec.model.model)
         return thread_summarizer(
-            self._settings,
             self._build_model,
-            model=name,
-            endpoint=models_of(segment, self._settings).endpoint,
+            name,
+            endpoint=models_of(segment).endpoint,
             provider=spec.model.provider,
         )
 

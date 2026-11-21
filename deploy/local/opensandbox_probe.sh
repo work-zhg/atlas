@@ -42,7 +42,6 @@ spec:
       env:
         - {name: DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@${HOST_IP}:5433/atlas_server_test"}
         - {name: REDIS_URL, value: "${PROBE_REDIS_URL}"}
-        - {name: LITELLM_KEY, value: unused}
         - {name: SANDBOX_ENABLED, value: "true"}
         - {name: OPENSANDBOX_SBX_URL, value: "http://opensandbox-sbx.opensandbox-system"}
         - name: OPENSANDBOX_SBX_API_KEY

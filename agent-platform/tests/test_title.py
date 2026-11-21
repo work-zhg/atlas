@@ -16,7 +16,7 @@ from atlas_agent.services.title import _clean, fallback_title
 from httpx import ASGITransport
 
 from tests.fake_uc import AS_USER
-from tests.fakes import text_model
+from tests.fakes import bind_service_model, text_model
 from tests.test_runs_api import wait_for_status
 
 
@@ -64,7 +64,8 @@ async def _run_once(client: httpx.AsyncClient, thread_id: str) -> None:
 
 @pytest.mark.usefixtures("clean_db")
 async def test_new_thread_gets_generated_title(client: httpx.AsyncClient) -> None:
-    """★ P5 完成标准：新会话自动有标题。"""
+    """★ P5 完成标准：新会话自动有标题（平台服务模型配置了「会话标题」）。"""
+    await bind_service_model("title", "claude-haiku-4-5")
     thread_id = await _thread(client)
     before = (await client.get(f"/v1/threads/{thread_id}")).json()
     assert before["title_source"] == "pending"

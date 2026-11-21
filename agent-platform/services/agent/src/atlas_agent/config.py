@@ -62,9 +62,8 @@ class Settings(BaseSettings):
     database_url: str
     redis_url: str
 
-    litellm_base_url: AnyHttpUrl = AnyHttpUrl("https://apijp.techstz.com")
-    litellm_key: SecretStr
-    litellm_timeout_s: float = 120.0
+    #: 单次模型调用的超时（流式时是两段数据之间的最大间隔）。不是一轮的上限
+    model_timeout_s: float = 120.0
 
     # ── 身份与鉴权（doc/auth-permission-design.html、doc/identity-propagation-design.html）──
     #: 身份一律来自请求头（网关按登录态写入 X-Uid；业务应用调用时写它的用户），缺 X-Uid 一律 401；
@@ -81,7 +80,6 @@ class Settings(BaseSettings):
     ops_api_key: SecretStr | None = None
 
     default_model: str = "claude-sonnet-5"
-    summarizer_model: str = "claude-haiku-4-5"  # §8 标题（压缩的摘要模型改由智能体配置决定）
     #: 系统提示词里「今天是哪天」按这个时区算（IANA 名）。Pod 默认是 UTC，不设的话北京时间
     #: 0–8 点模型会以为还是昨天
     prompt_timezone: str = "Asia/Shanghai"
@@ -110,9 +108,7 @@ class Settings(BaseSettings):
     deferred_tools_min_tokens: int = 10_000
     titling_timeout_s: float = 3.0
     # ── 自动模式的判断器（kernel/middleware/auto_judge.py）──────────────
-    #: 判断用的快模型（没接模型管理平台时）。空 = summarizer_model。
-    #: 经平台时按平台服务模型配置（service_model「自动模式判断器」）取 Key 和模型
-    approval_judge_model: str | None = None
+    #: 模型按平台服务模型配置（service_model「自动模式判断器」）取 Key 和模型
     #: 一次判断（含复核）的超时。超时按判断器出错处理：退回请示用户，不替用户做决定
     approval_judge_timeout_s: float = 60.0
 
@@ -135,8 +131,6 @@ class Settings(BaseSettings):
     #:   的话耗尽后表现为「所有 HTTP 请求一起变慢」，而根因在一批挂着的长连接。
     #:   宁可对第 N+1 个明确 503：它是可重试的，而慢到超时不是。
     sse_max_connections: int = 200
-
-    models_cache_ttl_s: int = 300
 
     # ── 横向扩展（doc/horizontal-scaling-design.html）──────────────
     #: 进程角色：api 只接请求与 SSE（并发上限为 0，它接到的 run 由别的实例的兜底任务接走）；
@@ -356,8 +350,6 @@ class Settings(BaseSettings):
     memory_backfill_max_writes: int = 8
     #: 连续失败这么多次就不再自动重试这个会话（避免反复烧 LLM）；有新消息后重新计数
     memory_backfill_max_failures: int = 3
-    #: 抽取 / 拆分用的模型。空 = summarizer_model
-    memory_backfill_model: str | None = None
 
     # ── 遥测（可观测性设计 §02）────────────────────────────────────
     #
@@ -416,19 +408,15 @@ class Settings(BaseSettings):
     mcp_max_result_chars: int = 100_000
 
     # ── 模型管理平台（agent-platform/doc/design/model-design.html）──────────
-    #: 模型管理平台地址。配了就经平台：每个智能体一把客户端 Key
-    #: （客户端类型 Agent、编码 = 智能体 id），编辑器、Run 开始、ACP 建会话时取 Key 和可用模型，
-    #: 带着 Key 直连 LiteLLM（model_litellm_url）；
-    #: 会话标题、记忆补记按库里的平台服务模型配置（service_model 表）取 Key。
-    #: 空 = 没接入：照旧直连 litellm_base_url、用 litellm_key
-    model_platform_url: str | None = None
-    #: 模型网关通用接口的地址（agent-platform/doc/design/model-gateway-design.html），
-    #: 如 http://atlas-llmgateway:8091/universal：经平台时模型调用连它，Pod 里的 CLI 也连它
-    #: （ANTHROPIC_BASE_URL）。一律按 Anthropic 格式发，线路是哪种格式由网关转换。
-    #: 空 = 过渡期还连 LiteLLM（model_litellm_url）
-    model_gateway_url: str | None = None
-    #: LiteLLM 地址：没配模型网关时模型调用连它。空 = 用 litellm_base_url
-    model_litellm_url: str | None = None
+    #: 模型管理平台地址。每个智能体一把客户端 Key（客户端类型 Agent、编码 = 智能体 id），
+    #: 编辑器、Run 开始、CLI 建会话时取 Key 和可用模型，带着 Key 调模型网关（model_gateway_url）；
+    #: 会话标题、记忆补记、判断器按库里的平台服务模型配置（service_model 表）取 Key。
+    #: 默认是本机开发的端口（make modelgw-serve）
+    model_platform_url: str = "http://127.0.0.1:8090"
+    #: 模型网关通用接口的地址（agent-platform/doc/design/model-gateway-design.html）：
+    #: 模型调用都连它，Pod 里的 CLI 也连它（ANTHROPIC_BASE_URL）。一律按 Anthropic 格式发，
+    #: 线路是哪种格式由网关转换。默认是本机开发的端口（make modelgw-gateway）
+    model_gateway_url: str = "http://127.0.0.1:8091/universal"
     #: 调平台的超时
     model_platform_timeout_s: float = 10.0
 

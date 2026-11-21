@@ -34,6 +34,8 @@ from atlas_engine.contracts import ToolEffect
 from atlas_engine.runtime.tool_registry import MEMORY_TOOL, tool_effects
 from sqlalchemy import delete, select, text
 
+from tests.fakes import bind_service_model, unbind_service_model
+
 MEMORY_DB = "atlas_memory_test"
 _ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
 MEMORY_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{MEMORY_DB}"
@@ -146,7 +148,6 @@ async def memory_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
 
 def _settings(**kw: Any) -> Settings:
     return Settings(  # type: ignore[call-arg]
-        litellm_key="x",
         memory_base_url="http://memory",
         memory_topic_max_chars=kw.pop("memory_topic_max_chars", 200),
         **kw,
@@ -163,7 +164,10 @@ def owners() -> list[UUID]:
 async def rt(memory_app: Any, owners: list[UUID]) -> AsyncIterator[MemoryRuntime]:
     client = MemoryClient("http://memory", transport=httpx.ASGITransport(app=memory_app))
     runtime = MemoryRuntime(_settings(), get_sessionmaker(), client)
+    # 补记的模型按平台服务模型配置取（假模型不看名字）
+    await bind_service_model("memory_backfill", "claude-haiku-4-5")
     yield runtime
+    await unbind_service_model("memory_backfill")
     async with get_sessionmaker()() as session:
         await session.execute(delete(ThreadMemory).where(ThreadMemory.thread_uuid.in_(owners)))
         await session.execute(

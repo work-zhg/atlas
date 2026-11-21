@@ -82,7 +82,7 @@ class Segment:
     #: 自动压缩连续失败了几次（熔断用）
     compact_count: int = 0
     compaction_failures: int = 0
-    #: 这一轮的模型端点与目录（CapabilityAssembly.with_models 填）。None = 还没解析，按直连处理
+    #: 这一轮的模型端点与目录（CapabilityAssembly.with_models 填）。None = 还没解析
     models: RunModels | None = None
     #: 这一轮能查的知识集（CapabilityAssembly.with_knowledge 填，按这一轮的权限展开）。
     #: None = 没有能查的知识集

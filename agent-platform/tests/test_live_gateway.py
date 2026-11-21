@@ -1,6 +1,9 @@
-"""对真实 litellm 网关的集成测试 —— 默认跳过。
+"""对真实模型网关的集成测试 —— 默认跳过。
 
-    ATLAS_LIVE_TESTS=1 uv run pytest tests/test_live_gateway.py -v
+    ATLAS_LIVE_TESTS=1 ATLAS_LIVE_MODEL_KEY=<客户端 Key> uv run pytest tests/test_live_gateway.py -v
+
+网关地址取 MODEL_GATEWAY_URL（默认本机 http://127.0.0.1:8091/universal）；
+Key 要分配了下面用到的模型。
 
 CI 不跑（无 key、会真实计费）。但本地改动 model_factory / compat 后必须跑一遍：
 单测用假模型，覆盖不到"网关到底收不收这个参数"这一层，而那恰恰是踩过坑的地方。
@@ -27,14 +30,13 @@ RUN_ID = UUID("22222222-2222-2222-2222-222222222222")
 
 
 def _creds() -> tuple[str, str]:
-    base = os.getenv("LITELLM_BASE_URL", "https://apijp.techstz.com")
-    key = os.environ["LITELLM_KEY"]
+    base = os.getenv("MODEL_GATEWAY_URL", "http://127.0.0.1:8091/universal")
+    key = os.environ["ATLAS_LIVE_MODEL_KEY"]
     return base, key
 
 
 def _spec(model: str) -> AgentSpec:
-    # 刻意不指定 effort / thinking —— 让 engine 按模型能力解析。
-    # 写死 effort="low" 会在 haiku-4-5 上被正确拒绝（它不支持该参数）。
+    # 刻意不指定 effort / thinking —— 按默认意图发，模型收不收由网关整理
     return AgentSpec(
         slug="live",
         name="live",
@@ -66,21 +68,6 @@ async def test_live_stream_end_to_end(model: str) -> None:
 
     usage = next(e.data for e in events if e.type == EventType.USAGE_UPDATED)
     assert usage["output_tokens"] > 0
-
-
-async def test_live_temperature_rejected_by_gateway() -> None:
-    """确认 supports_temperature 门禁的依据仍然成立（网关行为若变，这里会亮）。"""
-    base, key = _creds()
-    from atlas_engine.contracts import InvalidSpec
-
-    # engine 侧先拦下来
-    with pytest.raises(InvalidSpec):
-        build_chat_model(
-            ModelSpec(model="claude-opus-5", temperature=0.2),
-            base_url=base,
-            api_key=key,
-            request_timeout_s=120,
-        )
 
 
 async def test_live_tools_produce_inspector_data() -> None:

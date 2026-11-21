@@ -139,13 +139,10 @@ def main(argv: list[str] | None = None) -> int:
         from .config import get_settings
         from .db.models import Agent
         from .db.session import get_engine, get_sessionmaker
-        from .providers.llm.model_platform import agent_key, uses_model_platform
+        from .providers.llm.model_platform import agent_key
 
         async def _register() -> int:
             settings = get_settings()
-            if not uses_model_platform(settings):
-                print("✗ 没有接入模型管理平台（MODEL_PLATFORM_URL）", file=sys.stderr)
-                return 1
             try:
                 async with get_sessionmaker()() as session:
                     live = select(Agent).where(Agent.status != "archived")

@@ -38,7 +38,6 @@ from ..providers.llm.model_platform import (
     platform_catalog,
     register_agent,
     rename_agent,
-    uses_model_platform,
 )
 from ..providers.mcp import make_mcp_catalog, mcp_agent_access
 from ..providers.mcp.gateway import delete_agent_key, register_agent_key, rename_agent_key
@@ -611,14 +610,14 @@ class AgentService:
     async def _check_models(
         self, spec: AgentSpecIn, *, previous: AgentSpecIn | None, agent: Agent | None
     ) -> None:
-        """新选的或换了的模型（模型管理方案设计 7.2）：经模型管理平台时，智能体的客户端 Key 已经
+        """新选的或换了的模型（模型管理方案设计 7.2）：智能体的客户端 Key 已经
         分配了模型 → 新选的要在它的可用模型里；还没分配（新建、待分配、停用）→ 新选的要是平台上
         登记了的模型（分配之前它不能运行，Run 开始时会说清楚）。
 
         ★ 只校验**新选**的：旧版本已经选着的不重判 —— 模型被移出 Key 以后，连改提示词都保存不了
           就太过了；运行时会明确报出来。
         """
-        if self._settings is None or not uses_model_platform(self._settings):
+        if self._settings is None:
             return
         added = sorted(_models_of(spec) - (_models_of(previous) if previous else set()))
         if not added:

@@ -1,8 +1,8 @@
 """智能体 API schema（文档 §11.1）。
 
 这里是 server 与 engine 的接缝：请求体 → engine 的 AgentSpec dataclass。
-**保存时就调用 spec.validate()**，于是"opus-5 不收 temperature"这类错误
-在编辑器点保存的瞬间就被拒，而不是等到某次 run 才 400（§3 D3）。
+**保存时就调用 spec.validate()**，配置错误在编辑器点保存的瞬间就被拒，而不是等到某次 run
+才失败（§3 D3）。模型收不收某个参数不在这里判断：意图原样发，由模型网关按上游整理。
 """
 
 from __future__ import annotations

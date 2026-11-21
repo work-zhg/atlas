@@ -45,13 +45,10 @@ from ..providers.filesystem import WorkspaceRouting, make_workspace
 from ..providers.llm.model_platform import (
     admit_models,
     agent_key,
-    direct_endpoint,
     key_endpoint,
     sees_images,
-    uses_model_platform,
     with_platform_model,
 )
-from ..repositories.model_catalog import ModelCatalogRepository
 from ..runtime_config import RuntimeConfig
 from ..services.title import TitleService
 from ..stream.relay import EventRelay
@@ -160,7 +157,7 @@ class CapabilityAssembly:
             readable_store=tools.readable_store,
         )
 
-        models = models_of(segment, self._settings)
+        models = models_of(segment)
         endpoint = models.endpoint
         chat = self._build_model(
             segment.spec.model,
@@ -218,15 +215,13 @@ class CapabilityAssembly:
     async def with_models(self, segment: Segment) -> Segment:
         """这一轮用到的模型能不能用、怎么连（模型管理方案设计 7.3）。
 
-        经模型管理平台时：取这个智能体的客户端 Key（每轮都取最新的；没有就补建，「待分配」），
+        取这个智能体的客户端 Key（每轮都取最新的；没有就补建，「待分配」），
         检查主模型和压缩模型都在可用模型里，用不了就本轮不开始（ModelNotAllowed）。
-        端点 = LiteLLM + 这把 Key；调用一律走 Anthropic Messages（LiteLLM 转换）。
+        端点 = 模型网关 + 这把 Key；调用一律走 Anthropic Messages（线路是别的格式由网关转换）。
         ★ 与权限类型无关：同一个智能体对所有使用者能用的模型相同。
         ★ SubAgent 的模型只换调用方式：它们在自己的 Run 开始时检查（内联的沿用同一个智能体的 Key）。
         """
         s = self._settings
-        if not uses_model_platform(s):
-            return dataclasses.replace(segment, models=RunModels(direct_endpoint(s)))
         spec = segment.spec
         needed = [spec.model.model]
         if spec.compaction.enabled:
@@ -320,19 +315,12 @@ class CapabilityAssembly:
         return titler
 
     async def _prompt_cache_ttl(self, segment: Segment) -> Literal["5m", "1h"] | None:
-        """开了缓存、且模型实测支持时才打 cache_control —— 编辑器里的开关就是这里生效。
+        """开了缓存才打 cache_control —— 编辑器里的开关就是这里生效。
 
-        ★ supports_cache 为假的模型（DeepSeek）塞了 cache_control 也不起作用（迁移 0008 实测），
-          它自己的上下文缓存不受影响。
+        ★ 不看模型支不支持：转成别的格式的上游时网关会去掉缓存标记。
         """
         if not segment.spec.model.prompt_cache:
             return None
-        if self._settings.model_gateway_url and uses_model_platform(self._settings):
-            # 经模型网关：缓存标记照打，转成 OpenAI 格式的上游时网关会去掉
-            return self._settings.prompt_cache_ttl
-        async with self._sessionmaker() as session:
-            if not await ModelCatalogRepository(session).supports_cache(segment.spec.model.model):
-                return None
         return self._settings.prompt_cache_ttl
 
 

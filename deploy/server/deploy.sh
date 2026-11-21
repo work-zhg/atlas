@@ -61,7 +61,7 @@ fi
 if [ -f .env ]; then
   # shellcheck disable=SC1091
   set -a; . ./.env; set +a
-  for v in OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET LITELLM_BASE_URL LITELLM_KEY; do
+  for v in OSS_ACCESS_KEY_ID OSS_ACCESS_KEY_SECRET; do
     [ -n "${!v:-}" ] || missing+=(".env 的 $v")
   done
 else
@@ -191,7 +191,7 @@ kubectl -n atlas-system delete pod atlas-migrate --ignore-not-found --wait=true 
 kubectl -n atlas-system run atlas-migrate --image="$APP_IMAGE" --image-pull-policy=Never \
   --restart=Never --attach --rm --quiet \
   --env="DATABASE_URL=postgresql+asyncpg://atlas:atlas@postgres.${INFRA}:5432/atlas" \
-  --env="REDIS_URL=redis://redis.${INFRA}:6379/0" --env="LITELLM_KEY=unused" \
+  --env="REDIS_URL=redis://redis.${INFRA}:6379/0" \
   --env="TENANT_BACKFILL_UUID=${TENANT_BACKFILL_UUID:-}" \
   -- sh -c 'alembic upgrade head && python -m atlas_agent migrate-appconfig'
 
@@ -202,6 +202,9 @@ ATLAS_OSS_ADDR="minio.${INFRA}:9000" ATLAS_QDRANT_ADDR="qdrant.${INFRA}:6333" \
 ATLAS_OTEL_ADDR="otel-collector.${INFRA}:4318" \
 ATLAS_PUBLIC_ORIGIN="${PUBLIC_SCHEME}://${PUBLIC_HOST}" ATLAS_APP_IMAGE="$APP_IMAGE" \
   deploy/local/apply.sh
+# LiteLLM 已退役（apply.sh 删了它的 Deployment）：它的库也删掉。FORCE 断开残留连接（幂等）
+kubectl -n atlas-infra exec statefulset/postgres -- psql -U atlas -d atlas -qc \
+  "DROP DATABASE IF EXISTS atlas_litellm WITH (FORCE)"
 ATLAS_HOST_IP="$SERVER_IP" ATLAS_FRONTENDS_IMAGE="$FRONTENDS_IMAGE" deploy/local/frontends.sh --no-build
 sed "s/__ATLAS_HOST__/${PUBLIC_HOST}/g" deploy/server/20-ingress.yaml | kubectl apply -f -
 
