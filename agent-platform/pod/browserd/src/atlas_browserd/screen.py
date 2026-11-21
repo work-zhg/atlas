@@ -180,34 +180,60 @@ class XInput:
         self._env = {**os.environ, "DISPLAY": display}
 
     def click(self, x: int, y: int, *, repeat: int = 1) -> None:
-        self._run("mousemove", "--sync", str(x), str(y))
+        self._move(x, y)
         self._run("click", "--repeat", str(repeat), "--delay", "80", "1")
 
     def drag(self, a: tuple[int, int], b: tuple[int, int], *, steps: int = 12) -> None:
         """按下、分几步挪过去、松开：滑块要看到中间的移动才认。"""
-        self._run("mousemove", "--sync", str(a[0]), str(a[1]))
+        self._move(*a)
         self._run("mousedown", "1")
+        at = a
         for i in range(1, steps + 1):
-            x = a[0] + (b[0] - a[0]) * i // steps
-            y = a[1] + (b[1] - a[1]) * i // steps
-            self._run("mousemove", "--sync", str(x), str(y))
+            step = (a[0] + (b[0] - a[0]) * i // steps, a[1] + (b[1] - a[1]) * i // steps)
+            if step != at:  # 挪得近时相邻几步落在同一点：原地 --sync 会卡住（见 _move）
+                self._run("mousemove", "--sync", str(step[0]), str(step[1]))
+                at = step
             time.sleep(0.02)
         self._run("mouseup", "1")
 
     def scroll(self, x: int, y: int, direction: str, times: int) -> None:
         button = {"up": "4", "down": "5", "left": "6", "right": "7"}[direction]
-        self._run("mousemove", "--sync", str(x), str(y))
+        self._move(x, y)
         self._run("click", "--repeat", str(times), "--delay", "50", button)
 
     def keys(self, combo: str) -> None:
         self._run("key", "--clearmodifiers", combo)
 
-    def _run(self, *args: str) -> None:
-        done = subprocess.run(
-            ["xdotool", *args], env=self._env, capture_output=True, text=True, timeout=10
-        )
+    def _move(self, x: int, y: int) -> None:
+        """把鼠标挪到 (x, y)，等它到位。
+
+        ★ 鼠标已经在那儿就不挪：mousemove --sync 原地不动时等不到移动事件，一直卡到超时 ——
+          同一个坐标连点两次必现（网站的「再点一次即可下载」正好撞上；会话 01a1f830 里三次）。
+        """
+        if self._pointer() == (x, y):
+            return
+        self._run("mousemove", "--sync", str(x), str(y))
+
+    def _pointer(self) -> tuple[int, int] | None:
+        """鼠标现在的位置。读不出来返回 None（照常挪）。"""
+        out = self._run("getmouselocation", "--shell")
+        values = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+        try:
+            return int(values["X"]), int(values["Y"])
+        except (KeyError, ValueError):
+            return None
+
+    def _run(self, *args: str) -> str:
+        try:
+            done = subprocess.run(
+                ["xdotool", *args], env=self._env, capture_output=True, text=True, timeout=10
+            )
+        except subprocess.TimeoutExpired as exc:
+            # 报成普通的失败：不让 Traceback 出现在给模型看的输出里
+            raise RuntimeError(f"xdotool {args[0]} 超时（10s 没完成），请重新看一眼再操作") from exc
         if done.returncode != 0:
             raise RuntimeError(f"xdotool {args[0]} 失败：{done.stderr.strip() or done.returncode}")
+        return done.stdout
 
 
 # ---------------------------------------------------------------------------- 排队

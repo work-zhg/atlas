@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .downloads import DOWNLOAD_DIR
 from .paths import CDP_PORT, Paths
 from .screens import Slot
 from .spec import ProcessSpec
@@ -250,12 +251,15 @@ class Supervisor:
             time.sleep(1.0)
 
 
-def quiet_profile(paths: Paths) -> None:
-    """Chromium 起来之前改 profile 的偏好：不弹「翻译此页」。
+def quiet_profile(paths: Paths, downloads: Path = DOWNLOAD_DIR) -> None:
+    """Chromium 起来之前改 profile 的偏好：不弹「翻译此页」；下载固定进 downloads、不弹确认。
 
     ★ Google Chrome 157 不认 --disable-features=Translate（11-16 VPS 实测仍弹），气泡盖在右上角，
       computer use 截图里多一块、可能挡住要点的东西。偏好在 Chrome 退出时会被它整份写回，所以每次
       拉起前都改一次。读不了（损坏）就不动它。
+    ★ 下载（会话 01a1f830）：不指定目录时模型找不到文件下到哪了；同一个网站连着下第二个文件时
+      Chrome 要确认「允许下载多个文件」，下载停在 Unconfirmed *.crdownload。browser downloads 按
+      这个目录列。
     """
     prefs = paths.profile / "Default" / "Preferences"
     try:
@@ -264,9 +268,26 @@ def quiet_profile(paths: Paths) -> None:
         return
     if not isinstance(data, dict):
         return
-    translate = data.setdefault("translate", {})
-    if isinstance(translate, dict) and translate.get("enabled") is not False:
-        translate["enabled"] = False
+    want = {
+        ("translate", "enabled"): False,
+        ("download", "default_directory"): str(downloads),
+        ("download", "prompt_for_download"): False,
+        ("download", "directory_upgrade"): True,
+        ("profile", "default_content_setting_values", "automatic_downloads"): 1,
+    }
+    changed = False
+    for keys, value in want.items():
+        node = data
+        for key in keys[:-1]:
+            child = node.get(key)
+            if not isinstance(child, dict):
+                child = node[key] = {}
+            node = child
+        if node.get(keys[-1]) != value:
+            node[keys[-1]] = value
+            changed = True
+    downloads.mkdir(parents=True, exist_ok=True)
+    if changed:
         prefs.parent.mkdir(parents=True, exist_ok=True)
         prefs.write_text(json.dumps(data))
 

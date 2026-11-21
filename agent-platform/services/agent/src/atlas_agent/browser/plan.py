@@ -105,7 +105,8 @@ class BrowserPlan:
 #: 这里只说这次能用哪几种
 _HINT = """## 浏览器
 你可以用 Shell 里的 browser 命令操作一个浏览器（{where}）。{ways}
-遇到登录、验证码、扫码，调用 request_takeover 请用户接管，不要自己输密码。"""
+遇到登录、验证码、扫码，调用 request_takeover 请用户接管，不要自己输密码。
+下载的文件用 browser downloads 看（完成没有、卡住没有；--wait 等它下完），不用自己去找。"""
 
 
 def browser_hint(plan: BrowserPlan, *, vision: bool) -> str:

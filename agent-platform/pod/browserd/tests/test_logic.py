@@ -259,16 +259,149 @@ def test_daemon_cli_knows_stop_and_optional_close_out() -> None:
     assert _parser().parse_args(["stop"]).command == "stop"
 
 
-def test_profile_never_offers_to_translate(tmp_path: Path) -> None:
+def test_profile_never_offers_to_translate_and_downloads_without_asking(tmp_path: Path) -> None:
     from atlas_browserd.supervisor import quiet_profile
 
-    paths = Paths(tmp_path)
-    quiet_profile(paths)  # 新 profile：先写一份
+    paths, downloads = Paths(tmp_path), tmp_path / "Downloads"
+    quiet_profile(paths, downloads)  # 新 profile：先写一份
     prefs = tmp_path / "profile" / "Default" / "Preferences"
-    assert json.loads(prefs.read_text()) == {"translate": {"enabled": False}}
-    prefs.write_text(json.dumps({"translate": {"enabled": True}, "profile": {"name": "x"}}))
-    quiet_profile(paths)  # 已有的：只改这一项
-    assert json.loads(prefs.read_text()) == {
+    wanted = {
         "translate": {"enabled": False},
-        "profile": {"name": "x"},
+        "download": {
+            "default_directory": str(downloads),
+            "prompt_for_download": False,
+            "directory_upgrade": True,
+        },
+        "profile": {"default_content_setting_values": {"automatic_downloads": 1}},
     }
+    assert json.loads(prefs.read_text()) == wanted
+    assert downloads.is_dir()
+    prefs.write_text(json.dumps({"translate": {"enabled": True}, "profile": {"name": "x"}}))
+    quiet_profile(paths, downloads)  # 已有的：只改这几项
+    data = json.loads(prefs.read_text())
+    assert data["profile"]["name"] == "x" and data["translate"] == {"enabled": False}
+    assert data["profile"]["default_content_setting_values"] == {"automatic_downloads": 1}
+
+
+class _FakeXdotool:
+    """记下 xdotool 的调用；getmouselocation 报当前位置，mousemove 改位置。"""
+
+    def __init__(self, at: tuple[int, int] = (0, 0), *, hang: str = "") -> None:
+        self.at, self.calls, self.hang = at, [], hang
+
+    def __call__(self, argv: list[str], **_kw: object) -> object:
+        import subprocess
+        from types import SimpleNamespace
+
+        args = argv[1:]
+        self.calls.append(args)
+        if args[0] == self.hang:
+            raise subprocess.TimeoutExpired(argv, 10)
+        if args[0] == "getmouselocation":
+            out = f"X={self.at[0]}\nY={self.at[1]}\nSCREEN=0\nWINDOW=1\n"
+            return SimpleNamespace(returncode=0, stdout=out, stderr="")
+        if args[0] == "mousemove":
+            self.at = (int(args[-2]), int(args[-1]))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+
+def _moves(fake: _FakeXdotool) -> list[list[str]]:
+    return [c for c in fake.calls if c[0] == "mousemove"]
+
+
+def test_tapping_the_same_spot_twice_does_not_wait_for_a_move(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """鼠标已经在目标上时 mousemove --sync 等不到移动事件、卡满超时：已经在那儿就不挪。"""
+    from atlas_browserd import screen
+
+    fake = _FakeXdotool()
+    monkeypatch.setattr(screen.subprocess, "run", fake)
+    xinput = screen.XInput()
+    xinput.click(1310, 440)
+    xinput.click(1310, 440)  # 「再点一次即可下载」
+    xinput.scroll(1310, 440, "down", 3)
+    assert len(_moves(fake)) == 1
+    assert sum(c[0] == "click" for c in fake.calls) == 3
+
+
+def test_a_short_drag_never_moves_onto_the_spot_it_is_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    from atlas_browserd import screen
+
+    fake = _FakeXdotool()
+    monkeypatch.setattr(screen.subprocess, "run", fake)
+    screen.XInput().drag((100, 100), (103, 100))  # 12 步挪 3 个像素：相邻几步落在同一点
+    targets = [tuple(c[-2:]) for c in _moves(fake)]
+    assert targets == [("100", "100"), ("101", "100"), ("102", "100"), ("103", "100")]
+
+
+def test_a_stuck_xdotool_is_reported_as_a_plain_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """超时报成普通的失败（browser 命令打一行原因），不让 Traceback 出现在模型看的输出里。"""
+    from atlas_browserd import screen
+
+    monkeypatch.setattr(screen.subprocess, "run", _FakeXdotool(hang="click"))
+    with pytest.raises(RuntimeError, match="超时"):
+        screen.XInput().click(5, 5)
+
+
+def test_downloads_say_what_finished_what_is_stuck_and_what_is_an_error_page(
+    tmp_path: Path,
+) -> None:
+    import os
+
+    from atlas_browserd.downloads import describe, scan
+
+    now = 1_000_000.0
+    files = {
+        "M500002obykg1VsjK8.mp3": (b"ID3\x03" + b"\0" * 100, now - 300),
+        "Unconfirmed 287984.crdownload": (b"\0" * 1024, now - 5),
+        "song.mp3.crdownload": (b"\0" * 2048, now - 60),
+        "next.mp3.crdownload": (b"\0" * 2048, now - 1),
+        "圣诞星-周杰伦.mp3": (b"<!DOCTYPE html><html>error</html>", now - 30),
+    }
+    for name, (body, mtime) in files.items():
+        (tmp_path / name).write_bytes(body)
+        os.utime(tmp_path / name, (mtime, mtime))
+    found = {d.name: d for d in scan(tmp_path, now=now)}
+    assert found["M500002obykg1VsjK8.mp3"].state == "完成"
+    assert not found["M500002obykg1VsjK8.mp3"].note
+    assert found["Unconfirmed 287984.crdownload"].state == "等确认"
+    assert found["song.mp3.crdownload"].state == "卡住"
+    assert found["next.mp3.crdownload"].state == "下载中"
+    assert "错误页" in found["圣诞星-周杰伦.mp3"].note
+    text = describe(scan(tmp_path, now=now), tmp_path)
+    assert text.index("next.mp3") < text.index("M500002")  # 新的在前
+
+
+def test_waiting_for_downloads_stops_once_nothing_is_growing(tmp_path: Path) -> None:
+    import os
+
+    from atlas_browserd.downloads import wait
+
+    part = tmp_path / "a.mp3.crdownload"
+    part.write_bytes(b"x")
+    clock = [100.0]
+    os.utime(part, (clock[0], clock[0]))
+
+    def sleep(seconds: float) -> None:
+        clock[0] += seconds
+        if clock[0] >= 106:  # 下完了：改名成正式文件
+            part.rename(tmp_path / "a.mp3")
+
+    files, waited = wait(60, tmp_path, clock=lambda: clock[0], sleep=sleep)
+    assert [f.state for f in files] == ["完成"] and waited == 6
+
+
+def test_downloads_command_needs_no_browser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from atlas_browserd import command, downloads
+
+    def boom(*_a: object) -> None:
+        raise AssertionError("不该去拉起浏览器")
+
+    monkeypatch.setattr(command, "_ensure_daemon", boom)
+    monkeypatch.setattr(downloads, "DOWNLOAD_DIR", tmp_path)
+    assert command.main(["downloads"]) == 0
+    assert "还没有文件" in capsys.readouterr().out
+    assert command.main(["downloads", "--wait", "x"]) == 2

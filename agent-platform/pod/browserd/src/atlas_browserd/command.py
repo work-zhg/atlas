@@ -80,6 +80,10 @@ computer use（看截图、用系统键鼠；要能看图；检测自动化的�
   browser go <网址>              在地址栏里输入网址、回车
   每个动作做完会自动再截一张，输出里给路径：看它确认点中了没有。
 
+下载：
+  browser downloads              下载目录里最近的文件：完成、下载中、卡住、等确认、是不是错误页
+  browser downloads --wait [秒]  等下载完（默认最多 60 秒）再列。下载目录是固定的，不用自己找
+
 遇到登录、验证码：请用户接管（request_takeover）。
 一个会话只用自己的这一个窗口：不要开新标签页（后台标签页里点不动）。"""
 
@@ -252,6 +256,9 @@ def main(argv: list[str] | None = None) -> int:
     if not args or args[0] in ("-h", "--help", "help"):
         print(USAGE)
         return 0
+    if args[0] == "downloads":
+        # 只看下载目录：不用浏览器在，也不用开窗口
+        return _downloads(args[1:])
     paths = Paths()
     paths.ensure()
     session = _safe(os.environ.get(SESSION_ENV, "") or "default")
@@ -279,6 +286,24 @@ def main(argv: list[str] | None = None) -> int:
     env = {**os.environ, "PLAYWRIGHT_CLI_SESSION": session}
     os.execve(cli, [cli, f"-s={session}", *args], env)
     return 0  # 走不到
+
+
+def _downloads(args: list[str]) -> int:
+    from . import downloads
+
+    directory = downloads.DOWNLOAD_DIR
+    if not args:
+        print(downloads.describe(downloads.scan(directory), directory))
+        return 0
+    if args[0] != "--wait" or len(args) > 2 or (len(args) == 2 and not args[1].isdigit()):
+        print("browser：用法 browser downloads [--wait [秒]]", file=sys.stderr)
+        return 2
+    seconds = int(args[1]) if len(args) == 2 else 60
+    files, waited = downloads.wait(min(seconds, 600), directory)
+    still = sum(f.state == "下载中" for f in files)
+    head = f"等了 {waited:.0f} 秒，还有 {still} 个在下载" if still else f"等了 {waited:.0f} 秒"
+    print(f"{head}。\n{downloads.describe(files, directory)}")
+    return 0
 
 
 if __name__ == "__main__":

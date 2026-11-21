@@ -528,6 +528,7 @@ def test_browser_hint_tells_the_cli_which_ways_it_can_use() -> None:
     assert "用户自己的电脑上" in both and "browser-computer-use" in both and "zhipin" in both
     only = browser_hint(device, vision=False)
     assert "只能用快照" in only and "request_takeover" in only
+    assert "browser downloads" in both and "browser downloads" in only
 
 
 def test_captured_sites_ignore_unparseable_domains() -> None:
