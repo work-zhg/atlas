@@ -36,6 +36,7 @@ __all__ = [
     "JudgeSetup",
     "JudgeVerdict",
     "blocked_result",
+    "judge_record",
     "judge_view",
 ]
 
@@ -98,6 +99,8 @@ _USER_TEXT_CHARS = 4_000
 _USERS_BUDGET = 16_000
 _HISTORY_ARG_CHARS = 300
 _ACTIONS_BUDGET = 16_000
+#: 操作记录超出预算时一次丢这么多条：一条一条丢的话每次判断开头都变，缓存次次落空
+_ACTIONS_DROP_STEP = 16
 _PENDING_ARG_CHARS = 8_000
 _DECISION_CHARS = 1_000
 
@@ -170,8 +173,8 @@ class AutoJudge:
                 setup = await self._setup_once()
                 if setup is None:
                     return None
-                view = judge_view(setup.instructions, messages, action,
-                                  effects=effects, user_tools=user_tools)  # fmt: skip
+                view = judge_record(setup.instructions, messages, action,
+                                    effects=effects, user_tools=user_tools)  # fmt: skip
                 first = await _complete(setup, view, STAGE1_ASK, STAGE1_MAX_TOKENS)
                 if _allows(first):
                     return JudgeVerdict(block=False, stage=1)
@@ -192,15 +195,19 @@ class AutoJudge:
             return self._setup
 
 
-async def _complete(setup: JudgeSetup, view: str, ask: str, max_tokens: int) -> str:
-    """一次判断请求。★ 两个阶段只有最后一块不同：规则（system）+ 记录是同一个前缀。"""
-    record: dict[str, Any] = {"type": "text", "text": view}
+async def _complete(setup: JudgeSetup, view: JudgeRecord, ask: str, max_tokens: int) -> str:
+    """一次判断请求。
+
+    ★ 两个阶段只有最后一块不同：规则（system）+ 记录是同一个前缀。
+    ★ 前后两次判断也共用前缀：记录按块发（用户的消息一块，每条操作一块），缓存标记打在最后一条
+      历史操作上 —— 下一次判断多一条操作，前面的块原样不变，按块对齐的缓存接得上。整段一块发的话，
+      每次都只有规则那一小段命中（会话 01a1f830：判断器 150 次，缓存命中 3–25%）。
+    """
+    blocks: list[dict[str, Any]] = [{"type": "text", "text": text} for text in view.history]
     if setup.cache:
-        record["cache_control"] = {"type": "ephemeral"}
-    request = [
-        SystemMessage(content=JUDGE_RULES),
-        HumanMessage(content=[record, {"type": "text", "text": ask}]),
-    ]
+        blocks[-1]["cache_control"] = {"type": "ephemeral"}
+    blocks += [{"type": "text", "text": view.pending}, {"type": "text", "text": ask}]
+    request = [SystemMessage(content=JUDGE_RULES), HumanMessage(content=blocks)]
     # ★ nostream：判断器在图里（工具节点）被调用，不打这个标签它的输出会混进 messages 流、
     #   被当成智能体的正文发给前端
     result = await setup.model.ainvoke(request, config={"tags": [TAG_NOSTREAM]},
@@ -253,6 +260,46 @@ def blocked_result(verdict: JudgeVerdict) -> str:
 # ---------------------------------------------------------------------- 记录
 
 
+@dataclass(frozen=True)
+class JudgeRecord:
+    """判断器看到的记录，分块：history 是前后两次判断共用的前缀，pending 是这次要判的。"""
+
+    #: 用户的消息（和任务书）一块、每条操作一块
+    history: tuple[str, ...]
+    #: 操作区的收尾 + 待判定的操作
+    pending: str
+
+    @property
+    def text(self) -> str:
+        return "".join(self.history) + self.pending
+
+
+def judge_record(
+    instructions: Sequence[Instruction],
+    messages: Sequence[BaseMessage],
+    action: Mapping[str, Any],
+    *,
+    effects: Mapping[str, ToolEffect],
+    user_tools: Collection[str] = (),
+) -> JudgeRecord:
+    """判断器看到的记录。★ 刻意不含智能体的文字和工具结果（用户的决定除外）。"""
+    users = [_clip(i.text, _USER_TEXT_CHARS) for i in instructions if i.by == "user"]
+    briefs = [_clip(i.text, _USER_TEXT_CHARS) for i in instructions if i.by == "delegator"]
+    actions = list(_actions(messages, str(action.get("id") or ""), effects, user_tools))
+    parts = [_section("用户的消息", users, _USERS_BUDGET)]
+    if briefs:
+        parts.append(_section("上级智能体的任务书", briefs, _USERS_BUDGET))
+    head = "\n\n".join(parts) + "\n\n<智能体的操作>\n"
+    first = _stable_start(actions, _ACTIONS_BUDGET)
+    if first:
+        head += f"（更早的 {first} 条已省略）\n"
+    lines = [f"[{first + i}] {item}\n" for i, item in enumerate(actions[first:], 1)]
+    if not lines:
+        head += "（没有）\n"
+    pending = f"<待判定的操作>\n{_call_line(action, _PENDING_ARG_CHARS)}\n</待判定的操作>"
+    return JudgeRecord(history=(head, *lines), pending=f"</智能体的操作>\n\n{pending}")
+
+
 def judge_view(
     instructions: Sequence[Instruction],
     messages: Sequence[BaseMessage],
@@ -261,16 +308,19 @@ def judge_view(
     effects: Mapping[str, ToolEffect],
     user_tools: Collection[str] = (),
 ) -> str:
-    """判断器看到的记录。★ 刻意不含智能体的文字和工具结果（用户的决定除外）。"""
-    users = [_clip(i.text, _USER_TEXT_CHARS) for i in instructions if i.by == "user"]
-    briefs = [_clip(i.text, _USER_TEXT_CHARS) for i in instructions if i.by == "delegator"]
-    actions = list(_actions(messages, str(action.get("id") or ""), effects, user_tools))
-    parts = [_section("用户的消息", users, _USERS_BUDGET)]
-    if briefs:
-        parts.append(_section("上级智能体的任务书", briefs, _USERS_BUDGET))
-    parts.append(_section("智能体的操作", actions, _ACTIONS_BUDGET))
-    parts.append(f"<待判定的操作>\n{_call_line(action, _PENDING_ARG_CHARS)}\n</待判定的操作>")
-    return "\n\n".join(parts)
+    """判断器看到的记录（整段文字）。"""
+    return judge_record(instructions, messages, action, effects=effects, user_tools=user_tools).text
+
+
+def _stable_start(items: Sequence[str], budget: int) -> int:
+    """从第几条开始保留：超出预算时按 _ACTIONS_DROP_STEP 整批丢最早的，最新的一条始终在。
+
+    ★ 只由条目本身决定（不记状态）：没跨过下一批之前，开头不变，前缀缓存接得上。
+    """
+    start = 0
+    while start < len(items) - 1 and sum(len(i) for i in items[start:]) > budget:
+        start = min(start + _ACTIONS_DROP_STEP, len(items) - 1)
+    return start
 
 
 def _actions(

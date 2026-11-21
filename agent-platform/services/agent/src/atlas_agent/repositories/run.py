@@ -94,6 +94,8 @@ def _usage_increments(usage: dict[str, int]) -> dict[str, Any]:
         "cache_read_tokens": Run.cache_read_tokens + usage.get("cache_read", 0),
         "thinking_tokens": Run.thinking_tokens + usage.get("thinking_tokens", 0),
         "total_tokens": Run.total_tokens + usage.get("total_tokens", 0),
+        # 模型调用次数：原生运行时每一步报一次 steps=1（RunBudgetMiddleware），CLI 不报
+        "step_count": Run.step_count + usage.get("steps", 0),
     }
 
 

@@ -309,6 +309,8 @@ export interface ContextUsageData {
   /** usage = 以模型返回的用量为准；estimate = 估算；acp = CLI 上报 */
   basis: string;
   context_window: number;
+  /** 窗口是兜底的估计值：模型平台里这个模型没登记上下文窗口 */
+  window_assumed?: boolean;
   effective_window: number;
   input_tokens?: number;
   output_tokens?: number;

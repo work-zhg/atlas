@@ -1,8 +1,8 @@
 """原生运行时 · 上下文管理的 server 一侧（native-runtime/code-native-runtime-context.html）。
 
 为一段交出系统提示词分层（持久指令、记忆常驻块），和上下文流水线（槽位 ④）要的端口：窗口
-从模型目录查、摘要用哪个模型、摘要和覆盖边界存在 thread_context。流水线本身由 engine 按
-spec 拼（atlas_engine/runtime/context.py）。
+从模型平台 / 模型目录查（都没有就兜底）、摘要用哪个模型、摘要和覆盖边界存在 thread_context。
+流水线本身由 engine 按 spec 拼（atlas_engine/runtime/context.py）。
 """
 
 from __future__ import annotations
@@ -92,13 +92,10 @@ class ContextManager:
         )
 
     async def _limits_for(self, segment: Segment, *, workspace: Any) -> ContextLimits | None:
-        """压缩要的东西。关了自动压缩、或者模型目录里查不到窗口时为 None。"""
+        """压缩要的东西。关了自动压缩时为 None。"""
         if not segment.spec.compaction.enabled:
             return None
-        limits = await self._limits(segment)
-        if limits is None:
-            return None
-        window, model_max_output = limits
+        window, model_max_output, assumed = await self._limits(segment)
         # 距上次回复已超过缓存有效期 → 缓存反正失效，第一次调模型前顺手清旧工具结果（§8 ②）
         cache_expired = segment.history_upto is not None and (
             (datetime.now(UTC) - segment.history_upto).total_seconds()
@@ -115,23 +112,35 @@ class ContextManager:
                 self._sessionmaker, segment.thread_id, segment.history_upto
             ),
             cache_expired=cache_expired,
+            window_assumed=assumed,
         )
 
-    async def _limits(self, segment: Segment) -> tuple[int, int] | None:
-        """(窗口, 模型的最大输出)。来自 model_catalog —— 实测落库（§3 D3），不能硬编码：
-        opus/sonnet/fable 是 1M，haiku 只有 200k，差 5 倍。"""
-        model = segment.spec.model.model
-        # 上限来自模型平台里登记的规格；没登记的读 model_catalog 表
+    async def _limits(self, segment: Segment) -> tuple[int, int, bool]:
+        """(窗口, 模型的最大输出, 窗口是不是兜底的)。不能硬编码：opus/sonnet/fable 是 1M，
+        haiku 只有 200k，差 5 倍。
+
+        ★ 先看模型平台里登记的规格，再看 model_catalog 表；都没有就按 context_window_fallback
+          兜底。原先是「不猜、不压」，让 token 上限兜底 —— 结果整套清理、压缩、上下文过长的恢复
+          静默不装，上下文一路涨到 220k（会话 01a1f830：MiniMax-M3 没登记窗口），而 token 上限
+          也没刹住。兜底值取保守的：猜小了只是压得早，猜大了还有上下文过长的恢复接着。
+        ★ 只缺最大输出时用智能体配的输出上限：窗口才是档位要的。
+        """
+        spec = segment.spec
+        model = spec.model.model
         entry = models_of(segment).entry(model)
-        if entry is not None and entry.max_input_tokens and entry.max_output_tokens:
-            return entry.max_input_tokens, entry.max_output_tokens
+        if entry is not None and entry.max_input_tokens:
+            return (
+                entry.max_input_tokens,
+                entry.max_output_tokens or spec.model.max_output_tokens,
+                False,
+            )
         async with self._sessionmaker() as session:
             limits = await ModelCatalogRepository(session).limits(model)
-        if limits is None:
-            # 目录里没有这个模型 —— 不猜一个窗口值：猜大了压缩永不触发，
-            # 猜小了每轮都压。宁可不压，让 token 上限去兜底。
-            logger.warning("model_catalog 无 %s 的窗口，不按档位清理和压缩", model)
-        return limits
+        if limits is not None:
+            return (*limits, False)
+        fallback = self._settings.context_window_fallback
+        logger.warning("模型 %s 没登记上下文窗口，按 %d 兜底清理和压缩", model, fallback)
+        return fallback, spec.model.max_output_tokens, True
 
     def _summarizer(self, segment: Segment) -> Summarizer:
         """压缩用的摘要器：智能体的推理，和主模型同一个端点（Run 开始时已检查过）。"""

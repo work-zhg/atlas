@@ -1216,7 +1216,7 @@ export function AgentStudio({ agentId }: { agentId: string }) {
                   />
                 </div>
                 <div>
-                  <span className={styles.label}>单次对话最多用量（token）</span>
+                  <span className={styles.label}>单次对话最多用量（token，不含缓存命中）</span>
                   <InputNumber
                     style={{ width: "100%" }}
                     min={1000}

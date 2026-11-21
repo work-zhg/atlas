@@ -111,6 +111,8 @@ class RunOut(BaseModel):
     cache_read_tokens: int
     thinking_tokens: int
     total_tokens: int
+    #: 调了几次模型（原生运行时；CLI 不报，恒为 0）
+    step_count: int = 0
     started_at: datetime | None
     finished_at: datetime | None
     created_at: datetime

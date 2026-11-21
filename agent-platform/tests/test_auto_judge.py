@@ -26,6 +26,7 @@ from atlas_engine.kernel.middleware.auto_judge import (
     Instruction,
     JudgeError,
     JudgeSetup,
+    judge_record,
     judge_view,
 )
 from atlas_engine.kernel.middleware.permission import EXIT_PLAN_MODE, PermissionMiddleware
@@ -278,6 +279,49 @@ async def test_cache_marker_only_when_asked() -> None:
     await _judge(cached, cache=True).judge(ACTION, [], effects=EFFECTS)
     assert "cache_control" not in plain.requests[0]["messages"][1].content[0]
     assert cached.requests[0]["messages"][1].content[0]["cache_control"] == {"type": "ephemeral"}
+
+
+def _calls(n: int, *, size: int = 10) -> list[BaseMessage]:
+    """n 次执行命令（每次一条 AIMessage + 结果）。"""
+    out: list[BaseMessage] = []
+    for i in range(n):
+        call = {"id": f"h{i}", "name": "execute", "args": {"command": f"step {i} " + "x" * size}}
+        out.append(AIMessage(content="", tool_calls=[call]))
+        out.append(ToolMessage(content="ok", tool_call_id=f"h{i}"))
+    return out
+
+
+def _texts(request: dict[str, Any]) -> list[str]:
+    return [b["text"] for b in request["messages"][1].content]
+
+
+async def test_consecutive_judgments_share_the_cached_prefix() -> None:
+    """下一次判断只多一条操作：前面的块原样不变，缓存标记跟着挪到最后一条历史操作上。
+
+    整段一块发时，每次都只有规则那一小段命中（会话 01a1f830：判断器缓存命中 3–25%）。
+    """
+    model = JudgeModel(answers=["ALLOW", "ALLOW"])
+    judge = _judge(model, cache=True)
+    await judge.judge(ACTION, _calls(3), effects=EFFECTS)
+    await judge.judge(ACTION, _calls(4), effects=EFFECTS)
+    first, second = model.requests
+    history = len(_texts(first)) - 2  # 最后两块是待判定的操作和问题
+    assert _texts(second)[:history] == _texts(first)[:history]
+    marked = [i for i, b in enumerate(second["messages"][1].content) if "cache_control" in b]
+    assert marked == [history]  # 第二次多出来的那条操作（新的最后一条历史）
+
+
+def test_old_actions_are_dropped_in_batches() -> None:
+    """操作记录超出预算：整批丢最早的，没跨过下一批之前开头不变（前缀缓存接得上）。"""
+
+    def head(n: int) -> str:
+        return judge_record(USERS, _calls(n, size=400), ACTION, effects=EFFECTS).history[0]
+
+    assert "更早的" not in head(10)
+    assert "更早的" in head(60)
+    assert head(60) == head(61)
+    view = judge_view(USERS, _calls(60, size=400), ACTION, effects=EFFECTS)
+    assert "step 59" in view and "step 0 " not in view
 
 
 async def test_requests_are_tagged_nostream_with_a_small_stage_one_budget() -> None:

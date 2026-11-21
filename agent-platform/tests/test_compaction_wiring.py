@@ -334,6 +334,119 @@ async def test_disabled_compaction_leaves_only_offload_and_reminders() -> None:
     assert await middleware.abefore_model({"messages": build_history(30)}) is None
 
 
+def _limits_segment(model: str, entry: Any = None) -> Any:
+    from atlas_agent.executor.run_models import RunModels
+    from atlas_agent.providers.llm.model_platform import ModelEndpoint
+
+    class _Segment:
+        spec = _spec(model=ModelSpec(model=model, max_output_tokens=16_384))
+        models = RunModels(ModelEndpoint("http://gw", "k"), {model: entry} if entry else {})
+
+    return _Segment()
+
+
+async def test_unregistered_window_falls_back_instead_of_disabling_compaction() -> None:
+    """会话 01a1f830：MiniMax-M3 没登记窗口 → 清理、压缩整套静默不装，上下文涨到 220k。
+
+    现在按兜底窗口照装，并标出窗口是估的（用量条据此提示）。
+    """
+    from atlas_agent.db.session import get_sessionmaker
+    from atlas_agent.executor.context_manager import ContextManager
+
+    settings = Settings(context_window_fallback=100_000)
+    manager = ContextManager(get_sessionmaker(), settings, None)  # type: ignore[arg-type]
+    limits = await manager._limits(_limits_segment("no-such-model"))  # type: ignore[arg-type]
+    assert limits == (100_000, 16_384, True)
+
+
+async def test_registered_window_without_max_output_is_used() -> None:
+    """平台只登记了窗口、没登记最大输出：窗口照用，输出上限取智能体配的。"""
+    from atlas_agent.executor.context_manager import ContextManager
+    from atlas_agent.providers.llm.model_platform import PlatformModel
+
+    entry = PlatformModel("MiniMax-M3", "MiniMax-M3", "minimax", max_input_tokens=1_000_000)
+    manager = ContextManager(None, Settings(), None)  # type: ignore[arg-type]
+    limits = await manager._limits(_limits_segment("MiniMax-M3", entry))  # type: ignore[arg-type]
+    assert limits == (1_000_000, 16_384, False)
+
+
+def test_assumed_window_is_reported_with_the_usage() -> None:
+    from atlas_engine.runtime.context import ContextLimits, ContextPorts
+    from atlas_engine.runtime.context import context_pipeline as pipeline_for
+
+    ports = ContextPorts(
+        offload_store=None,
+        result_limit_tokens=32_000,
+        batch_cap_tokens=80_000,
+        limits=ContextLimits(
+            window=128_000, model_max_output=16_384, summarizer=None, window_assumed=True
+        ),
+    )
+    middleware = pipeline_for(_spec(), ports)
+    assert middleware._budget is not None and middleware._budget.window_assumed
+    assert middleware._compactor is not None
+
+
+def _searches(name: str, n: int) -> list[BaseMessage]:
+    out: list[BaseMessage] = []
+    for i in range(n):
+        out.append(AIMessage(content="", tool_calls=[{"id": f"s{i}", "name": name, "args": {}}]))
+        out.append(ToolMessage(content="结果" * 500, tool_call_id=f"s{i}", id=f"r{i}"))
+    return [*out, AIMessage(content="好的")]
+
+
+def test_read_only_external_tools_are_cleared_like_builtin_ones() -> None:
+    """会话 01a1f830：3 次谷歌搜索的原始结果占了 171k 里的三分之一，清理清单里没有 MCP 工具，
+    从头跟到尾。只读的外部工具重新调一次就能拿回结果，和 execute、read_file 一样可以清。"""
+    from atlas_engine.runtime.context import ContextLimits, ContextPorts
+    from atlas_engine.runtime.context import context_pipeline as pipeline_for
+
+    ports = ContextPorts(
+        offload_store=None,
+        result_limit_tokens=32_000,
+        batch_cap_tokens=80_000,
+        limits=ContextLimits(window=1_000_000, model_max_output=16_384, summarizer=None),
+    )
+    middleware = pipeline_for(_spec(), ports, regenerable={"serpapi__google_search"})
+    assert middleware._clearing is not None
+    cleared = middleware._clearing.plan(_searches("serpapi__google_search", 7))
+    assert [m.id for m in cleared] == ["r0", "r1"]  # 最近 5 条留着
+    assert "重新调用 serpapi__google_search" in str(cleared[0].content)
+    # 没声明只读的外部工具（可能有副作用）照旧不清
+    assert middleware._clearing.plan(_searches("crm__create_ticket", 7)) == []
+
+
+def test_assembly_treats_read_only_tools_as_regenerable(monkeypatch: pytest.MonkeyPatch) -> None:
+    from atlas_engine.contracts.tools import ToolSpec
+    from atlas_engine.runtime import assemble
+    from atlas_engine.runtime.context import ContextPorts
+
+    async def call(**_: Any) -> str:
+        return ""
+
+    def spec(name: str, **annotations: Any) -> ToolSpec:
+        return ToolSpec(name, "d", {"type": "object"}, call, annotations=annotations)
+
+    seen: dict[str, Any] = {}
+    real = assemble.context_pipeline
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(assemble, "context_pipeline", spy)
+    assemble.assemble(
+        _spec(),
+        assemble.Capabilities(
+            model=TurnModel(scripts=[]),
+            tools=[spec("serpapi__google_search", readOnlyHint=True), spec("crm__create")],
+            deferred_tools=[spec("wiki__read", readOnlyHint=True)],
+            context=ContextPorts(offload_store=None, result_limit_tokens=1, batch_cap_tokens=1),
+        ),
+    )
+    assert seen["regenerable"] == {"serpapi__google_search", "wiki__read"}
+
+
 async def test_overflow_when_recent_turns_alone_exceed_window() -> None:
     """§7.6：保留区本身就装不下 → 报错而不是无限压缩。"""
     middleware = context_pipeline(

@@ -17,9 +17,9 @@
     awrap_tool_call（每次工具调用后）
       ⑦ 单条大结果外置（ResultOffloader）
 
-按档位的阶段（②③、用量提醒、⑥）要有预算（ContextBudget）；智能体关了自动压缩、或者不知道
-模型的窗口时不给预算，流水线只剩外置和提醒 —— 它们不是压缩，关压缩不该把大结果保护和记忆
-提醒一起关掉。
+按档位的阶段（②③、用量提醒、⑥）要有预算（ContextBudget）；智能体关了自动压缩时不给预算，
+流水线只剩外置和提醒 —— 它们不是压缩，关压缩不该把大结果保护和记忆提醒一起关掉。
+（模型没登记窗口时 server 按保守值兜底，预算照给，见 executor/context_manager.py）
 
 ★ 所有改写只作用于模型看到的 state；消息表不受影响。
 ★ 压缩写回 state 用「清空 + 按序重写」：只删压缩区再追加摘要的话，reducer 把摘要追加在**末尾**，
@@ -211,6 +211,7 @@ class ContextMiddleware(AgentMiddleware):
                 "input_tokens": int(usage.get("input_tokens") or 0),
                 "output_tokens": int(usage.get("output_tokens") or 0),
                 "context_window": budget.window,
+                "window_assumed": budget.window_assumed,
                 "effective_window": budget.effective,
                 "thresholds": budget.thresholds(),
                 "composition": comp.as_dict(),

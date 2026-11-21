@@ -71,8 +71,11 @@ class ContextBudget:
         max_output_tokens: int = 0,
         clear_ratio: float | None = None,
         warn_ratio: float | None = None,
+        window_assumed: bool = False,
     ) -> None:
         self.window = context_window
+        #: 窗口是兜底的估计值（模型没登记）：只用于展示，档位照常按它算
+        self.window_assumed = window_assumed
         self.effective = effective_window(context_window, max_output_tokens)
         self.compact_at = int(self.effective * compact_ratio)
         self.clear_at = int(self.effective * clear_ratio) if clear_ratio else None

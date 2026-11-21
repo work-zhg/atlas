@@ -45,6 +45,7 @@ from ..providers.filesystem import WorkspaceRouting, make_workspace
 from ..providers.llm.model_platform import (
     admit_models,
     agent_key,
+    for_session,
     key_endpoint,
     sees_images,
     with_platform_model,
@@ -188,6 +189,7 @@ class CapabilityAssembly:
             ).workdir,
             # 每段装配时取一次：跨过零点的会话下一段就换成新的一天
             today=datetime.now(ZoneInfo(self._settings.prompt_timezone)).date(),
+            prior_tokens=segment.prior_tokens,
         )
         return caps, self._titler(segment)
 
@@ -246,7 +248,9 @@ class CapabilityAssembly:
                 for sub in spec.subagents
             ),
         )
-        models = RunModels(key_endpoint(s, key.key), {m.name: m for m in key.models})
+        # 主模型、看截图、压缩摘要都用这个端点：带上会话头（网关的调用记录、线路粘滞按它）
+        endpoint = for_session(key_endpoint(s, key.key), segment.thread_id)
+        models = RunModels(endpoint, {m.name: m for m in key.models})
         return dataclasses.replace(segment, spec=spec, models=models)
 
     async def with_browser(self, segment: Segment) -> Segment:

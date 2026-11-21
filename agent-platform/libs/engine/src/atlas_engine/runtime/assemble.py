@@ -27,7 +27,7 @@ from atlas_engine.contracts.tools import ToolSpec
 from atlas_engine.kernel.middleware.ask_user import AskUserMiddleware
 from atlas_engine.kernel.middleware.auto_judge import AutoJudge, JudgeSetup
 from atlas_engine.kernel.middleware.filesystem import FilesystemMiddleware
-from atlas_engine.kernel.middleware.limits import StepLimitMiddleware, ToolGovernorMiddleware
+from atlas_engine.kernel.middleware.limits import RunBudgetMiddleware, ToolGovernorMiddleware
 from atlas_engine.kernel.middleware.permission import PermissionMiddleware
 from atlas_engine.kernel.middleware.screen import ScreenMiddleware
 from atlas_engine.kernel.middleware.skills import SkillsMiddleware
@@ -42,6 +42,7 @@ from atlas_engine.runtime.tool_registry import (
     filesystem_tools_for,
     irreversible_tools,
     middleware_for,
+    read_only_tools,
     tool_effects,
 )
 from atlas_engine.runtime.tools import to_langchain
@@ -107,6 +108,8 @@ class Capabilities:
     workdir: str = DEFAULT_WORKDIR
     #: 今天的日期（server 按部署时区算好），写进系统提示词。None = 不写
     today: date | None = None
+    #: 这个 run 之前几段已经计入 token 上限的量（max_total_tokens 跨段累计）
+    prior_tokens: int = 0
 
 
 def assemble(spec: AgentSpec, caps: Capabilities) -> Any:
@@ -118,7 +121,13 @@ def assemble(spec: AgentSpec, caps: Capabilities) -> Any:
         sandbox=caps.sandbox,
         approvals=caps.approvals,
         judge=AutoJudge(caps.judge.setup, timeout_s=caps.judge.timeout_s) if caps.judge else None,
-        context=context_pipeline(spec, caps.context) if caps.context is not None else None,
+        context=(
+            context_pipeline(
+                spec, caps.context, regenerable=read_only_tools([*caps.tools, *caps.deferred_tools])
+            )
+            if caps.context is not None
+            else None
+        ),
         skills=list(caps.skills),
         extra_tools=caps.tools,
         spawner=caps.spawner,
@@ -130,6 +139,7 @@ def assemble(spec: AgentSpec, caps: Capabilities) -> Any:
         workdir=caps.workdir,
         vision_model=caps.vision_model,
         today=caps.today,
+        prior_tokens=caps.prior_tokens,
     )
 
 
@@ -199,6 +209,7 @@ def build_graph(
     workdir: str = DEFAULT_WORKDIR,
     vision_model: BaseChatModel | None = None,
     today: date | None = None,
+    prior_tokens: int = 0,
 ) -> Any:
     """按 spec 组装 agent 图。返回编译好的图，交给 runner.run 驱动。
 
@@ -216,6 +227,8 @@ def build_graph(
     vision_model 是看截图用的模型（inspect_screenshot）；None = 不装这个工具。
 
     today 是今天的日期（server 按部署时区算）；None = 提示词里不写日期。
+
+    prior_tokens 是这个 run 之前几段已经计入 token 上限的量。
     """
     tools = [to_langchain(t) for t in extra_tools]
     deferred = [to_langchain(t) for t in deferred_tools]
@@ -328,7 +341,14 @@ def build_graph(
 
         stack.add(Slot.TOOLS, ToolSearchMiddleware(deferred))
     stack.extend(Slot.TOOLS, middleware_for(set(spec.tool_names)))
-    stack.add(Slot.LIMITS, StepLimitMiddleware(spec.limits.max_steps))
+    stack.add(
+        Slot.LIMITS,
+        RunBudgetMiddleware(
+            max_steps=spec.limits.max_steps,
+            max_tokens=spec.limits.max_total_tokens,
+            prior_tokens=prior_tokens,
+        ),
+    )
     stack.add(Slot.LIMITS, ToolGovernorMiddleware(concurrency=spec.limits.tool_concurrency))
 
     if subagents is not None:

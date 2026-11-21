@@ -135,7 +135,8 @@ async def test_usage_event_emitted_with_token_counts() -> None:
     assert u["thinking_tokens"] == 42
 
 
-async def test_no_usage_event_when_model_reports_none() -> None:
+async def test_no_token_usage_when_model_reports_none() -> None:
+    """模型没报用量：usage.updated 里只有步数（run.step_count 要记），没有编出来的 token。"""
     events = await collect(
         spec=make_spec(),
         run_id=RUN_ID,
@@ -143,7 +144,8 @@ async def test_no_usage_event_when_model_reports_none() -> None:
         input_content="hi",
         clock=_clock,
     )
-    assert EventType.USAGE_UPDATED not in [e.type for e in events]
+    usage = next(e for e in events if e.type == EventType.USAGE_UPDATED).data
+    assert usage == {"steps": 1, "thinking_occurred": False}
 
 
 # ---------------------------------------------------------------------------
@@ -193,9 +195,9 @@ async def test_model_exception_becomes_run_failed() -> None:
     assert "gateway exploded" not in last.data["message"]
 
 
-async def test_token_limit_exceeded_fails_after_completion() -> None:
-    """token 上限是刹车不是硬墙：调用返回后才知道用量（文档 §4.4）。"""
-    usage = {"input_tokens": 10, "output_tokens": 10, "total_tokens": 999_999}
+async def test_token_limit_does_not_fail_a_completed_answer() -> None:
+    """token 上限在每次调模型之前查（RunBudgetMiddleware）：答完了就是答完了，不事后改判。"""
+    usage = {"input_tokens": 999_990, "output_tokens": 10, "total_tokens": 1_000_000}
     events = await collect(
         spec=make_spec(max_total_tokens=100),
         run_id=RUN_ID,
@@ -204,9 +206,8 @@ async def test_token_limit_exceeded_fails_after_completion() -> None:
         clock=_clock,
     )
     types = [e.type for e in events]
-    assert EventType.MESSAGE_COMPLETED in types  # 已产出的内容不丢
-    assert types[-1] == EventType.RUN_FAILED
-    assert events[-1].data["error_kind"] == "limit_exceeded"
+    assert EventType.MESSAGE_COMPLETED in types
+    assert types[-1] == EventType.RUN_FINISHED
 
 
 async def test_invalid_spec_raises_before_any_event() -> None:

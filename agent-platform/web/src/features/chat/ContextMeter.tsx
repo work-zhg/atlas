@@ -131,6 +131,17 @@ export function ContextMeter({
               </Tag>
             )}
           </Descriptions.Item>
+          {usage.window_assumed && (
+            <Descriptions.Item label="窗口">
+              {fmt(usage.context_window)}
+              <Tag color="warning" style={{ marginLeft: 8 }}>
+                估计值
+              </Tag>
+              <div style={{ fontSize: 12, color: "var(--fg-3)", marginTop: 4 }}>
+                模型平台里这个模型没登记上下文窗口，按保守值清理和压缩；登记后按实际窗口算
+              </div>
+            </Descriptions.Item>
+          )}
           {usage.thresholds && (
             <Descriptions.Item label="档位">
               {usage.thresholds.clear

@@ -45,6 +45,7 @@ __all__ = [
     "admit_models",
     "agent_key",
     "client_key",
+    "for_session",
     "key_endpoint",
     "platform_catalog",
     "register_agent",
@@ -315,6 +316,16 @@ class ModelEndpoint:
 def key_endpoint(settings: Settings, key: str) -> ModelEndpoint:
     """模型网关 + 客户端 Key。"""
     return ModelEndpoint(settings.model_gateway_url, key)
+
+
+#: 模型网关认的会话头（atlas_modelgateway codecs.SESSION_HEADER）
+SESSION_HEADER = "X-Session-Id"
+
+
+def for_session(endpoint: ModelEndpoint, session: UUID) -> ModelEndpoint:
+    """告诉模型网关这次调用属于哪个会话：调用记录据此对得上会话；同一个会话按它粘在同一条线路上，
+    提示词缓存接得上。不带的话网关只能按 Key 粘，调用记录也看不出是哪个会话的。"""
+    return replace(endpoint, headers={**endpoint.headers, SESSION_HEADER: str(session)})
 
 
 class ModelNotAllowed(CapabilityUnavailable):

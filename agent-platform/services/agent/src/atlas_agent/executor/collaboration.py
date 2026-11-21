@@ -27,6 +27,7 @@ from ..config import Settings
 from ..db.models import Thread
 from ..providers.filesystem import make_workspace
 from ..providers.filesystem.skill_copy import resolve_skills, seed_session_skills
+from ..providers.llm.model_platform import for_session
 from ..repositories.run import RunRepository
 from ..services.service_models import resolve_service_model, service_model_configured
 from ..skills import skill_directory
@@ -157,7 +158,7 @@ class Collaboration:
                 ),
                 base_url=found.endpoint.base_url,
                 api_key=found.endpoint.api_key,
-                headers=found.endpoint.headers,
+                headers=for_session(found.endpoint, thread.thread_uuid).headers,
             )
             async with sessionmaker() as session:
                 instructions = await _judge_instructions(RunRepository(session), thread)

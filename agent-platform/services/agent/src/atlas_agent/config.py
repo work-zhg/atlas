@@ -103,6 +103,8 @@ class Settings(BaseSettings):
     #: 据它判断「距上次回复超过有效期 → 缓存必然失效，顺手清旧工具结果」。
     #: Anthropic 只接受 5m / 1h 两档。
     prompt_cache_ttl: Literal["5m", "1h"] = "5m"
+    #: 模型平台和模型目录里都查不到窗口时，按这个窗口清理和压缩（偏保守：猜小了只是压得早）
+    context_window_fallback: int = Field(default=128_000, ge=8_000)
     #: MCP 工具超过这么多个、或定义总量超过这么多 tokens 时改为按需加载（tool_search）
     deferred_tools_min_count: int = 20
     deferred_tools_min_tokens: int = 10_000

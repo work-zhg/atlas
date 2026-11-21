@@ -1,11 +1,11 @@
 """运行限制的强制执行（文档 §4.4 / §13.2）。
 
-`timeout_s` 与 `max_total_tokens` 在 runner 里直接管；这三项必须拦在
-图内部，所以做成中间件：
+这几项必须拦在图内部，所以做成中间件：
 
 | 限制 | 拦截点 | 为什么 |
 |---|---|---|
 | `max_steps` | `abefore_model` | 步 = 一次模型调用。跑飞的 agent 就是在这里空转 |
+| `max_total_tokens` | `abefore_model` | 下一次调用之前就停：调用返回后才查的话，已经做完的一轮会被改判失败 |
 | `tool_concurrency` | `awrap_tool_call` | 模型一次可以发多个 tool_call，图会并发执行 |
 | 工具熔断（§13.2） | `awrap_tool_call` | 同一工具连续失败 3 次说明方案不通，继续试只是烧钱 |
 
@@ -24,10 +24,12 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ToolCallRequest
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
 
 from atlas_engine.contracts import LimitExceeded
+from atlas_engine.kernel.context._text import emit
+from atlas_engine.kernel.context.reminders import Reminders
 
 logger = logging.getLogger(__name__)
 
@@ -37,32 +39,105 @@ CIRCUIT_THRESHOLD = 3
 CIRCUIT_OPEN_RESULT = "该工具已连续失败 {n} 次，已被停用。请改用其他方式完成任务，不要再调用它。"
 
 
-class StepLimitMiddleware(AgentMiddleware):
-    """限制单个 run 内的模型调用次数（`max_steps`）。
+#: 步数或 token 用到这个比例，就在每次调用前提醒模型收尾
+WARN_RATIO = 0.8
 
-    步数是**跑飞的 agent** 唯一可靠的刹车：token 上限只能在调用返回后检查
-    （§4.4），而一个陷在「调工具→失败→再调」循环里的 agent，每步 token 不多，
-    但会一直转下去直到超时。
+_STEPS_WARNING = (
+    "已用 {used}/{limit} 步（每次调用模型算一步），快到上限了，到了会直接中断。请尽快收尾：先把已经"
+    "完成的结果整理好告诉用户；没做完的说明卡在哪、需要用户决定什么。不要再做没把握的重复尝试。"
+)
+_TOKENS_WARNING = (
+    "这一轮已用 {used}/{limit} tokens（不含缓存命中），快到上限了，到了会直接中断。请尽快收尾：先把"
+    "已经完成的结果整理好告诉用户；没做完的说明卡在哪、需要用户决定什么。不要再做没把握的重复尝试。"
+)
+
+
+def billable_tokens(usage: Any) -> int:
+    """一次调用计入 token 上限的量：没命中缓存的输入 + 输出。
+
+    ★ 缓存命中的不算：它便宜，长任务每次调用都把整段上下文重读一遍 —— 算进来的话 1M 的上限
+      十几次调用就到了（会话 01a1f830：一共 30M，其中 97% 是缓存命中）。
+    """
+    if not isinstance(usage, dict):
+        return 0
+    details = usage.get("input_token_details") or {}
+    cached = details.get("cache_read") if isinstance(details, dict) else 0
+    total = int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
+    return max(0, total - int(cached or 0))
+
+
+class RunBudgetMiddleware(AgentMiddleware):
+    """一个 run 的两道刹车：模型调用次数（`max_steps`）、token（`max_total_tokens`）。
+
+    都在**下一次调用之前**拦：一次调用的用量要等它返回才知道，返回后再判的话，模型已经写完的
+    回答会被改判失败（会话 01a1f830：13 首歌都下完了，最后一段显示「超过上限」）。
+    用到 WARN_RATIO 时，每次调用前追加一条提醒让模型收尾 —— 撞线前它知道还剩多少。
+
+    ★ 步数按段计（每段新装一个）；token 跨段累计：prior_tokens 是之前几段已经计入的量。
+    ★ 每一步经 custom 通道报一次 usage.delta（steps=1），runner 记进 usage，落进 run.step_count。
     """
 
-    def __init__(self, max_steps: int) -> None:
+    def __init__(
+        self, *, max_steps: int, max_tokens: int | None = None, prior_tokens: int = 0
+    ) -> None:
         super().__init__()
-        self._max = max_steps
+        self._max_steps = max_steps
+        self._max_tokens = max_tokens
         self._used = 0
+        self._tokens = prior_tokens
 
     @property
     def steps_used(self) -> int:
         return self._used
 
+    @property
+    def tokens_used(self) -> int:
+        return self._tokens
+
     async def abefore_model(self, state: Any, runtime: Any = None) -> dict[str, Any] | None:
         self._used += 1
-        if self._used > self._max:
+        if self._used > self._max_steps:
             raise LimitExceeded(
-                f"已达步数上限 {self._max}（每次模型调用算一步），已中断",
-                max_steps=self._max,
+                f"已达步数上限 {self._max_steps}（每次模型调用算一步），已中断",
+                max_steps=self._max_steps,
                 steps_used=self._used,
             )
+        if self._max_tokens is not None and self._tokens > self._max_tokens:
+            raise LimitExceeded(
+                f"已用 {self._tokens} tokens（不含缓存命中），超过上限 {self._max_tokens}，已中断",
+                total_tokens=self._tokens,
+                max_total_tokens=self._max_tokens,
+            )
+        emit({"kind": "usage.delta", "steps": 1})
         return None
+
+    async def awrap_model_call(self, request: Any, handler: Callable[[Any], Awaitable[Any]]) -> Any:
+        response = await handler(Reminders.attach(request, self._warnings()))
+        message = _last_ai(response)
+        if message is not None:
+            self._tokens += billable_tokens(message.usage_metadata)
+        return response
+
+    def _warnings(self) -> list[tuple[str, str]]:
+        notes = []
+        if self._used >= self._max_steps * WARN_RATIO:
+            notes.append(
+                ("step_budget", _STEPS_WARNING.format(used=self._used, limit=self._max_steps))
+            )
+        if self._max_tokens is not None and self._tokens >= self._max_tokens * WARN_RATIO:
+            notes.append(
+                ("token_budget", _TOKENS_WARNING.format(used=self._tokens, limit=self._max_tokens))
+            )
+        return notes
+
+
+def _last_ai(response: Any) -> AIMessage | None:
+    if isinstance(response, AIMessage):
+        return response
+    for message in reversed(list(getattr(response, "result", None) or [])):
+        if isinstance(message, AIMessage):
+            return message
+    return None
 
 
 class ToolGovernorMiddleware(AgentMiddleware):

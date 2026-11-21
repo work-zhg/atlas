@@ -44,7 +44,6 @@ from langchain_core.messages import (
 from atlas_engine.contracts import (
     REFUSAL_STOP_REASONS,
     EngineError,
-    LimitExceeded,
     ModelEmptyResponse,
     ModelRefused,
     WaitingOn,
@@ -99,8 +98,6 @@ class SegmentInput(Protocol):
     def start_seq(self) -> int: ...
     @property
     def resume(self) -> bool: ...
-    @property
-    def prior_tokens(self) -> int: ...
     @property
     def base_depth(self) -> int: ...
     @property
@@ -300,7 +297,7 @@ async def run(
 
     ★ 图由调用方装配（runtime/assemble.py::build_graph）—— runner 只管
       执行循环与事件推导。这一段要跑什么都在 segment 里（SegmentInput：
-      输入、历史、续跑、序号起点、跨段累计的 token、委派深度、挂起现场、审批模式、
+      输入、历史、续跑、序号起点、委派深度、挂起现场、审批模式、
       跨段 state），这里只剩 runner 自己消费的注入点：
 
     cancel / clock / titler  取消信号、时钟、标题生成器（测试可注入）
@@ -314,14 +311,13 @@ async def run(
         紧跟 run.started 产出 —— 装配发生在事件工厂之前，由这里统一编号才能
         保住 seq 无空洞（契约规则 2）。
 
-    spec 在这里只读两样：run.started 的元信息、max_total_tokens ——
-    调用方必须保证 graph 与 spec 出自同一份配置（assemble.py 是唯一装配点）。
+    spec 在这里只读 run.started 的元信息 —— 调用方必须保证 graph 与 spec 出自同一份配置
+    （assemble.py 是唯一装配点）。步数、token 上限都在图里（kernel/middleware/limits.py）。
 
     ★ segment 里几个字段在这里的语义：
       start_seq     事件序号的起点。同一个 run 分多段执行时，第二段必须接着第一段往下数
                     —— 前端靠 seq 去重与补齐（契约规则 2）
       resume        本次是续跑，输入已在 history 里，不要再 append
-      prior_tokens  之前几段已经花掉的 token：max_total_tokens 是**跨段**的累计上限
       base_depth    委派树里的深度（主 run 0，子 run 1），叠加到所有事件的 depth 上
       waiting_on / decisions  续跑时交回图的挂起现场（contracts/suspension.py）
       approval_mode 本段开始时的审批模式；计划获批时图内会改它，经 agent.mode 事件落库
@@ -331,7 +327,7 @@ async def run(
     input_content = segment.input_content
     history = history_messages(segment.history, summary=segment.summary)
     start_seq, resume = segment.start_seq, segment.resume
-    prior_tokens, base_depth = segment.prior_tokens, segment.base_depth
+    base_depth = segment.base_depth
     waiting_on, decisions = segment.waiting_on, segment.decisions
     approval_mode, run_state = segment.approval_mode, segment.run_state
     spec.validate()
@@ -379,7 +375,7 @@ async def run(
     try:
         # ★ 一轮没有时间上限：在干活就不中断。单次模型调用（model_timeout_s）与
         #   单次工具调用（如 mcp_call_timeout_s）各有超时，不会无限挂住；
-        #   结束只由完成、出错、用户取消、token 上限（max_total_tokens）决定。
+        #   结束只由完成、出错、用户取消、步数与 token 上限（图里的 RunBudgetMiddleware）决定。
         # ★ subgraphs=True：子智能体的内部步骤会以带命名空间的形式流出来。
         #   命名空间深度就是 agent 深度 —— 主 agent 是 ()，子智能体是
         #   ('tools:<id>',)。这是 TraceEvent.depth 的唯一来源。
@@ -534,10 +530,6 @@ async def run(
 
     # ★ 图跳出是因为还有东西在等 → 这一段到此为止，run 没结束。
     #
-    #   必须在检查 token 上限**之前**：挂起不是终态，不该在这里被一个
-    #   「本轮超支」的判断改写成失败 —— 累计用量在下一段续跑时照样会撞上
-    #   同一个刹车，而那时它是真的结束。
-    #
     # ★ 事件里是数组（前端的 SuspensionWait[]），落库时 server 按 tool_call_id 还原成
     #   state 的形状（inprocess._persist）。
     if waits:
@@ -578,21 +570,9 @@ async def run(
         )
         return
 
-    # token 上限是刹车不是硬墙：只能在调用返回后检查（文档 §4.4）
-    #
-    # ★ 加上 prior_tokens —— 「累计」是**跨段**的。一个 run 分三段执行时，
-    #   每段各算各的话就能烧掉三倍预算，而账面上刹车一直没踩到。
-    total = prior_tokens + usage.get("total_tokens", 0)
-    if total > spec.limits.max_total_tokens:
-        yield events.make(
-            EventType.RUN_FAILED,
-            {
-                "error_kind": LimitExceeded.kind,
-                "message": f"累计 {total} tokens 超过上限 {spec.limits.max_total_tokens}，已中断",
-                "total_tokens": total,
-            },
-        )
-        return
+    # ★ 这里不再查 token 上限：图里每次调模型之前查（RunBudgetMiddleware）。走到这里说明模型已经
+    #   答完了，返回后再判只会把做完的一轮改判失败（会话 01a1f830）。
+    total = usage.get("total_tokens", 0)
 
     # §8.1：标题并入 run 的收尾阶段。SSE 在 run.finished 后就关闭了，
     # 异步生成的标题送不出去，所以必须在这之前发完。

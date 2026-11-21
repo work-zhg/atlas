@@ -250,3 +250,27 @@ async def test_title_uses_the_configured_service_model(
         "memory_backfill": False,
         "approval_judge": False,
     }
+
+
+async def test_model_calls_carry_the_session_header() -> None:
+    """主模型的端点带上会话头：网关的调用记录对得上会话，线路按会话粘。
+
+    会话 01a1f830 复盘时，网关的调用记录只能按时间窗口对账。
+    """
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from atlas_agent.executor.assembly import CapabilityAssembly
+    from atlas_agent.executor.segment_data import Segment
+    from atlas_engine.contracts.spec import AgentSpec, ModelSpec
+
+    thread = SimpleNamespace(thread_uuid=uuid4(), agent_uuid=uuid4())
+    segment = Segment(
+        spec=AgentSpec(slug="s", name="s", system_prompt="p", model=ModelSpec(model="m")),
+        input_content="hi",
+        thread=thread,  # type: ignore[arg-type]
+    )
+    assembly = CapabilityAssembly(get_sessionmaker(), get_settings(), lambda *a, **k: None)
+    resolved = await assembly.with_models(segment)
+    assert resolved.models is not None
+    assert resolved.models.endpoint.headers["X-Session-Id"] == str(thread.thread_uuid)

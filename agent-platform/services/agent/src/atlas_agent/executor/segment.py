@@ -248,7 +248,8 @@ class SegmentLoader:
             # 本轮用户消息的时间：Agent 这一轮写入记忆时的「信息成立时间」（记忆设计 §6.4）
             input_at=rows[input_index].created_at if input_index is not None else None,
             start_seq=run.last_seq,
-            prior_tokens=run.total_tokens,
+            # 计入上限的口径：缓存命中的不算（kernel/middleware/limits.py::billable_tokens）
+            prior_tokens=max(0, run.input_tokens - run.cache_read_tokens + run.output_tokens),
             # ★ 子孙 run 的事件带它在 run 树里的深度（子 1、孙 2 ……），建子 run 时记下
             #   （迁移 0021）。SubAgent 可以继续派 SubAgent，不能再按「有没有父 run」判 0 / 1。
             base_depth=run.depth,

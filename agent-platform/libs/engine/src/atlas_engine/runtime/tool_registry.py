@@ -24,6 +24,7 @@ from atlas_engine.contracts.tool_names import ASK_USER_QUESTION, SUBAGENT_TOOL
 
 if TYPE_CHECKING:
     from atlas_engine.contracts.spec import AgentSpec
+    from atlas_engine.contracts.tools import ToolSpec
 
 #: MCP 工具的命名前缀：mcp:<server>:<tool>。
 #: 它们由 server 解析后以 extra_tools 注入，不在本表内。
@@ -234,6 +235,14 @@ def tool_effects(extra_tools: Iterable[Any] = ()) -> dict[str, ToolEffect]:
         read_only = metadata.get("readOnlyHint") is True
         out.setdefault(tool.name, ToolEffect.READ if read_only else ToolEffect.EXTERNAL)
     return out
+
+
+def read_only_tools(specs: Iterable[ToolSpec] = ()) -> frozenset[str]:
+    """server 交来的工具（MCP、知识库检索等）里声明了只读的：结果清掉后再调一次就能拿回来。
+
+    ★ 和 tool_effects 同一个判据（MCP 的 readOnlyHint），只是这里看的是转成框架工具之前的 ToolSpec。
+    """
+    return frozenset(s.name for s in specs if s.annotations.get("readOnlyHint") is True)
 
 
 def irreversible_tools() -> frozenset[str]:

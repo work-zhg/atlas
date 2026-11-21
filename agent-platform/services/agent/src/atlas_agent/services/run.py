@@ -52,6 +52,7 @@ def _to_out(run: Run) -> RunOut:
         cache_read_tokens=run.cache_read_tokens,
         thinking_tokens=run.thinking_tokens,
         total_tokens=run.total_tokens,
+        step_count=run.step_count,
         started_at=run.started_at,
         finished_at=run.finished_at,
         created_at=run.created_at,

@@ -32,6 +32,7 @@ class _Runs:
             cache_read_tokens=0,
             thinking_tokens=0,
             total_tokens=0,
+            step_count=0,
             started_at=None,
             finished_at=None,
             created_at=datetime.now(UTC),

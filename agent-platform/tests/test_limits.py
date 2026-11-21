@@ -26,7 +26,7 @@ from atlas_engine.contracts.events import EventType
 from atlas_engine.contracts.spec import AgentSpec, LimitSpec, ModelSpec, SubAgentSpec
 from atlas_engine.kernel.middleware.limits import (
     CIRCUIT_THRESHOLD,
-    StepLimitMiddleware,
+    RunBudgetMiddleware,
     ToolGovernorMiddleware,
 )
 from langchain_core.messages import AIMessageChunk, ToolMessage
@@ -60,11 +60,7 @@ def _looping_model() -> TurnModel:
 
 
 async def test_step_limit_stops_a_runaway_agent() -> None:
-    """★ 步数是跑飞的 agent 唯一可靠的刹车。
-
-    token 上限只能在调用返回后检查（§4.4）；一个陷在「调工具→再调」
-    循环里的 agent 每步 token 不多，会一直转到超时。
-    """
+    """★ 一个陷在「调工具→再调」循环里的 agent 每步 token 不多，只有步数拦得住。"""
     events = [
         e
         async for e in run(
@@ -93,12 +89,126 @@ async def test_step_limit_not_hit_on_normal_run() -> None:
 
 
 async def test_step_middleware_counts_model_calls() -> None:
-    middleware = StepLimitMiddleware(2)
+    middleware = RunBudgetMiddleware(max_steps=2)
     await middleware.abefore_model({})
     await middleware.abefore_model({})
     assert middleware.steps_used == 2
     with pytest.raises(LimitExceeded):
         await middleware.abefore_model({})
+
+
+async def test_each_step_is_reported_for_the_run_record() -> None:
+    """run.step_count 的来源：每一步报一次 steps=1，usage.updated 里是这一段的步数。"""
+    model = TurnModel(
+        scripts=[[tool_call_chunk("write_todos", '{"todos":[]}', "c1")], [AIMessageChunk("好了")]]
+    )
+    events = [e async for e in run(_spec(), run_id=RUN_ID, model=model, input_content="开始")]
+    usage = next(e for e in events if e.type is EventType.USAGE_UPDATED)
+    assert usage.data["steps"] == 2 == model.call_count
+
+
+def _step_warned(messages: list[Any]) -> bool:
+    return 'name="step_budget"' in str(messages[-1].content)
+
+
+async def test_steps_near_the_limit_tell_the_model_to_wrap_up() -> None:
+    """用到 80% 起，每次调用前提醒收尾 —— 撞线前模型知道还剩多少（会话 01a1f830 盲重试到撞线）。"""
+    model = _looping_model()
+    _ = [e async for e in run(_spec(max_steps=5), run_id=RUN_ID, model=model, input_content="开始")]
+    assert [_step_warned(m) for m in model.seen] == [False, False, False, True, True]
+    assert "4/5 步" in str(model.seen[3][-1].content)
+
+
+# ---------------------------------------------------------------- max_total_tokens
+
+
+def _usage(uncached: int, *, cached: int = 0) -> AIMessageChunk:
+    return AIMessageChunk(
+        content="",
+        usage_metadata={
+            "input_tokens": uncached + cached,
+            "output_tokens": 0,
+            "total_tokens": uncached + cached,
+            "input_token_details": {"cache_read": cached},
+        },
+    )
+
+
+def _two_calls(first: AIMessageChunk) -> TurnModel:
+    return TurnModel(
+        scripts=[
+            [tool_call_chunk("write_todos", '{"todos":[]}', "c1"), first],
+            [AIMessageChunk("做完了")],
+        ]
+    )
+
+
+async def test_token_limit_stops_before_the_next_call() -> None:
+    model = _two_calls(_usage(600))
+    events = [
+        e
+        async for e in run(
+            _spec(max_total_tokens=500), run_id=RUN_ID, model=model, input_content="开始"
+        )
+    ]
+    failed = events[-1]
+    assert failed.type is EventType.RUN_FAILED
+    assert failed.data["error_kind"] == LimitExceeded.kind
+    assert failed.data["total_tokens"] == 600
+    assert model.call_count == 1  # 第二次调用没有发出去
+
+
+async def test_a_finished_answer_is_not_failed_by_the_token_limit() -> None:
+    """会话 01a1f830：13 首都下完、回答写好了，最后一段被改判「超过上限」。"""
+    model = TurnModel(scripts=[[AIMessageChunk("全部完成"), _usage(10_000)]])
+    events = [
+        e
+        async for e in run(
+            _spec(max_total_tokens=1_000), run_id=RUN_ID, model=model, input_content="开始"
+        )
+    ]
+    assert events[-1].type is EventType.RUN_FINISHED
+
+
+async def test_cache_hits_do_not_count_toward_the_token_limit() -> None:
+    model = _two_calls(_usage(100, cached=90_000))
+    events = [
+        e
+        async for e in run(
+            _spec(max_total_tokens=500), run_id=RUN_ID, model=model, input_content="开始"
+        )
+    ]
+    assert events[-1].type is EventType.RUN_FINISHED
+    assert model.call_count == 2
+
+
+async def test_earlier_segments_count_toward_the_token_limit() -> None:
+    """上限跨段累计：之前几段已经用过头，续跑的这一段一次也不调。"""
+    model = text_model("不该发出")
+    events = [
+        e
+        async for e in run(
+            _spec(max_total_tokens=500),
+            run_id=RUN_ID,
+            model=model,
+            input_content="开始",
+            prior_tokens=501,
+        )
+    ]
+    assert events[-1].type is EventType.RUN_FAILED
+    assert events[-1].data["error_kind"] == LimitExceeded.kind
+
+
+async def test_tokens_near_the_limit_tell_the_model_to_wrap_up() -> None:
+    model = _two_calls(_usage(450))
+    _ = [
+        e
+        async for e in run(
+            _spec(max_total_tokens=500), run_id=RUN_ID, model=model, input_content="开始"
+        )
+    ]
+    assert 'name="token_budget"' not in str(model.seen[0][-1].content)
+    assert "450/500 tokens" in str(model.seen[1][-1].content)
 
 
 # ---------------------------------------------------------------- 并发

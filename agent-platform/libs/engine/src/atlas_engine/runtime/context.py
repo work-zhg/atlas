@@ -10,12 +10,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 from atlas_engine.contracts.spec import AgentSpec
 from atlas_engine.kernel.context import (
+    DEFAULT_CLEARABLE_TOOLS,
     CallRecovery,
     Compactor,
     ContextBudget,
@@ -40,9 +41,9 @@ _KEEP_IMAGES = 2
 
 @dataclass(frozen=True)
 class ContextLimits:
-    """压缩要的东西：只在开了自动压缩、而且知道模型窗口时才有。"""
+    """压缩要的东西：开了自动压缩才有。"""
 
-    #: 模型的上下文窗口、最大输出（模型目录里的实测值，不猜）
+    #: 模型的上下文窗口、最大输出（模型平台登记的值；没登记时 server 按保守值兜底）
     window: int
     model_max_output: int
     #: 摘要器（runtime/summarize.py 的 Summarizer）
@@ -56,6 +57,8 @@ class ContextLimits:
     on_compacted: Callable[[dict[str, Any]], Awaitable[None]] | None = None
     #: 距上次回复已超过提示词缓存的有效期：缓存反正失效，第一次调模型前顺手清旧工具结果
     cache_expired: bool = False
+    #: 窗口是兜底的估计值（模型没登记窗口）：context.usage 里带上，用量条据此提示
+    window_assumed: bool = False
 
 
 @dataclass(frozen=True)
@@ -69,14 +72,17 @@ class ContextPorts:
     batch_cap_tokens: int
     #: 每次调模型前追加的提醒来自哪里（记忆的更新、待办）
     reminder_sources: Sequence[ReminderSource] = field(default_factory=tuple)
-    #: None = 关了自动压缩，或者不知道窗口
+    #: None = 关了自动压缩
     limits: ContextLimits | None = None
     #: 外置的工具结果、超长用户输入写进 offload_store 的哪个目录（模型看到的就是这里的路径）
     offload_dir: str = OFFLOAD_DIR
     input_dir: str = INPUT_DIR
 
 
-def context_pipeline(spec: AgentSpec, ports: ContextPorts) -> ContextMiddleware:
+def context_pipeline(
+    spec: AgentSpec, ports: ContextPorts, *, regenerable: Iterable[str] = ()
+) -> ContextMiddleware:
+    """regenerable：默认清单之外、结果也可以清的工具（只读的外部工具，见 tool_registry）。"""
     offloader = ResultOffloader(
         store=ports.offload_store,
         single_limit_tokens=ports.result_limit_tokens,
@@ -99,6 +105,7 @@ def context_pipeline(spec: AgentSpec, ports: ContextPorts) -> ContextMiddleware:
         compact_ratio=cfg.trigger_ratio,
         clear_ratio=cfg.clear_ratio,
         warn_ratio=cfg.warn_ratio,
+        window_assumed=limits.window_assumed,
     )
     compactor = Compactor(
         summarizer=limits.summarizer,
@@ -116,8 +123,12 @@ def context_pipeline(spec: AgentSpec, ports: ContextPorts) -> ContextMiddleware:
             budget_tokens=int(budget.effective * cfg.attachment_budget_ratio), sources=sources
         ),
         budget=budget,
+        # ★ 只读的外部工具（MCP 的搜索之类）也清：不清的话一次搜索 2 万 token 的原始结果一直
+        #   留在上下文里（会话 01a1f830：3 次搜索占了 171k 里的三分之一，跟了 280 次调用）
         clearing=ResultClearing(
-            keep_recent=cfg.keep_recent_tool_results, cache_expired=limits.cache_expired
+            keep_recent=cfg.keep_recent_tool_results,
+            clearable=DEFAULT_CLEARABLE_TOOLS | frozenset(regenerable),
+            cache_expired=limits.cache_expired,
         ),
         compactor=compactor,
         recovery=CallRecovery(compactor=compactor, max_output_cap=limits.model_max_output),

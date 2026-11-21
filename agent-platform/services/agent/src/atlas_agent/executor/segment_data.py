@@ -53,7 +53,8 @@ class Segment:
     #: True = 这个 run 之前已经跑过一段，本次是续跑。本轮输入早已在 history
     #: 里，不能再 append 一遍（那会让模型看到同一个问题问了两次）。
     resume: bool = False
-    #: 这个 run 在之前几段里已经花掉的 token。max_total_tokens 是跨段累计的。
+    #: 这个 run 在之前几段里已经计入 token 上限的量（没命中缓存的输入 + 输出）。
+    #: max_total_tokens 是跨段累计的：装配时交给图里的预算中间件
     prior_tokens: int = 0
     #: 这个 run 在委派树里的深度：主 run 是 0，子 run 是 1。进 TraceEvent.depth，
     #: 前端据此把子智能体的过程渲染进卡片而不是主对话。

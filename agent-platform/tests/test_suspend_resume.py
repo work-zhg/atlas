@@ -374,6 +374,8 @@ async def test_usage_accumulates_across_segments(client_factory) -> None:
 
     assert final["status"] == "succeeded", final
     assert final["total_tokens"] == 330, final
+    # 步数同样跨段累加：委派那一步 + 续跑后作答那一步
+    assert final["step_count"] == 2, final
 
 
 # ──────────────────────────────────────────────── 续跑看到的是真话
