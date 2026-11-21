@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -113,6 +114,13 @@ def _dump(messages: list[Any]) -> list[Any]:
     return [(m.type, m.content) for m in messages]
 
 
+async def test_today_goes_last_in_the_system_prompt() -> None:
+    """日期一天一变：排在系统提示词最后，换天时前面的段落仍能按前缀命中缓存。"""
+    seen = await _request(today=date(2026, 11, 21))
+
+    assert seen["system"] == "你是客服助手。\n\n今天是 2026-11-21（星期六）。"
+
+
 # ── assembly：spec 开关 × 模型目录 ────────────────────────────────────────────
 
 
@@ -163,3 +171,8 @@ def test_compaction_idle_rule_follows_the_same_ttl() -> None:
 def test_only_the_two_anthropic_ttls_are_accepted() -> None:
     with pytest.raises(ValueError, match="prompt_cache_ttl"):
         Settings(prompt_cache_ttl="10m")  # type: ignore[arg-type]
+
+
+def test_unknown_timezone_fails_at_startup() -> None:
+    with pytest.raises(ValueError, match="prompt_timezone"):
+        Settings(prompt_timezone="Mars/Olympus")

@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import AnyHttpUrl, BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -81,6 +82,20 @@ class Settings(BaseSettings):
 
     default_model: str = "claude-sonnet-5"
     summarizer_model: str = "claude-haiku-4-5"  # §8 标题（压缩的摘要模型改由智能体配置决定）
+    #: 系统提示词里「今天是哪天」按这个时区算（IANA 名）。Pod 默认是 UTC，不设的话北京时间
+    #: 0–8 点模型会以为还是昨天
+    prompt_timezone: str = "Asia/Shanghai"
+
+    @field_validator("prompt_timezone")
+    @classmethod
+    def _known_timezone(cls, value: str) -> str:
+        # 启动时就报错：写错的时区名不该等到每一轮装配时才失败
+        try:
+            ZoneInfo(value)
+        except ZoneInfoNotFoundError as exc:  # 它是 KeyError，pydantic 只收 ValueError
+            raise ValueError(f"未知的时区：{value}") from exc
+        return value
+
     # ── 上下文管理（doc/context-management-design.html）─────────────────
     #: 单条工具结果的上限（tokens，按 2.5 字符 / token 粗估，约 80 000 字符）：超过就外置
     context_result_limit_tokens: int = 32_000

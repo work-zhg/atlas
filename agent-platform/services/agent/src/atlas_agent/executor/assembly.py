@@ -16,8 +16,10 @@ from __future__ import annotations
 import dataclasses
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import redis.asyncio as aioredis
 from atlas_engine.contracts.events import EventType
@@ -187,6 +189,8 @@ class CapabilityAssembly:
             workdir=WorkspaceLayout.of(
                 thread.created_by_uuid, segment.thread_id, thread.workspace_dir
             ).workdir,
+            # 每段装配时取一次：跨过零点的会话下一段就换成新的一天
+            today=datetime.now(ZoneInfo(self._settings.prompt_timezone)).date(),
         )
         return caps, self._titler(segment)
 
