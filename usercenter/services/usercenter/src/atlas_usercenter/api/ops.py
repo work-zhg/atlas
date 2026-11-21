@@ -269,7 +269,11 @@ async def switch_app(
 @router.get("/apps")
 async def list_apps(session: CatalogDep, actor: OpsDep) -> list[dict[str, Any]]:
     svc = AppService(session, actor)
-    return [app_view(a, **await svc.counts(a.uuid)) for a in await svc.list()]
+    using = await svc.tenants_using()
+    return [
+        app_view(a, **await svc.counts(a.uuid), tenants=using.get(a.uuid, 0))
+        for a in await svc.list()
+    ]
 
 
 @router.post("/apps", status_code=201)
@@ -284,7 +288,8 @@ async def create_app(body: AppCreate, session: CatalogDep, actor: OpsDep) -> dic
 @router.get("/apps/{app_id}")
 async def get_app(app_id: UUID, session: CatalogDep, actor: OpsDep) -> dict[str, Any]:
     svc = AppService(session, actor)
-    return app_view(await svc.get(app_id), **await svc.counts(app_id))
+    using = await svc.tenants_using()
+    return app_view(await svc.get(app_id), **await svc.counts(app_id), tenants=using.get(app_id, 0))
 
 
 @router.patch("/apps/{app_id}")

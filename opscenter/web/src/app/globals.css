@@ -1,10 +1,682 @@
-html,
-body {
-  margin: 0;
-  padding: 0;
-  background: #f6f7fb;
+/* 设计变量（:root）在 ../theme/tokens.css（与 Atlas 同一套值），由 layout.tsx 引入。 */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
-a {
-  text-decoration: none;
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
+}
+
+:focus-visible {
+  outline: 2px solid var(--primary-text);
+  outline-offset: 2px;
+  border-radius: var(--r-sm);
+}
+
+/* ---------- 页面骨架：标题 + 右侧主操作，内容最宽 1280 居中（同 Atlas） ---------- */
+.ops-page {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 22px 32px 56px;
+}
+
+.ops-page-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+  min-height: 36px;
+}
+
+.ops-page-head h1 {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+  margin: 0;
+}
+
+.ops-page-head .sub {
+  color: var(--fg-3);
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.ops-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+
+.ops-grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.ops-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ops-muted {
+  color: var(--fg-3);
+}
+
+.ops-nw {
+  white-space: nowrap;
+}
+
+.ops-mono {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.ops-sub {
+  color: var(--fg-3);
+  font-size: 12px;
+}
+
+.ops-code {
+  background: var(--bg-code);
+  border: 1px solid var(--line);
+  color: var(--fg-2);
+  border-radius: var(--r-md);
+  padding: 10px 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow: auto;
+  white-space: pre;
+  margin: 0;
+}
+
+/* 左栏（树 / 列表）+ 右侧详情 */
+.ops-split {
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.ops-panel {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  max-height: calc(100vh - var(--top-h) - 48px);
+  overflow: hidden;
+}
+
+.ops-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.ops-panel-body {
+  overflow-y: auto;
+  padding: 6px;
+  flex: 1;
+}
+
+/* 列表项（角色、选人） */
+.ops-li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: var(--r-md);
+  cursor: pointer;
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.ops-li:hover {
+  background: var(--bg-2);
+}
+
+.ops-li[aria-current="true"] {
+  background: var(--primary-soft);
+}
+
+.ops-li[aria-current="true"] b {
+  color: var(--primary-text);
+}
+
+.ops-group-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--fg-3);
+  padding: 10px 10px 4px;
+}
+
+/*
+ * 勾选项（授予角色 / 岗位、岗位的默认角色）：整行可点、悬停有底色。
+ * ★ antd 的复选框是 align-self: center，说明一换行就对着整块居中、跟名称错开 —— 改为对齐第一行。
+ * ★ 已授予的项禁用，但文字不置灰（antd 默认置灰），靠「已授予」标签区分。
+ */
+.ops-opt.ant-checkbox-wrapper {
+  display: flex;
+  align-items: flex-start;
+  padding: 8px 12px;
+}
+
+.ops-opt.ant-checkbox-wrapper:hover {
+  background: var(--bg-2);
+}
+
+.ops-opt .ant-checkbox {
+  align-self: flex-start;
+  margin-top: 3px;
+}
+
+.ops-opt .ant-checkbox + span {
+  flex: 1;
+  min-width: 0;
+}
+
+.ops-opt .ant-checkbox-disabled + span {
+  color: inherit;
+}
+
+/* 三格摘要（部门信息） */
+.ops-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.ops-stat {
+  background: var(--bg-side);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.ops-stat .k {
+  font-size: 12px;
+  color: var(--fg-3);
+  margin-bottom: 4px;
+}
+
+.ops-stat .v {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-weight: 600;
+}
+
+/* 方形图标（应用、部门、数字员工） */
+.ops-sq {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+/* 人：圆形头像 */
+.ops-avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 650;
+}
+
+/* 表格里的整行点击 */
+.ops-row-click {
+  cursor: pointer;
+}
+
+/* 只显示一次的凭据 */
+.ops-once {
+  background: var(--bg-side);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 2px 14px;
+}
+
+.ops-once-row {
+  display: grid;
+  grid-template-columns: 80px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--line);
+}
+
+.ops-once-row:last-child {
+  border-bottom: none;
+}
+
+/* 单选卡片（可访问范围） */
+.ops-radio-card {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  background: var(--bg-1);
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.ops-radio-card:hover {
+  border-color: var(--line-2);
+}
+
+.ops-radio-card[aria-checked="true"] {
+  border-color: var(--primary-hover);
+  background: #f8f8ff;
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.ops-radio-card .dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1.5px solid #c5cad6;
+  flex: none;
+  margin-top: 3px;
+}
+
+.ops-radio-card[aria-checked="true"] .dot {
+  border: 5px solid var(--primary);
+}
+
+/* 卡片网格（应用目录、我的应用） */
+.ops-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  gap: 14px;
+}
+
+.ops-acard {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  transition:
+    border-color var(--t-fast) var(--ease),
+    box-shadow var(--t-fast) var(--ease);
+}
+
+button.ops-acard,
+a.ops-acard {
+  cursor: pointer;
+}
+
+button.ops-acard:hover,
+a.ops-acard:hover {
+  border-color: var(--line-2);
+  box-shadow: var(--shadow-md);
+}
+
+.ops-acard .desc {
+  color: var(--fg-3);
+  font-size: 13px;
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 40px;
+}
+
+.ops-acard .foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--fg-3);
+  margin-top: auto;
+}
+
+/* 菜单预览（应用详情 › 菜单） */
+.ops-pv {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-side);
+  padding: 8px 6px;
+  font-size: 13px;
+  min-height: 120px;
+}
+
+.ops-pv-dir {
+  color: var(--fg-3);
+  font-size: 11.5px;
+  padding: 8px 10px 4px;
+}
+
+.ops-pv-item {
+  padding: 6px 10px;
+  border-radius: 6px;
+  color: var(--fg-2);
+}
+
+/* ======================================================================
+ * 运营中心补的（agent-platform/doc/prototype/opscenter.html）
+ * ====================================================================== */
+
+/* 人数 / 名额：短进度条 + 数字 */
+.ops-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ops-meter .bar {
+  width: 72px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.ops-meter .bar i,
+.ops-ubar .track i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: #6366f1;
+}
+
+.ops-meter .bar i[data-warn="true"],
+.ops-ubar .track i[data-warn="true"] {
+  background: var(--warning);
+}
+
+/* 用量 / 份额：一行文字 + 长进度条 */
+.ops-ubar {
+  font-size: 13px;
+}
+
+.ops-ubar .track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+  margin-top: 6px;
+}
+
+.ops-ubars {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+/* 键值列表（基本信息） */
+.ops-kv {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 12px 14px;
+  font-size: 13.5px;
+  margin: 0;
+}
+
+.ops-kv dt {
+  color: var(--fg-3);
+}
+
+.ops-kv dd {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* 详情：左右两栏 */
+.ops-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+/* 租户操作：每个系统一步 */
+.ops-op {
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+.ops-op + .ops-op {
+  margin-top: 10px;
+}
+
+.ops-op-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  cursor: pointer;
+  flex-wrap: wrap;
+}
+
+.ops-op-head:hover {
+  background: var(--bg-side);
+}
+
+.ops-steps {
+  border-top: 1px solid var(--line);
+  padding: 6px 16px 10px;
+}
+
+.ops-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 0;
+  position: relative;
+}
+
+.ops-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 30px;
+  bottom: -8px;
+  width: 2px;
+  background: var(--line);
+}
+
+.ops-step-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex: none;
+  background: var(--line);
+  color: var(--fg-3);
+}
+
+.ops-step-dot[data-status="DONE"] {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.ops-step-dot[data-status="FAILED"] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.ops-step-dot[data-status="WARN"] {
+  background: var(--warning-soft);
+  color: #b45309;
+}
+
+/* 表单分区标题（开通租户） */
+.ops-section {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--fg);
+  margin: 4px 0 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.ops-section:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+
+.ops-section .ops-sub {
+  font-weight: 400;
+}
+
+.ops-cols-2,
+.ops-cols-3 {
+  display: grid;
+  gap: 0 14px;
+}
+
+.ops-cols-2 {
+  grid-template-columns: 1fr 1fr;
+}
+
+.ops-cols-3 {
+  grid-template-columns: 1fr 1fr 1.3fr;
+}
+
+.ops-quota-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+}
+
+/* 份额与容量：系统卡片里的默认份额行 */
+.ops-def-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.ops-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-1);
+  font-size: 13px;
+  color: var(--fg-2);
+  white-space: nowrap;
+}
+
+a.ops-chip:hover {
+  background: var(--bg-2);
+  color: var(--fg);
+}
+
+.ops-subhead {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg-3);
+  margin: 16px 0 8px;
+}
+
+/* 发布技能：拖入区 */
+.ops-drop {
+  border: 1.5px dashed var(--line-2);
+  border-radius: 12px;
+  padding: 22px;
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-3);
+  background: var(--bg-side);
+  cursor: pointer;
+}
+
+.ops-drop:hover {
+  border-color: var(--primary);
+}
+
+.ops-json {
+  background: #0f172a;
+  color: #e2e8f0;
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  overflow-x: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-all;
 }

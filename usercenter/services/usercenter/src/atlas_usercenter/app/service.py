@@ -91,6 +91,19 @@ class AppService:
             "data_types": await n(DataType, DataType.app_uuid == app_uuid),
         }
 
+    async def tenants_using(self) -> dict[UUID, int]:
+        """→ {应用: 开通了它的租户数}。只给运营接口：租户管理员不该知道别的租户用了什么。
+
+        内置应用不需要开通（每个租户都能用），不在结果里。
+        """
+        stmt = (
+            select(TenantApp.app_uuid, func.count())
+            .where(TenantApp.status == "active")
+            .group_by(TenantApp.app_uuid)
+        )
+        with platform_scope(self.session):
+            return {a: int(n) for a, n in (await self.session.execute(stmt)).all()}
+
     def _mutable(self, app: App) -> None:
         if app.is_builtin:
             raise Conflict("BUILTIN_READONLY", "内置应用的配置、操作与菜单不能修改")

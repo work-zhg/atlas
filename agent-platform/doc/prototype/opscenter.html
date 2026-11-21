@@ -1,0 +1,1747 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>运营中心 — 改版原型</title>
+<style>
+/* 设计 token 与 Atlas 控制台改版原型（atlas-console.html）、用户中心改版原型（usercenter.html）、packages/chat-ui/src/theme/tokens.css 同一套 */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --surface-2: #fbfbfd; --hover: #f2f4f8;
+  --ink: #0f172a; --ink-2: #334155; --ink-3: #64748b; --ink-4: #94a3b8;
+  --line: #e6e8ee; --line-2: #eef0f4;
+  --primary: #4f46e5; --primary-2: #6366f1; --primary-weak: #eef0ff; --primary-ink: #4338ca;
+  --secondary: #0ea5e9; --secondary-weak: #e6f6fe;
+  --success: #16a34a; --success-weak: #e7f6ec;
+  --warning: #d97706; --warning-weak: #fef3e2;
+  --danger: #dc2626; --danger-weak: #fdeaea;
+  --radius: 12px; --radius-sm: 8px; --radius-xs: 6px;
+  --shadow-xs: 0 1px 2px rgba(16,24,40,.05);
+  --shadow-md: 0 6px 18px rgba(16,24,40,.08), 0 2px 6px rgba(16,24,40,.05);
+  --shadow-lg: 0 20px 48px rgba(16,24,40,.16);
+  --font: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --top-h: 52px; --sider-w: 248px; --sider-w-min: 60px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { font-family: var(--font); background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+a { color: var(--primary); text-decoration: none; cursor: pointer; }
+button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+h1, h2, h3, h4 { margin: 0; color: var(--ink); }
+h1 { font-size: 20px; font-weight: 650; }
+h2 { font-size: 16px; font-weight: 650; }
+h3 { font-size: 14px; font-weight: 650; }
+p { margin: 0; }
+code, .mono { font-family: var(--mono); font-size: 12px; }
+code { background: var(--line-2); padding: 1px 5px; border-radius: 5px; }
+svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+svg.i.fill { fill: currentColor; stroke: none; }
+input[type=checkbox], input[type=radio] { accent-color: var(--primary); width: 15px; height: 15px; margin: 0; flex: none; }
+.muted { color: var(--ink-3); }
+.faint { color: var(--ink-4); }
+.sm { font-size: 12.5px; }
+.xs { font-size: 12px; }
+.row { display: flex; align-items: center; gap: 8px; }
+.col { display: flex; flex-direction: column; gap: 8px; }
+.grow { flex: 1; min-width: 0; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp { flex: 1; }
+
+/* ---------- 顶栏：一级菜单 ---------- */
+.top { height: var(--top-h); background: var(--surface); border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 16px 0 14px; gap: 20px; position: relative; z-index: 20; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px; letter-spacing: .01em; cursor: pointer; white-space: nowrap; }
+.logo { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, #6366f1, #0ea5e9); color: #fff; display: grid; place-items: center; font-size: 14px; font-weight: 700; flex: none; }
+.pnav { display: flex; gap: 2px; height: 100%; }
+.pnav a { display: flex; align-items: center; gap: 7px; padding: 0 14px; color: var(--ink-2); font-weight: 550; position: relative; white-space: nowrap; }
+.pnav a:hover { color: var(--ink); background: var(--hover); }
+.pnav a.on { color: var(--primary-ink); }
+.pnav a.on::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; background: var(--primary); border-radius: 2px; }
+.top-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.avatar { width: 30px; height: 30px; border-radius: 50%; display: inline-grid; place-items: center; color: #fff; font-size: 12.5px; font-weight: 650; flex: none; vertical-align: middle; }
+.sq { display: inline-grid; place-items: center; border-radius: 10px; flex: none; }
+.sq svg { width: 52%; height: 52%; }
+
+/* ---------- 左侧：二级菜单（可收缩） ---------- */
+.body { display: flex; height: calc(100vh - var(--top-h)); }
+.body.full { height: 100vh; }
+.sider { width: var(--sider-w); flex: none; background: var(--surface-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; transition: width .18s ease; overflow: hidden; }
+.sider.min { width: var(--sider-w-min); }
+.sider-top { padding: 12px 10px 6px; display: flex; flex-direction: column; gap: 2px; }
+.snav { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: var(--radius-sm); color: var(--ink-2); font-weight: 520; white-space: nowrap; cursor: pointer; position: relative; }
+.snav:hover { background: var(--hover); color: var(--ink); }
+.snav.on { background: var(--primary-weak); color: var(--primary-ink); font-weight: 600; }
+.snav .badge { margin-left: auto; }
+.sider.min .snav { justify-content: center; padding: 0; }
+.sider.min .snav span, .sider.min .snav .badge { display: none; }
+.hist { flex: 1; overflow-y: auto; padding: 4px 10px 10px; border-top: 1px solid var(--line-2); margin-top: 6px; }
+.hist-group { font-size: 11.5px; color: var(--ink-4); padding: 10px 8px 4px; }
+.hist-item { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 8px; border-radius: var(--radius-sm); color: var(--ink-2); cursor: pointer; }
+.hist-item:hover { background: var(--hover); }
+.hist-item.on { background: #e9ebf3; color: var(--ink); font-weight: 550; }
+.hist-item .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.sider-foot { border-top: 1px solid var(--line-2); padding: 8px 10px; }
+.main { flex: 1; min-width: 0; overflow-y: auto; position: relative; }
+.page { padding: 24px 32px 60px; max-width: 1280px; margin: 0 auto; }
+.page.narrow { max-width: 880px; }
+.page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; min-height: 36px; }
+.page-head .sub { color: var(--ink-3); font-size: 13px; margin-top: 2px; }
+
+/* ---------- 通用组件（与 Atlas 原型相同） ---------- */
+.btn { height: 34px; padding: 0 14px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface); display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; font-weight: 550; white-space: nowrap; color: var(--ink); }
+.btn:hover { border-color: #cfd3dd; background: var(--hover); }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn.primary:hover { background: var(--primary-2); }
+.btn.danger { color: var(--danger); }
+.btn.danger.solid { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.ghost:hover { background: var(--hover); }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 13px; }
+.btn.lg { height: 40px; font-size: 14.5px; }
+.btn.block { width: 100%; }
+.btn[disabled] { opacity: .5; cursor: not-allowed; }
+.ibtn { width: 32px; height: 32px; border-radius: var(--radius-sm); border: none; background: transparent; display: inline-grid; place-items: center; cursor: pointer; color: var(--ink-3); flex: none; }
+.ibtn:hover { background: var(--hover); color: var(--ink); }
+.ibtn.sm { width: 26px; height: 26px; }
+.input, .select, textarea.input { height: 34px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 11px; background: var(--surface); outline: none; width: 100%; }
+.input.lg { height: 40px; font-size: 14.5px; }
+textarea.input { height: auto; padding: 9px 11px; resize: vertical; line-height: 1.6; }
+.input:focus, .select:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px var(--primary-weak); }
+.input[readonly] { background: var(--surface-2); color: var(--ink-2); }
+.search { position: relative; }
+.search svg { position: absolute; left: 10px; top: 9px; color: var(--ink-4); }
+.search .input { padding-left: 32px; }
+.tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 550; background: var(--line-2); color: var(--ink-2); white-space: nowrap; }
+.tag.xs { height: 18px; padding: 0 6px; font-size: 11px; }
+.tag.primary { background: var(--primary-weak); color: var(--primary-ink); }
+.tag.success { background: var(--success-weak); color: var(--success); }
+.tag.warning { background: var(--warning-weak); color: #b45309; }
+.tag.danger { background: var(--danger-weak); color: var(--danger); }
+.tag.blue { background: var(--secondary-weak); color: #0369a1; }
+.tag.mono { font-family: var(--mono); font-weight: 500; }
+.badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: #fff; font-size: 11px; font-weight: 650; display: inline-grid; place-items: center; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.card.pad { padding: 16px 18px; }
+.card-h { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line-2); min-height: 50px; }
+.card-b { padding: 14px 16px; }
+.tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+.tabs a { padding: 10px 0; color: var(--ink-3); font-weight: 550; position: relative; white-space: nowrap; }
+.tabs a:hover { color: var(--ink); }
+.tabs a.on { color: var(--ink); }
+.tabs a.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--primary); border-radius: 2px; }
+.tabs.inner { padding: 0 16px; margin-bottom: 0; }
+.seg { display: inline-flex; background: var(--line-2); border-radius: 9px; padding: 3px; gap: 2px; }
+.seg a { padding: 4px 12px; border-radius: 7px; color: var(--ink-3); font-weight: 550; font-size: 13px; white-space: nowrap; }
+.seg a.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-xs); }
+.seg a .n { color: var(--ink-4); font-weight: 500; margin-left: 3px; }
+.seg.block { display: flex; } .seg.block a { flex: 1; text-align: center; }
+.switch { display: inline-block; vertical-align: middle; width: 36px; height: 20px; border-radius: 10px; background: #d5d9e2; position: relative; cursor: pointer; flex: none; transition: background .15s; }
+.switch::after { content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%; background: #fff; top: 2px; left: 2px; transition: left .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.switch.on { background: var(--primary); }
+.switch.on::after { left: 18px; }
+.table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.table th { text-align: left; font-weight: 600; font-size: 12.5px; color: var(--ink-3); background: var(--surface-2); padding: 10px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.table td { padding: 11px 14px; border-bottom: 1px solid var(--line-2); vertical-align: middle; }
+.table tr:last-child td { border-bottom: none; }
+.table tr.click:hover td { background: var(--surface-2); cursor: pointer; }
+.table tr.grp td { background: var(--surface-2); font-size: 12.5px; font-weight: 600; color: var(--ink-3); padding: 7px 14px; }
+.table.flat { border: none; border-radius: 0 0 var(--radius) var(--radius); }
+.table .acts { text-align: right; white-space: nowrap; }
+.table .acts > * { vertical-align: middle; }
+.nw { white-space: nowrap; }
+.empty { text-align: center; padding: 48px 20px; color: var(--ink-3); }
+.empty .ill { width: 52px; height: 52px; border-radius: 16px; background: var(--primary-weak); color: var(--primary); display: grid; place-items: center; margin: 0 auto 12px; }
+.empty .ill svg { width: 24px; height: 24px; }
+.empty h3 { margin-bottom: 4px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-size: 13px; color: var(--ink-2); white-space: nowrap; }
+a.chip:hover { background: var(--hover); color: var(--ink); }
+.chip .x { color: var(--ink-4); cursor: pointer; display: inline-grid; }
+.chip .x:hover { color: var(--danger); }
+.chip .x svg { width: 13px; height: 13px; }
+.kv { display: grid; grid-template-columns: 110px 1fr; gap: 12px 14px; font-size: 13.5px; margin: 0; }
+.kv dt { color: var(--ink-3); }
+.kv dd { margin: 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.divider { height: 1px; background: var(--line-2); margin: 16px 0; }
+.label { font-size: 13px; font-weight: 600; color: var(--ink-2); margin-bottom: 6px; display: block; }
+.help { font-size: 12.5px; color: var(--ink-3); margin-top: 5px; }
+.radio-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; cursor: pointer; display: flex; gap: 10px; align-items: flex-start; background: var(--surface); }
+.radio-card:hover { border-color: #cfd3dd; }
+.radio-card.on { border-color: var(--primary-2); background: #f8f8ff; box-shadow: 0 0 0 3px var(--primary-weak); }
+.radio-card .r { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid #c5cad6; flex: none; margin-top: 2px; }
+.radio-card.on .r { border: 5px solid var(--primary); }
+.toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
+.acard { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px; cursor: pointer; transition: box-shadow .15s, border-color .15s; position: relative; }
+.acard:hover { border-color: #d6d9e3; box-shadow: var(--shadow-md); }
+.acard .desc { color: var(--ink-3); font-size: 13px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 40px; }
+.acard .foot { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-3); margin-top: auto; }
+.alert { display: flex; gap: 8px; align-items: flex-start; padding: 9px 12px; border-radius: 8px; font-size: 13px; line-height: 1.5; }
+.alert svg { margin-top: 1px; }
+.alert.danger { background: var(--danger-weak); color: #b91c1c; }
+.alert.warning { background: var(--warning-weak); color: #92400e; }
+.alert.info { background: var(--primary-weak); color: var(--primary-ink); }
+.alert.plain { background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-2); }
+.pager { display: flex; align-items: center; gap: 6px; padding: 10px 14px; border-top: 1px solid var(--line-2); }
+.pager .pg { min-width: 26px; height: 26px; border-radius: 6px; display: inline-grid; place-items: center; font-size: 13px; color: var(--ink-2); }
+.pager .pg.on { background: var(--primary-weak); color: var(--primary-ink); font-weight: 600; }
+
+/* 浮层 */
+.pop { position: absolute; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 6px; z-index: 60; min-width: 200px; }
+.pop .mi { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 7px; cursor: pointer; color: var(--ink-2); }
+.pop .mi:hover { background: var(--hover); color: var(--ink); }
+.pop .mi.on { color: var(--primary-ink); }
+.pop .mi.danger { color: var(--danger); }
+.pop .sep { height: 1px; background: var(--line-2); margin: 5px 4px; }
+.pop .ph { font-size: 11.5px; color: var(--ink-4); padding: 6px 10px 2px; }
+.mask { position: fixed; inset: 0; background: rgba(15,23,42,.36); z-index: 80; display: grid; place-items: center; }
+.modal { background: var(--surface); border-radius: 14px; width: 560px; max-width: calc(100vw - 40px); max-height: calc(100vh - 60px); display: flex; flex-direction: column; box-shadow: var(--shadow-lg); }
+.modal.wide { width: 720px; }
+.modal-h { display: flex; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--line-2); }
+.modal-b { padding: 18px 20px; overflow-y: auto; }
+.modal-f { padding: 12px 20px; border-top: 1px solid var(--line-2); display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.drawer-mask { position: fixed; inset: 0; background: rgba(15,23,42,.2); z-index: 70; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 600px; max-width: 92vw; background: var(--surface); z-index: 71; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; }
+.drawer-b { flex: 1; overflow-y: auto; padding: 18px 20px; }
+.toast { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 10px; font-size: 13.5px; z-index: 100; box-shadow: var(--shadow-md); }
+.form { display: flex; flex-direction: column; gap: 14px; }
+.form-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+/* ---------- 用户中心专用 ---------- */
+.split { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 16px; align-items: start; }
+.split.narrow { grid-template-columns: 250px minmax(0, 1fr); }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; position: sticky; top: 0; max-height: calc(100vh - var(--top-h) - 48px); overflow: hidden; }
+.panel-h { display: flex; align-items: center; gap: 8px; padding: 10px; border-bottom: 1px solid var(--line-2); }
+.panel-b { overflow-y: auto; padding: 6px; }
+.tn { display: flex; align-items: center; gap: 6px; height: 32px; padding-right: 8px; border-radius: var(--radius-sm); cursor: pointer; color: var(--ink-2); font-size: 13.5px; }
+.tn:hover { background: var(--hover); }
+.tn.on { background: var(--primary-weak); color: var(--primary-ink); font-weight: 600; }
+.tn .tw { width: 18px; height: 18px; display: grid; place-items: center; color: var(--ink-4); flex: none; border-radius: 4px; }
+.tn .tw:hover { background: var(--line-2); color: var(--ink); }
+.tn .tw svg { width: 14px; height: 14px; }
+.tn > svg { color: var(--ink-4); width: 15px; height: 15px; }
+.tn.on > svg { color: var(--primary); }
+.tn .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tn .n { font-size: 12px; color: var(--ink-4); font-weight: 500; }
+.li { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: var(--radius-sm); cursor: pointer; }
+.li:hover { background: var(--hover); }
+.li.on { background: var(--primary-weak); }
+.li.on b { color: var(--primary-ink); }
+.lg-label { font-size: 11.5px; color: var(--ink-4); padding: 10px 10px 4px; }
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; margin-top: 14px; }
+.stat { background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 10px; padding: 10px 12px; min-width: 0; }
+.stat .k { font-size: 12px; color: var(--ink-3); margin-bottom: 4px; }
+.stat .v { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 600; }
+.opt { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border-radius: 8px; cursor: pointer; }
+.opt:hover { background: var(--hover); }
+.opt input { margin-top: 3px; }
+.grp { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.grp + .grp { margin-top: 10px; }
+.grp-h { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--surface-2); border-bottom: 1px solid var(--line-2); font-weight: 600; font-size: 13.5px; }
+.opgrid { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 0 8px; padding: 4px; }
+.savebar { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--line-2); background: var(--surface-2); border-radius: 0 0 var(--radius) var(--radius); }
+.secret { font-family: var(--mono); font-size: 12.5px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; }
+.once { background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; padding: 4px 14px; }
+.once .r { display: grid; grid-template-columns: 80px 1fr auto; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px dashed var(--line); }
+.once .r:last-child { border-bottom: none; }
+.once .r .v { font-family: var(--mono); font-size: 13px; word-break: break-all; }
+.quota { display: flex; align-items: center; gap: 8px; }
+.quota .bar { width: 72px; height: 6px; border-radius: 3px; background: var(--line-2); overflow: hidden; }
+.quota .bar i { display: block; height: 100%; background: var(--primary-2); }
+.quota .bar i.warn { background: var(--warning); }
+.stack { display: inline-flex; }
+.stack .sq { border: 2px solid var(--surface); margin-left: -6px; }
+.stack .sq:first-child { margin-left: 0; }
+.apps-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; }
+.app-tile { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 12px 4px 10px; border-radius: 10px; cursor: pointer; font-size: 12.5px; color: var(--ink-2); text-align: center; line-height: 1.3; }
+.app-tile:hover { background: var(--hover); }
+.app-tile.cur { background: var(--primary-weak); color: var(--primary-ink); font-weight: 600; }
+.mini { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--bg); font-size: 12.5px; }
+.mini-top { height: 36px; display: flex; align-items: center; gap: 4px; padding: 0 10px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.mini-top .logo { width: 20px; height: 20px; border-radius: 6px; font-size: 11px; margin-right: 6px; }
+.mini-top .p { color: var(--ink-3); padding: 0 8px; height: 100%; display: flex; align-items: center; position: relative; white-space: nowrap; }
+.mini-top .p.on { color: var(--primary-ink); font-weight: 600; }
+.mini-top .p.on::after { content: ""; position: absolute; left: 6px; right: 6px; bottom: -1px; height: 2px; background: var(--primary); border-radius: 2px; }
+.mini-body { display: flex; height: 200px; }
+.mini-side { width: 150px; background: var(--surface-2); border-right: 1px solid var(--line); padding: 8px 6px; display: flex; flex-direction: column; gap: 2px; }
+.mini-side .it { height: 28px; display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 6px; color: var(--ink-2); }
+.mini-side .it.on { background: var(--primary-weak); color: var(--primary-ink); font-weight: 600; }
+.mini-main { flex: 1; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.mini-main i { display: block; height: 10px; border-radius: 4px; background: var(--line); }
+
+/* ---------- 登录 ---------- */
+.lg-main { flex: 1; overflow-y: auto; display: flex; flex-direction: column; align-items: center; justify-content: safe center; padding: 40px 20px; background: radial-gradient(900px 420px at 50% -8%, rgba(99,102,241,.10), transparent 70%), radial-gradient(700px 360px at 100% 100%, rgba(14,165,233,.07), transparent 70%), var(--bg); }
+.lg-brand { display: flex; align-items: center; gap: 10px; font-size: 21px; font-weight: 700; margin-bottom: 20px; letter-spacing: .01em; }
+.lg-brand .logo { width: 36px; height: 36px; border-radius: 10px; font-size: 17px; }
+.lg-card { width: 400px; max-width: 100%; background: var(--surface); border: 1px solid var(--line); border-radius: 16px; box-shadow: var(--shadow-md); padding: 28px 28px 22px; }
+.lg-sub { color: var(--ink-3); font-size: 13.5px; margin: 4px 0 18px; }
+.lg-from { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 13px; background: var(--primary-weak); color: var(--primary-ink); font-size: 12.5px; margin-bottom: 14px; }
+.lg-from svg { width: 14px; height: 14px; }
+.field { margin-bottom: 14px; }
+.pw { position: relative; }
+.pw .input { padding-right: 40px; }
+.pw .ibtn { position: absolute; right: 4px; top: 4px; }
+.lg-help { display: flex; justify-content: space-between; margin-top: 14px; font-size: 13px; }
+.lg-foot { margin-top: 22px; font-size: 12px; color: var(--ink-4); }
+.tenant-chip { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); }
+.rules { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin-top: 8px; font-size: 12.5px; }
+.rule { display: flex; align-items: center; gap: 6px; color: var(--ink-3); }
+.rule .dotc { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid #c5cad6; display: grid; place-items: center; flex: none; }
+.rule.ok { color: var(--success); }
+.rule.ok .dotc { background: var(--success); border-color: var(--success); color: #fff; }
+.rule .dotc svg { width: 10px; height: 10px; stroke-width: 3; }
+.rule.bad { color: var(--danger); }
+.who { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line-2); background: var(--surface-2); border-radius: 10px; margin-bottom: 18px; }
+
+/* ---------- 设计说明（评审用，非产品界面） ---------- */
+.notes { width: 300px; flex: none; overflow-y: auto; background: #fffdf3; border-left: 1px solid #f3e3a6; padding: 14px 16px; font-size: 13px; }
+.notes h4 { font-size: 13px; margin: 12px 0 4px; color: #92400e; }
+.notes ul { margin: 0; padding-left: 18px; }
+.notes li { margin: 3px 0; color: #57534e; }
+.notes .be { display: inline-block; font-size: 11px; background: #fde68a; color: #92400e; border-radius: 4px; padding: 0 5px; margin-right: 4px; }
+.notes .diff { display: inline-block; font-size: 11px; background: #e0e7ff; color: #3730a3; border-radius: 4px; padding: 0 5px; margin-right: 4px; }
+.demo { background: #fff; border: 1px solid #f3e3a6; border-radius: 10px; padding: 6px 10px 8px; margin-top: 10px; }
+.demo .dl { font-size: 11.5px; color: #92400e; margin: 6px 0 3px; }
+.demo .opts { display: flex; flex-wrap: wrap; gap: 4px; }
+.demo .opts a { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: #fef3c7; color: #78350f; }
+.demo .opts a.on { background: #92400e; color: #fff; }
+.notes .nav a { display: block; color: #78350f; padding: 2px 0; }
+.notes .nav a:hover { text-decoration: underline; }
+
+/* 信息架构页 */
+.ia { max-width: 1080px; margin: 0 auto; padding: 32px 32px 80px; }
+.ia h2 { margin: 28px 0 10px; }
+.ia .table td { vertical-align: top; }
+.ia ul { margin: 6px 0; padding-left: 20px; }
+.ia li { margin: 4px 0; color: var(--ink-2); }
+.arrow { color: var(--ink-4); }
+
+/* ---------- 运营中心专用 ---------- */
+.env { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 13px; background: var(--surface-2); border: 1px solid var(--line); font-size: 12px; color: var(--ink-3); font-family: var(--mono); }
+.env svg { width: 13px; height: 13px; }
+.me-chip { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 8px 0 4px; border-radius: 17px; cursor: pointer; color: var(--ink-2); }
+.me-chip:hover { background: var(--hover); }
+.me-chip > svg { width: 14px; height: 14px; color: var(--ink-4); }
+.brand .tag { margin-left: 2px; }
+.sg { font-size: 11.5px; color: var(--ink-4); padding: 12px 10px 4px; white-space: nowrap; }
+.sider.min .sg { visibility: hidden; height: 8px; padding: 0; }
+.page.wide { max-width: 1360px; }
+.tabs a .tn-n { margin-left: 5px; font-size: 12px; color: var(--ink-4); font-weight: 500; }
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 16px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; display: flex; gap: 12px; align-items: flex-start; cursor: pointer; transition: box-shadow .15s, border-color .15s; }
+.kpi:hover { border-color: #d6d9e3; box-shadow: var(--shadow-md); }
+.kpi .k { font-size: 12.5px; color: var(--ink-3); }
+.kpi .v { font-size: 24px; font-weight: 700; line-height: 1.25; margin: 2px 0 2px; }
+.kpi .v .u { font-size: 12.5px; font-weight: 500; color: var(--ink-3); }
+.home-grid { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.todo { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line-2); }
+.todo:last-child { border-bottom: none; }
+.todo-i { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; flex: none; }
+.todo-i.danger { background: var(--danger-weak); color: var(--danger); }
+.todo-i.warning { background: var(--warning-weak); color: #b45309; }
+.todo-i.primary { background: var(--primary-weak); color: var(--primary); }
+.usage-row { display: flex; align-items: center; gap: 10px; }
+.mini-stat { display: flex; flex-direction: column; align-items: flex-end; min-width: 64px; }
+.mini-stat b { font-size: 15px; }
+.mini-stat span { font-size: 11.5px; color: var(--ink-3); }
+.feed { display: flex; align-items: center; gap: 8px; padding: 7px 0; font-size: 13px; border-bottom: 1px dashed var(--line-2); }
+.feed:last-child { border-bottom: none; }
+.detail-grid { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.ubar .ubar-t { height: 6px; border-radius: 3px; background: var(--line-2); overflow: hidden; margin-top: 6px; }
+.ubar .ubar-t i { display: block; height: 100%; background: var(--primary-2); border-radius: 3px; }
+.ubar .ubar-t i.warn { background: var(--warning); }
+.quota-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.stats4 { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.def-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line-2); }
+.sub-h { font-size: 12.5px; font-weight: 600; color: var(--ink-3); padding: 10px 16px 8px; border-top: 1px solid var(--line-2); }
+.op { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.op-h { display: flex; align-items: center; gap: 10px; padding: 12px 16px; cursor: pointer; }
+.op-h:hover { background: var(--surface-2); }
+.steps { border-top: 1px solid var(--line-2); padding: 6px 16px 10px; }
+.step { display: flex; align-items: flex-start; gap: 12px; padding: 8px 0; position: relative; }
+.step:not(:last-child)::before { content: ""; position: absolute; left: 10px; top: 30px; bottom: -8px; width: 2px; background: var(--line-2); }
+.step-i { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; flex: none; }
+.step-i svg { width: 13px; height: 13px; stroke-width: 2.6; }
+.step-i.done { background: var(--success-weak); color: var(--success); }
+.step-i.fail { background: var(--danger-weak); color: var(--danger); }
+.step-i.wait { background: var(--line-2); color: var(--ink-4); }
+.step-i.wait svg { width: 8px; height: 8px; }
+.step.pending b { color: var(--ink-3); }
+.sec-t { font-size: 13px; font-weight: 650; color: var(--ink); padding-top: 4px; border-top: 1px solid var(--line-2); margin-top: 2px; padding-top: 12px; }
+.form > .sec-t:first-child { border-top: none; padding-top: 0; margin-top: 0; }
+.form-3 { display: grid; grid-template-columns: 1fr 1fr 1.3fr; gap: 14px; }
+.app-pick { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.app-opt { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.app-opt:hover { background: var(--hover); }
+.q-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.q-in { display: flex; flex-direction: column; gap: 2px; width: 120px; }
+.q-in .input { height: 30px; }
+.drop { border: 1.5px dashed #cfd3dd; border-radius: 12px; padding: 26px; display: flex; gap: 14px; align-items: center; justify-content: center; color: var(--ink-3); background: var(--surface-2); cursor: pointer; }
+.drop svg { width: 26px; height: 26px; color: var(--primary); }
+.json { background: #0f172a; color: #e2e8f0; border-radius: 10px; padding: 12px 14px; font-family: var(--mono); font-size: 12.5px; line-height: 1.6; overflow-x: auto; margin: 0; }
+.drawer.wide { width: 780px; }
+textarea.input.code { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; background: #fbfbfd; }
+.table.inner { border-radius: 8px; }
+.table.inner th { background: var(--surface); }
+.table tr.sub > td { background: var(--surface-2); padding: 10px 14px 14px 56px; }
+.switch.off-dis { opacity: .5; cursor: not-allowed; }
+.stack .sq { box-sizing: content-box; }
+.quota .sm { white-space: nowrap; }
+.stack > span { margin-left: -6px; display: inline-flex; }
+.stack > span:first-child { margin-left: 0; }
+.stack > span .sq { border: 2px solid var(--surface); }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* =====================================================================
+ * 运营中心改版原型：照 Atlas 前端风格重画（opscenter/web 的 16 页 + 总览、接入的系统）。
+ * 单文件、hash 路由、内存态演示数据；#/ia 是信息架构与现状对照。
+ * 通用样式、图标与 Atlas / 用户中心原型同一套。
+ * ===================================================================== */
+const ICONS = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  users: '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 3.1a4 4 0 0 1 0 7.8M22 21a7 7 0 0 0-5-6.7"/>',
+  userPlus: '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M19 8v6M16 11h6"/>',
+  sitemap: '<rect x="9" y="2" width="6" height="5" rx="1"/><rect x="2" y="17" width="6" height="5" rx="1"/><rect x="16" y="17" width="6" height="5" rx="1"/><path d="M12 7v5M5 17v-3a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v3"/>',
+  building: '<rect x="4" y="2" width="16" height="20" rx="2"/><path d="M9 22v-4h6v4M8 6h.01M12 6h.01M16 6h.01M8 10h.01M12 10h.01M16 10h.01M8 14h.01M12 14h.01M16 14h.01"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  box: '<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
+  bot: '<rect x="3" y="8" width="18" height="12" rx="3"/><path d="M12 8V4M8.5 14h.01M15.5 14h.01"/>',
+  briefcase: '<rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
+  database: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/>',
+  list: '<path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  left: '<path d="m15 18-6-6 6-6"/>',
+  right: '<path d="m9 18 6-6-6-6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  up: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  arrowRight: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  waffle: '<circle cx="5" cy="5" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="19" cy="5" r="2"/><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><circle cx="5" cy="19" r="2"/><circle cx="12" cy="19" r="2"/><circle cx="19" cy="19" r="2"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
+  pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+  login: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4M10 17l5-5-5-5M15 12H3"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14 9l2 2"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  unlock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.7-1.5"/>',
+  ban: '<circle cx="12" cy="12" r="9"/><path d="m5.7 5.7 12.6 12.6"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 16v-4M12 8h.01"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  eyeOff: '<path d="M9.9 4.2A10 10 0 0 1 12 4c6.5 0 10 8 10 8a17 17 0 0 1-2.2 3.2M6.6 6.6A17 17 0 0 0 2 12s3.5 8 10 8a9.7 9.7 0 0 0 5.4-1.6"/><path d="M14.1 14.1a3 3 0 1 1-4.2-4.2M2 2l20 20"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/>',
+  external: '<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+  mail: '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/>',
+  phone: '<rect x="6" y="2" width="12" height="20" rx="2"/><path d="M11 18h2"/>',
+  zap: '<path d="M13 2 3 14h8l-1 8 10-12h-8z"/>',
+  flow: '<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="12" r="3"/><path d="M6 9v6M8.6 7.5l6.8 3M8.6 16.5l6.8-3"/>',
+  spark: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/>',
+  plug: '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
+  chart: '<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/>',
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  bulb: '<path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/>',
+  code: '<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>',
+  menu: '<path d="M4 6h16M4 12h16M4 18h10"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  map: '<path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3z"/><path d="M9 3v15M15 6v15"/>',
+  badge: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="11" r="2.5"/><path d="M5.5 17a3.5 3.5 0 0 1 7 0M15 10h3M15 14h3"/>',
+  star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
+};
+const FILL = new Set(['more', 'waffle']);
+const ic = (n, cls = '') => `<svg class="i ${FILL.has(n) ? 'fill' : ''} ${cls}" viewBox="0 0 24 24">${ICONS[n] || ''}</svg>`;
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const COLORS = ['#6366f1', '#0ea5e9', '#f59e0b', '#10b981', '#ec4899', '#8b5cf6', '#14b8a6', '#ef4444'];
+const colorOf = (s) => COLORS[[...String(s)].reduce((a, c) => a + c.charCodeAt(0), 0) % COLORS.length];
+/** 人：圆形头像，取姓名最后一个字（与现有用户中心、Atlas 顶栏一致） */
+const pav = (name, size = 30) =>
+  `<span class="avatar" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px;background:${colorOf(name)}">${esc(String(name).slice(-1))}</span>`;
+/** 应用 / 部门 / 数字员工：方形图标 */
+const sq = (icon, color = '#6366f1', size = 36) => `<span class="sq" style="width:${size}px;height:${size}px;background:${color}1a;color:${color};border-radius:${Math.round(size * 0.28)}px">${ic(icon)}</span>`;
+/* =====================================================================
+ * 运营中心专用图标（补在 ICONS 上）
+ * ===================================================================== */
+Object.assign(ICONS, {
+  home: '<path d="M3 11 12 4l9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
+  server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+  gauge: '<path d="M12 14l4-4"/><path d="M3.3 17a9 9 0 1 1 17.4 0"/>',
+  activity: '<path d="M22 12h-4l-3 8L9 4l-3 8H2"/>',
+  pkg: '<path d="m16.5 9.4-9-5.2M21 16V8a2 2 0 0 0-1-1.7l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.7l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.3 7 12 12l8.7-5M12 22V12"/>',
+  store: '<path d="M3 9l1.5-5h15L21 9"/><path d="M3 9a3 3 0 0 0 6 0 3 3 0 0 0 6 0 3 3 0 0 0 6 0"/><path d="M5 12v8h14v-8"/>',
+  brain: '<path d="M9.5 3a3 3 0 0 0-3 3v.2A3 3 0 0 0 4 9.2 3 3 0 0 0 5 14a3 3 0 0 0 2 4.8A2.5 2.5 0 0 0 12 19V5a2 2 0 0 0-2.5-2z"/><path d="M14.5 3a3 3 0 0 1 3 3v.2A3 3 0 0 1 20 9.2 3 3 0 0 1 19 14a3 3 0 0 1-2 4.8A2.5 2.5 0 0 1 12 19"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  timer: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/>',
+  calendar: '<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
+  file: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>',
+  pause: '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>',
+  play: '<path d="M7 4v16l13-8z"/>',
+  power: '<path d="M12 2v10M18.4 6.6a9 9 0 1 1-12.8 0"/>',
+  check2: '<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
+  xcircle: '<circle cx="12" cy="12" r="9"/><path d="m15 9-6 6M9 9l6 6"/>',
+  dot: '<circle cx="12" cy="12" r="4"/>',
+  terminal: '<path d="m4 17 6-5-6-5M12 19h8"/>',
+  scroll: '<path d="M8 21h12a2 2 0 0 0 2-2v-2H10v2a2 2 0 1 1-4 0V5a2 2 0 0 0-2-2 2 2 0 0 0-2 2v3h4"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/>',
+  idcard: '<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="11" r="2"/><path d="M6 16a3 3 0 0 1 6 0M15 10h3M15 13h3"/>',
+});
+FILL.add('dot');
+
+/* =====================================================================
+ * 演示数据（内存态，刷新后重置；字段对着 opscenter/web/src/lib/types.ts）
+ * ===================================================================== */
+const TODAY = '2026-11-21';
+const CAP_LABEL = {
+  user_center: '租户与应用目录', lifecycle: '租户生命周期', capacity: '份额与容量', settings: '系统参数',
+  jobs: '系统任务', runtime_env: '沙箱模板', skill_market: '技能市场', memory_scopes: '记忆作用域',
+};
+const SYSTEMS = [
+  { code: 'usercenter', name: '用户中心', icon: 'users', color: '#6366f1', caps: ['user_center'], key: true },
+  { code: 'atlas', name: 'Atlas', icon: 'spark', color: '#4f46e5', caps: ['lifecycle', 'capacity', 'settings', 'jobs', 'runtime_env'], key: true },
+  { code: 'knowledge', name: '知识库', icon: 'book', color: '#0ea5e9', caps: ['lifecycle', 'capacity', 'settings', 'jobs'], key: true },
+  { code: 'skill', name: '技能', icon: 'zap', color: '#f59e0b', caps: ['lifecycle', 'skill_market'], key: true },
+  { code: 'mcpgateway', name: 'MCP 网关', icon: 'plug', color: '#10b981', caps: ['lifecycle', 'jobs'], key: true },
+  { code: 'modelgateway', name: '模型平台', icon: 'layers', color: '#8b5cf6', caps: ['lifecycle', 'jobs'], key: true },
+  { code: 'memory', name: '记忆服务', icon: 'brain', color: '#ec4899', caps: ['lifecycle', 'memory_scopes'], key: false },
+];
+const sysOf = (c) => SYSTEMS.find((s) => s.code === c);
+const withCap = (cap) => SYSTEMS.filter((s) => s.caps.includes(cap));
+
+const TENANTS = [
+  { id: 't0', code: 'default', name: '默认租户', status: 'active', users: 14, max: null, exp: null, created: '2026-11-11 09:20', platform: true },
+  { id: 't1', code: 'xinghai', name: '星海科技', status: 'active', users: 86, max: 100, exp: '2027-06-30', created: '2026-11-12 10:02' },
+  { id: 't2', code: 'moshi', name: '墨石律师事务所', status: 'active', users: 23, max: 30, exp: '2026-12-03', created: '2026-11-13 14:36' },
+  { id: 't3', code: 'yunfan', name: '云帆物流', status: 'active', users: 41, max: 50, exp: '2026-11-01', created: '2026-11-12 16:40' },
+  { id: 't4', code: 'beichen', name: '北辰医疗', status: 'active', users: 1, max: 200, exp: '2027-11-20', created: '2026-11-21 15:58' },
+  { id: 't5', code: 'qinghe', name: '青禾教育', status: 'suspended', users: 57, max: 80, exp: '2027-03-31', created: '2026-11-14 11:05' },
+  { id: 't6', code: 'lanjing', name: '蓝鲸零售', status: 'closed', users: 0, max: 20, exp: null, created: '2026-11-12 09:48' },
+];
+const tenantOf = (id) => TENANTS.find((t) => t.id === id);
+const daysTo = (d) => Math.round((new Date(d) - new Date(TODAY)) / 86400000);
+const expired = (t) => t.status === 'active' && t.exp && daysTo(t.exp) < 0;
+const expiringSoon = (t) => t.status === 'active' && t.exp && daysTo(t.exp) >= 0 && daysTo(t.exp) <= 30;
+
+const ACTION_LABEL = {
+  OPEN: { usercenter: '建租户和首个管理员', skill: '准备租户、装默认技能', _: '准备租户' },
+  SUSPEND: { usercenter: '挡住入口（登录、调用一律拒绝）', atlas: '挂起在跑的 run、回收沙箱', _: '挂起' },
+  RESUME: { usercenter: '放开入口', _: '恢复' },
+  CLOSE: { usercenter: '删除租户和账号', _: '删除这个租户的数据' },
+};
+const KIND = { OPEN: ['开通', 'primary'], SUSPEND: ['挂起', 'warning'], RESUME: ['恢复', 'success'], CLOSE: ['关闭', 'danger'] };
+const ORDER = ['usercenter', 'atlas', 'knowledge', 'skill', 'mcpgateway', 'modelgateway', 'memory'];
+const steps = (kind, at, over = {}) => ORDER.map((s, i) => ({ system: s, action: kind, status: 'DONE', attempts: 1, finished: at, ...(over[s] || {}), seq: i + 1 }));
+const OPS = {
+  t4: [{ id: 'o4', kind: 'OPEN', status: 'RUNNING', by: '周周', at: '2026-11-21 15:58', stuck: true,
+    steps: steps('OPEN', '15:58', {
+      knowledge: { status: 'FAILED', attempts: 3, next: '16:32', error: '知识库返回 503：服务暂时不可用', finished: null },
+      skill: { status: 'PENDING', attempts: 0, finished: null }, mcpgateway: { status: 'PENDING', attempts: 0, finished: null },
+      modelgateway: { status: 'PENDING', attempts: 0, finished: null }, memory: { status: 'PENDING', attempts: 0, finished: null },
+    }) }],
+  t1: [{ id: 'o1', kind: 'OPEN', status: 'DONE', by: '运营管理员', at: '2026-11-12 10:02', done: '2026-11-12 10:03', steps: steps('OPEN', '10:03') }],
+  t2: [{ id: 'o2', kind: 'OPEN', status: 'DONE', by: '周周', at: '2026-11-13 14:36', done: '2026-11-13 14:37', steps: steps('OPEN', '14:37') }],
+  t3: [{ id: 'o3', kind: 'OPEN', status: 'DONE', by: '周周', at: '2026-11-12 16:40', done: '2026-11-12 16:41', steps: steps('OPEN', '16:41') }],
+  t5: [
+    { id: 'o5b', kind: 'SUSPEND', status: 'DONE', by: '周周', at: '2026-11-20 18:22', done: '2026-11-20 18:23', reason: '合同到期未续，暂停使用', steps: steps('SUSPEND', '18:23') },
+    { id: 'o5a', kind: 'OPEN', status: 'DONE', by: '运营管理员', at: '2026-11-14 11:05', done: '2026-11-14 11:06', steps: steps('OPEN', '11:06') },
+  ],
+  t6: [
+    { id: 'o6b', kind: 'CLOSE', status: 'DONE', by: '运营管理员', at: '2026-11-19 10:15', done: '2026-11-19 10:21', reason: '客户解约', steps: steps('CLOSE', '10:21', {
+      atlas: { deleted: { 智能体: 12, 会话: 431, 沙箱: 3 } }, knowledge: { deleted: { 知识库: 4, 文档: 268 } }, memory: { deleted: { 记忆: 1530 } } }) },
+    { id: 'o6a', kind: 'OPEN', status: 'DONE', by: '运营管理员', at: '2026-11-12 09:48', done: '2026-11-12 09:49', steps: steps('OPEN', '09:49') },
+  ],
+  t0: [],
+};
+const running = () => TENANTS.filter((t) => (OPS[t.id] || []).some((o) => o.status === 'RUNNING'));
+
+const APPS = [
+  { id: 'a1', name: 'Atlas 智能平台', code: 'atlas', icon: 'spark', color: '#4f46e5', builtin: true, status: 'active', home: '/atlas', desc: '智能体、知识库、技能、MCP、模型的统一入口', ops: 18, menus: 12, roles: 3, data: 4, akey: 'ak_7Hq2Lx9e', tail: 'f3e9', created: '2026-11-11 09:20' },
+  { id: 'a2', name: 'AI TeamFlow', code: 'teamflow', icon: 'flow', color: '#0ea5e9', builtin: true, status: 'active', home: '/teamflow', desc: '多智能体协作的需求到交付流程', ops: 9, menus: 6, roles: 2, data: 1, akey: 'ak_tF83pQ2m', tail: '0b1c', created: '2026-11-11 09:20' },
+  { id: 'a3', name: '用户中心', code: 'usercenter', icon: 'users', color: '#6366f1', builtin: true, status: 'active', home: '/uc', desc: '组织、人员、角色与数据权限', ops: 22, menus: 9, roles: 3, data: 2, akey: 'ak_uC5n1Rw0', tail: '91aa', created: '2026-11-11 09:20' },
+  { id: 'a4', name: '模型平台', code: 'model-gateway', icon: 'layers', color: '#8b5cf6', builtin: true, status: 'active', home: '/atlas/models', desc: '模型、线路、Key 与调用记录', ops: 7, menus: 5, roles: 2, data: 1, akey: 'ak_mG4s9Vb2', tail: '7d20', created: '2026-11-11 09:20' },
+  { id: 'a5', name: 'MCP 网关', code: 'mcp-gateway', icon: 'plug', color: '#10b981', builtin: true, status: 'active', home: '/atlas/mcp', desc: '外部工具服务的接入与授权', ops: 5, menus: 3, roles: 2, data: 1, akey: 'ak_mC2k8Td7', tail: '3ef4', created: '2026-11-11 09:20' },
+  { id: 'a6', name: '合同审查助手', code: 'contract', icon: 'briefcase', color: '#14b8a6', builtin: false, status: 'disabled', home: 'https://contract.example.com', desc: '外部应用，经网关接入；试点结束后停用', ops: 3, menus: 2, roles: 1, data: 0, akey: 'ak_ct9Pz1Qa', tail: 'c55e', created: '2026-11-16 15:12' },
+];
+const appOf = (id) => APPS.find((a) => a.id === id);
+const TENANT_APPS = { t0: ['a1', 'a2', 'a3', 'a4', 'a5'], t1: ['a1', 'a2', 'a3', 'a4', 'a5'], t2: ['a1', 'a3'], t3: ['a1', 'a3', 'a4'], t4: ['a1', 'a2', 'a3'], t5: ['a1', 'a3'], t6: ['a1', 'a3'] };
+
+const APP_OPS = [
+  ['对话', 'chat:use', '使用智能平台', '上报', ['普通用户', '智能体开发者', '管理员']],
+  ['智能体', 'agent:create', '新建智能体', '上报', ['智能体开发者', '管理员']],
+  ['智能体', 'agent:manage', '管理所有智能体', '上报', ['管理员']],
+  ['知识库', 'kb:create', '新建知识库', '上报', ['智能体开发者', '管理员']],
+  ['知识库', 'kb:review', '审核知识库文档', '上报', ['管理员']],
+  ['技能', 'skill:publish', '发布技能', '上报', ['智能体开发者', '管理员']],
+  ['模型', 'model:manage', '管理模型与线路', '上报', ['管理员']],
+  ['设置', 'settings:manage', '管理租户设置', '上报', ['管理员']],
+  ['设置', 'atlas:audit', '查看操作记录', '手动', []],
+];
+const APP_MENUS = [
+  { id: 'm1', p: null, type: 'dir', name: '智能平台', code: 'platform', path: null, pub: false, roles: 3, icon: 'spark' },
+  { id: 'm2', p: 'm1', type: 'menu', name: '对话', code: 'chat', path: '/chat', pub: true, roles: 3 },
+  { id: 'm3', p: 'm1', type: 'menu', name: '智能体', code: 'agents', path: '/agents', pub: false, roles: 2 },
+  { id: 'm4', p: null, type: 'dir', name: '知识库', code: 'knowledge', path: null, pub: false, roles: 3, icon: 'book' },
+  { id: 'm5', p: 'm4', type: 'menu', name: '知识库列表', code: 'kb-list', path: '/knowledge', pub: false, roles: 3 },
+  { id: 'm6', p: 'm4', type: 'menu', name: '知识集', code: 'kb-sets', path: '/knowledge/sets', pub: false, roles: 2 },
+  { id: 'm7', p: null, type: 'dir', name: '系统', code: 'system', path: null, pub: false, roles: 1, icon: 'gear' },
+  { id: 'm8', p: 'm7', type: 'menu', name: '租户设置', code: 'settings', path: '/settings', pub: false, roles: 1 },
+  { id: 'm9', p: 'm7', type: 'menu', name: '定时任务', code: 'jobs', path: '/jobs', pub: false, roles: 1 },
+];
+const APP_DATA = [
+  ['Agent', '智能体', '按智能体授权给人、部门', 1240],
+  ['KnowledgeBase', '知识库', '知识库的读写权限', 86],
+  ['Model', '模型', '私有模型授权', 9],
+  ['MemoryUserProject', '项目记忆', '记忆服务的 user_project 作用域', 312],
+];
+const APP_ROLES = [
+  { id: 'r1', code: 'atlas-user', name: '普通用户', desc: '用智能体对话、用别人共享的智能体', builtin: true, shared: true, ops: ['chat:use'], menus: ['m1', 'm2', 'm4', 'm5'] },
+  { id: 'r2', code: 'atlas-dev', name: '智能体开发者', desc: '自己建智能体、知识库、技能', builtin: true, shared: false, ops: ['chat:use', 'agent:create', 'kb:create', 'skill:publish'], menus: ['m1', 'm2', 'm3', 'm4', 'm5', 'm6'] },
+  { id: 'r3', code: 'atlas-admin', name: '管理员', desc: '管理本租户的全部智能体、模型和设置', builtin: true, shared: false, ops: APP_OPS.filter((o) => o[3] === '上报').map((o) => o[1]), menus: APP_MENUS.map((m) => m.id) },
+];
+
+const GB = 1e9;
+const CAPACITY = {
+  atlas: {
+    perInstance: 8, usage: { running_runs: 5, sandboxes: 9, storage_bytes: 23.4 * GB },
+    def: { running_runs: 10, sandboxes: 20, storage_bytes: 50 * GB },
+    tenants: [{ t: 't1', running_runs: 30, sandboxes: 60, storage_bytes: 200 * GB, by: '运营管理员', at: '2026-11-12 10:03' },
+      { t: 't4', running_runs: 40, sandboxes: null, storage_bytes: 500 * GB, by: '周周', at: '2026-11-21 15:58' }],
+    tenantUsage: { t1: { running_runs: 3, sandboxes: 7, storage_bytes: 18.2 * GB }, t2: { running_runs: 1, sandboxes: 2, storage_bytes: 1.6 * GB }, t3: { running_runs: 0, sandboxes: 0, storage_bytes: 2.9 * GB }, t0: { running_runs: 1, sandboxes: 0, storage_bytes: 0.7 * GB }, t4: { running_runs: 0, sandboxes: 0, storage_bytes: 0 }, t5: { running_runs: 0, sandboxes: 0, storage_bytes: 4.1 * GB } },
+  },
+  knowledge: {
+    usage: { storage_bytes: 8.1 * GB }, def: { storage_bytes: 20 * GB },
+    tenants: [{ t: 't1', storage_bytes: 100 * GB, by: '运营管理员', at: '2026-11-12 10:03' }],
+    tenantUsage: { t1: { storage_bytes: 6.3 * GB }, t2: { storage_bytes: 0.4 * GB }, t3: { storage_bytes: 0.9 * GB }, t0: { storage_bytes: 0.2 * GB }, t4: { storage_bytes: 0 }, t5: { storage_bytes: 0.3 * GB } },
+  },
+};
+const QF = { running_runs: ['同时运行的对话', '个'], sandboxes: ['沙箱', '个'], storage_bytes: ['存储', ''] };
+const fmtQ = (f, v) => (v === null || v === undefined ? '不限' : f === 'storage_bytes' ? bytes(v) : `${v} ${QF[f][1]}`.trim());
+const bytes = (n) => (n >= GB ? `${(n / GB).toFixed(n >= 10 * GB ? 0 : 1)} GB` : n >= 1e6 ? `${(n / 1e6).toFixed(0)} MB` : n >= 1e3 ? `${(n / 1e3).toFixed(0)} KB` : `${n} B`);
+const quotaOf = (sys, t) => CAPACITY[sys].tenants.find((x) => x.t === t) || null;
+
+const TEMPLATES = [
+  { code: 'sbx-strict', desc: '默认沙箱：普通用户、根只读、工作区可写', server: 'opensandbox-sbx', version: 3, pub: 3, at: '2026-11-15 01:59', by: '运营管理员' },
+  { code: 'sbx-open', desc: '开放档：免密 sudo、根可写、临时盘 10Gi', server: 'opensandbox-sbx', version: 3, pub: 2, at: '2026-11-15 02:10', by: '周周' },
+  { code: 'sbx-bench', desc: '评测档：root、镜像由题目给定、本会话专属', server: 'opensandbox-bench', version: 1, pub: 1, at: '2026-11-10 20:31', by: '周周', drift: true },
+  { code: 'cli', desc: 'CLI 智能体的会话 Pod', server: 'opensandbox-cli', version: 2, pub: 2, at: '2026-11-15 02:12', by: '运营管理员' },
+  { code: 'sbx-gpu', desc: 'GPU 沙箱（试用）', server: 'opensandbox-sbx', version: 1, pub: null, at: null, by: '周周' },
+];
+const TPL_YAML = `apiVersion: sandbox.opensandbox.io/v1
+kind: SandboxTemplate
+metadata:
+  name: sbx-open
+spec:
+  image: atlas-sandbox:dev
+  user: 1000
+  sudo: nopasswd
+  rootReadOnly: false
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits:   { cpu: "2", memory: 4Gi }
+  ephemeralStorage: 10Gi
+  idleTimeout: 30m
+  mounts:
+    - name: data          # 这个人的整个前缀
+      path: /data`;
+
+const SKILLS = [
+  { slug: 'browser', desc: '用浏览器操作网页（快照方式）：打开、读页面清单、按编号点、填表', def: true, versions: [
+    { v: 3, status: 'published', size: 48e3, files: 6, scripts: false, by: '运营管理员', at: '2026-11-18 04:52' },
+    { v: 2, status: 'published', size: 46e3, files: 6, scripts: false, by: '运营管理员', at: '2026-11-17 08:01' },
+    { v: 1, status: 'revoked', size: 41e3, files: 5, scripts: false, by: '周周', at: '2026-11-14 14:20', reason: '交还登录态的方式改了，旧说明会让模型重开浏览器' }] },
+  { slug: 'browser-computer-use', desc: '看截图、用系统键鼠操作浏览器；会检测自动化的网站用它', def: true, versions: [
+    { v: 4, status: 'published', size: 62e3, files: 7, scripts: false, by: '运营管理员', at: '2026-11-18 06:07' }] },
+  { slug: 'pdf', desc: '读取、拆分、合并 PDF，提取表格', def: false, versions: [{ v: 2, status: 'published', size: 1.3e6, files: 14, scripts: true, by: '周周', at: '2026-11-16 10:40' }] },
+  { slug: 'xlsx', desc: '读写 Excel，按公式重算、出图表', def: false, versions: [{ v: 1, status: 'published', size: 0.9e6, files: 11, scripts: true, by: '周周', at: '2026-11-16 10:42' }] },
+  { slug: 'ui-ux-pro-max', desc: 'UI/UX 设计规范：配色、字体、组件与可访问性', def: false, versions: [{ v: 1, status: 'published', size: 4.2e6, files: 96, scripts: true, by: '运营管理员', at: '2026-11-13 09:12' }] },
+];
+
+const SCOPES = [
+  { code: 'user', desc: '跨会话的个人记忆', keys: ['uid'], check: false, data: null, updated: '2026-11-11 09:20' },
+  { code: 'user_project', desc: '某个项目里的个人记忆', keys: ['uid', 'project'], check: true, data: 'MemoryUserProject', updated: '2026-11-11 09:20' },
+  { code: 'agent', desc: '数字员工自己的记忆', keys: ['agent_id'], check: true, data: 'MemoryAgent', updated: '2026-11-15 16:02' },
+];
+
+const PARAMS = {
+  atlas: [
+    { key: 'sandbox.images', name: '可选的沙箱镜像', type: 'list', value: ['atlas-sandbox:dev', 'python:3.13-slim', 'node:22'], changed: true, desc: '智能体编辑器里能选的镜像' },
+    { key: 'workspace.max_upload_mb', name: '单个文件上传上限（MB）', type: 'int', value: 200, changed: false, desc: '' },
+    { key: 'workspace.quota_gb', name: '每人工作空间配额（GB）', type: 'int', value: 20, changed: true, desc: '租户份额之内，每个人的默认上限' },
+    { key: 'browser.skill', name: '浏览器技能（快照方式）', type: 'str', value: 'browser@3', changed: true, desc: '开了浏览器的智能体自动带上' },
+    { key: 'browser.computer_use_skill', name: '浏览器技能（computer use）', type: 'str', value: 'browser-computer-use@4', changed: true, desc: '' },
+    { key: 'cli.prompt_idle_timeout_s', name: 'CLI 等模型的最大静默（秒）', type: 'int', value: 600, changed: false, desc: '超过就判卡死' },
+    { key: 'context.window_fallback', name: '模型没登记窗口时按多少算', type: 'int', value: 128000, changed: false, desc: '' },
+  ],
+  knowledge: [
+    { key: 'ingest.max_file_mb', name: '单个文档上限（MB）', type: 'int', value: 50, changed: false, desc: '' },
+    { key: 'retrieve.top_k', name: '检索返回条数', type: 'int', value: 8, changed: false, desc: '' },
+    { key: 'enrich.enabled', name: '入库时做上下文补全', type: 'bool', value: true, changed: true, desc: '要配 kb_enrich_model' },
+  ],
+};
+const JOBS = {
+  atlas: [
+    ['兜底任务', '接手没人跑的 run、过期的租约', '每 15 秒', 'ok', '16:29:58'],
+    ['续租', '给本实例在跑的 run 续租约', '每 10 秒', 'ok', '16:30:02'],
+    ['沙箱回收', '闲置超过时限的沙箱退役', '每 5 分钟', 'ok', '16:25:00'],
+    ['存储用量统计', '按租户、按人统计工作空间用量', '每小时', 'ok', '16:00:03'],
+    ['事件归档清理', '删除 30 天前的事件归档', '每天 03:00', 'fail', '03:00:11'],
+  ],
+  knowledge: [['入库巡检', '卡住的入库任务重新排队', '每分钟', 'ok', '16:30:00'], ['重新分段', '按新规则重切文档', '有任务时', 'idle', '—']],
+  mcpgateway: [['工具定义刷新', '从各服务拉 tools/list、比对摘要', '每 10 分钟', 'ok', '16:20:00']],
+  modelgateway: [['重算 Key 的有效模型', '公有 / 私有、授权变了之后', '每 5 分钟', 'ok', '16:30:00'], ['调用汇总', '按小时汇总调用记录', '每小时', 'ok', '16:00:05']],
+};
+
+const OPERATORS = [
+  { id: 'p1', account: 'ops', name: '运营管理员', role: 'ADMIN', status: 'active', last: '2026-11-21 16:12' },
+  { id: 'p2', account: 'zhou', name: '周周', role: 'ADMIN', status: 'active', last: '2026-11-21 15:58' },
+  { id: 'p3', account: 'li.audit', name: '李审计', role: 'OBSERVER', status: 'active', locked: true, last: '2026-11-19 09:30' },
+  { id: 'p4', account: 'chen', name: '陈晨', role: 'OBSERVER', status: 'active', must: true, last: null },
+  { id: 'p5', account: 'wang', name: '王运维', role: 'ADMIN', status: 'disabled', last: '2026-11-15 11:20' },
+];
+const ME = OPERATORS[0];
+const ROLE = { ADMIN: ['运营管理员', 'primary'], OBSERVER: ['运营观察员', ''] };
+
+const AUDIT = [
+  { at: '2026-11-21 16:12:08', who: '运营管理员', action: 'login.ok', target: 'ops', result: 'OK', detail: { ip: '34.97.0.12' } },
+  { at: '2026-11-21 16:05:41', who: '周周', action: 'system.atlas.PUT', target: '/quotas/default', result: 'OK', detail: { body: { running_runs: 10, sandboxes: 20, storage_bytes: 50000000000 } } },
+  { at: '2026-11-21 15:58:20', who: '周周', action: 'tenant.open', target: '北辰医疗（beichen）', tenant: 't4', result: null, detail: { apps: ['atlas', 'teamflow', 'usercenter'], max_users: 200, install_default_skills: true } },
+  { at: '2026-11-21 11:30:16', who: '运营管理员', action: 'operator.reset_password', target: 'chen', result: 'OK', detail: {} },
+  { at: '2026-11-21 09:14:52', who: '李审计', action: 'login.failed', target: 'li.audit', result: 'FAILED', detail: { reason: '密码错误', locked_minutes: 15 } },
+  { at: '2026-11-20 18:22:07', who: '周周', action: 'tenant.suspend', target: '青禾教育（qinghe）', tenant: 't5', result: 'OK', detail: { reason: '合同到期未续，暂停使用' } },
+  { at: '2026-11-20 10:41:33', who: '周周', action: 'system.atlas.POST', target: '/sandbox-templates/sbx-open/publish', result: 'OK', detail: { version: 3 } },
+  { at: '2026-11-19 10:15:02', who: '运营管理员', action: 'tenant.close', target: '蓝鲸零售（lanjing）', tenant: 't6', result: 'OK', detail: { reason: '客户解约' } },
+  { at: '2026-11-18 06:07:44', who: '运营管理员', action: 'system.skill.POST', target: '/market/skills/browser-computer-use/versions', result: 'OK', detail: { version: 4, file_count: 7 } },
+  { at: '2026-11-16 15:12:30', who: '周周', action: 'system.usercenter.POST', target: '/apps', result: 'OK', detail: { name: '合同审查助手', code: 'contract' } },
+  { at: '2026-11-15 11:20:05', who: '运营管理员', action: 'operator.disable', target: 'wang', result: 'OK', detail: {} },
+  { at: '2026-11-14 11:05:41', who: '运营管理员', action: 'tenant.open', target: '青禾教育（qinghe）', tenant: 't5', result: 'OK', detail: { apps: ['atlas', 'usercenter'], max_users: 80 } },
+];
+const AUDIT_LABEL = {
+  'login.ok': '登录', 'login.failed': '登录失败', logout: '退出', 'password.change': '修改自己的密码',
+  'tenant.open': '开通租户', 'tenant.suspend': '挂起租户', 'tenant.resume': '恢复租户', 'tenant.close': '关闭租户',
+  'tenant.update': '修改租户', 'tenant.admin_password': '补发临时密码', 'operation.retry': '立即重做',
+  'operator.create': '开运营账号', 'operator.reset_password': '重置运营账号密码', 'operator.disable': '停用运营账号', 'operator.enable': '启用运营账号',
+};
+const auditLabel = (a) => {
+  if (AUDIT_LABEL[a.action]) return AUDIT_LABEL[a.action];
+  const m = a.action.match(/^system\.([^.]+)\.(\w+)$/);
+  return m ? `${sysOf(m[1])?.name ?? m[1]} · ${{ GET: '读取', POST: '提交', PUT: '修改', PATCH: '修改', DELETE: '删除' }[m[2]] ?? m[2]}` : a.action;
+};
+const AUDIT_CAT = { tenant: ['tenant.', 'operation.'], app: ['system.usercenter.'], system: ['system.'], account: ['operator.', 'password.'], login: ['login.', 'logout'] };
+
+/* =====================================================================
+ * 状态、权限与路由
+ * ===================================================================== */
+const S = {
+  role: 'ADMIN', notes: true, collapsed: false, pop: null, modal: null, drawer: null, toast: null, refocus: null,
+  login: { step: 'form', result: 'ok', err: '', showPw: false, pw1: '', pw2: '' },
+  tStatus: 'all', tQ: '', tenantTab: 'overview', opOpen: {},
+  appTab: 'info', opQ: '', roleSel: 'r2', roleTab: 'ops',
+  sysTab: 'atlas', jobsTab: 'atlas', paramFilter: 'all', paramQ: '', skillOpen: 'browser',
+  auditCat: 'all', auditQ: '', tplTab: 'yaml',
+  openStep: 'form', openQuota: {}, enabledApps: JSON.parse(JSON.stringify(TENANT_APPS)), defSkills: Object.fromEntries(SKILLS.map((s) => [s.slug, s.def])),
+};
+const admin = () => S.role === 'ADMIN';
+/** 观察员看得到按钮的位置，但是灰的、悬停说明为什么 —— 不是直接藏掉，免得以为功能没有 */
+const guard = () => (admin() ? '' : 'disabled title="运营观察员只能查看"');
+
+const PLATFORMS = [
+  { id: 'home', name: '总览', icon: 'home' },
+  { id: 'tenants', name: '租户', icon: 'building' },
+  { id: 'apps', name: '应用', icon: 'grid' },
+  { id: 'system', name: '系统', icon: 'server' },
+  { id: 'ops', name: '运营', icon: 'shield' },
+];
+
+function parseRoute() {
+  const h = (location.hash || '#/login').slice(2).split('/');
+  return { p: h[0] || 'login', a: h[1] || '', b: h[2] || '' };
+}
+const go = (h) => { S.pop = null; location.hash = h; };
+window.addEventListener('hashchange', () => { S.pop = null; S.modal = null; S.drawer = null; render(); document.querySelector('.main')?.scrollTo(0, 0); });
+
+function siderItems(p) {
+  switch (p) {
+    case 'tenants': return [
+      { h: '#/tenants', icon: 'building', t: '租户', on: (r) => r.a !== 'capacity' },
+      { h: '#/tenants/capacity', icon: 'gauge', t: '份额与容量', on: (r) => r.a === 'capacity' },
+    ];
+    case 'apps': return [{ h: '#/apps', icon: 'grid', t: '应用目录', on: (r) => !r.a }];
+    case 'system': return [
+      { h: '#/system', icon: 'server', t: '接入的系统', on: (r) => !r.a },
+      { g: '运行资源' },
+      { h: '#/system/templates', icon: 'pkg', t: '沙箱模板', on: (r) => r.a === 'templates' },
+      { h: '#/system/skills', icon: 'store', t: '技能市场', on: (r) => r.a === 'skills' },
+      { h: '#/system/scopes', icon: 'brain', t: '记忆作用域', on: (r) => r.a === 'scopes' },
+      { g: '配置' },
+      { h: '#/system/params', icon: 'sliders', t: '系统参数', on: (r) => r.a === 'params' },
+      { h: '#/system/jobs', icon: 'timer', t: '系统任务', on: (r) => r.a === 'jobs' },
+    ];
+    case 'ops': return [
+      { h: '#/ops/operators', icon: 'idcard', t: '运营账号', on: (r) => r.a === 'operators' },
+      { h: '#/ops/audit', icon: 'scroll', t: '运营审计', on: (r) => r.a === 'audit' },
+    ];
+  }
+  return [];
+}
+
+function topbar(r) {
+  return `<header class="top">
+    <div class="brand" data-go="#/home"><span class="logo">A</span>运营中心<span class="tag warning xs" title="管的是整个平台：所有租户、所有系统">平台</span></div>
+    <nav class="pnav">${PLATFORMS.map((p) => `<a href="#/${p.id}${p.id === 'ops' ? '/operators' : ''}" class="${r.p === p.id ? 'on' : ''}">${ic(p.icon)}${p.name}</a>`).join('')}</nav>
+    <div class="top-right">
+      <span class="env" title="当前连的是哪套环境：生产、测试的运营中心长得一样，靠这里分">${ic('server')}atlas.techstz.com</span>
+      <button class="btn sm ${S.notes ? '' : 'ghost'}" data-act="toggleNotes" title="评审用：每页的设计说明与后端依赖">${ic('bulb')}设计说明</button>
+      <span class="me-chip" data-pop="me">${pav(ME.name, 28)}<span class="sm">${esc(ME.name)}</span><span class="tag xs ${ROLE[S.role][1]}">${ROLE[S.role][0]}</span>${ic('down')}</span>
+    </div>
+  </header>`;
+}
+
+function sider(r) {
+  const min = S.collapsed;
+  const items = siderItems(r.p);
+  if (!items.length) return '';
+  let extra = '<div class="sp"></div>';
+  if (!min && r.p === 'tenants' && running().length) {
+    extra = `<div class="hist"><div class="hist-group">进行中的操作</div>${running().map((t) => {
+      const op = OPS[t.id].find((o) => o.status === 'RUNNING');
+      return `<a class="hist-item ${r.a === t.id ? 'on' : ''}" href="#/tenants/${t.id}">${tenantIcon(t, 22)}<span class="t">${esc(t.name)}</span><span class="tag xs ${op.stuck ? 'danger' : 'primary'}">${KIND[op.kind][0]}${op.stuck ? '·失败' : '中'}</span></a>`;
+    }).join('')}</div>`;
+  }
+  if (!min && r.p === 'apps') {
+    extra = `<div class="hist"><div class="hist-group">已接入的应用</div>${APPS.map((a) => `
+      <a class="hist-item ${r.a === a.id ? 'on' : ''}" href="#/apps/${a.id}">${sq(a.icon, a.color, 22)}<span class="t">${esc(a.name)}</span>${a.status === 'disabled' ? '<span class="tag xs">停用</span>' : ''}</a>`).join('')}</div>`;
+  }
+  return `<aside class="sider ${min ? 'min' : ''}">
+    <div class="sider-top">${items.map((it) => it.g
+      ? `<div class="sg">${it.g}</div>`
+      : `<a class="snav ${it.on(r) ? 'on' : ''}" href="${it.h}" title="${it.t}">${ic(it.icon)}<span>${it.t}</span></a>`).join('')}</div>
+    ${extra}
+    <div class="sider-foot"><a class="snav" data-act="collapse" title="${min ? '展开菜单' : '收起菜单'}">${ic(min ? 'right' : 'left')}<span>收起</span></a></div>
+  </aside>`;
+}
+
+/* =====================================================================
+ * 渲染
+ * ===================================================================== */
+function render() {
+  const r = parseRoute();
+  const app = document.getElementById('app');
+  const tail = overlays() + (S.toast ? `<div class="toast">${esc(S.toast)}</div>` : '');
+  if (r.p === 'login') {
+    app.innerHTML = `<div class="body full"><main class="main lg-main">${loginPage()}</main>${S.notes ? notesPanel(r) : ''}</div>` + tail;
+    return afterRender();
+  }
+  if (r.p === 'ia') { app.innerHTML = `<div class="body full"><main class="main">${iaPage()}</main></div>` + tail; return; }
+  if (!PLATFORMS.find((p) => p.id === r.p)) { location.replace('#/home'); return; }
+  if (r.p === 'ops' && !r.a) { location.replace('#/ops/operators'); return; }
+  app.innerHTML = topbar(r) + `<div class="body">${sider(r)}<main class="main">${page(r)}</main>${S.notes ? notesPanel(r) : ''}</div>` + tail;
+  afterRender();
+}
+
+function page(r) {
+  switch (r.p) {
+    case 'home': return homePage();
+    case 'tenants':
+      if (r.a === 'capacity') return capacityPage();
+      if (r.a) return tenantDetail(r.a);
+      return tenantsPage();
+    case 'apps': return r.a ? appDetail(r.a) : appsPage();
+    case 'system':
+      switch (r.a) {
+        case 'templates': return templatesPage();
+        case 'skills': return skillsPage();
+        case 'scopes': return scopesPage();
+        case 'params': return paramsPage();
+        case 'jobs': return jobsPage();
+      }
+      return systemsPage();
+    case 'ops': return r.a === 'audit' ? auditPage() : operatorsPage();
+  }
+  return '<div class="page">404</div>';
+}
+
+function toast(msg) {
+  S.toast = msg; render();
+  clearTimeout(toast.t); toast.t = setTimeout(() => { S.toast = null; render(); }, 2200);
+}
+
+/* ---------- 公共片段 ---------- */
+function head(title, right = '', sub = '') {
+  return `<div class="page-head"><div class="grow"><h1>${title}</h1>${sub ? `<div class="sub">${sub}</div>` : ''}</div>${right}</div>`;
+}
+function detailHead(back, iconHtml, title, sub, tags, right) {
+  return `<div class="page-head" style="align-items:flex-start;margin-bottom:6px">
+    <button class="ibtn" data-go="${back}" title="返回">${ic('left')}</button>${iconHtml}
+    <div class="grow"><div class="row" style="flex-wrap:wrap"><h1>${esc(title)}</h1>${tags || ''}</div><div class="sm muted" style="margin-top:2px">${sub}</div></div>${right || ''}</div>`;
+}
+function seg(key, opts, cls = '') {
+  return `<div class="seg ${cls}">${opts.map(([k, t, n]) => `<a class="${S[key] === k ? 'on' : ''}" data-act="setS" data-k="${key}" data-v="${k}">${t}${n !== undefined ? `<span class="n">${n}</span>` : ''}</a>`).join('')}</div>`;
+}
+function tabs(key, opts, cls = '') {
+  return `<div class="tabs ${cls}">${opts.map(([k, t, n]) => `<a class="${S[key] === k ? 'on' : ''}" data-act="setS" data-k="${key}" data-v="${k}">${t}${n !== undefined ? `<span class="tn-n">${n}</span>` : ''}</a>`).join('')}</div>`;
+}
+const searchBox = (ph, key, w = 260) => `<div class="search" style="width:${w}px">${ic('search')}<input class="input" placeholder="${ph}" ${key ? `data-input="${key}" value="${esc(S[key])}"` : ''}></div>`;
+const empty = (icon, title, text) => `<div class="empty"><div class="ill">${ic(icon)}</div><h3>${title}</h3><p class="sm">${text}</p></div>`;
+const alertBox = (kind, text) => `<div class="alert ${kind}">${ic(kind === 'info' || kind === 'plain' ? 'info' : 'alert')}<span>${text}</span></div>`;
+const tenantIcon = (t, size = 32) => sq('building', t.status === 'closed' ? '#94a3b8' : colorOf(t.code), size);
+const mono = (s) => `<span class="mono">${esc(s)}</span>`;
+const copyBtn = (msg = '已复制') => `<button class="ibtn sm" data-act="toast" data-msg="${msg}" title="复制">${ic('copy')}</button>`;
+
+function tenantStatus(t) {
+  const tags = [];
+  if (t.status === 'active') tags.push(expired(t) ? '<span class="tag danger">已到期</span>' : '<span class="tag success">正常</span>');
+  if (t.status === 'suspended') tags.push('<span class="tag warning">已挂起</span>');
+  if (t.status === 'closed') tags.push('<span class="tag">已关闭</span>');
+  const op = (OPS[t.id] || []).find((o) => o.status === 'RUNNING');
+  if (op) tags.push(`<span class="tag ${op.stuck ? 'danger' : 'primary'}">${ic(op.stuck ? 'alert' : 'refresh')}${KIND[op.kind][0]}${op.stuck ? '：有步骤失败' : '中'}</span>`);
+  if (t.platform) tags.push('<span class="tag blue" title="平台自己用的租户：放运营之外的平台级账号">平台租户</span>');
+  return tags.join('');
+}
+function expiryCell(t) {
+  if (t.status === 'closed') return '<span class="muted">—</span>';
+  if (!t.exp) return '<span class="muted">不到期</span>';
+  const d = daysTo(t.exp);
+  if (t.status !== 'active') return `<span class="muted">${t.exp}</span>`;
+  if (d < 0) return `<span class="nw" style="color:var(--danger)">${t.exp}</span><div class="xs nw" style="color:var(--danger)">已过期 ${-d} 天</div>`;
+  if (d <= 30) return `<span class="nw">${t.exp}</span><div class="xs nw" style="color:#b45309">还有 ${d} 天</div>`;
+  return `<span class="nw">${t.exp}</span>`;
+}
+function seatCell(t) {
+  if (t.status === 'closed') return '<span class="muted">—</span>';
+  if (!t.max) return `${t.users} 人 <span class="xs muted">· 不限</span>`;
+  const p = Math.min(100, Math.round((t.users * 100) / t.max));
+  return `<div class="quota"><span class="bar"><i class="${p >= 90 ? 'warn' : ''}" style="width:${p}%"></i></span><span class="sm">${t.users} / ${t.max}</span></div>`;
+}
+
+/* =====================================================================
+ * 登录
+ * ===================================================================== */
+const LOGIN_ERR = {
+  failed: ['danger', '账号或密码不对，还能再试 2 次，之后锁定 15 分钟'],
+  locked: ['warning', '这个账号试错太多次，已锁定，14 分钟后再试；急用请找其他运营管理员重置密码'],
+  disabled: ['danger', '这个账号已停用，请联系运营管理员'],
+};
+function loginPage() {
+  const L = S.login;
+  if (L.step === 'setpw') return `<div class="lg-brand"><span class="logo">A</span>运营中心</div>
+    <div class="lg-card">
+      <h2>设置新密码</h2><div class="lg-sub">这是临时密码，第一次登录要换成自己的密码</div>
+      <div class="who">${pav(ME.name, 30)}<div class="grow"><b>${esc(ME.name)}</b><div class="xs muted">${esc(ME.account)}</div></div><a class="sm" data-act="loginBack">换个账号</a></div>
+      <div class="field"><label class="label">新密码</label><div class="pw"><input class="input lg" type="password" data-input="pw1" value="${esc(L.pw1)}" placeholder="至少 12 位"></div></div>
+      <div class="field"><label class="label">再输一次</label><input class="input lg" type="password" data-input="pw2" value="${esc(L.pw2)}"></div>
+      <button class="btn primary lg block" data-act="doSetPw">保存并进入</button>
+      <div class="lg-foot">运营中心的账号和各企业的账号是分开的，密码不通用</div>
+    </div>`;
+  const err = L.err && LOGIN_ERR[L.err];
+  return `<div class="lg-brand"><span class="logo">A</span>运营中心</div>
+    <div class="lg-card">
+      <h2>登录</h2><div class="lg-sub">平台运营专用。这里能开通、停用所有企业，请用自己的账号登录</div>
+      ${err ? `<div style="margin-bottom:14px">${alertBox(err[0], err[1])}</div>` : ''}
+      <div class="field"><label class="label">账号</label><input class="input lg" value="ops" data-enter="login"></div>
+      <div class="field"><label class="label">密码</label><div class="pw"><input class="input lg" type="${L.showPw ? 'text' : 'password'}" value="••••••••••••" data-enter="login"><button class="ibtn" data-act="togglePw">${ic(L.showPw ? 'eyeOff' : 'eye')}</button></div></div>
+      <button class="btn primary lg block" data-act="doLogin">登录</button>
+      <div class="lg-help"><span class="muted">忘记密码请找其他运营管理员重置</span></div>
+      <div class="lg-foot">会话闲置 30 分钟自动退出 · 登录、操作都会记进运营审计</div>
+    </div>`;
+}
+
+/* =====================================================================
+ * 总览
+ * ===================================================================== */
+function homePage() {
+  const act = TENANTS.filter((t) => t.status === 'active');
+  const todo = [];
+  for (const t of running()) {
+    const op = OPS[t.id].find((o) => o.status === 'RUNNING');
+    const bad = op.steps.find((s) => s.status === 'FAILED');
+    todo.push({ lv: op.stuck ? 'danger' : 'primary', icon: op.stuck ? 'alert' : 'refresh', t,
+      title: `${t.name}：${KIND[op.kind][0]}${op.stuck ? '卡住了' : '进行中'}`,
+      text: bad ? `${sysOf(bad.system).name}「${ACTION_LABEL[op.kind][bad.system] || ACTION_LABEL[op.kind]._}」第 ${bad.attempts} 次失败，${bad.next} 自动再试。${esc(bad.error)}` : '各系统依次处理中',
+      acts: `<button class="btn sm" data-go="#/tenants/${t.id}">查看</button>${op.stuck ? `<button class="btn sm" ${guard()} data-act="toast" data-msg="马上重做失败的步骤">立即重做</button>` : ''}` });
+  }
+  for (const t of TENANTS.filter(expired)) todo.push({ lv: 'danger', icon: 'calendar', t, title: `${t.name}：${t.exp} 已到期`, text: `${t.users} 人都登录不了；续期后马上恢复`, acts: `<button class="btn sm" ${guard()} data-act="modal" data-type="editTenant" data-id="${t.id}">续期</button>` });
+  for (const t of TENANTS.filter(expiringSoon)) todo.push({ lv: 'warning', icon: 'calendar', t, title: `${t.name}：还有 ${daysTo(t.exp)} 天到期`, text: `${t.exp} 到期后自动停用`, acts: `<button class="btn sm" ${guard()} data-act="modal" data-type="editTenant" data-id="${t.id}">续期</button>` });
+  for (const s of SYSTEMS.filter((x) => !x.key)) todo.push({ lv: 'warning', icon: 'key', title: `${s.name}：没有配运营密钥`, text: '运营中心调不了它：开通、挂起、关闭租户时这一步会一直失败', acts: '<button class="btn sm" data-go="#/system">查看</button>' });
+  const users = act.reduce((a, t) => a + t.users, 0);
+  const stat = (icon, color, k, v, sub, h) => `<div class="kpi" ${h ? `data-go="${h}"` : ''}>${sq(icon, color, 36)}<div class="grow"><div class="k">${k}</div><div class="v">${v}</div><div class="xs muted">${sub}</div></div></div>`;
+  const atlasU = CAPACITY.atlas.usage;
+  return `<div class="page wide">
+    ${head('总览', '', `${TODAY} 16:30 · 每 10 秒刷新`)}
+    <div class="kpis">
+      ${stat('building', '#4f46e5', '租户', `${act.length}<span class="u"> 个在用</span>`, `挂起 ${TENANTS.filter((t) => t.status === 'suspended').length} · 已关闭 ${TENANTS.filter((t) => t.status === 'closed').length}`, '#/tenants')}
+      ${stat('users', '#0ea5e9', '用户', `${users}<span class="u"> 人</span>`, '在用租户里的账号总数', '#/tenants')}
+      ${stat('refresh', running().some((t) => OPS[t.id][0].stuck) ? '#dc2626' : '#16a34a', '进行中的操作', `${running().length}<span class="u"> 个</span>`, running().some((t) => OPS[t.id][0].stuck) ? '<span style="color:var(--danger)">1 个有步骤失败</span>' : '都在正常推进', '#/tenants')}
+      ${stat('calendar', '#d97706', '到期', `${TENANTS.filter(expiringSoon).length}<span class="u"> 个 30 天内</span>`, `已过期 ${TENANTS.filter(expired).length} 个`, '#/tenants')}
+    </div>
+    <div class="home-grid">
+      <div class="card">
+        <div class="card-h"><h3>需要处理</h3><span class="tag ${todo.length ? 'danger' : 'success'} xs">${todo.length}</span></div>
+        ${todo.length ? todo.map((x) => `<div class="todo">
+          <span class="todo-i ${x.lv}">${ic(x.icon)}</span>
+          <div class="grow"><b>${esc(x.title)}</b><div class="sm muted" style="margin-top:2px">${x.text}</div></div>
+          <div class="row" style="gap:6px">${x.acts}</div></div>`).join('') : empty('check2', '没有要处理的事', '卡住的操作、快到期的租户会出现在这里')}
+      </div>
+      <div class="col" style="gap:16px">
+        <div class="card">
+          <div class="card-h"><h3>系统用量</h3><span class="sp"></span><a class="sm" href="#/tenants/capacity">份额与容量 ${ic('right')}</a></div>
+          <div class="card-b col" style="gap:12px">
+            <div class="usage-row">${sq('spark', '#4f46e5', 28)}<div class="grow"><b>Atlas</b><div class="xs muted">每个实例 ${CAPACITY.atlas.perInstance} 个并发槽位</div></div>
+              <div class="mini-stat"><b>${atlasU.running_runs}</b><span>运行中</span></div><div class="mini-stat"><b>${atlasU.sandboxes}</b><span>沙箱</span></div><div class="mini-stat"><b>${bytes(atlasU.storage_bytes)}</b><span>存储</span></div></div>
+            <div class="usage-row">${sq('book', '#0ea5e9', 28)}<div class="grow"><b>知识库</b><div class="xs muted">文档与向量</div></div><div class="mini-stat"><b>${bytes(CAPACITY.knowledge.usage.storage_bytes)}</b><span>存储</span></div></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-h"><h3>最近的运营操作</h3><span class="sp"></span><a class="sm" href="#/ops/audit">运营审计 ${ic('right')}</a></div>
+          <div class="card-b" style="padding-top:6px;padding-bottom:6px">${AUDIT.slice(0, 6).map((a) => `<div class="feed">${pav(a.who, 24)}<div class="grow ellipsis"><b>${esc(a.who)}</b> <span class="muted">${esc(auditLabel(a))}</span> ${esc(a.target || '')}</div>${resultTag(a.result)}<span class="xs faint nw">${a.at.slice(5, 16)}</span></div>`).join('')}</div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* =====================================================================
+ * 租户
+ * ===================================================================== */
+function tenantsPage() {
+  const q = S.tQ.trim().toLowerCase();
+  const by = {
+    all: () => true, active: (t) => t.status === 'active' && !expired(t), expired: (t) => expired(t) || expiringSoon(t),
+    suspended: (t) => t.status === 'suspended', closed: (t) => t.status === 'closed',
+  };
+  const rows = TENANTS.filter(by[S.tStatus]).filter((t) => !q || t.name.toLowerCase().includes(q) || t.code.includes(q));
+  const n = (k) => TENANTS.filter(by[k]).length;
+  return `<div class="page">
+    ${head('租户', `<button class="btn primary" ${guard()} data-act="modal" data-type="openTenant">${ic('plus')}开通租户</button>`, '每个企业一个租户：账号、数据、份额彼此隔开。运营中心只看得到元数据和数字，看不到企业的业务内容')}
+    <div class="toolbar">${searchBox('搜索名称或企业代码', 'tQ')}
+      ${seg('tStatus', [['all', '全部', n('all')], ['active', '正常', n('active')], ['expired', '到期', n('expired')], ['suspended', '已挂起', n('suspended')], ['closed', '已关闭', n('closed')]])}</div>
+    ${rows.length ? `<table class="table"><thead><tr><th>租户</th><th>状态</th><th>人数 / 名额</th><th>开通的应用</th><th>到期</th><th></th></tr></thead><tbody>
+      ${rows.map((t) => `<tr class="click" data-go="#/tenants/${t.id}">
+        <td><div class="row" style="gap:10px">${tenantIcon(t)}<div><b class="nw">${esc(t.name)}</b><div class="xs muted mono">${esc(t.code)}</div></div></div></td>
+        <td><div class="row" style="gap:4px;flex-wrap:wrap">${tenantStatus(t)}</div></td>
+        <td>${seatCell(t)}</td>
+        <td>${t.status === 'closed' ? '<span class="muted">—</span>' : `<span class="stack">${S.enabledApps[t.id].map((id) => { const a = appOf(id); return `<span title="${esc(a.name)}">${sq(a.icon, a.color, 24)}</span>`; }).join('')}</span>`}</td>
+        <td class="sm">${expiryCell(t)}</td>
+        <td class="acts"><button class="ibtn sm" data-pop="tenantMore" data-id="${t.id}">${ic('more')}</button></td></tr>`).join('')}
+    </tbody></table>` : `<div class="card">${empty('building', '没有符合条件的租户', '换个筛选条件，或者开通一个新租户')}</div>`}
+  </div>`;
+}
+
+function opTimeline(op, openByDefault) {
+  const open = S.opOpen[op.id] ?? openByDefault;
+  const st = (s) => s.status === 'DONE' ? `<span class="step-i done">${ic('check')}</span>` : s.status === 'FAILED' ? `<span class="step-i fail">${ic('x')}</span>` : `<span class="step-i wait">${ic('dot')}</span>`;
+  return `<div class="op">
+    <div class="op-h" data-act="toggleOp" data-id="${op.id}">
+      <span class="tag ${KIND[op.kind][1]}">${KIND[op.kind][0]}</span>
+      <b class="sm">${op.status === 'DONE' ? `完成于 ${op.done}` : op.stuck ? '有步骤失败，自动重试中' : '进行中'}</b>
+      <span class="sm muted">${esc(op.by)} · ${op.at}${op.reason ? ` · ${esc(op.reason)}` : ''}</span>
+      <span class="sp"></span>
+      ${op.status === 'RUNNING' && op.stuck ? `<button class="btn sm" ${guard()} data-act="toast" data-msg="马上重做失败的步骤（不等退避）">${ic('refresh')}立即重做</button>` : ''}
+      <span class="faint">${ic(open ? 'down' : 'right')}</span>
+    </div>
+    ${open ? `<div class="steps">${op.steps.map((s) => `<div class="step ${s.status.toLowerCase()}">${st(s)}
+      <div class="grow"><div class="row" style="gap:6px">${sq(sysOf(s.system).icon, sysOf(s.system).color, 20)}<b class="sm">${sysOf(s.system).name}</b><span class="sm muted">${ACTION_LABEL[op.kind][s.system] || ACTION_LABEL[op.kind]._}</span></div>
+        ${s.error ? `<div class="xs" style="color:var(--danger);margin-top:3px">${esc(s.error)}</div>` : ''}
+        ${s.deleted ? `<div class="xs muted" style="margin-top:3px">删了 ${Object.entries(s.deleted).map(([k, v]) => `${k} ${v}`).join('、')}</div>` : ''}</div>
+      <span class="xs muted nw">${s.status === 'DONE' ? `完成 ${s.finished}` : s.status === 'FAILED' ? `第 ${s.attempts} 次失败 · ${s.next} 再试` : '等前面的步骤'}</span></div>`).join('')}</div>` : ''}
+  </div>`;
+}
+
+function tenantDetail(id) {
+  const t = tenantOf(id);
+  if (!t) return '<div class="page">租户不存在</div>';
+  const ops = OPS[t.id] || [];
+  const run = ops.find((o) => o.status === 'RUNNING');
+  const admins = { t4: 'liu.admin', t1: 'xh.admin', t2: 'moshi.admin', t3: 'yf.admin', t5: 'qh.admin', t6: 'lj.admin', t0: 'admin' };
+  const right = t.status === 'closed' ? '' : `<div class="row">
+    <button class="btn" ${guard()} data-act="modal" data-type="editTenant" data-id="${t.id}">${ic('pencil')}编辑</button>
+    ${t.status === 'suspended' ? `<button class="btn" ${guard()} ${run ? 'disabled' : ''} data-act="toast" data-msg="已发起恢复：先放开各系统，最后放开用户中心的入口">${ic('play')}恢复</button>` : ''}
+    <button class="ibtn" data-pop="tenantMore" data-id="${t.id}">${ic('more')}</button></div>`;
+  const tabsHtml = tabs('tenantTab', [['overview', '概况'], ['apps', '应用', S.enabledApps[t.id].length], ['quota', '份额与用量'], ['ops', '操作记录', ops.length]]);
+  let body = '';
+  if (S.tenantTab === 'overview') {
+    const au = CAPACITY.atlas.tenantUsage[t.id] || {};
+    const aq = quotaOf('atlas', t.id) || CAPACITY.atlas.def;
+    body = `<div class="detail-grid">
+      <div class="card"><div class="card-h"><h3>基本信息</h3></div><div class="card-b"><dl class="kv">
+        <dt>企业代码</dt><dd>${mono(t.code)}<span class="xs muted">登录时输入，建好不能改</span></dd>
+        <dt>名称</dt><dd>${esc(t.name)}</dd>
+        <dt>状态</dt><dd>${tenantStatus(t)}</dd>
+        <dt>人数 / 名额</dt><dd>${seatCell(t)}</dd>
+        <dt>到期</dt><dd>${t.exp ? expiryCell(t) : '不到期'}</dd>
+        <dt>首个管理员</dt><dd>${mono(admins[t.id])}${t.status === 'active' ? `<a class="sm" ${admin() ? 'data-act="modal" data-type="reissue"' : ''} data-id="${t.id}">补发临时密码</a>` : ''}</dd>
+        <dt>开通时间</dt><dd>${t.created}</dd>
+        <dt>租户 id</dt><dd><span class="mono xs">${'44351406-5cd8-4936-99ea-56be6ea18edb'.replace('4435', '44' + t.id.slice(1) + '5')}</span>${copyBtn()}</dd>
+      </dl></div></div>
+      <div class="card"><div class="card-h"><h3>用量</h3><span class="sp"></span><a class="sm" data-act="setS" data-k="tenantTab" data-v="quota">份额与用量 ${ic('right')}</a></div><div class="card-b col" style="gap:14px">
+        ${t.status === 'closed' ? '<div class="muted sm">已关闭，数据已删除</div>' : ['running_runs', 'sandboxes', 'storage_bytes'].map((f) => usageBar(`Atlas · ${QF[f][0]}`, f, au[f] ?? 0, aq[f])).join('') + usageBar('知识库 · 存储', 'storage_bytes', CAPACITY.knowledge.tenantUsage[t.id]?.storage_bytes ?? 0, (quotaOf('knowledge', t.id) || CAPACITY.knowledge.def).storage_bytes)}
+      </div></div>
+    </div>`;
+  } else if (S.tenantTab === 'apps') {
+    body = `<div class="card"><div class="card-h"><h3>开通的应用</h3><span class="sm muted">关掉后这个企业的所有人都用不了它；谁能用由企业管理员在用户中心定</span></div>
+      <table class="table flat"><thead><tr><th>应用</th><th>入口</th><th>状态</th><th style="width:120px">为这个企业开通</th></tr></thead><tbody>
+      ${APPS.map((a) => { const on = S.enabledApps[t.id].includes(a.id); return `<tr>
+        <td><div class="row" style="gap:10px">${sq(a.icon, a.color, 28)}<div><b>${esc(a.name)}</b><div class="xs muted mono">${esc(a.code)}</div></div></div></td>
+        <td class="sm mono muted">${esc(a.home || '—')}</td>
+        <td>${a.status === 'disabled' ? '<span class="tag">平台已停用</span>' : '<span class="tag success">可用</span>'}</td>
+        <td>${a.code === 'usercenter' ? '<span class="xs muted">必开</span>' : `<span class="switch ${on ? 'on' : ''} ${admin() && t.status !== 'closed' ? '' : 'off-dis'}" ${admin() && t.status !== 'closed' ? `data-act="toggleApp" data-t="${t.id}" data-id="${a.id}"` : ''}></span>`}</td></tr>`; }).join('')}
+      </tbody></table></div>`;
+  } else if (S.tenantTab === 'quota') {
+    body = `<div class="col" style="gap:14px">${withCap('capacity').map((s) => {
+      const own = quotaOf(s.code, t.id);
+      const q = own || CAPACITY[s.code].def;
+      const u = CAPACITY[s.code].tenantUsage[t.id] || {};
+      const fields = Object.keys(CAPACITY[s.code].def);
+      return `<div class="card"><div class="card-h">${sq(s.icon, s.color, 24)}<h3>${s.name}</h3>${own ? `<span class="tag primary xs">单独定的份额</span><span class="xs muted">${esc(own.by)} · ${own.at}</span>` : '<span class="tag xs">用默认份额</span>'}<span class="sp"></span>
+        ${own ? `<button class="btn sm ghost" ${guard()} data-act="toast" data-msg="已改回默认份额">改回默认</button>` : ''}<button class="btn sm" ${guard()} data-act="modal" data-type="quota" data-sys="${s.code}" data-t="${t.id}">${own ? '修改' : '单独定份额'}</button></div>
+        <div class="card-b quota-grid">${fields.map((f) => usageBar(QF[f][0], f, u[f] ?? 0, q[f])).join('')}</div></div>`;
+    }).join('')}
+    ${alertBox('plain', '企业里每个人的上限由企业管理员在这份额度内自己定。超了份额的新请求会被拒（已在跑的不打断）')}</div>`;
+  } else {
+    body = ops.length ? `<div class="col" style="gap:10px">${ops.map((o, i) => opTimeline(o, i === 0)).join('')}</div>` : `<div class="card">${empty('history', '还没有操作', '开通、挂起、恢复、关闭都会记在这里')}</div>`;
+  }
+  return `<div class="page">
+    ${detailHead('#/tenants', tenantIcon(t, 40), t.name, `企业代码 <span class="mono">${esc(t.code)}</span> · 开通于 ${t.created.slice(0, 10)}`, `<div class="row" style="gap:4px">${tenantStatus(t)}</div>`, right)}
+    ${run ? `<div style="margin:12px 0 4px">${alertBox(run.stuck ? 'danger' : 'info', `${KIND[run.kind][0]}还没做完：${run.steps.filter((s) => s.status === 'DONE').length} / ${run.steps.length} 个系统已完成${run.stuck ? '，有一步失败了，在自动重试' : ''}。<a data-act="setS" data-k="tenantTab" data-v="ops">看进度</a>`)}</div>` : ''}
+    ${t.status === 'suspended' ? `<div style="margin:12px 0 4px">${alertBox('warning', `已挂起：${esc(OPS[t.id][0].reason || '')}。登录和各系统调用都被拒绝，数据都留着，恢复后接着用`)}</div>` : ''}
+    ${t.status === 'closed' ? `<div style="margin:12px 0 4px">${alertBox('plain', '已关闭：各系统的数据已删除，企业代码不能再用')}</div>` : ''}
+    <div style="margin-top:14px">${tabsHtml}</div>${body}
+  </div>`;
+}
+function usageBar(label, f, used, cap) {
+  const p = cap ? Math.min(100, Math.round((used * 100) / cap)) : 0;
+  return `<div class="ubar"><div class="row"><span class="sm">${label}</span><span class="sp"></span><span class="sm"><b>${fmtQ(f, used)}</b><span class="muted"> / ${fmtQ(f, cap)}</span></span></div>
+    <div class="ubar-t"><i class="${p >= 90 ? 'warn' : ''}" style="width:${cap ? p : 0}%"></i></div></div>`;
+}
+
+function capacityPage() {
+  return `<div class="page">
+    ${head('份额与容量', '', '份额管的是每个企业最多能占多少共用资源（同时运行的对话、沙箱、存储）。没单独定的企业用默认份额')}
+    <div class="col" style="gap:16px">${withCap('capacity').map((s) => {
+      const c = CAPACITY[s.code];
+      const fields = Object.keys(c.def);
+      return `<div class="card">
+        <div class="card-h">${sq(s.icon, s.color, 26)}<h3>${s.name}</h3></div>
+        <div class="card-b">
+          <div class="stats4">${c.perInstance ? `<div class="stat"><div class="k">每个实例的并发槽位</div><div class="v">${c.perInstance}</div></div>` : ''}
+            ${fields.map((f) => `<div class="stat"><div class="k">当前用量 · ${QF[f][0]}</div><div class="v">${fmtQ(f, c.usage[f])}</div></div>`).join('')}</div>
+          <div class="def-row"><b class="sm">默认份额</b>${fields.map((f) => `<span class="chip">${QF[f][0]} <b>${fmtQ(f, c.def[f])}</b></span>`).join('')}<span class="sp"></span>
+            <button class="btn sm" ${guard()} data-act="modal" data-type="quota" data-sys="${s.code}">${ic('pencil')}改默认份额</button></div>
+        </div>
+        <div class="sub-h">单独定了份额的企业 <span class="muted">${c.tenants.length}</span></div>
+        ${c.tenants.length ? `<table class="table flat"><thead><tr><th>企业</th>${fields.map((f) => `<th>${QF[f][0]}</th>`).join('')}<th>改的人 · 时间</th><th></th></tr></thead><tbody>
+          ${c.tenants.map((q) => { const t = tenantOf(q.t); return `<tr><td><a href="#/tenants/${t.id}">${esc(t.name)}</a> <span class="xs muted mono">${t.code}</span></td>
+            ${fields.map((f) => `<td class="sm">${usageMini(f, c.tenantUsage[t.id]?.[f] ?? 0, q[f])}</td>`).join('')}
+            <td class="sm muted">${esc(q.by)} · ${q.at}</td>
+            <td class="acts"><button class="btn sm ghost" ${guard()} data-act="modal" data-type="quota" data-sys="${s.code}" data-t="${t.id}">修改</button><button class="btn sm ghost" ${guard()} data-act="toast" data-msg="已改回默认份额">改回默认</button></td></tr>`; }).join('')}
+        </tbody></table>` : '<div class="card-b sm muted">都用默认份额</div>'}
+      </div>`;
+    }).join('')}</div>
+  </div>`;
+}
+const usageMini = (f, used, cap) => `<span class="nw">${fmtQ(f, used)} <span class="muted">/ ${fmtQ(f, cap)}</span></span>`;
+
+/* =====================================================================
+ * 应用
+ * ===================================================================== */
+function appsPage() {
+  return `<div class="page">
+    ${head('应用目录', `<button class="btn primary" ${guard()} data-act="modal" data-type="createApp">${ic('plus')}接入应用</button>`, '接入用户中心的应用。为企业开通后，企业里的人才能用；操作码、菜单、内置角色由应用上报，也可以在这里维护')}
+    <div class="grid">${APPS.map((a) => `<div class="acard" data-go="#/apps/${a.id}">
+      <div class="row" style="gap:12px">${sq(a.icon, a.color, 40)}<div class="grow"><div class="row" style="gap:6px"><b>${esc(a.name)}</b>${a.builtin ? '<span class="tag xs">产品自带</span>' : ''}${a.status === 'disabled' ? '<span class="tag xs danger">已停用</span>' : ''}</div><div class="xs muted mono">${esc(a.code)}</div></div></div>
+      <div class="desc">${esc(a.desc)}</div>
+      <div class="foot"><span>操作码 ${a.ops}</span><span>菜单 ${a.menus}</span><span>角色 ${a.roles}</span><span class="sp"></span><span>${Object.values(S.enabledApps).filter((l) => l.includes(a.id)).length} 个企业在用</span></div>
+    </div>`).join('')}</div>
+  </div>`;
+}
+
+function appDetail(id) {
+  const a = appOf(id);
+  if (!a) return '<div class="page">应用不存在</div>';
+  const editable = admin() && !a.builtin;
+  const right = `<div class="row"><button class="btn" ${guard()} data-act="modal" data-type="editApp" data-id="${a.id}">${ic('pencil')}编辑</button><button class="ibtn" data-pop="appMore" data-id="${a.id}">${ic('more')}</button></div>`;
+  let body = '';
+  if (S.appTab === 'info') {
+    body = `<div class="card"><div class="card-b"><dl class="kv">
+      <dt>名称</dt><dd>${esc(a.name)}</dd>
+      <dt>应用编码</dt><dd>${mono(a.code)}<span class="xs muted">内网调用用它表明身份（X-Caller-App）</span></dd>
+      <dt>状态</dt><dd>${a.status === 'disabled' ? '<span class="tag danger">已停用</span><span class="xs muted">所有企业都用不了，它调用户中心也会被拒</span>' : '<span class="tag success">正常</span>'}</dd>
+      <dt>入口地址</dt><dd>${mono(a.home || '—')}<span class="xs muted">出现在各应用顶栏的「应用切换」里</span></dd>
+      <dt>App Key</dt><dd>${mono(a.akey)}${copyBtn()}</dd>
+      <dt>App Secret</dt><dd>${mono('••••••••' + a.tail)}<a class="sm" ${admin() ? 'data-act="modal" data-type="rotate"' : ''} data-id="${a.id}">轮换</a><span class="xs muted">经网关接入的外部应用用</span></dd>
+      <dt>说明</dt><dd>${esc(a.desc)}</dd>
+      <dt>接入时间</dt><dd>${a.created}</dd>
+    </dl></div></div>`;
+  } else if (S.appTab === 'ops') {
+    const q = S.opQ.trim();
+    const rows = APP_OPS.filter((o) => !q || o[1].includes(q) || o[2].includes(q));
+    const mods = [...new Set(rows.map((o) => o[0]))];
+    body = `<div class="toolbar">${searchBox('搜索编码或名称', 'opQ', 240)}<span class="sp"></span><button class="btn" ${editable ? '' : 'disabled title="产品自带应用的操作码由应用上报"'} data-act="toast">${ic('plus')}新增操作码</button></div>
+      <table class="table"><thead><tr><th>编码</th><th>名称</th><th>来源</th><th>用到它的内置角色</th><th></th></tr></thead><tbody>
+      ${mods.map((m) => `<tr class="grp"><td colspan="5">${m}</td></tr>${rows.filter((o) => o[0] === m).map((o) => `<tr>
+        <td>${mono(o[1])}</td><td>${esc(o[2])}</td><td><span class="tag xs ${o[3] === '上报' ? 'blue' : ''}">${o[3]}</span></td>
+        <td>${o[4].length ? o[4].map((r) => `<span class="tag xs">${r}</span>`).join(' ') : '<span class="xs muted">—</span>'}</td>
+        <td class="acts">${o[3] === '手动' && admin() ? `<button class="btn sm ghost">编辑</button><button class="btn sm ghost danger">删除</button>` : ''}</td></tr>`).join('')}`).join('')}
+      </tbody></table>`;
+  } else if (S.appTab === 'menus') {
+    const kids = (p) => APP_MENUS.filter((m) => m.p === p);
+    const row = (m, depth) => `<tr><td><div class="row" style="gap:8px;padding-left:${depth * 22}px">${m.type === 'dir' ? ic(m.icon || 'folder') : '<span class="faint">' + ic('file') + '</span>'}<b class="${m.type === 'dir' ? '' : 'sm'}" style="font-weight:${m.type === 'dir' ? 600 : 500}">${esc(m.name)}</b></div></td>
+      <td>${mono(m.code)}</td><td class="sm mono muted">${esc(m.path || '—')}</td><td>${m.pub ? '<span class="tag xs success">人人可见</span>' : '<span class="xs muted">按角色</span>'}</td><td class="sm">${m.roles}</td>
+      <td class="acts">${admin() ? `<button class="ibtn sm" title="上移">${ic('up')}</button><button class="btn sm ghost">编辑</button>` : ''}</td></tr>`;
+    body = `<div class="toolbar"><span class="sm muted">菜单由应用上报（启动时登记）；运营可以调顺序、改名，应用下次上报不会覆盖手工调过的顺序</span><span class="sp"></span><button class="btn" ${guard()}>${ic('plus')}新增菜单</button></div>
+      <table class="table"><thead><tr><th>名称</th><th>编码</th><th>路径</th><th>可见</th><th>角色数</th><th></th></tr></thead><tbody>
+      ${kids(null).map((d) => row(d, 0) + kids(d.id).map((m) => row(m, 1)).join('')).join('')}</tbody></table>`;
+  } else if (S.appTab === 'data') {
+    body = `<div class="toolbar"><span class="sm muted">数据编码：按「哪条数据」授权的类别（如某个智能体、某个知识库），由企业管理员在用户中心授权</span><span class="sp"></span><button class="btn" ${guard()}>${ic('plus')}新增数据编码</button></div>
+      <table class="table"><thead><tr><th>编码</th><th>名称</th><th>说明</th><th>登记的数据</th><th></th></tr></thead><tbody>
+      ${APP_DATA.map((d) => `<tr><td>${mono(d[0])}</td><td>${d[1]}</td><td class="sm muted">${d[2]}</td><td class="sm">${d[3]} 条</td><td class="acts">${admin() ? '<button class="btn sm ghost">编辑</button>' : ''}</td></tr>`).join('')}</tbody></table>`;
+  } else {
+    const r = APP_ROLES.find((x) => x.id === S.roleSel) || APP_ROLES[0];
+    const mods = [...new Set(APP_OPS.map((o) => o[0]))];
+    body = `<div class="split">
+      <div class="panel"><div class="panel-h"><b class="sm grow">内置角色</b><button class="ibtn sm" ${guard()} title="新增内置角色">${ic('plus')}</button></div><div class="panel-b">
+        ${APP_ROLES.map((x) => `<div class="li ${x.id === r.id ? 'on' : ''}" data-act="setS" data-k="roleSel" data-v="${x.id}">${sq('badge', colorOf(x.code), 28)}<div class="grow"><b class="sm">${x.name}</b><div class="xs muted mono">${x.code}</div></div>${x.shared ? '<span class="tag xs blue" title="开通应用时自动授给企业里的所有人">全员</span>' : ''}</div>`).join('')}
+      </div></div>
+      <div class="card">
+        <div class="card-h"><div class="grow"><h3>${r.name}</h3><div class="xs muted">${esc(r.desc)}</div></div>${r.shared ? '<span class="tag blue">开通后授给全员</span>' : ''}</div>
+        <div style="padding:0 16px">${tabs('roleTab', [['ops', '操作码', r.ops.length], ['menus', '菜单', r.menus.length]], 'inner')}</div>
+        <div class="card-b">${S.roleTab === 'ops' ? mods.map((m) => `<div class="grp"><div class="grp-h">${m}</div><div class="opgrid">${APP_OPS.filter((o) => o[0] === m).map((o) => `<label class="opt"><input type="checkbox" ${r.ops.includes(o[1]) ? 'checked' : ''} ${admin() ? '' : 'disabled'}><div><div class="sm">${o[2]}</div><div class="xs muted mono">${o[1]}</div></div></label>`).join('')}</div></div>`).join('')
+          : APP_MENUS.map((m) => `<label class="opt" style="padding-left:${m.p ? 32 : 10}px"><input type="checkbox" ${r.menus.includes(m.id) ? 'checked' : ''} ${admin() ? '' : 'disabled'}><span class="sm">${m.name}</span></label>`).join('')}</div>
+        ${admin() ? `<div class="savebar"><span class="xs muted">内置角色改了，所有企业里的这个角色都跟着变（企业自建的角色不受影响）</span><span class="sp"></span><button class="btn primary sm" data-act="toast" data-msg="已保存">保存</button></div>` : ''}
+      </div></div>`;
+  }
+  return `<div class="page">
+    ${detailHead('#/apps', sq(a.icon, a.color, 40), a.name, `应用编码 <span class="mono">${esc(a.code)}</span> · ${Object.values(S.enabledApps).filter((l) => l.includes(a.id)).length} 个企业在用`, `${a.builtin ? '<span class="tag">产品自带</span>' : ''}${a.status === 'disabled' ? '<span class="tag danger">已停用</span>' : ''}`, right)}
+    <div style="margin-top:14px">${tabs('appTab', [['info', '基本信息'], ['ops', '操作码', a.ops], ['menus', '菜单', a.menus], ['data', '数据编码', a.data], ['roles', '内置角色', a.roles]])}</div>${body}
+  </div>`;
+}
+
+/* =====================================================================
+ * 系统
+ * ===================================================================== */
+function systemsPage() {
+  const link = (cap) => ({ capacity: '#/tenants/capacity', settings: '#/system/params', jobs: '#/system/jobs', runtime_env: '#/system/templates', skill_market: '#/system/skills', memory_scopes: '#/system/scopes', user_center: '#/apps' }[cap]);
+  return `<div class="page">
+    ${head('接入的系统', '', '部署配置里登记的系统。运营中心用各自的运营密钥签名调它们的运营接口；能力决定这个系统出现在哪些页面')}
+    <div class="grid">${SYSTEMS.map((s) => `<div class="acard" style="cursor:default">
+      <div class="row" style="gap:12px">${sq(s.icon, s.color, 40)}<div class="grow"><b>${esc(s.name)}</b><div class="xs muted mono">${s.code}</div></div>
+        ${s.key ? '<span class="tag success">' + ic('check') + '密钥已配置</span>' : '<span class="tag danger" title="部署时 atlas-ops-keys 里没有它的密钥">' + ic('alert') + '密钥没配</span>'}</div>
+      <div class="row" style="flex-wrap:wrap;gap:6px">${s.caps.map((c) => link(c) && c !== 'lifecycle' ? `<a class="chip" href="${link(c)}">${CAP_LABEL[c]}</a>` : `<span class="chip" style="cursor:default">${CAP_LABEL[c]}</span>`).join('')}</div>
+      ${s.key ? '' : `<div class="xs" style="color:var(--danger)">运营中心调不了它：开通、挂起、关闭租户到这一步会一直失败</div>`}
+    </div>`).join('')}</div>
+    <div style="margin-top:16px">${alertBox('plain', '系统和密钥写在部署配置里（ATLAS_OPS_SYSTEMS、Secret atlas-ops-keys），这里只看不改：改了要重新部署')}</div>
+  </div>`;
+}
+
+function templatesPage() {
+  return `<div class="page">
+    ${head('沙箱模板', `<button class="btn primary" ${guard()} data-act="drawer" data-type="tpl" data-id="new">${ic('plus')}新建模板</button>`, '智能体的沙箱按模板创建。改了先存成新修订，发布后才生效；已发布的会同步到集群')}
+    <table class="table"><thead><tr><th>模板</th><th>OpenSandbox 实例</th><th>版本</th><th>发布</th><th></th></tr></thead><tbody>
+    ${TEMPLATES.map((t) => `<tr class="click" data-act="drawer" data-type="tpl" data-id="${t.code}">
+      <td><b class="mono">${t.code}</b><div class="xs muted">${esc(t.desc)}</div></td>
+      <td class="sm mono muted">${t.server}</td>
+      <td><div class="row" style="gap:4px;flex-wrap:wrap"><span class="sm">v${t.version}</span>${tplTags(t)}</div></td>
+      <td class="sm muted">${t.at ? `${esc(t.by)} · ${t.at}` : '—'}</td>
+      <td class="acts"><span class="faint">${ic('right')}</span></td></tr>`).join('')}
+    </tbody></table>
+  </div>`;
+}
+const tplTags = (t) => (t.pub === null ? '<span class="tag xs">没发布过</span>' : t.pub === t.version ? '<span class="tag xs success">已发布</span>' : `<span class="tag xs warning">已发布 v${t.pub}，有新修订</span>`) + (t.drift ? '<span class="tag xs danger" title="集群里的和已发布的对不上">被手工改过</span>' : '');
+
+function skillsPage() {
+  return `<div class="page">
+    ${head('技能市场', `<button class="btn primary" ${guard()} data-act="modal" data-type="publishSkill">${ic('upload')}发布技能</button>`, '平台提供给所有企业的技能。企业管理员在自己的技能里安装；勾了「开通时默认安装」的，新开通的企业自动装上')}
+    <table class="table"><thead><tr><th>技能</th><th>最新版本</th><th>开通时默认安装</th><th></th></tr></thead><tbody>
+    ${SKILLS.map((s) => { const open = S.skillOpen === s.slug; const latest = s.versions.find((v) => v.status === 'published'); return `<tr class="click" data-act="toggleSkill" data-id="${s.slug}">
+      <td><div class="row" style="gap:10px">${sq('zap', colorOf(s.slug), 30)}<div><b class="mono">${s.slug}</b><div class="xs muted">${esc(s.desc)}</div></div></div></td>
+      <td class="sm">v${latest.v}${latest.scripts ? ' <span class="tag xs warning" title="技能里有可执行脚本">含脚本</span>' : ''}</td>
+      <td data-stop><span class="switch ${S.defSkills[s.slug] ? 'on' : ''} ${admin() ? '' : 'off-dis'}" ${admin() ? `data-act="toggleDefSkill" data-id="${s.slug}"` : ''}></span></td>
+      <td class="acts"><span class="faint">${ic(open ? 'down' : 'right')}</span></td></tr>
+      ${open ? `<tr class="sub"><td colspan="4"><table class="table inner"><thead><tr><th>版本</th><th>状态</th><th>内容</th><th>发布</th><th></th></tr></thead><tbody>
+        ${s.versions.map((v) => `<tr><td class="sm">v${v.v}</td><td>${v.status === 'published' ? '<span class="tag xs success">已发布</span>' : `<span class="tag xs" title="${esc(v.reason)}">已下架</span><div class="xs muted" style="margin-top:2px">${esc(v.reason)}</div>`}</td>
+          <td class="sm muted">${bytes(v.size)} · ${v.files} 个文件${v.scripts ? ' · 含脚本' : ''}</td><td class="sm muted">${esc(v.by)} · ${v.at}</td>
+          <td class="acts">${v.status === 'published' && admin() ? `<button class="btn sm ghost danger" data-act="modal" data-type="revoke" data-id="${s.slug}" data-v="${v.v}">下架</button>` : ''}</td></tr>`).join('')}
+      </tbody></table></td></tr>` : ''}`; }).join('')}
+    </tbody></table>
+  </div>`;
+}
+
+function scopesPage() {
+  return `<div class="page">
+    ${head('记忆作用域', `<button class="btn primary" ${guard()} data-act="modal" data-type="scope" data-id="new">${ic('plus')}新建作用域</button>`, '记忆按作用域分开存：一个作用域由哪几个字段确定一份记忆，读写时要不要按数据权限校验')}
+    <table class="table"><thead><tr><th>编码</th><th>说明</th><th>关联主键</th><th>数据权限</th><th>更新时间</th><th></th></tr></thead><tbody>
+    ${SCOPES.map((s) => `<tr><td>${mono(s.code)}</td><td class="sm">${esc(s.desc)}</td><td>${s.keys.map((k) => `<span class="tag xs mono">${k}</span>`).join(' + ')}</td>
+      <td>${s.check ? `<span class="tag xs blue">校验 · ${s.data}</span>` : '<span class="tag xs">不校验</span>'}</td><td class="sm muted">${s.updated}</td>
+      <td class="acts">${admin() ? `<button class="btn sm ghost" data-act="modal" data-type="scope" data-id="${s.code}">编辑</button>` : ''}</td></tr>`).join('')}
+    </tbody></table>
+  </div>`;
+}
+
+function sysTabs(key, cap) {
+  return tabs(key, withCap(cap).map((s) => [s.code, s.name]));
+}
+function paramsPage() {
+  if (!withCap('settings').some((s) => s.code === S.sysTab)) S.sysTab = withCap('settings')[0].code;
+  const all = PARAMS[S.sysTab] || [];
+  const q = S.paramQ.trim();
+  const rows = all.filter((p) => (S.paramFilter === 'all' || p.changed) && (!q || p.key.includes(q) || p.name.includes(q)));
+  const val = (p) => p.type === 'bool' ? (p.value ? '<span class="tag xs success">开</span>' : '<span class="tag xs">关</span>') : p.type === 'list' ? p.value.map((v) => `<span class="tag xs mono">${esc(v)}</span>`).join(' ') : mono(String(p.value));
+  return `<div class="page">
+    ${head('系统参数', '', '各系统的系统参数：可用镜像、上传上限、默认技能……改了下一次用到时生效，每次修改留一个版本，可以回滚')}
+    ${sysTabs('sysTab', 'settings')}
+    <div class="toolbar">${seg('paramFilter', [['all', '全部', all.length], ['changed', '已修改', all.filter((p) => p.changed).length]])}${searchBox('搜索配置项', 'paramQ', 240)}</div>
+    <table class="table"><thead><tr><th>配置项</th><th>类型</th><th>当前值</th><th></th></tr></thead><tbody>
+    ${rows.map((p) => `<tr><td><b class="sm">${esc(p.name)}</b><div class="xs muted mono">${p.key}</div>${p.desc ? `<div class="xs muted">${esc(p.desc)}</div>` : ''}</td>
+      <td><span class="tag xs mono">${p.type}</span></td>
+      <td><div class="row" style="gap:6px;flex-wrap:wrap">${val(p)}${p.changed ? '<span class="tag xs blue">已修改</span>' : '<span class="tag xs">默认</span>'}</div></td>
+      <td class="acts"><button class="btn sm ghost" ${guard()} data-act="drawer" data-type="param" data-id="${p.key}">修改</button><button class="btn sm ghost" data-act="drawer" data-type="paramHist" data-id="${p.key}">${ic('history')}历史</button></td></tr>`).join('')}
+    </tbody></table>
+  </div>`;
+}
+function jobsPage() {
+  if (!withCap('jobs').some((s) => s.code === S.jobsTab)) S.jobsTab = withCap('jobs')[0].code;
+  const rows = JOBS[S.jobsTab] || [];
+  const stat = (s, at) => s === 'ok' ? `<span class="tag xs success">${ic('check')}正常</span><span class="xs muted"> 上次 ${at}</span>` : s === 'fail' ? `<span class="tag xs danger">${ic('x')}上次失败</span><span class="xs muted"> ${at}</span>` : '<span class="tag xs">空闲</span>';
+  return `<div class="page">
+    ${head('系统任务', '', '各系统的后台任务。是系统机制，只能查看；多实例部署时看到的是回应这次请求的那个实例')}
+    ${sysTabs('jobsTab', 'jobs')}
+    <table class="table"><thead><tr><th>任务</th><th>触发</th><th>运行份数</th><th>状态</th><th></th></tr></thead><tbody>
+    ${rows.map((j) => `<tr class="click" data-act="drawer" data-type="job" data-id="${esc(j[0])}"><td><b class="sm">${j[0]}</b><div class="xs muted">${j[1]}</div></td><td class="sm">${j[2]}</td><td class="sm muted">每个实例一份</td><td>${stat(j[3], j[4])}</td><td class="acts"><span class="faint">${ic('right')}</span></td></tr>`).join('')}
+    </tbody></table>
+  </div>`;
+}
+
+/* =====================================================================
+ * 运营
+ * ===================================================================== */
+function operatorsPage() {
+  return `<div class="page">
+    ${head('运营账号', `<button class="btn primary" ${guard()} data-act="modal" data-type="createOp">${ic('userPlus')}开账号</button>`, '运营中心自己的账号，和各企业的账号分开。管理员能开通、停用企业、改系统配置；观察员只能看')}
+    <table class="table"><thead><tr><th>账号</th><th>角色</th><th>状态</th><th>最近登录</th><th></th></tr></thead><tbody>
+    ${OPERATORS.map((o) => `<tr><td><div class="row" style="gap:10px">${pav(o.name, 30)}<div><div class="row" style="gap:6px"><b>${esc(o.name)}</b>${o.id === ME.id ? '<span class="tag xs primary">你</span>' : ''}</div><div class="xs muted mono">${o.account}</div></div></div></td>
+      <td><span class="tag ${ROLE[o.role][1]}">${ROLE[o.role][0]}</span></td>
+      <td><div class="row" style="gap:4px">${o.status === 'active' ? '<span class="tag success">正常</span>' : '<span class="tag">已停用</span>'}${o.locked ? '<span class="tag danger" title="试错太多次，15 分钟后自动解锁；重置密码也会解锁">暂时锁定</span>' : ''}${o.must ? '<span class="tag warning">待改临时密码</span>' : ''}</div></td>
+      <td class="sm muted">${o.last || '还没登录过'}</td>
+      <td class="acts">${admin() && o.id !== ME.id ? `<button class="btn sm ghost" data-act="modal" data-type="resetPw" data-id="${o.id}">${ic('key')}重置密码</button>${o.status === 'active' ? '<button class="btn sm ghost danger" data-act="toast" data-msg="已停用，正在登录的会话立即失效">停用</button>' : '<button class="btn sm ghost" data-act="toast" data-msg="已启用">启用</button>'}` : o.id === ME.id ? '<span class="xs muted">自己的账号在右上角改密码</span>' : ''}</td></tr>`).join('')}
+    </tbody></table>
+  </div>`;
+}
+const resultTag = (r) => (r === 'OK' ? '<span class="tag xs success">成功</span>' : r === 'FAILED' ? '<span class="tag xs danger">失败</span>' : '<span class="tag xs primary">进行中</span>');
+
+function auditPage() {
+  const q = S.auditQ.trim();
+  const inCat = (a) => S.auditCat === 'all' || AUDIT_CAT[S.auditCat].some((p) => a.action.startsWith(p)) && !(S.auditCat === 'system' && a.action.startsWith('system.usercenter.'));
+  const rows = AUDIT.filter(inCat).filter((a) => !q || a.action.includes(q) || (a.target || '').includes(q) || auditLabel(a).includes(q));
+  return `<div class="page">
+    ${head('运营审计', '', '每个写操作一条，登录也记；跨系统的操作（开通、挂起、关闭）做完后补记结果。只能看，不能改')}
+    <div class="toolbar">${seg('auditCat', [['all', '全部'], ['tenant', '租户'], ['app', '应用目录'], ['system', '系统配置'], ['account', '运营账号'], ['login', '登录']])}${searchBox('按操作或对象搜索', 'auditQ', 240)}</div>
+    <table class="table"><thead><tr><th style="width:170px">时间</th><th>运营人员</th><th>操作</th><th>对象</th><th>结果</th></tr></thead><tbody>
+    ${rows.map((a) => `<tr class="click" data-act="drawer" data-type="audit" data-id="${a.at}"><td class="sm muted nw">${a.at}</td>
+      <td><div class="row" style="gap:8px">${pav(a.who, 24)}<span class="sm nw">${esc(a.who)}</span></div></td>
+      <td><span class="sm">${esc(auditLabel(a))}</span><div class="xs faint mono">${a.action}</div></td>
+      <td class="sm">${a.tenant ? `<a href="#/tenants/${a.tenant}" data-stop>${esc(a.target)}</a>` : esc(a.target || '—')}</td>
+      <td>${resultTag(a.result)}</td></tr>`).join('')}
+    </tbody></table>
+    <div style="text-align:center;margin-top:12px"><button class="btn" data-act="toast" data-msg="（原型）再取 50 条">加载更早的</button></div>
+  </div>`;
+}
+
+/* =====================================================================
+ * 弹窗、抽屉、浮层
+ * ===================================================================== */
+const onceBox = (rows, warn) => `<div class="alert warning" style="margin-bottom:10px">${ic('alert')}<span>${warn}</span></div><div class="once">${rows.map(([k, v]) => `<div class="r"><span class="sm muted">${k}</span><span class="v">${esc(v)}</span>${copyBtn()}</div>`).join('')}</div>`;
+function modalFrame(title, body, foot, wide) {
+  return `<div class="mask" data-act="closeModal"><div class="modal ${wide ? 'wide' : ''}" data-stop>
+    <div class="modal-h"><h2 class="grow">${title}</h2><button class="ibtn" data-act="closeModal">${ic('x')}</button></div>
+    <div class="modal-b">${body}</div><div class="modal-f">${foot}</div></div></div>`;
+}
+const cancelOk = (ok, msg, danger) => `<button class="btn" data-act="closeModal">取消</button><button class="btn ${danger ? 'danger solid' : 'primary'}" data-act="toastClose" data-msg="${msg}">${ok}</button>`;
+
+function modal() {
+  const m = S.modal;
+  if (!m) return '';
+  const t = m.id ? tenantOf(m.id) : null;
+  switch (m.type) {
+    case 'openTenant':
+      if (S.openStep === 'done') return modalFrame('租户已开通', `
+        <div class="alert info" style="margin-bottom:12px">${ic('check2')}<span>用户中心已建好租户和首个管理员；其余 6 个系统在后台依次准备，进度在租户的「操作记录」里</span></div>
+        ${onceBox([['登录地址', 'https://atlas.techstz.com/uc/login'], ['企业代码', 'beichen'], ['管理员账号', 'liu.admin'], ['临时密码', 'Vq7m-2Lx9-Pe4k']], '临时密码只显示这一次，关掉就再也看不到。交给企业管理员，他第一次登录要改成自己的密码')}`,
+        `<button class="btn" data-act="toast" data-msg="已复制全部">${ic('copy')}复制全部</button><button class="btn primary" data-act="openDone">我已交给企业管理员</button>`);
+      return modalFrame('开通租户', `<div class="form">
+        <div class="sec-t">企业</div>
+        <div class="form-2"><div><label class="label">企业代码</label><input class="input" placeholder="如 beichen" value="beichen"><div class="help">登录时输入；小写字母、数字、短横线，建好不能改</div></div>
+          <div><label class="label">名称</label><input class="input" value="北辰医疗"></div></div>
+        <div class="sec-t">首个企业管理员 <span class="help" style="margin:0 0 0 6px;display:inline">开通后由他在用户中心建人、授权</span></div>
+        <div class="form-3"><div><label class="label">账号</label><input class="input" value="liu.admin"></div><div><label class="label">姓名</label><input class="input" value="刘敏"></div><div><label class="label">邮箱</label><input class="input" value="liumin@beichen.example"></div></div>
+        <div class="sec-t">名额与到期</div>
+        <div class="form-2"><div><label class="label">人员名额</label><input class="input" placeholder="不限" value="200"><div class="help">不填 = 不限</div></div><div><label class="label">到期日</label><input class="input" type="date" value="2027-11-20"><div class="help">不填 = 不到期；到期后自动停用，续期即恢复</div></div></div>
+        <div class="sec-t">开通的应用 <span class="help" style="margin:0 0 0 6px;display:inline">用户中心必开；谁能用由企业管理员定</span></div>
+        <div class="app-pick">${APPS.filter((a) => a.status === 'active').map((a) => `<label class="app-opt"><input type="checkbox" ${['a1', 'a2', 'a3'].includes(a.id) ? 'checked' : ''} ${a.code === 'usercenter' ? 'disabled' : ''}>${sq(a.icon, a.color, 26)}<span class="sm">${esc(a.name)}</span></label>`).join('')}</div>
+        <div class="sec-t">份额</div>
+        ${withCap('capacity').map((s) => { const own = S.openQuota[s.code]; return `<div class="q-row">${sq(s.icon, s.color, 24)}<b class="sm" style="width:64px">${s.name}</b>
+          ${seg2(`openQuota.${s.code}`, own)}
+          ${own ? Object.keys(CAPACITY[s.code].def).map((f) => `<div class="q-in"><span class="xs muted">${QF[f][0]}</span><input class="input" placeholder="不限" value="${f === 'storage_bytes' ? '500 GB' : 40}"></div>`).join('') : `<span class="xs muted">${Object.keys(CAPACITY[s.code].def).map((f) => `${QF[f][0]} ${fmtQ(f, CAPACITY[s.code].def[f])}`).join(' · ')}</span>`}</div>`; }).join('')}
+        <label class="opt" style="padding-left:0"><input type="checkbox" checked><div><div class="sm">装技能市场里「开通时默认安装」的技能</div><div class="xs muted">${SKILLS.filter((s) => S.defSkills[s.slug]).map((s) => s.slug).join('、')}</div></div></label>
+      </div>`, `<span class="xs muted grow">开通依次在 7 个系统里做；某一步失败会自动重试，不用重新开</span><button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="openSubmit">开通</button>`, true);
+    case 'editTenant': return modalFrame(`编辑 ${esc(t.name)}`, `<div class="form">
+        <div><label class="label">名称</label><input class="input" value="${esc(t.name)}"></div>
+        <div class="form-2"><div><label class="label">人员名额</label><input class="input" placeholder="不限" value="${t.max ?? ''}"><div class="help">不填 = 不限；少于现有人数时不能再加人，已有的不受影响</div></div>
+          <div><label class="label">到期日</label><input class="input" type="date" value="${expired(t) || expiringSoon(t) ? '2027-12-31' : t.exp ?? ''}"><div class="help">${expired(t) ? '续期后所有人马上能登录' : '不填 = 不到期'}</div></div></div>
+      </div>`, cancelOk('保存', '已保存'));
+    case 'suspend': return modalFrame(`挂起 ${esc(t.name)}`, `<div class="form">
+        ${alertBox('warning', '先挡住用户中心的入口（登录、各系统调用都会被拒），再挂起各系统：在跑的对话挂起、沙箱回收。数据都留着，恢复后接着用')}
+        <div><label class="label">原因</label><textarea class="input" rows="2" placeholder="会记进运营审计和操作记录，如：合同到期未续"></textarea></div></div>`, cancelOk('挂起', '已发起挂起', true));
+    case 'close': return modalFrame(`关闭 ${esc(t.name)}`, `<div class="form">
+        ${alertBox('danger', '关闭会删除这个企业在所有系统里的数据：智能体、会话、知识库、记忆、账号。<b>删了就找不回来</b>，企业代码也不能再用')}
+        <div><label class="label">原因</label><input class="input" placeholder="如：客户解约"></div>
+        <div><label class="label">输入企业代码 <span class="mono">${esc(t.code)}</span> 确认</label><input class="input" placeholder="${esc(t.code)}"></div></div>`, cancelOk('关闭并删除数据', '已发起关闭', true));
+    case 'reissue': return modalFrame('补发临时密码', `${onceBox([['企业代码', t.code], ['管理员账号', 'liu.admin'], ['临时密码', 'Rk3w-9Tz2-Hq8c']], '旧的临时密码已作废。新的只显示这一次；只有首个管理员还没登录过时能补发')}`, '<button class="btn primary" data-act="closeModal">我已交给企业管理员</button>');
+    case 'quota': {
+      const s = sysOf(m.sys); const fields = Object.keys(CAPACITY[m.sys].def); const tt = m.t ? tenantOf(m.t) : null;
+      const cur = tt ? (quotaOf(m.sys, tt.id) || CAPACITY[m.sys].def) : CAPACITY[m.sys].def;
+      return modalFrame(`${s.name} · ${tt ? `${esc(tt.name)}的份额` : '默认份额'}`, `<div class="form">
+        ${fields.map((f) => `<div class="form-2" style="align-items:center"><label class="label" style="margin:0">${QF[f][0]}</label><input class="input" placeholder="不限" value="${cur[f] === null ? '' : f === 'storage_bytes' ? bytes(cur[f]) : cur[f]}"></div>`).join('')}
+        <div class="help">留空 = 不限。${tt ? '只对这个企业生效' : '改的是系统参数，有修订历史；单独定了份额的企业不受影响'}</div></div>`, cancelOk('保存', '已保存'));
+    }
+    case 'createApp': return modalFrame('接入应用', `<div class="form">
+        <div class="form-2"><div><label class="label">名称</label><input class="input" placeholder="如 合同审查助手"></div><div><label class="label">应用编码</label><input class="input" placeholder="如 contract"><div class="help">内网调用表明身份用，建好不能改</div></div></div>
+        <div><label class="label">图标</label><div class="row" style="gap:6px">${['briefcase', 'book', 'chart', 'flow', 'bot', 'database'].map((i, k) => `<span style="cursor:pointer;${k === 0 ? 'outline:2px solid var(--primary);border-radius:9px' : ''}">${sq(i, COLORS[k + 3], 32)}</span>`).join('')}</div></div>
+        <div><label class="label">入口地址</label><input class="input" placeholder="/contract 或 https://…"><div class="help">不填 = 不在应用切换里出现</div></div>
+        <div><label class="label">说明</label><textarea class="input" rows="2"></textarea></div></div>`,
+        `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="modal" data-type="appCreated">接入</button>`);
+    case 'appCreated': return modalFrame('应用已接入', onceBox([['App Key', 'ak_ct9Pz1Qa'], ['App Secret', 'sec_4f9Q2m7Xc1Vb8Lp3Zt6Ra0Ye']], 'App Secret 只显示这一次。经网关接入的外部应用要用它；内网应用用应用编码就行'), '<button class="btn primary" data-act="closeModal">完成</button>');
+    case 'editApp': { const a = appOf(m.id); return modalFrame(`编辑 ${esc(a.name)}`, `<div class="form">
+        <div><label class="label">名称</label><input class="input" value="${esc(a.name)}"></div>
+        <div><label class="label">入口地址</label><input class="input" value="${esc(a.home || '')}"></div>
+        <div><label class="label">说明</label><textarea class="input" rows="2">${esc(a.desc)}</textarea></div></div>`, cancelOk('保存', '已保存')); }
+    case 'rotate': return modalFrame('轮换 App Secret', onceBox([['新的 App Secret', 'sec_8Hn2Qe5Vw1Tx7Mk3Lc9Pa4Zb']], '旧的已经失效，用它的外部应用要马上换上新的；新的只显示这一次'), '<button class="btn primary" data-act="closeModal">完成</button>');
+    case 'disableApp': return modalFrame('停用应用', alertBox('danger', '停用后所有企业都用不了这个应用，它调用户中心也会被拒。企业里的授权都留着，启用后恢复'), cancelOk('停用', '已停用', true));
+    case 'publishSkill': return modalFrame('发布技能', `<div class="form">
+        <div class="drop">${ic('upload')}<div><b class="sm">把技能包（.zip）拖到这里，或点击选择</b><div class="xs muted">包里要有 SKILL.md；同名技能发成新版本，旧版本留着</div></div></div>
+        ${alertBox('plain', '含可执行脚本的技能会标「含脚本」，企业管理员安装时能看到')}</div>`, cancelOk('发布', '已发布 v2'));
+    case 'revoke': return modalFrame(`下架 ${esc(m.id)} v${m.v}`, `<div class="form">${alertBox('warning', '已经装了这个版本的企业照常能用；市场里不再提供，新安装会装别的版本')}
+        <div><label class="label">原因（必填）</label><textarea class="input" rows="3" placeholder="企业管理员能看到"></textarea></div></div>`, cancelOk('下架', '已下架', true));
+    case 'scope': { const s = SCOPES.find((x) => x.code === m.id); return modalFrame(s ? `编辑 ${s.code}` : '新建作用域', `<div class="form">
+        <div class="form-2"><div><label class="label">编码</label><input class="input mono" value="${s ? s.code : ''}" ${s ? 'readonly' : ''} placeholder="如 user_project"></div><div><label class="label">说明</label><input class="input" value="${s ? esc(s.desc) : ''}"></div></div>
+        <div><label class="label">关联主键（有序）</label><input class="input mono" value="${s ? s.keys.join(', ') : ''}" ${s ? 'readonly' : ''} placeholder="uid, project"><div class="help">由哪几个字段确定一份记忆；建好不能改</div></div>
+        <label class="opt" style="padding-left:0"><span class="switch ${!s || s.check ? 'on' : ''}" data-act="toggleSwitch"></span><div><div class="sm">读写时校验数据权限</div><div class="xs muted">数据编码不填按编码生成（user_project → MemoryUserProject）</div></div></label></div>`, cancelOk('保存', '已保存')); }
+    case 'createOp': return modalFrame('开运营账号', `<div class="form">
+        <div class="form-2"><div><label class="label">账号</label><input class="input" placeholder="如 zhang"></div><div><label class="label">名字</label><input class="input"></div></div>
+        <label class="label" style="margin-bottom:0">角色</label>
+        <div class="col">${[['ADMIN', '运营管理员', '开通、挂起、关闭企业，改份额和系统配置，管运营账号'], ['OBSERVER', '运营观察员', '什么都能看，什么都不能改；适合审计、值班查看']].map(([k, n, d], i) => `<div class="radio-card ${i === 1 ? 'on' : ''}"><span class="r"></span><div><b class="sm">${n}</b><div class="xs muted">${d}</div></div></div>`).join('')}</div></div>`,
+        `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="modal" data-type="opCreated">开账号</button>`);
+    case 'opCreated': return modalFrame('账号已开', onceBox([['账号', 'zhang'], ['临时密码', 'Wd6p-3Kx8-Nr2v']], '临时密码只显示这一次。他第一次登录要改成自己的密码'), '<button class="btn primary" data-act="closeModal">完成</button>');
+    case 'resetPw': { const o = OPERATORS.find((x) => x.id === m.id); return modalFrame(`重置 ${o.account} 的密码`, onceBox([['账号', o.account], ['临时密码', 'Jm4t-8Qw1-Zc5x']], '旧密码已失效、锁定已解除。临时密码只显示这一次，他登录后要改成自己的'), '<button class="btn primary" data-act="closeModal">完成</button>'); }
+    case 'myPw': return modalFrame('修改密码', `<div class="form">
+        <div><label class="label">当前密码</label><input class="input" type="password"></div>
+        <div><label class="label">新密码</label><input class="input" type="password" placeholder="至少 12 位"></div>
+        <div><label class="label">再输一次</label><input class="input" type="password"></div></div>`, cancelOk('保存', '已修改，其他设备上的登录已退出'));
+  }
+  return '';
+}
+const seg2 = (key, own) => `<div class="seg"><a class="${own ? '' : 'on'}" data-act="openQuota" data-sys="${key.split('.')[1]}" data-v="">用默认</a><a class="${own ? 'on' : ''}" data-act="openQuota" data-sys="${key.split('.')[1]}" data-v="1">单独定</a></div>`;
+
+function drawer() {
+  const d = S.drawer;
+  if (!d) return '';
+  const frame = (title, tags, body, foot = '') => `<div class="drawer-mask" data-act="closeDrawer"></div><div class="drawer ${d.type === 'tpl' ? 'wide' : ''}">
+    <div class="modal-h"><div class="grow"><div class="row" style="gap:8px"><h2>${title}</h2>${tags}</div></div><button class="ibtn" data-act="closeDrawer">${ic('x')}</button></div>
+    <div class="drawer-b">${body}</div>${foot ? `<div class="modal-f">${foot}</div>` : ''}</div>`;
+  if (d.type === 'tpl') {
+    const t = TEMPLATES.find((x) => x.code === d.id);
+    if (!t) return frame('新建沙箱模板', '', `<div class="form"><div class="form-2"><div><label class="label">编码</label><input class="input mono" placeholder="如 sbx-gpu"></div><div><label class="label">OpenSandbox 实例</label><select class="input"><option>opensandbox-sbx</option><option>opensandbox-cli</option><option>opensandbox-bench</option></select></div></div>
+      <div><label class="label">说明</label><input class="input"></div><div><label class="label">模板（YAML）</label><textarea class="input code" rows="16">${esc(TPL_YAML)}</textarea></div></div>`, `<button class="btn" data-act="closeDrawer">取消</button><button class="btn primary" data-act="toastClose" data-msg="已建好 v1，发布后才生效">保存</button>`);
+    return frame(t.code, tplTags(t), `
+      ${t.drift ? `<div style="margin-bottom:12px">${alertBox('danger', '集群里的模板和已发布的 v1 对不上，被人手工改过。新建的沙箱按集群里的走 —— <a data-act="toastClose" data-msg="已按 v1 覆盖集群里的">按已发布的覆盖</a>')}</div>` : ''}
+      <dl class="kv" style="margin-bottom:14px"><dt>说明</dt><dd>${esc(t.desc)}</dd><dt>实例</dt><dd class="mono">${t.server}</dd><dt>已发布</dt><dd>${t.pub ? `v${t.pub} · ${esc(t.by)} · ${t.at}` : '没发布过'}</dd></dl>
+      ${tabs('tplTab', [['yaml', `v${t.version}（最新修订）`], ['hist', '修订历史', t.version]])}
+      ${S.tplTab === 'yaml' ? `<textarea class="input code" rows="18" ${admin() ? '' : 'readonly'}>${esc(TPL_YAML.replace('sbx-open', t.code))}</textarea>`
+        : `<table class="table">${Array.from({ length: t.version }, (_, i) => t.version - i).map((v) => `<tr><td class="sm">v${v}</td><td>${v === t.pub ? '<span class="tag xs success">已发布</span>' : v > (t.pub ?? 0) ? '<span class="tag xs warning">未发布</span>' : ''}</td><td class="sm muted">${esc(t.by)} · 2026-11-${String(10 + v).padStart(2, '0')}</td><td class="acts">${admin() && v !== t.pub ? `<button class="btn sm ghost" data-act="toastClose" data-msg="已发布 v${v}">发布这一版</button>` : ''}</td></tr>`).join('')}</table>`}`,
+      admin() ? `<span class="xs muted grow">保存 = 存成新修订（不影响在用的）；发布后新建的沙箱才用它</span><button class="btn" data-act="toastClose" data-msg="已存成 v${t.version + 1}">保存为新修订</button>${t.pub !== t.version ? `<button class="btn primary" data-act="toastClose" data-msg="已发布 v${t.version}，已同步到集群">发布 v${t.version}</button>` : ''}` : '');
+  }
+  if (d.type === 'param' || d.type === 'paramHist') {
+    const p = Object.values(PARAMS).flat().find((x) => x.key === d.id);
+    if (d.type === 'paramHist') return frame(p.name, `<span class="tag xs mono">${p.key}</span>`, `<table class="table"><thead><tr><th>版本</th><th>值</th><th>修改说明</th><th>修改人 · 时间</th><th></th></tr></thead><tbody>
+      ${(p.changed ? [[3, JSON.stringify(p.value), '加了 node:22', '周周 · 11-20 10:12', true], [2, '["atlas-sandbox:dev","python:3.13-slim"]', '', '运营管理员 · 11-15 02:01'], [1, '默认', '', '—']] : [[1, '默认', '', '—', true]]).map(([v, val, note, who, cur]) => `<tr><td class="sm">v${v}${cur ? ' <span class="tag xs success">当前</span>' : ''}</td><td class="sm mono">${esc(val)}</td><td class="sm muted">${esc(note) || '—'}</td><td class="sm muted">${who}</td><td class="acts">${!cur && admin() ? '<button class="btn sm ghost" data-act="toastClose" data-msg="已回滚，存成新的一版">回滚到这一版</button>' : ''}</td></tr>`).join('')}</tbody></table>`);
+    return frame(`修改：${p.name}`, `<span class="tag xs mono">${p.key}</span>`, `<div class="form">
+      <div><label class="label">值</label>${p.type === 'list' ? `<div class="col" style="gap:6px">${p.value.map((v) => `<div class="row"><input class="input mono" value="${esc(v)}"><button class="ibtn sm">${ic('x')}</button></div>`).join('')}<button class="btn sm" style="align-self:flex-start">${ic('plus')}加一项</button></div>` : p.type === 'bool' ? `<span class="switch ${p.value ? 'on' : ''}" data-act="toggleSwitch"></span>` : `<input class="input mono" value="${esc(String(p.value))}">`}</div>
+      <div><label class="label">修改说明</label><input class="input" placeholder="会记进修订历史，如：加了 node:22"></div>
+      ${alertBox('plain', '下一次用到时生效（不用重启）；改坏了可以在「历史」里回滚')}</div>`, `<button class="btn ghost" data-act="toastClose" data-msg="已恢复默认值">恢复默认</button><span class="sp"></span><button class="btn" data-act="closeDrawer">取消</button><button class="btn primary" data-act="toastClose" data-msg="已保存，存成新的一版">保存</button>`);
+  }
+  if (d.type === 'job') {
+    const j = Object.values(JOBS).flat().find((x) => x[0] === d.id);
+    return frame(j[0], j[3] === 'fail' ? '<span class="tag xs danger">上次失败</span>' : '<span class="tag xs success">正常</span>', `<dl class="kv" style="margin-bottom:14px"><dt>做什么</dt><dd>${j[1]}</dd><dt>触发</dt><dd>${j[2]}</dd><dt>运行份数</dt><dd>每个实例一份</dd></dl>
+      <div class="sub-h" style="padding-left:0">最近 5 次</div>
+      <table class="table">${['03:00:11', '昨天 03:00:09', '11-19 03:00:12', '11-18 03:00:10', '11-17 03:00:08'].map((at, i) => `<tr><td class="sm">${at}</td><td>${i === 0 && j[3] === 'fail' ? '<span class="tag xs danger">失败</span>' : '<span class="tag xs success">成功</span>'}</td><td class="sm muted">${i === 0 && j[3] === 'fail' ? 'statement timeout：归档表 210 万行，一次删不完' : `用时 ${1 + i}.${i}s`}</td></tr>`).join('')}</table>`);
+  }
+  if (d.type === 'audit') {
+    const a = AUDIT.find((x) => x.at === d.id);
+    return frame(auditLabel(a), resultTag(a.result), `<dl class="kv"><dt>时间</dt><dd>${a.at}</dd><dt>运营人员</dt><dd>${pav(a.who, 22)}${esc(a.who)}</dd><dt>操作</dt><dd class="mono">${a.action}</dd><dt>对象</dt><dd>${esc(a.target || '—')}</dd>${a.result === null ? '<dt>结果</dt><dd>跨系统的操作还在进行，做完后补记</dd>' : ''}</dl>
+      <div class="sub-h" style="padding-left:0;margin-top:14px">参数摘要</div><pre class="json">${esc(JSON.stringify(a.detail, null, 2))}</pre>
+      <div class="xs muted" style="margin-top:8px">响应里的密钥、临时密码不进审计</div>`);
+  }
+  return '';
+}
+
+function popContent(id) {
+  if (id === 'me') return `<div class="row" style="padding:8px 10px;gap:10px">${pav(ME.name, 34)}<div><b>${esc(ME.name)}</b><div class="xs muted">${esc(ME.account)} · ${ROLE[S.role][0]}</div></div></div><div class="sep"></div>
+    <a class="mi" data-act="modal" data-type="myPw">${ic('key')}修改密码</a>
+    <div class="ph">演示：切换身份</div>
+    <a class="mi ${S.role === 'ADMIN' ? 'on' : ''}" data-act="role" data-v="ADMIN">${ic(S.role === 'ADMIN' ? 'check' : 'user')}运营管理员（能改）</a>
+    <a class="mi ${S.role === 'OBSERVER' ? 'on' : ''}" data-act="role" data-v="OBSERVER">${ic(S.role === 'OBSERVER' ? 'check' : 'eye')}运营观察员（只能看）</a>
+    <div class="sep"></div><a class="mi danger" data-act="logout">${ic('logout')}退出登录</a>`;
+  if (id === 'tenantMore') {
+    const t = tenantOf(S.pop.tid);
+    const dis = admin() ? '' : 'style="opacity:.5;pointer-events:none"';
+    if (t.status === 'closed') return `<a class="mi" data-go="#/tenants/${t.id}">${ic('eye')}查看</a>`;
+    return `<a class="mi" data-go="#/tenants/${t.id}">${ic('eye')}查看</a>
+      <a class="mi" ${dis} data-act="modal" data-type="editTenant" data-id="${t.id}">${ic('pencil')}编辑名称、名额、到期</a>
+      ${t.status === 'active' ? `<a class="mi" ${dis} data-act="modal" data-type="reissue" data-id="${t.id}">${ic('key')}补发首个管理员的临时密码</a>` : ''}
+      <div class="sep"></div>
+      ${t.status === 'active' ? `<a class="mi" ${dis} data-act="modal" data-type="suspend" data-id="${t.id}">${ic('pause')}挂起</a>` : `<a class="mi" ${dis} data-act="toast" data-msg="已发起恢复">${ic('play')}恢复</a>`}
+      <a class="mi danger" ${dis} data-act="modal" data-type="close" data-id="${t.id}">${ic('trash')}关闭并删除数据</a>`;
+  }
+  if (id === 'appMore') {
+    const a = appOf(S.pop.tid);
+    const dis = admin() ? '' : 'style="opacity:.5;pointer-events:none"';
+    return `<a class="mi" ${dis} data-act="modal" data-type="rotate" data-id="${a.id}">${ic('refresh')}轮换 App Secret</a>
+      ${a.builtin ? '<div class="mi" style="cursor:default;color:var(--ink-4)">' + ic('lock') + '产品自带，不能停用</div>' : a.status === 'active' ? `<a class="mi danger" ${dis} data-act="modal" data-type="disableApp" data-id="${a.id}">${ic('ban')}停用</a>` : `<a class="mi" ${dis} data-act="toast" data-msg="已启用">${ic('power')}启用</a>`}`;
+  }
+  return '';
+}
+
+function overlays() {
+  let pop = '';
+  if (S.pop) pop = `<div class="pop" style="position:fixed;left:${S.pop.x}px;top:${S.pop.y}px;max-height:calc(100vh - ${S.pop.y + 12}px);overflow-y:auto" data-stop>${popContent(S.pop.id)}</div>`;
+  return pop + modal() + drawer();
+}
+
+/* =====================================================================
+ * 设计说明（评审用）
+ * ===================================================================== */
+const GLOBAL_NOTES = [
+  '骨架照搬 Atlas：顶部一级菜单、左侧二级菜单（可收起）、内容区居中；token 与 packages/chat-ui/src/theme 同一套，antd 主题同 Atlas、用户中心',
+  '运营中心是独立账号体系：右上角不放应用切换，只放环境名和自己的账号菜单（改密码、退出）',
+  '品牌旁的「平台」标签 + 顶栏环境名：浅色之后和 Atlas 长得像，靠这两处提醒「这里改的是整个平台」',
+  '观察员：按钮照样显示但置灰，悬停说明「只能查看」—— 不直接藏掉，免得以为没有这个功能',
+  '图标全换成线性图标（原来是 emoji）；表格、标签、弹窗、抽屉的样式同 Atlas',
+];
+function notesFor(r) {
+  const N = (title, items, be = [], diff = []) => ({ title, items, be, diff });
+  if (r.p === 'login') return N('登录', [
+    '视觉同用户中心的统一登录页：浅底、indigo 主色；品牌写「运营中心」，副标题点明这是平台运营专用',
+    '错误就地显示在表单上方，沿用后端原话（剩余次数、锁定分钟数）',
+    '临时密码登录后，在同一张卡片里第二步设新密码（同用户中心），不再单独跳 /password 页',
+  ], [], ['原来改临时密码是单独的 /password 页']);
+  if (r.p === 'home') return N('总览（新增）', [
+    '首页从「租户列表」改成总览：运营每天先看的是有没有卡住的操作、有没有快到期的企业',
+    '「需要处理」汇总：进行中/卡住的操作（可立即重做）、已到期、30 天内到期、没配密钥的系统；每条带直接处理的按钮',
+    '指标卡可点：租户、用户、进行中的操作、到期，点进去是对应筛选后的列表',
+    '系统用量取各系统的 /capacity；最近的运营操作取审计前 6 条',
+  ], ['不需要新接口：GET /api/operations（进行中的操作）、/api/tenants、各系统 /capacity、/api/audit 都已有'], ['原来登录后直接进租户列表，卡住的操作只能逐个点进租户看']);
+  if (r.p === 'tenants' && r.a === 'capacity') return N('份额与容量', [
+    '从一级菜单挪到「租户」下面：份额是按企业定的，和租户放一起',
+    '每个系统一张卡：总量（每实例槽位、当前用量）→ 默认份额（可改）→ 单独定了份额的企业（显示用量 / 份额）',
+    '单独定的企业可以「改回默认」',
+  ], ['单独定份额的表里要显示用量：现在各系统 /usage/{tenant} 是逐个查，企业多了要一个批量接口（可先逐个查）'], ['原来是一级菜单「容量」，表里只有份额没有用量']);
+  if (r.p === 'tenants' && r.a) return N('租户详情', [
+    '标题区：企业名 + 状态标签（正常/已到期/已挂起/已关闭/操作进行中）；主操作「编辑」直接放出来，挂起、关闭、补发临时密码收进「⋯」',
+    '有进行中的操作、已挂起、已关闭时，标题下方一条横幅说明现状和影响',
+    '分四个页签：概况（基本信息 + 用量）、应用（开关）、份额与用量（按系统，可单独定 / 改回默认）、操作记录（每次操作可展开看各系统的步骤）',
+    '操作记录：每个系统一行，失败的写原因和下次重试时间；关闭操作显示各系统删了多少',
+    '关闭要输入企业代码确认，并写明「删了找不回来」',
+  ], ['概况里的「首个管理员账号」取开通操作第一步的结果（admin_account），已有', '用量卡同时要 Atlas、知识库的 /usage/{tenant}，已有'], ['原来所有内容堆在一页（描述 + 三张卡片），操作按钮一排平铺']);
+  if (r.p === 'tenants') return N('租户列表', [
+    '筛选按运营关心的状态分：正常 / 到期（含 30 天内）/ 已挂起 / 已关闭，数字跟着',
+    '列：租户（名称 + 企业代码）、状态（含进行中的操作）、人数 / 名额（进度条，90% 以上变橙）、开通的应用（图标叠放）、到期（快到期、已过期标出来）',
+    '整行可点进详情；行尾「⋯」放编辑、补发临时密码、挂起 / 恢复、关闭',
+    '左侧二级菜单下方列出进行中的操作，卡住的标红，一点直达',
+    '开通租户：一个宽弹窗分区填写（企业、首个管理员、名额与到期、应用、份额、默认技能）；开通后给出登录地址、企业代码、账号、临时密码（只显示一次，可一键复制）',
+  ], ['列表要带每个企业的人数（users）和开通的应用：现在只有详情里有，要在 /api/tenants 里一并返回（或前端逐个查）'], ['原来列表只有名称、状态、到期、操作、开通时间']);
+  if (r.p === 'apps' && r.a) return N('应用详情', [
+    '页签：基本信息、操作码、菜单、数据编码、内置角色（同原来），数字标在页签上',
+    '操作码按模块分组，标来源（应用上报 / 手动），列出用到它的内置角色；产品自带应用的操作码由应用上报，不能在这里加删',
+    '菜单显示成树（目录 → 菜单），可调顺序',
+    '内置角色左右分栏：左边角色列表，右边勾操作码 / 菜单，底部保存条提醒「所有企业里的这个角色都跟着变」',
+    'App Secret 轮换、停用收进「⋯」；产品自带的应用不能停用',
+  ], [], ['原来内置角色是表格 + 弹窗勾选']);
+  if (r.p === 'apps') return N('应用目录', [
+    '卡片网格（同 Atlas 的智能体、用户中心的应用页）：图标、名称、编码、说明、操作码 / 菜单 / 角色数、几个企业在用',
+    '接入应用：名称、编码、图标、入口地址、说明；接入后 App Key、App Secret 只显示一次',
+  ], ['卡片上的「几个企业在用」要按应用统计开通数：用户中心加一个统计字段（或不显示这一项）', '图标：现在是 emoji 字段。落地可以把 emoji 放进同样的方块里；要线性图标 + 颜色就得加字段'], ['原来是表格']);
+  if (r.p === 'system' && !r.a) return N('接入的系统（新增）', [
+    '列出部署配置里登记的系统：编码、能力、运营密钥有没有配',
+    '能力做成可点的标签，直达对应页面（份额与容量、系统参数、系统任务、沙箱模板……）',
+    '没配密钥的系统标红，并说明后果（租户操作到这一步会一直失败）；总览的「需要处理」里也会出现',
+  ], ['不需要新接口：GET /api/systems 已返回 capabilities 和 key_configured'], ['原来没有这一页，系统列表只用来生成各页的页签']);
+  if (r.p === 'system' && r.a === 'templates') return N('沙箱模板', [
+    '列表：模板、实例、版本（已发布 / 有新修订 / 没发布过 / 被手工改过）、发布人和时间',
+    '详情用宽抽屉：YAML 编辑、修订历史（可发布任一版）；保存 = 存新修订，发布才生效，按钮文案写清楚',
+    '集群里的和已发布的对不上时，抽屉顶部红色横幅 + 「按已发布的覆盖」',
+  ], [], ['原来同样是抽屉，样式换成 Atlas 的']);
+  if (r.p === 'system' && r.a === 'skills') return N('技能市场', [
+    '每个技能一行，点开展开版本表（状态、大小、文件数、含脚本、发布人）',
+    '「开通时默认安装」做成开关直接切；下架要填原因（企业管理员看得到）',
+    '发布技能：拖入 zip，同名发成新版本',
+  ], [], ['原来版本在嵌套表格里，默认安装是勾选框']);
+  if (r.p === 'system' && r.a === 'params') return N('系统参数', [
+    '按系统分页签（Atlas、知识库），沿用共享面板 @atlas/appconfig-ui 的结构：配置项、类型、当前值、默认 / 已修改',
+    '修改、历史都用右侧抽屉；修改要写说明，历史可回滚',
+  ], ['@atlas/appconfig-ui 换主题即可，结构不用动（Atlas 的「配置」页同一套）'], []);
+  if (r.p === 'system' && r.a === 'jobs') return N('系统任务', [
+    '按系统分页签，沿用 @atlas/jobs-ui：任务、触发规则、运行份数、状态（上次成功 / 失败）',
+    '点行看最近几次的结果和失败原因；只能看，不能手动触发',
+  ], [], []);
+  if (r.p === 'system' && r.a === 'scopes') return N('记忆作用域', [
+    '表格 + 弹窗，同原来；关联主键用标签串起来，数据权限写清校验哪个数据编码',
+  ], [], []);
+  if (r.p === 'ops' && r.a === 'audit') return N('运营审计', [
+    '按类别筛（租户、应用目录、系统配置、运营账号、登录），再加关键词搜索',
+    '「操作」列显示中文说法（开通租户、Atlas · 修改），下面小字是原始编码，方便对日志',
+    '点行看详情抽屉：参数摘要（JSON）；跨系统的操作在进行中时标「进行中」，做完后补记',
+    '对象是租户的可以直接点进租户',
+  ], ['按类别筛映射到现有的 action 前缀参数；「系统配置」要排除 system.usercenter.（归应用目录），前端过滤即可'], ['原来只有一个按前缀搜索的输入框']);
+  if (r.p === 'ops') return N('运营账号', [
+    '表格：账号（头像 + 名字 + 账号）、角色、状态（正常 / 已停用 / 暂时锁定 / 待改临时密码）、最近登录',
+    '开账号时用卡片选角色，并写清两个角色各能做什么；自己的账号不能停用、重置，在右上角改密码',
+    '重置密码同时解除锁定，临时密码只显示一次',
+  ], [], ['原来角色是下拉框，没有说明']);
+  return N('', []);
+}
+function loginDemo() {
+  const L = S.login;
+  return `<div class="demo"><b style="font-size:12px;color:#92400e">演示控制</b><div class="dl">点「登录」的结果</div><div class="opts">${[['ok', '成功'], ['must', '临时密码'], ['failed', '密码错误'], ['locked', '已锁定'], ['disabled', '已停用']].map(([k, t]) => `<a class="${L.result === k ? 'on' : ''}" data-act="loginSet" data-v="${k}">${t}</a>`).join('')}</div></div>`;
+}
+function notesPanel(r) {
+  const n = notesFor(r);
+  if (!n.items.length) return '';
+  return `<div class="notes"><div class="row"><b style="color:#92400e">${ic('bulb')} ${n.title}</b><span class="sp"></span><button class="ibtn sm" data-act="toggleNotes">${ic('x')}</button></div>
+    ${r.p === 'login' ? loginDemo() : ''}
+    <h4>设计要点</h4><ul>${n.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>
+    ${n.be.length ? `<h4>后端</h4><ul>${n.be.map((i) => `<li><span class="be">后端</span>${esc(i)}</li>`).join('')}</ul>` : ''}
+    ${n.diff.length ? `<h4>与现状的差异</h4><ul>${n.diff.map((i) => `<li><span class="diff">现状</span>${esc(i)}</li>`).join('')}</ul>` : ''}
+    ${r.p !== 'login' ? `<h4>全局</h4><ul>${GLOBAL_NOTES.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>` : ''}
+    <h4>导航</h4><div class="nav"><a href="#/ia">信息架构 · 现状对照 · 页面导览</a>${r.p === 'login' ? '<a data-act="doLoginOk">跳过登录，进入运营中心 →</a>' : '<a href="#/login">回到登录页</a>'}</div>
+    <div class="xs" style="color:#a8a29e;margin-top:10px">右上角「设计说明」可关闭；账号菜单里可切换管理员 / 观察员</div></div>`;
+}
+
+/* =====================================================================
+ * 信息架构
+ * ===================================================================== */
+function iaPage() {
+  const pages = [
+    ['登录', '#/login', '独立账号；临时密码第二步改'], ['总览', '#/home', '新增：需要处理、系统用量、最近操作'],
+    ['租户列表', '#/tenants', '筛选 + 开通租户'], ['租户详情（卡住的开通）', '#/tenants/t4', '操作进行中、有步骤失败'],
+    ['租户详情（已挂起）', '#/tenants/t5', ''], ['租户详情（已关闭）', '#/tenants/t6', '关闭时各系统删了多少'],
+    ['份额与容量', '#/tenants/capacity', ''], ['应用目录', '#/apps', ''], ['应用详情', '#/apps/a1', '五个页签'],
+    ['接入的系统', '#/system', '新增'], ['沙箱模板', '#/system/templates', '点行打开抽屉'], ['技能市场', '#/system/skills', ''],
+    ['记忆作用域', '#/system/scopes', ''], ['系统参数', '#/system/params', ''], ['系统任务', '#/system/jobs', ''],
+    ['运营账号', '#/ops/operators', ''], ['运营审计', '#/ops/audit', ''],
+  ];
+  const map = [
+    ['（无，登录后进租户列表）', '总览', '新增'], ['租户', '租户 › 租户', ''], ['容量', '租户 › 份额与容量', '挪位置'],
+    ['应用目录', '应用 › 应用目录', ''], ['系统设置 › 沙箱模板', '系统 › 运行资源 › 沙箱模板', ''], ['系统设置 › 技能市场', '系统 › 运行资源 › 技能市场', ''],
+    ['系统设置 › 记忆作用域', '系统 › 运行资源 › 记忆作用域', ''], ['系统设置 › 系统参数', '系统 › 配置 › 系统参数', ''], ['系统设置 › 系统任务', '系统 › 配置 › 系统任务', ''],
+    ['（无）', '系统 › 接入的系统', '新增'], ['运营 › 运营账号', '运营 › 运营账号', ''], ['运营 › 运营审计', '运营 › 运营审计', ''], ['/password 页', '登录第二步 + 账号菜单「修改密码」', '合并'],
+  ];
+  return `<div class="ia">
+    <div class="row"><span class="logo">A</span><h1>运营中心改版 · 信息架构</h1><span class="sp"></span><a class="btn" href="#/home">进入原型 ${ic('right')}</a></div>
+    <p class="muted" style="margin-top:8px">照 Atlas 的前端风格重画：浅色、顶部一级菜单 + 左侧二级菜单、线性图标、卡片和表格样式同 Atlas。功能不变，只多两页（总览、接入的系统），页面里的信息重新组织。</p>
+    <h2>一级菜单</h2>
+    <table class="table"><thead><tr><th>一级</th><th>二级</th><th>给谁看</th></tr></thead><tbody>
+      <tr><td>总览</td><td>—（整页，没有左侧菜单）</td><td>每天先看这里</td></tr>
+      <tr><td>租户</td><td>租户、份额与容量；下方列出进行中的操作</td><td>开通、续期、挂起、关闭企业</td></tr>
+      <tr><td>应用</td><td>应用目录；下方列出已接入的应用</td><td>接入应用、维护操作码 / 菜单 / 内置角色</td></tr>
+      <tr><td>系统</td><td>接入的系统；运行资源（沙箱模板、技能市场、记忆作用域）；配置（系统参数、系统任务）</td><td>平台本身的配置</td></tr>
+      <tr><td>运营</td><td>运营账号、运营审计</td><td>运营团队自己</td></tr>
+    </tbody></table>
+    <h2>现状对照</h2>
+    <table class="table"><thead><tr><th>现在</th><th>改版后</th><th></th></tr></thead><tbody>${map.map(([a, b, c]) => `<tr><td>${a}</td><td>${b}</td><td>${c ? `<span class="tag xs ${c === '新增' ? 'primary' : ''}">${c}</span>` : ''}</td></tr>`).join('')}</tbody></table>
+    <h2>页面导览</h2>
+    <table class="table"><tbody>${pages.map(([n, h, d]) => `<tr><td style="width:240px"><a href="${h}">${n}</a></td><td class="sm muted">${d}</td></tr>`).join('')}</tbody></table>
+  </div>`;
+}
+
+/* =====================================================================
+ * 交互
+ * ===================================================================== */
+const ACT = {
+  toggleNotes: () => { S.notes = !S.notes; },
+  collapse: () => { S.collapsed = !S.collapsed; },
+  toast: (el) => { S.pop = null; toast(el.dataset.msg || '（原型）'); return false; },
+  toastClose: (el) => { S.modal = null; S.drawer = null; toast(el.dataset.msg); return false; },
+  setS: (el) => { S[el.dataset.k] = el.dataset.v; },
+  role: (el) => { S.role = el.dataset.v; S.pop = null; },
+  logout: () => { S.login.step = 'form'; S.login.err = ''; go('#/login'); return false; },
+  toggleOp: (el) => { const id = el.dataset.id; const first = Object.values(OPS).some((l) => l[0]?.id === id); S.opOpen[id] = !(S.opOpen[id] ?? first); },
+  toggleApp: (el) => { const l = S.enabledApps[el.dataset.t]; const i = l.indexOf(el.dataset.id); if (i >= 0) l.splice(i, 1); else l.push(el.dataset.id); toast(i >= 0 ? '已关闭：这个企业的人马上用不了' : '已开通'); return false; },
+  toggleSkill: (el) => { S.skillOpen = S.skillOpen === el.dataset.id ? '' : el.dataset.id; },
+  toggleDefSkill: (el) => { S.defSkills[el.dataset.id] = !S.defSkills[el.dataset.id]; },
+  toggleSwitch: (el) => { el.classList.toggle('on'); return false; },
+  openQuota: (el) => { S.openQuota[el.dataset.sys] = !!el.dataset.v; },
+  openSubmit: () => { S.openStep = 'done'; },
+  openDone: () => { S.modal = null; S.openStep = 'form'; go('#/tenants/t4'); return false; },
+  modal: (el) => { S.pop = null; S.modal = { ...el.dataset }; },
+  closeModal: () => { S.modal = null; S.openStep = 'form'; },
+  drawer: (el) => { S.drawer = { ...el.dataset }; S.tplTab = 'yaml'; },
+  closeDrawer: () => { S.drawer = null; },
+  togglePw: () => { S.login.showPw = !S.login.showPw; },
+  loginSet: (el) => { S.login.result = el.dataset.v; S.login.err = ''; S.login.step = 'form'; },
+  loginBack: () => { S.login.step = 'form'; },
+  doLogin: () => {
+    const L = S.login;
+    if (LOGIN_ERR[L.result]) { L.err = L.result; return; }
+    L.err = '';
+    if (L.result === 'must') { L.step = 'setpw'; return; }
+    ACT.doLoginOk(); return false;
+  },
+  doSetPw: () => { S.login.step = 'form'; ACT.doLoginOk(); return false; },
+  doLoginOk: () => { go('#/home'); return false; },
+};
+
+document.addEventListener('click', (e) => {
+  const el = e.target.closest('[data-act],[data-go],[data-pop]');
+  // 可点的行里的链接（审计里的租户名）：链接优先，不触发整行
+  const link = e.target.closest('a[href]');
+  if (link && !link.dataset.act && (!el || el.contains(link))) { e.preventDefault(); return go(link.getAttribute('href')); }
+  if (!el) { if (S.pop && !e.target.closest('[data-stop]')) { S.pop = null; render(); } return; }
+  if (el.dataset.act === 'closeModal' && el.classList.contains('mask') && e.target !== el) return;
+  if (el.tagName !== 'INPUT') e.preventDefault();
+  if (S.pop && !el.dataset.pop && !el.closest('.pop')) S.pop = null;
+  if (el.dataset.pop) {
+    const id = el.dataset.pop;
+    if (S.pop?.id === id && S.pop.tid === el.dataset.id) { S.pop = null; return render(); }
+    const rc = el.getBoundingClientRect();
+    const w = 240;
+    const x = Math.max(12, Math.min(rc.right - w, window.innerWidth - w - 12));
+    S.pop = { id, tid: el.dataset.id, x, y: rc.bottom + 6 }; return render();
+  }
+  if (el.dataset.go && !el.dataset.act) return go(el.dataset.go);
+  const fn = ACT[el.dataset.act];
+  if (fn) { if (fn(el, e) !== false) render(); if (el.dataset.go) go(el.dataset.go); }
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && (S.modal || S.drawer || S.pop)) { S.modal = null; S.drawer = null; S.pop = null; S.openStep = 'form'; render(); }
+  if (e.key === 'Enter' && e.target.dataset?.enter === 'login') { ACT.doLogin(); render(); }
+});
+document.addEventListener('input', (e) => {
+  const k = e.target.dataset?.input; if (!k) return;
+  if (k === 'pw1' || k === 'pw2') { S.login[k] = e.target.value; return; }
+  S[k] = e.target.value; S.refocus = { sel: `[data-input="${k}"]`, pos: e.target.selectionStart }; render();
+});
+function afterRender() {
+  if (S.refocus) { const el = document.querySelector(S.refocus.sel); if (el) { el.focus(); el.setSelectionRange?.(S.refocus.pos, S.refocus.pos); } S.refocus = null; }
+}
+render();
+
+</script>
+</body>
+</html>

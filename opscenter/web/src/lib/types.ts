@@ -104,6 +104,8 @@ export interface AppInfo {
   menus?: number;
   roles?: number;
   data_types?: number;
+  /** 开通了它的租户数（只有运营接口给）；产品自带的应用不用开通，为 0 */
+  tenants?: number;
 }
 
 export interface OpInfo {

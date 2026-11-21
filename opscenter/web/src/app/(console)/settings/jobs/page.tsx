@@ -15,7 +15,7 @@ export default function JobsPage() {
   const { data: systems } = useSystems();
   return (
     <>
-      <PageHead title="系统任务" sub="各系统的后台任务（系统机制，只能查看）。多实例部署时看到的是回应请求的那个实例" />
+      <PageHead title="系统任务" sub="各系统的后台任务（兜底、巡检、清理……）。是系统机制，只能查看；多实例部署时看到的是回应这次请求的那个实例" />
       <Tabs
         items={withCapability(systems, "jobs").map((s) => ({
           key: s.code,

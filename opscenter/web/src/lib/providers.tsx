@@ -6,6 +6,8 @@ import { App as AntdApp, ConfigProvider } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import { useState, type ReactNode } from "react";
 
+import { opsTheme } from "@/theme/antd";
+
 import { ApiError } from "./api";
 
 export function Providers({ children }: { children: ReactNode }) {
@@ -25,17 +27,7 @@ export function Providers({ children }: { children: ReactNode }) {
   );
   return (
     <AntdRegistry>
-      <ConfigProvider
-        locale={zhCN}
-        theme={{
-          token: {
-            colorPrimary: "#8a6d00",
-            borderRadius: 8,
-            fontFamily:
-              'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
-          },
-        }}
-      >
+      <ConfigProvider locale={zhCN} theme={opsTheme}>
         <AntdApp>
           <QueryClientProvider client={client}>{children}</QueryClientProvider>
         </AntdApp>

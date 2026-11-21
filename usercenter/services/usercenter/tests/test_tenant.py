@@ -136,6 +136,11 @@ async def test_open_api_is_scoped_to_the_header_tenant() -> None:
     assert r.status_code == 200, r.text
     apps = (await ops.get(f"/ops/v1/tenants/{acme_id}/apps")).json()
     assert [a["enabled"] for a in apps if a["app"]["id"] == app_id] == [True]
+    # 运营中心的应用目录看得到几个租户开通了它；租户管理员看不到（别的租户的事）
+    catalog = {a["id"]: a for a in (await ops.get("/ops/v1/apps")).json()}
+    assert catalog[app_id]["tenants"] == 1
+    assert (await ops.get(f"/ops/v1/apps/{app_id}")).json()["tenants"] == 1
+    assert "tenants" not in (await acme.get(f"/api/v1/apps/{app_id}")).json()
     # 租户自己配范围（不需要运营中心）
     r = await acme.put(f"/api/v1/apps/{app_id}/scope", {"all": True, "dept_ids": []})
     assert r.status_code == 200, r.text

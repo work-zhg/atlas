@@ -1,30 +1,29 @@
 "use client";
 
 /**
- * 容量：总容量 → 租户份额 → 每人上限（每人上限由租户管理员在份额内自己定，不在这里）。
- * 各系统各管自己的共用设施（Atlas：并发 run、沙箱、工作空间存储；知识库：知识库文件），只有数字。
- * 份额可以多分：总量占满时所有租户按先来后到排队。
+ * 份额与容量：总量 → 企业份额 → 每人上限（每人上限由企业管理员在份额内自己定，不在这里）。
+ * 各系统各管自己的共用设施（Atlas：同时运行的对话、沙箱、工作空间存储；知识库：知识库文件），只有数字。
+ * 份额可以多分：总量占满时所有企业按先来后到排队。
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { App, Button, Card, InputNumber, Modal, Space, Statistic, Table, Typography } from "antd";
+import { App, Button, Card, Space, Table, Tooltip } from "antd";
 import Link from "next/link";
 import { useState } from "react";
 
-import { ErrorBox, PageHead, errorText } from "@/components/common";
+import { ErrorBox, OBSERVER_TIP, PageHead, QUOTA_LABEL, SystemIcon, errorText, quotaText } from "@/components/common";
+import { Icon } from "@/components/Icon";
+import { QuotaModal } from "@/components/quota";
 import { api, sys } from "@/lib/api";
-import { GB, bytes, dateTime, limit } from "@/lib/format";
+import { dateTime } from "@/lib/format";
 import { useMe, useSystems, withCapability } from "@/lib/session";
-import type { CapacityTotal, Quota, Quotas, SystemInfo, Tenant } from "@/lib/types";
-
-const LABEL: Record<string, string> = { running_runs: "同时运行的 run", sandboxes: "沙箱 / 会话 Pod", storage_bytes: "存储" };
-const fmt = (k: string, v: number | null | undefined) => (k === "storage_bytes" ? bytes(v) : limit(v));
+import type { CapacityTotal, Quota, Quotas, SystemInfo, Tenant, TenantUsage } from "@/lib/types";
 
 export default function CapacityPage() {
   const { data: systems } = useSystems();
   const tenants = useQuery({ queryKey: ["tenants"], queryFn: () => api.get<Tenant[]>("/tenants") });
   return (
     <>
-      <PageHead title="容量" sub="总容量、默认份额和各租户单独定的份额。租户里每个人的上限由租户管理员在份额内自己定" />
+      <PageHead title="份额与容量" sub="份额管的是每个企业最多能占多少共用资源（同时运行的对话、沙箱、存储）。没单独定的企业用默认份额；企业里每个人的上限由企业管理员在份额内自己定" />
       <Space direction="vertical" style={{ width: "100%" }} size={16}>
         {withCapability(systems, "capacity").map((s) => (
           <SystemCapacity key={s.code} system={s} tenants={tenants.data ?? []} />
@@ -34,110 +33,144 @@ export default function CapacityPage() {
   );
 }
 
+type Own = Quota & { tenant_uuid: string; updated_by: string; updated_at: string };
+
 function SystemCapacity({ system, tenants }: { system: SystemInfo; tenants: Tenant[] }) {
   const { data: me } = useMe();
+  const admin = me?.role === "ADMIN";
   const qc = useQueryClient();
   const { message } = App.useApp();
   const ops = sys(system.code);
   const total = useQuery({ queryKey: ["capacity", system.code], queryFn: () => ops.get<CapacityTotal>("/capacity") });
   const quotas = useQuery({ queryKey: ["quotas", system.code], queryFn: () => ops.get<Quotas>("/quotas") });
-  const [editing, setEditing] = useState<Record<string, number | null> | null>(null);
+  const [editing, setEditing] = useState<"default" | Own | null>(null);
   const fields = Object.keys(quotas.data?.default ?? {});
-  const tenantName = (id: string) => tenants.find((t) => t.id === id);
+  const tenantOf = (id: string) => tenants.find((t) => t.id === id);
 
-  async function saveDefault() {
-    if (!editing) return;
+  async function save(path: string, body: Record<string, unknown>, ok: string) {
     try {
-      await ops.put(
-        "/quotas/default",
-        Object.fromEntries(Object.entries(editing).map(([k, v]) => [k, v === null ? null : k === "storage_bytes" ? Math.round(v * GB) : v])),
-      );
-      setEditing(null);
+      await ops.put(path, body);
       await qc.invalidateQueries({ queryKey: ["quotas", system.code] });
-      message.success("默认份额已保存（没单独定份额的租户都跟着变）");
+      await qc.invalidateQueries({ queryKey: ["usage", system.code] });
+      message.success(ok);
     } catch (e) {
       message.error(errorText(e));
+      throw e;
     }
   }
 
+  const stats: [string, string][] = [
+    ...(total.data?.runs_per_instance !== undefined ? ([["每个实例的并发槽位", String(total.data.runs_per_instance)]] as [string, string][]) : []),
+    ...Object.entries(total.data?.usage ?? {}).map(([k, v]) => [`当前用量 · ${QUOTA_LABEL[k] ?? k}`, quotaText(k, v)] as [string, string]),
+  ];
+  const own = (quotas.data?.tenants ?? []) as Own[];
+
   return (
-    <Card title={system.name}>
+    <Card
+      title={
+        <div className="ops-row">
+          <SystemIcon code={system.code} size={26} />
+          {system.name}
+        </div>
+      }
+    >
       <ErrorBox error={total.error ?? quotas.error} />
-      <Space size={48} style={{ marginBottom: 16 }}>
-        {total.data?.runs_per_instance !== undefined && (
-          <Statistic title="每个实例的并发 run 槽位" value={total.data.runs_per_instance} />
-        )}
-        {Object.entries(total.data?.usage ?? {}).map(([k, v]) => (
-          <Statistic key={k} title={`当前用量 · ${LABEL[k] ?? k}`} value={fmt(k, v)} />
+      <div className="ops-stats" style={{ gridTemplateColumns: `repeat(${Math.max(stats.length, 1)}, minmax(0, 1fr))`, marginTop: 0 }}>
+        {stats.map(([k, v]) => (
+          <div key={k} className="ops-stat">
+            <div className="k">{k}</div>
+            <div className="v">{v}</div>
+          </div>
         ))}
-      </Space>
-      <Space style={{ marginBottom: 8 }}>
-        <Typography.Text strong>默认份额</Typography.Text>
-        <Typography.Text>
-          {fields.map((k) => `${LABEL[k] ?? k} ${fmt(k, quotas.data?.default[k as keyof Quota])}`).join(" · ")}
-        </Typography.Text>
-        {me?.role === "ADMIN" && (
-          <Button
-            size="small"
-            onClick={() =>
-              setEditing(
-                Object.fromEntries(
-                  fields.map((k) => {
-                    const v = quotas.data?.default[k as keyof Quota] ?? null;
-                    return [k, k === "storage_bytes" && v !== null ? v / GB : v];
-                  }),
-                ),
-              )
-            }
-          >
+      </div>
+      <div className="ops-def-row">
+        <b>默认份额</b>
+        {fields.map((k) => (
+          <span key={k} className="ops-chip">
+            {QUOTA_LABEL[k] ?? k} <b>{quotaText(k, quotas.data?.default[k as keyof Quota])}</b>
+          </span>
+        ))}
+        <span className="ops-grow" />
+        <Tooltip title={admin ? undefined : OBSERVER_TIP}>
+          <Button icon={<Icon name="pencil" size={14} />} disabled={!admin || !quotas.data} onClick={() => setEditing("default")}>
             改默认份额
           </Button>
-        )}
-      </Space>
-      <Table
+        </Tooltip>
+      </div>
+      <div className="ops-subhead">单独定了份额的企业 {own.length}</div>
+      <Table<Own>
         rowKey="tenant_uuid"
-        size="small"
         pagination={false}
         loading={quotas.isLoading}
-        dataSource={quotas.data?.tenants ?? []}
-        locale={{ emptyText: "没有租户单独定份额，都用默认份额" }}
+        dataSource={own}
+        locale={{ emptyText: "没有企业单独定份额，都用默认份额" }}
         columns={[
           {
-            title: "单独定了份额的租户",
-            dataIndex: "tenant_uuid",
-            render: (id: string) => {
-              const t = tenantName(id);
-              return <Link href={`/tenants/${id}`}>{t ? `${t.name}（${t.code}）` : id}</Link>;
+            title: "企业",
+            render: (_, r) => {
+              const t = tenantOf(r.tenant_uuid);
+              return (
+                <Link href={`/tenants/${r.tenant_uuid}`}>
+                  {t ? t.name : r.tenant_uuid} {t && <span className="ops-sub ops-mono">{t.code}</span>}
+                </Link>
+              );
             },
           },
           ...fields.map((k) => ({
-            title: LABEL[k] ?? k,
-            dataIndex: k,
-            render: (v: number | null) => fmt(k, v),
+            title: QUOTA_LABEL[k] ?? k,
+            render: (_: unknown, r: Own) => <UsedOf system={system.code} tenantId={r.tenant_uuid} field={k} cap={r[k as keyof Quota]} />,
           })),
-          { title: "改的人", dataIndex: "updated_by" },
-          { title: "改的时间", dataIndex: "updated_at", render: dateTime },
+          { title: "改的人 · 时间", render: (_, r) => <span className="ops-muted">{r.updated_by} · {dateTime(r.updated_at)}</span> },
+          {
+            title: "",
+            align: "right",
+            render: (_, r) => (
+              <Space size={0}>
+                <Button type="link" size="small" disabled={!admin} onClick={() => setEditing(r)}>
+                  修改
+                </Button>
+                <Button
+                  type="link"
+                  size="small"
+                  disabled={!admin}
+                  onClick={() => void save(`/quotas/${r.tenant_uuid}`, { use_default: true }, "已改回默认份额").catch(() => undefined)}
+                >
+                  改回默认
+                </Button>
+              </Space>
+            ),
+          },
         ]}
       />
-      {editing && (
-        <Modal open title={`${system.name} · 默认份额`} onCancel={() => setEditing(null)} onOk={saveDefault}>
-          <Space direction="vertical">
-            {Object.entries(editing).map(([k, v]) => (
-              <Space key={k}>
-                <span style={{ width: 120, display: "inline-block" }}>{LABEL[k] ?? k}</span>
-                <InputNumber
-                  min={0}
-                  placeholder="不限"
-                  value={v}
-                  addonAfter={k === "storage_bytes" ? "GB" : undefined}
-                  onChange={(n) => setEditing({ ...editing, [k]: (n as number | null) ?? null })}
-                />
-              </Space>
-            ))}
-            <Typography.Text type="secondary">留空 = 不限。改默认份额是改系统参数，有修订历史</Typography.Text>
-          </Space>
-        </Modal>
+      {editing === "default" && quotas.data && (
+        <QuotaModal
+          title={`${system.name} · 默认份额`}
+          quota={quotas.data.default}
+          hint="留空 = 不限。改默认份额是改系统参数，有修订历史；单独定了份额的企业不受影响"
+          onSave={(body) => save("/quotas/default", body, "默认份额已保存（没单独定份额的企业都跟着变）")}
+          onClose={() => setEditing(null)}
+        />
+      )}
+      {editing && editing !== "default" && (
+        <QuotaModal
+          title={`${system.name} · ${tenantOf(editing.tenant_uuid)?.name ?? "企业"}的份额`}
+          quota={Object.fromEntries(fields.map((k) => [k, editing[k as keyof Quota] ?? null]))}
+          hint="留空 = 不限；只对这个企业生效"
+          onSave={(body) => save(`/quotas/${editing.tenant_uuid}`, body, "份额已保存")}
+          onClose={() => setEditing(null)}
+        />
       )}
     </Card>
+  );
+}
+
+/** 用量 / 份额：用量逐个企业查（单独定份额的企业不多） */
+function UsedOf({ system, tenantId, field, cap }: { system: string; tenantId: string; field: string; cap: number | null | undefined }) {
+  const q = useQuery({ queryKey: ["usage", system, tenantId], queryFn: () => sys(system).get<TenantUsage>(`/usage/${tenantId}`) });
+  const used = q.data?.usage[field as keyof TenantUsage["usage"]];
+  return (
+    <span className="ops-nw">
+      {used === undefined ? "…" : quotaText(field, used)} <span className="ops-muted">/ {quotaText(field, cap)}</span>
+    </span>
   );
 }

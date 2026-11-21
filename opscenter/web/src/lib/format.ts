@@ -36,9 +36,3 @@ export const ACTION_LABEL: Record<string, string> = {
   PURGE: "删除数据",
   DELETE_TENANT: "删除租户",
 };
-
-export const TENANT_STATUS: Record<string, { text: string; color: string }> = {
-  active: { text: "正常", color: "green" },
-  suspended: { text: "已停用", color: "orange" },
-  closed: { text: "已关闭", color: "default" },
-};

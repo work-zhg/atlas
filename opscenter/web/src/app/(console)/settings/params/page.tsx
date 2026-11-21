@@ -16,7 +16,7 @@ export default function ParamsPage() {
   const { data: systems } = useSystems();
   return (
     <>
-      <PageHead title="系统参数" sub="各系统的系统参数：可用镜像、上传上限、默认份额……改了下一次用到时生效，有修订历史可回滚" />
+      <PageHead title="系统参数" sub="各系统的系统参数：可用镜像、上传上限、默认技能……改了下一次用到时生效，每次修改留一个版本，可以回滚" />
       <Tabs
         items={withCapability(systems, "settings").map((s) => ({
           key: s.code,

@@ -1,70 +1,63 @@
 "use client";
 
-/**
- * 应用目录：接入了哪些应用。操作码、菜单、数据编码、应用内置角色由运营人员在这里录入（各应用代码里
- * 不登记，清单见各服务 README「用户中心登记」）；数据存在用户中心，经它的运营接口改。
- */
+/** 应用目录：接入用户中心的应用。为企业开通后，企业里的人才能用（产品自带的应用所有企业都能用）。 */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Button, Form, Input, Modal, Table, Tag } from "antd";
-import Link from "next/link";
+import { Button, Form, Input, Modal, Tag, Tooltip } from "antd";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-import { ErrorBox, OneTimeSecret, PageHead } from "@/components/common";
+import { AppIcon, ErrorBox, OBSERVER_TIP, OnceBox, PageHead } from "@/components/common";
+import { Icon } from "@/components/Icon";
 import { UC, sys } from "@/lib/api";
-import { dateTime } from "@/lib/format";
 import { useMe } from "@/lib/session";
 import type { AppInfo } from "@/lib/types";
 
 export default function AppsPage() {
+  const router = useRouter();
   const { data: me } = useMe();
+  const admin = me?.role === "ADMIN";
   const q = useQuery({ queryKey: ["apps"], queryFn: () => sys(UC).get<AppInfo[]>("/apps") });
   const [open, setOpen] = useState(false);
+
   return (
     <>
       <PageHead
         title="应用目录"
-        sub="所有租户共用的应用定义。接入后要在租户详情里给租户开通，租户管理员再定哪些人能用"
+        sub="接入用户中心的应用。为企业开通后，企业里的人才能用；操作码、菜单、内置角色由应用上报，也可以在这里维护"
         extra={
-          me?.role === "ADMIN" && (
-            <Button type="primary" onClick={() => setOpen(true)}>
+          <Tooltip title={admin ? undefined : OBSERVER_TIP}>
+            <Button type="primary" icon={<Icon name="plus" />} disabled={!admin} onClick={() => setOpen(true)}>
               接入应用
             </Button>
-          )
+          </Tooltip>
         }
       />
       <ErrorBox error={q.error} />
-      <Table<AppInfo>
-        rowKey="id"
-        loading={q.isLoading}
-        dataSource={q.data ?? []}
-        pagination={false}
-        columns={[
-          {
-            title: "应用",
-            render: (_, a) => (
-              <Link href={`/apps/${a.id}`}>
-                {a.icon} {a.name}
-              </Link>
-            ),
-          },
-          { title: "编码", dataIndex: "code", render: (v: string | null) => v ?? "—" },
-          {
-            title: "状态",
-            render: (_, a) => (
-              <>
-                <Tag color={a.status === "active" ? "green" : "default"}>{a.status === "active" ? "启用" : "停用"}</Tag>
-                {a.is_builtin && <Tag>产品自带</Tag>}
-              </>
-            ),
-          },
-          { title: "操作码", dataIndex: "operations" },
-          { title: "菜单", dataIndex: "menus" },
-          { title: "内置角色", dataIndex: "roles" },
-          { title: "数据编码", dataIndex: "data_types" },
-          { title: "入口地址", dataIndex: "home_url", render: (v: string | null) => v ?? "—" },
-          { title: "接入时间", dataIndex: "created_at", render: dateTime },
-        ]}
-      />
+      <div className="ops-grid">
+        {(q.data ?? []).map((a) => (
+          <div key={a.id} className="ops-acard" role="link" tabIndex={0} onClick={() => router.push(`/apps/${a.id}`)} onKeyDown={(e) => e.key === "Enter" && router.push(`/apps/${a.id}`)}>
+            <div className="ops-row" style={{ gap: 12 }}>
+              <AppIcon app={a} size={40} />
+              <div className="ops-grow">
+                <div className="ops-row" style={{ gap: 6 }}>
+                  <b>{a.name}</b>
+                  {a.is_builtin && <Tag>产品自带</Tag>}
+                  {a.status === "disabled" && <Tag color="error">已停用</Tag>}
+                </div>
+                <div className="ops-sub ops-mono">{a.code ?? "—"}</div>
+              </div>
+            </div>
+            <div className="desc">{a.description || "没有说明"}</div>
+            <div className="foot">
+              <span>操作码 {a.operations ?? 0}</span>
+              <span>菜单 {a.menus ?? 0}</span>
+              <span>角色 {a.roles ?? 0}</span>
+              <span className="ops-grow" />
+              <span>{a.is_builtin ? "所有企业都能用" : `${a.tenants ?? 0} 个企业开通`}</span>
+            </div>
+          </div>
+        ))}
+      </div>
       {open && <CreateApp onClose={() => setOpen(false)} />}
     </>
   );
@@ -75,14 +68,14 @@ function CreateApp({ onClose }: { onClose: () => void }) {
   const [form] = Form.useForm();
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
-  const [secret, setSecret] = useState<string | null>(null);
+  const [created, setCreated] = useState<{ app: AppInfo; app_secret: string } | null>(null);
 
   async function submit(v: Record<string, string>) {
     setBusy(true);
     setError(null);
     try {
       const out = await sys(UC).post<{ app: AppInfo; app_secret: string }>("/apps", v);
-      setSecret(out.app_secret);
+      setCreated(out);
       await qc.invalidateQueries({ queryKey: ["apps"] });
     } catch (e) {
       setError(e);
@@ -91,30 +84,48 @@ function CreateApp({ onClose }: { onClose: () => void }) {
     }
   }
 
-  if (secret)
+  if (created)
     return (
-      <Modal open title="应用已接入" onCancel={onClose} footer={<Button onClick={onClose}>完成</Button>}>
-        <OneTimeSecret label="App Secret（经网关接入的外部应用用；内网应用用应用编码即可）" value={secret} />
+      <Modal
+        open
+        title="应用已接入"
+        maskClosable={false}
+        onCancel={onClose}
+        footer={
+          <Button type="primary" onClick={onClose}>
+            完成
+          </Button>
+        }
+      >
+        <OnceBox
+          rows={[
+            ["App Key", created.app.app_key ?? ""],
+            ["App Secret", created.app_secret],
+          ]}
+          warn="App Secret 只显示这一次。经网关接入的外部应用要用它；内网应用用应用编码就行"
+        />
       </Modal>
     );
 
   return (
-    <Modal open title="接入应用" onCancel={onClose} onOk={() => form.submit()} confirmLoading={busy}>
+    <Modal open title="接入应用" okText="接入" onCancel={onClose} onOk={() => form.submit()} confirmLoading={busy}>
       <ErrorBox error={error} />
       <Form form={form} layout="vertical" requiredMark={false} onFinish={submit}>
-        <Form.Item name="name" label="名称" rules={[{ required: true }]}>
-          <Input />
-        </Form.Item>
-        <Form.Item
-          name="code"
-          label="应用编码"
-          extra="内网调用户中心开放接口时请求头 X-Caller-App 写它，和应用的配置一致（如 atlas、teamflow）"
-          rules={[{ pattern: /^[a-z][a-z0-9-]{1,31}$/, message: "小写字母开头，小写字母、数字、短横线" }]}
-        >
-          <Input />
-        </Form.Item>
-        <Form.Item name="icon" label="图标" extra="一个 emoji">
-          <Input maxLength={4} />
+        <div className="ops-cols-2">
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: "请输入名称" }]}>
+            <Input placeholder="如 合同审查助手" />
+          </Form.Item>
+          <Form.Item
+            name="code"
+            label="应用编码"
+            extra="内网调用时请求头 X-Caller-App 写它（如 atlas、teamflow）"
+            rules={[{ pattern: /^[a-z][a-z0-9-]{1,31}$/, message: "小写字母开头，小写字母、数字、短横线" }]}
+          >
+            <Input placeholder="如 contract" />
+          </Form.Item>
+        </div>
+        <Form.Item name="icon" label="图标" extra="一个 emoji，显示在方块里">
+          <Input maxLength={4} style={{ width: 120 }} />
         </Form.Item>
         <Form.Item name="home_url" label="入口地址" extra="站内路径（/atlas）或完整地址；不填 = 不在应用切换里出现">
           <Input />

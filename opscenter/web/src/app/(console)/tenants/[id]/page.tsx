@@ -1,32 +1,33 @@
 "use client";
 
 /**
- * 一个租户：基本信息（以用户中心为准）、开通的应用、各系统的份额和用量（只有数字）、做过的操作和进度。
- * 停用先挡用户中心的入口再挂起各系统；关闭只能对已停用的做，要输入企业代码确认，不可恢复。
+ * 一个租户：概况（基本信息 + 用量）、应用、份额与用量（只有数字）、操作记录（做过的操作和各系统的进度）。
+ * 停用先挡用户中心的入口再停用各系统；关闭只能对已停用的做，要输入企业代码确认，不可恢复。
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  App,
-  Button,
-  Card,
-  Descriptions,
-  Form,
-  Input,
-  InputNumber,
-  Modal,
-  Space,
-  Switch,
-  Table,
-  Tag,
-  Timeline,
-  Typography,
-} from "antd";
+import { Alert, App, Button, Card, Dropdown, Space, Switch, Table, Tabs, Tag, Tooltip, Typography } from "antd";
 import { useParams } from "next/navigation";
 import { useState } from "react";
 
-import { ErrorBox, OneTimeSecret, PageHead, errorText } from "@/components/common";
+import {
+  DetailHead,
+  ErrorBox,
+  Expiry,
+  OBSERVER_TIP,
+  QUOTA_LABEL,
+  Seats,
+  SystemIcon,
+  TenantIcon,
+  TenantTags,
+  UsageBar,
+  AppIcon,
+  errorText,
+} from "@/components/common";
+import { Icon } from "@/components/Icon";
+import { QuotaModal } from "@/components/quota";
+import { useTenantActions } from "@/components/tenantActions";
 import { UC, api, sys } from "@/lib/api";
-import { ACTION_LABEL, GB, KIND_LABEL, TENANT_STATUS, bytes, dateTime, limit } from "@/lib/format";
+import { ACTION_LABEL, KIND_LABEL, dateTime } from "@/lib/format";
 import { systemName, useMe, useSystems, withCapability } from "@/lib/session";
 import type { Operation, SystemInfo, Tenant, TenantApp, TenantUsage } from "@/lib/types";
 
@@ -39,172 +40,245 @@ export default function TenantPage() {
   const { id } = useParams<{ id: string }>();
   const { data: me } = useMe();
   const admin = me?.role === "ADMIN";
-  const qc = useQueryClient();
-  const { message, modal } = App.useApp();
   const q = useQuery({
     queryKey: ["tenant", id],
     queryFn: () => api.get<Detail>(`/tenants/${id}`),
     refetchInterval: (query) => (query.state.data?.operations.some((o) => o.status === "RUNNING") ? 3000 : 15000),
   });
   const { data: systems } = useSystems();
-  const [edit, setEdit] = useState(false);
-  const [secret, setSecret] = useState<string | null>(null);
-  const t = q.data?.tenant;
-  const running = q.data?.operations.find((o) => o.status === "RUNNING");
-
-  const refresh = () => Promise.all([qc.invalidateQueries({ queryKey: ["tenant", id] }), qc.invalidateQueries({ queryKey: ["tenants"] })]);
-
-  async function run(fn: () => Promise<unknown>, ok: string) {
-    try {
-      await fn();
-      message.success(ok);
-      await refresh();
-    } catch (e) {
-      message.error(errorText(e));
-    }
-  }
-
-  function suspend() {
-    let reason = "";
-    modal.confirm({
-      title: `停用 ${t?.name}`,
-      content: (
-        <Space direction="vertical" style={{ width: "100%" }}>
-          <Typography.Text>先挡住用户中心的入口（登录、各系统调用都会被拒），再挂起各系统：在跑的 run 挂起、沙箱回收。数据都留着，恢复后接着用。</Typography.Text>
-          <Input placeholder="原因（可选）" onChange={(e) => (reason = e.target.value)} />
-        </Space>
-      ),
-      okText: "停用",
-      okButtonProps: { danger: true },
-      onOk: () => run(() => api.post(`/tenants/${id}/suspend`, { reason: reason || null }), "已发起停用"),
-    });
-  }
-
-  function close() {
-    let code = "";
-    modal.confirm({
-      title: `关闭并删除 ${t?.name}`,
-      content: (
-        <Space direction="vertical" style={{ width: "100%" }}>
-          <Typography.Text type="danger">
-            各系统会删除这个租户的全部数据（会话、文件、知识库、技能、模型、MCP、记忆……），最后删除用户中心里的租户。不可恢复。
-          </Typography.Text>
-          <Typography.Text>输入企业代码 <b>{t?.code}</b> 确认：</Typography.Text>
-          <Input onChange={(e) => (code = e.target.value)} />
-        </Space>
-      ),
-      okText: "关闭并删除",
-      okButtonProps: { danger: true },
-      onOk: () => run(() => api.post(`/tenants/${id}/close`, { confirm_code: code }), "已发起关闭"),
-    });
-  }
-
-  async function reissue() {
-    try {
-      const out = await api.post<{ temp_password: string }>(`/tenants/${id}/admin-password`);
-      setSecret(out.temp_password);
-    } catch (e) {
-      message.error(errorText(e));
-    }
-  }
+  const [tab, setTab] = useState("overview");
+  const actions = useTenantActions(admin);
+  const ops = q.data?.operations ?? [];
+  const running = ops.find((o) => o.status === "RUNNING");
+  // 详情接口不带进行中的操作摘要：从操作记录里补上，标签、菜单的「一次只做一件」都按它判断
+  const t: Tenant | undefined = q.data && { ...q.data.tenant, operation: running ? { id: running.id, kind: running.kind, stuck: running.stuck } : null };
 
   if (q.error) return <ErrorBox error={q.error} />;
   if (!t) return null;
-  const status = TENANT_STATUS[t.status] ?? { text: t.status, color: "default" };
+  const adminAccount = ops
+    .filter((o) => o.kind === "OPEN")
+    .flatMap((o) => o.steps)
+    .map((s) => s.result?.admin_account)
+    .find((a): a is string => typeof a === "string");
+  const lastSuspend = ops.find((o) => o.kind === "SUSPEND");
 
   return (
     <>
-      <PageHead
-        title={`${t.name}（${t.code}）`}
-        sub="租户本身以用户中心为准；运营中心看不到租户里的人、智能体、会话这些内容"
+      <DetailHead
+        back="/tenants"
+        icon={<TenantIcon tenant={t} size={40} />}
+        title={t.name}
+        tags={<TenantTags tenant={t} />}
+        sub={
+          <>
+            企业代码 <span className="ops-mono">{t.code}</span> · 开通于 {t.created_at.slice(0, 10)}
+          </>
+        }
         extra={
-          admin && (
-            <Space>
-              <Button onClick={() => setEdit(true)}>改名字 / 名额 / 到期</Button>
-              <Button onClick={reissue}>补发首个管理员的临时密码</Button>
-              {t.status === "active" ? (
-                <Button danger disabled={!!running} onClick={suspend}>
-                  停用
+          t.status !== "closed" && (
+            <>
+              <Tooltip title={admin ? undefined : OBSERVER_TIP}>
+                <Button icon={<Icon name="pencil" size={14} />} disabled={!admin} onClick={() => actions.edit(t)}>
+                  编辑
                 </Button>
-              ) : (
-                <>
-                  <Button disabled={!!running} onClick={() => run(() => api.post(`/tenants/${id}/resume`), "已发起恢复")}>
+              </Tooltip>
+              {t.status === "suspended" && (
+                <Tooltip title={admin ? undefined : OBSERVER_TIP}>
+                  <Button icon={<Icon name="play" size={14} />} disabled={!admin || !!running} onClick={() => void actions.resume(t)}>
                     恢复
                   </Button>
-                  <Button danger disabled={!!running} onClick={close}>
-                    关闭并删除
-                  </Button>
-                </>
+                </Tooltip>
               )}
-            </Space>
+              <Dropdown trigger={["click"]} placement="bottomRight" menu={actions.menu(t)}>
+                <Button aria-label="更多" icon={<Icon name="more" />} />
+              </Dropdown>
+            </>
           )
         }
       />
-      {secret && (
-        <div style={{ marginBottom: 16 }}>
-          <OneTimeSecret label="首个管理员的新临时密码" value={secret} />
-        </div>
+      {running && (
+        <Alert
+          style={{ margin: "12px 0 4px" }}
+          type={running.stuck ? "error" : "info"}
+          showIcon
+          message={
+            <>
+              {KIND_LABEL[running.kind]}还没做完：{running.steps.filter((s) => s.status === "DONE").length} / {running.steps.length} 步已完成
+              {running.stuck ? "，有一步失败了，在自动重试" : ""}。 <a onClick={() => setTab("ops")}>看进度</a>
+            </>
+          }
+        />
       )}
-      <Card style={{ marginBottom: 16 }}>
-        <Descriptions column={3} size="small">
-          <Descriptions.Item label="状态">
-            <Tag color={status.color}>{status.text}</Tag>
-            {t.status === "active" && !t.usable && <Tag color="red">已到期</Tag>}
-          </Descriptions.Item>
-          <Descriptions.Item label="人数 / 名额">
-            {t.users ?? 0} / {limit(t.max_users)}
-          </Descriptions.Item>
-          <Descriptions.Item label="到期">{t.expires_at ? dateTime(t.expires_at) : "不到期"}</Descriptions.Item>
-          <Descriptions.Item label="开通时间">{dateTime(t.created_at)}</Descriptions.Item>
-          <Descriptions.Item label="租户 id">
-            <Typography.Text copyable style={{ fontFamily: "monospace", fontSize: 12 }}>
+      {t.status === "suspended" && !running && (
+        <Alert
+          style={{ margin: "12px 0 4px" }}
+          type="warning"
+          showIcon
+          message={`已停用${lastSuspend?.reason ? `：${lastSuspend.reason}` : ""}。登录和各系统调用都被拒绝，数据都留着，恢复后接着用`}
+        />
+      )}
+      {t.status === "closed" && <Alert style={{ margin: "12px 0 4px" }} type="info" showIcon message="已关闭：各系统的数据已删除，企业代码不能再用" />}
+      <Tabs
+        activeKey={tab}
+        onChange={setTab}
+        style={{ marginTop: 8 }}
+        items={[
+          {
+            key: "overview",
+            label: "概况",
+            children: <Overview tenant={t} adminAccount={adminAccount} systems={withCapability(systems, "capacity")} onReissue={() => void actions.reissue(t)} admin={admin} onQuota={() => setTab("quota")} />,
+          },
+          { key: "apps", label: "应用", children: <TenantApps tenantId={id} admin={admin && t.status !== "closed"} /> },
+          { key: "quota", label: "份额与用量", children: <TenantQuotas tenantId={id} admin={admin && t.status !== "closed"} systems={withCapability(systems, "capacity")} /> },
+          { key: "ops", label: `操作记录 ${ops.length}`, children: <Operations ops={ops} systems={systems} admin={admin} /> },
+        ]}
+      />
+      {actions.element}
+    </>
+  );
+}
+
+function Overview({
+  tenant: t,
+  adminAccount,
+  systems,
+  admin,
+  onReissue,
+  onQuota,
+}: {
+  tenant: Tenant;
+  adminAccount: string | undefined;
+  systems: SystemInfo[];
+  admin: boolean;
+  onReissue: () => void;
+  onQuota: () => void;
+}) {
+  return (
+    <div className="ops-detail-grid">
+      <Card title="基本信息">
+        <dl className="ops-kv">
+          <dt>企业代码</dt>
+          <dd>
+            <span className="ops-mono">{t.code}</span>
+            <span className="ops-sub">登录时输入，建好不能改</span>
+          </dd>
+          <dt>名称</dt>
+          <dd>{t.name}</dd>
+          <dt>状态</dt>
+          <dd>
+            <TenantTags tenant={t} />
+          </dd>
+          <dt>人数 / 名额</dt>
+          <dd>
+            <Seats tenant={t} />
+          </dd>
+          <dt>到期</dt>
+          <dd>
+            <Expiry tenant={t} />
+          </dd>
+          <dt>首个管理员</dt>
+          <dd>
+            <span className="ops-mono">{adminAccount ?? "—"}</span>
+            {t.status === "active" && admin && <a onClick={onReissue}>补发临时密码</a>}
+          </dd>
+          <dt>开通时间</dt>
+          <dd>{dateTime(t.created_at)}</dd>
+          <dt>租户 id</dt>
+          <dd>
+            <Typography.Text copyable className="ops-mono" style={{ fontSize: 12 }}>
               {t.id}
             </Typography.Text>
-          </Descriptions.Item>
-        </Descriptions>
+          </dd>
+        </dl>
       </Card>
-      <Space align="start" style={{ width: "100%" }} styles={{ item: { flex: 1, minWidth: 0 } }}>
-        <TenantApps tenantId={id} admin={admin} />
-        <TenantQuotas tenantId={id} admin={admin} systems={withCapability(systems, "capacity")} />
-      </Space>
-      <Card title="做过的操作" style={{ marginTop: 16 }}>
-        <Operations ops={q.data?.operations ?? []} systems={systems} admin={admin} onChanged={refresh} />
+      <Card
+        title="用量"
+        extra={
+          <a onClick={onQuota}>
+            份额与用量 <Icon name="right" size={12} />
+          </a>
+        }
+      >
+        {t.status === "closed" ? (
+          <span className="ops-muted">已关闭，数据已删除</span>
+        ) : (
+          <Space direction="vertical" size={14} style={{ width: "100%" }}>
+            {systems.map((s) => (
+              <UsageRows key={s.code} system={s} tenantId={t.id} prefix />
+            ))}
+          </Space>
+        )}
       </Card>
-      {edit && <EditTenant tenant={t} onClose={() => setEdit(false)} onSaved={refresh} />}
-    </>
+    </div>
+  );
+}
+
+/** 一个系统的用量 / 份额（Atlas 三项，知识库只有存储） */
+function UsageRows({ system, tenantId, prefix }: { system: SystemInfo; tenantId: string; prefix?: boolean }) {
+  const q = useQuery({ queryKey: ["usage", system.code, tenantId], queryFn: () => sys(system.code).get<TenantUsage>(`/usage/${tenantId}`) });
+  if (q.error) return <ErrorBox error={q.error} />;
+  if (!q.data) return null;
+  const u = q.data;
+  return (
+    <Space direction="vertical" size={14} style={{ width: "100%" }}>
+      {Object.keys(u.quota).map((f) => (
+        <UsageBar
+          key={f}
+          label={prefix ? `${system.name} · ${QUOTA_LABEL[f] ?? f}` : (QUOTA_LABEL[f] ?? f)}
+          field={f}
+          used={u.usage[f as keyof TenantUsage["usage"]] ?? 0}
+          cap={u.quota[f as keyof TenantUsage["quota"]]}
+        />
+      ))}
+    </Space>
   );
 }
 
 function TenantApps({ tenantId, admin }: { tenantId: string; admin: boolean }) {
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const q = useQuery({
-    queryKey: ["tenant-apps", tenantId],
-    queryFn: () => sys(UC).get<TenantApp[]>(`/tenants/${tenantId}/apps`),
-  });
+  const q = useQuery({ queryKey: ["tenant-apps", tenantId], queryFn: () => sys(UC).get<TenantApp[]>(`/tenants/${tenantId}/apps`) });
   async function toggle(appId: string, enabled: boolean) {
     try {
       await sys(UC).put(`/tenants/${tenantId}/apps/${appId}`, { enabled });
       await qc.invalidateQueries({ queryKey: ["tenant-apps", tenantId] });
+      message.success(enabled ? "已开通" : "已关闭：这个企业的人马上用不了");
     } catch (e) {
       message.error(errorText(e));
     }
   }
   return (
-    <Card title="开通的应用" size="small">
+    <Card title="开通的应用" extra={<span className="ops-sub">产品自带的应用所有企业都能用，不在这里；谁能用由企业管理员在用户中心定</span>}>
       <ErrorBox error={q.error} />
       <Table<TenantApp>
         rowKey={(r) => r.app.id}
-        size="small"
         pagination={false}
         loading={q.isLoading}
         dataSource={q.data ?? []}
+        locale={{ emptyText: "还没有接入别的应用" }}
         columns={[
-          { title: "应用", render: (_, r) => `${r.app.icon ?? ""} ${r.app.name}` },
-          { title: "编码", render: (_, r) => r.app.code ?? "—" },
           {
-            title: "开通",
-            render: (_, r) => <Switch size="small" checked={r.enabled} disabled={!admin} onChange={(on) => toggle(r.app.id, on)} />,
+            title: "应用",
+            render: (_, r) => (
+              <div className="ops-row" style={{ gap: 10 }}>
+                <AppIcon app={r.app} size={28} />
+                <div>
+                  <b>{r.app.name}</b>
+                  <div className="ops-sub ops-mono">{r.app.code ?? "—"}</div>
+                </div>
+              </div>
+            ),
+          },
+          { title: "状态", render: (_, r) => (r.app.status === "active" ? <Tag color="success">可用</Tag> : <Tag>平台已停用</Tag>) },
+          { title: "开通时间", render: (_, r) => <span className="ops-muted">{r.enabled ? dateTime(r.enabled_at) : "—"}</span> },
+          {
+            title: "为这个企业开通",
+            width: 140,
+            render: (_, r) => (
+              <Tooltip title={admin ? undefined : OBSERVER_TIP}>
+                <Switch checked={r.enabled} disabled={!admin} onChange={(on) => void toggle(r.app.id, on)} />
+              </Tooltip>
+            ),
           },
         ]}
       />
@@ -214,244 +288,170 @@ function TenantApps({ tenantId, admin }: { tenantId: string; admin: boolean }) {
 
 function TenantQuotas({ tenantId, admin, systems }: { tenantId: string; admin: boolean; systems: SystemInfo[] }) {
   return (
-    <Card title="份额和用量" size="small">
+    <Space direction="vertical" size={14} style={{ width: "100%" }}>
       {systems.map((s) => (
-        <QuotaRow key={s.code} system={s} tenantId={tenantId} admin={admin} />
+        <QuotaCard key={s.code} system={s} tenantId={tenantId} admin={admin} />
       ))}
-    </Card>
+      <Alert type="info" showIcon message="企业里每个人的上限由企业管理员在这份额度内自己定。超了份额的新请求会被拒（已在跑的不打断）" />
+    </Space>
   );
 }
 
-const QUOTA_LABEL: Record<string, string> = { running_runs: "同时运行的 run", sandboxes: "沙箱 / 会话 Pod", storage_bytes: "存储" };
-
-function fmt(field: string, v: number | null | undefined): string {
-  return field === "storage_bytes" ? bytes(v) : limit(v);
-}
-
-function QuotaRow({ system, tenantId, admin }: { system: SystemInfo; tenantId: string; admin: boolean }) {
+function QuotaCard({ system, tenantId, admin }: { system: SystemInfo; tenantId: string; admin: boolean }) {
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const q = useQuery({
-    queryKey: ["usage", system.code, tenantId],
-    queryFn: () => sys(system.code).get<TenantUsage>(`/usage/${tenantId}`),
-  });
-  const [editing, setEditing] = useState<Record<string, number | null> | null>(null);
+  const q = useQuery({ queryKey: ["usage", system.code, tenantId], queryFn: () => sys(system.code).get<TenantUsage>(`/usage/${tenantId}`) });
+  const [editing, setEditing] = useState(false);
   const fields = Object.keys(q.data?.quota ?? {});
 
   async function save(body: Record<string, unknown>) {
     try {
       await sys(system.code).put(`/quotas/${tenantId}`, body);
-      setEditing(null);
       await qc.invalidateQueries({ queryKey: ["usage", system.code, tenantId] });
-      message.success("份额已保存");
+      await qc.invalidateQueries({ queryKey: ["quotas", system.code] });
+      message.success(body.use_default ? "已改回默认份额" : "份额已保存");
+    } catch (e) {
+      message.error(errorText(e));
+      throw e;
+    }
+  }
+
+  return (
+    <Card
+      title={
+        <div className="ops-row">
+          <SystemIcon code={system.code} size={24} />
+          {system.name}
+          {q.data && (q.data.is_default ? <Tag>用默认份额</Tag> : <Tag color="processing">单独定的份额</Tag>)}
+        </div>
+      }
+      extra={
+        q.data && (
+          <Space size={4}>
+            {!q.data.is_default && (
+              <Button size="small" type="text" disabled={!admin} onClick={() => void save({ use_default: true }).catch(() => undefined)}>
+                改回默认
+              </Button>
+            )}
+            <Tooltip title={admin ? undefined : OBSERVER_TIP}>
+              <Button size="small" disabled={!admin} onClick={() => setEditing(true)}>
+                {q.data.is_default ? "单独定份额" : "修改"}
+              </Button>
+            </Tooltip>
+          </Space>
+        )
+      }
+    >
+      <ErrorBox error={q.error} />
+      {q.data && (
+        <div className="ops-ubars">
+          {fields.map((f) => (
+            <UsageBar
+              key={f}
+              label={QUOTA_LABEL[f] ?? f}
+              field={f}
+              used={q.data?.usage[f as keyof TenantUsage["usage"]] ?? 0}
+              cap={q.data?.quota[f as keyof TenantUsage["quota"]]}
+            />
+          ))}
+        </div>
+      )}
+      {editing && q.data && (
+        <QuotaModal title={`${system.name} · 这个企业的份额`} quota={q.data.quota} hint="留空 = 不限；只对这个企业生效" onSave={save} onClose={() => setEditing(false)} />
+      )}
+    </Card>
+  );
+}
+
+function Operations({ ops, systems, admin }: { ops: Operation[]; systems: SystemInfo[] | undefined; admin: boolean }) {
+  const qc = useQueryClient();
+  const { message } = App.useApp();
+  // 默认展开最近的一次（进行中的、或刚做完的）
+  const [open, setOpen] = useState<Record<string, boolean>>({});
+  if (!ops.length) return <Card>还没有操作：开通、停用、恢复、关闭都会记在这里</Card>;
+
+  async function retry(op: Operation) {
+    try {
+      await api.post(`/operations/${op.id}/retry`);
+      message.success("马上重做失败的步骤");
+      await qc.invalidateQueries({ queryKey: ["tenant", op.tenant_id] });
     } catch (e) {
       message.error(errorText(e));
     }
   }
 
   return (
-    <div style={{ marginBottom: 12 }}>
-      <Space style={{ width: "100%", justifyContent: "space-between" }}>
-        <Typography.Text strong>
-          {system.name} {q.data?.is_default && <Tag>默认份额</Tag>}
-        </Typography.Text>
-        {admin && q.data && (
-          <Space size={4}>
-            {!q.data.is_default && (
-              <Button size="small" type="link" onClick={() => save({ use_default: true })}>
-                回到默认份额
-              </Button>
+    <div>
+      {ops.map((op, i) => {
+        const expanded = open[op.id] ?? i === 0;
+        return (
+          <div key={op.id} className="ops-op">
+            <div className="ops-op-head" onClick={() => setOpen({ ...open, [op.id]: !expanded })}>
+              <Tag color={{ OPEN: "processing", SUSPEND: "warning", RESUME: "success", CLOSE: "error" }[op.kind]}>{KIND_LABEL[op.kind]}</Tag>
+              <b>{op.status === "DONE" ? `完成于 ${dateTime(op.finished_at)}` : op.stuck ? "有步骤失败，自动重试中" : "进行中"}</b>
+              <span className="ops-muted">
+                {op.requested_by ?? "—"} · {dateTime(op.created_at)}
+                {op.reason ? ` · ${op.reason}` : ""}
+              </span>
+              <span className="ops-grow" />
+              {op.status === "RUNNING" && op.stuck && (
+                <span onClick={(e) => e.stopPropagation()}>
+                  <Tooltip title={admin ? undefined : OBSERVER_TIP}>
+                    <Button size="small" icon={<Icon name="refresh" size={14} />} disabled={!admin} onClick={() => void retry(op)}>
+                      立即重做
+                    </Button>
+                  </Tooltip>
+                </span>
+              )}
+              <Icon name={expanded ? "down" : "right"} size={14} style={{ color: "var(--fg-3)" }} />
+            </div>
+            {expanded && (
+              <div className="ops-steps">
+                {op.steps.map((s) => {
+                  const look = s.status === "FAILED" && !s.rejected ? "WARN" : s.status;
+                  return (
+                    <div key={s.id} className="ops-step">
+                      <span className="ops-step-dot" data-status={look}>
+                        <Icon name={s.status === "DONE" ? "check" : s.status === "FAILED" ? "x" : "dot"} size={s.status === "PENDING" ? 10 : 13} />
+                      </span>
+                      <div className="ops-grow">
+                        <div className="ops-row">
+                          <SystemIcon code={s.system} size={20} />
+                          <b>{systemName(systems, s.system)}</b>
+                          <span className="ops-muted">{ACTION_LABEL[s.action] ?? s.action}</span>
+                        </div>
+                        {s.last_error && (
+                          <div className="ops-sub" style={{ color: s.rejected ? "var(--danger)" : "#b45309", marginTop: 3 }}>
+                            {s.rejected ? "对方拒绝：" : ""}
+                            {s.last_error}
+                          </div>
+                        )}
+                        {s.result?.deleted !== undefined && (
+                          <div className="ops-sub" style={{ marginTop: 3 }}>
+                            删了{" "}
+                            {Object.entries(s.result.deleted as Record<string, number>)
+                              .map(([k, n]) => `${k} ${n}`)
+                              .join("、") || "0"}
+                          </div>
+                        )}
+                      </div>
+                      <span className="ops-sub ops-nw">
+                        {s.status === "DONE"
+                          ? `完成 ${dateTime(s.finished_at)}`
+                          : s.status === "FAILED"
+                            ? `第 ${s.attempts} 次失败 · ${dateTime(s.next_attempt_at)} 再试`
+                            : s.attempts
+                              ? `进行中（已做 ${s.attempts} 批）`
+                              : "等前面的步骤"}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             )}
-            <Button
-              size="small"
-              type="link"
-              onClick={() =>
-                setEditing(
-                  Object.fromEntries(
-                    fields.map((f) => {
-                      const v = q.data?.quota[f as keyof typeof q.data.quota] ?? null;
-                      return [f, f === "storage_bytes" && v !== null ? v / GB : v];
-                    }),
-                  ),
-                )
-              }
-            >
-              单独定份额
-            </Button>
-          </Space>
-        )}
-      </Space>
-      <ErrorBox error={q.error} />
-      {q.data &&
-        fields.map((f) => (
-          <div key={f} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "2px 0" }}>
-            <Typography.Text type="secondary">{QUOTA_LABEL[f] ?? f}</Typography.Text>
-            <span>
-              {fmt(f, q.data?.usage[f as keyof TenantUsage["usage"]] ?? 0)} / {fmt(f, q.data?.quota[f as keyof TenantUsage["quota"]])}
-            </span>
           </div>
-        ))}
-      {editing && (
-        <Modal
-          open
-          title={`${system.name} · 单独定份额`}
-          onCancel={() => setEditing(null)}
-          onOk={() =>
-            save(
-              Object.fromEntries(
-                Object.entries(editing).map(([k, v]) => [k, v === null ? null : k === "storage_bytes" ? Math.round(v * GB) : v]),
-              ),
-            )
-          }
-        >
-          <Space direction="vertical">
-            {Object.entries(editing).map(([k, v]) => (
-              <Space key={k}>
-                <span style={{ width: 120, display: "inline-block" }}>{QUOTA_LABEL[k] ?? k}</span>
-                <InputNumber
-                  min={0}
-                  placeholder="不限"
-                  value={v}
-                  addonAfter={k === "storage_bytes" ? "GB" : undefined}
-                  onChange={(n) => setEditing({ ...editing, [k]: (n as number | null) ?? null })}
-                />
-              </Space>
-            ))}
-            <Typography.Text type="secondary">留空 = 不限</Typography.Text>
-          </Space>
-        </Modal>
-      )}
+        );
+      })}
     </div>
-  );
-}
-
-function Operations({
-  ops,
-  systems,
-  admin,
-  onChanged,
-}: {
-  ops: Operation[];
-  systems: SystemInfo[] | undefined;
-  admin: boolean;
-  onChanged: () => Promise<unknown>;
-}) {
-  const { message } = App.useApp();
-  if (!ops.length) return <Typography.Text type="secondary">还没有操作</Typography.Text>;
-  return (
-    <Space direction="vertical" style={{ width: "100%" }} size={16}>
-      {ops.map((op) => (
-        <div key={op.id}>
-          <Space>
-            <Tag color={op.status === "DONE" ? "green" : "processing"}>{KIND_LABEL[op.kind]}</Tag>
-            <Typography.Text>{op.status === "DONE" ? `完成于 ${dateTime(op.finished_at)}` : "进行中"}</Typography.Text>
-            <Typography.Text type="secondary">
-              {op.requested_by ?? "—"} · {dateTime(op.created_at)}
-              {op.reason ? ` · ${op.reason}` : ""}
-            </Typography.Text>
-            {admin && op.stuck && op.status === "RUNNING" && (
-              <Button
-                size="small"
-                onClick={async () => {
-                  try {
-                    await api.post(`/operations/${op.id}/retry`);
-                    message.success("马上重做失败的步骤");
-                    await onChanged();
-                  } catch (e) {
-                    message.error(errorText(e));
-                  }
-                }}
-              >
-                立即重做
-              </Button>
-            )}
-          </Space>
-          <Timeline
-            style={{ marginTop: 12, marginBottom: 0 }}
-            items={op.steps.map((s) => ({
-              color: s.status === "DONE" ? "green" : s.status === "FAILED" ? (s.rejected ? "red" : "orange") : "gray",
-              children: (
-                <div>
-                  <Typography.Text>
-                    {systemName(systems, s.system)} · {ACTION_LABEL[s.action] ?? s.action}
-                  </Typography.Text>{" "}
-                  <Typography.Text type="secondary">
-                    {s.status === "DONE"
-                      ? `完成 ${dateTime(s.finished_at)}`
-                      : s.status === "FAILED"
-                        ? `第 ${s.attempts} 次失败，${dateTime(s.next_attempt_at)} 再试`
-                        : s.attempts
-                          ? `进行中（已做 ${s.attempts} 批）`
-                          : "等待"}
-                  </Typography.Text>
-                  {s.last_error && (
-                    <div>
-                      <Typography.Text type={s.rejected ? "danger" : "warning"} style={{ fontSize: 12 }}>
-                        {s.rejected ? "对方拒绝：" : ""}
-                        {s.last_error}
-                      </Typography.Text>
-                    </div>
-                  )}
-                  {s.result?.deleted !== undefined && (
-                    <div style={{ fontSize: 12, color: "#888" }}>
-                      删了 {Object.entries(s.result.deleted as Record<string, number>).map(([k, n]) => `${k} ${n}`).join("、") || "0"}
-                    </div>
-                  )}
-                </div>
-              ),
-            }))}
-          />
-        </div>
-      ))}
-    </Space>
-  );
-}
-
-function EditTenant({ tenant, onClose, onSaved }: { tenant: Tenant; onClose: () => void; onSaved: () => Promise<unknown> }) {
-  const [form] = Form.useForm();
-  const [error, setError] = useState<unknown>(null);
-  const [busy, setBusy] = useState(false);
-
-  async function submit(v: { name: string; max_users?: number | null; expires_on?: string }) {
-    setBusy(true);
-    try {
-      await api.patch(`/tenants/${tenant.id}`, {
-        name: v.name,
-        max_users: v.max_users || null,
-        expires_at: v.expires_on ? new Date(`${v.expires_on}T23:59:59`).toISOString() : null,
-      });
-      await onSaved();
-      onClose();
-    } catch (e) {
-      setError(e);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Modal open title="改名字 / 名额 / 到期" onCancel={onClose} onOk={() => form.submit()} confirmLoading={busy}>
-      <ErrorBox error={error} />
-      <Form
-        form={form}
-        layout="vertical"
-        initialValues={{
-          name: tenant.name,
-          max_users: tenant.max_users,
-          expires_on: tenant.expires_at ? tenant.expires_at.slice(0, 10) : undefined,
-        }}
-        onFinish={submit}
-      >
-        <Form.Item name="name" label="名称" rules={[{ required: true }]}>
-          <Input />
-        </Form.Item>
-        <Form.Item name="max_users" label="人员名额" extra="不填 = 不限">
-          <InputNumber min={1} style={{ width: "100%" }} />
-        </Form.Item>
-        <Form.Item name="expires_on" label="到期日" extra="不填 = 不到期；到期后自动停用">
-          <Input type="date" />
-        </Form.Item>
-      </Form>
-    </Modal>
   );
 }
