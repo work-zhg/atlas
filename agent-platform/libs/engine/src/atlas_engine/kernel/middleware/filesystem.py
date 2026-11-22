@@ -32,6 +32,7 @@ from atlas_engine.contracts import (
     ReadResult,
     WriteResult,
 )
+from atlas_engine.kernel.context.images import IMAGE_SEEN_ONCE_HINT
 from atlas_engine.kernel.middleware._fs_utils import (
     _EXTENSION_TO_FILE_TYPE,
     _GLOB_WILDCARD_CHARS,
@@ -220,6 +221,8 @@ def _scrub_message_multimodal_content(message: AnyMessage, *, profile: Mapping[s
     ]
     if new_blocks == blocks:
         return message
+    # 图没附上：「这张图只在这一步可见」的提醒也不成立了
+    new_blocks = [block for block in new_blocks if block.get("text") != IMAGE_SEEN_ONCE_HINT]
     return message.model_copy(update={"content": new_blocks})
 
 
@@ -1066,8 +1069,12 @@ class FilesystemMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
             if encoding == "base64" or file_type != "text":
                 block_type = file_type if file_type != "text" else "file"
                 mime_type = mimetypes.guess_type("file" + Path(validated_path).suffix)[0] or "application/octet-stream"
+                blocks: list[dict[str, Any]] = [{"type": block_type, "base64": content, "mime_type": mime_type}]
+                if block_type == "image":
+                    # 图在主上下文里只留这一步（kernel/context/images.py ImageLimit）：提醒模型把要用的写下来
+                    blocks.append({"type": "text", "text": IMAGE_SEEN_ONCE_HINT})
                 return ToolMessage(
-                    content_blocks=cast("list[ContentBlock]", [{"type": block_type, "base64": content, "mime_type": mime_type}]),
+                    content_blocks=cast("list[ContentBlock]", blocks),
                     name="read_file",
                     tool_call_id=tool_call_id,
                     additional_kwargs={"read_file_path": validated_path, "read_file_media_type": mime_type},

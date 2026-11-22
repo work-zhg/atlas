@@ -40,6 +40,7 @@ from atlas_engine.contracts.messages import (
     interrupted_block,
 )
 from atlas_engine.kernel.context import SUMMARY_PREFIX
+from atlas_engine.kernel.context.images import IMAGE_SEEN_ONCE_HINT
 
 __all__ = [
     "Transcript",
@@ -222,6 +223,7 @@ def tool_result_text(message: ToolMessage) -> str:
       （一张截图几十万字符，2026-11-17 交还接管后一轮连压三次）。原文件还在工作区，要看再读。
     ★ tool.completed 事件的 result 也用它（translator.tool_result_from）：事件同样落库，
       打开会话时历史轨迹和 SSE 回放都要整份下载（2026-11-17 一个会话 22 张截图共 9 MB）。
+    ★ 读图时附的「只在这一步可见」提醒不落库：图本来就不进库，留着它下一轮就是过期的话，界面上也是噪音。
     """
     content = message.content
     if isinstance(content, str):
@@ -230,6 +232,8 @@ def tool_result_text(message: ToolMessage) -> str:
     for block in content:
         if isinstance(block, str):
             parts.append(block)
+        elif isinstance(block, dict) and block.get("text") == IMAGE_SEEN_ONCE_HINT:
+            continue
         elif isinstance(block, dict) and block.get("type") == "text":
             parts.append(str(block.get("text") or ""))
         elif isinstance(block, dict):

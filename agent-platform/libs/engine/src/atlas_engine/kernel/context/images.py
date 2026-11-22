@@ -5,9 +5,14 @@
 inspect_screenshot（图不进主上下文），但模型偶尔改用 read_file 自己看、此后一直这样（2026-11-18 两个
 会话，图攒到 6–7 张时首字 30–106 秒）—— 这里兜底：不管图是怎么进来的，主上下文里最多留最近 keep 张。
 
+keep=0：图只在读到它之后的那一次调用里可见（看一次就走）。MiniMax 每次请求都把上下文里的图重新处理一遍、
+缓存命中也不更快，图在上下文里留几步就要多付几次；看到的内容靠模型当时写进回复（read_file 读图时附
+IMAGE_SEEN_ONCE_HINT 提醒它）。
+
 ★ 只动工具结果里的图片（read_file 读的截图、MCP 返回的图）；用户自己发的图不动。
 ★ 最后一批（最近一条 AIMessage 之后的）结果从不动：模型马上就要看它们。
-★ 同 id 替换、写回 state：换掉的不会再变，提示词缓存的前缀只在又有图被换掉时断一次。
+★ 同 id 替换、写回 state：换掉的不会再变，提示词缓存的前缀只在又有图被换掉时断一次。keep=0 时换掉的
+  总是上一步刚看过的图，断点在末尾附近，前面的前缀照常命中。
 ★ 不发事件：computer use 几乎每一步都会换掉一张，界面上不该每步一条「已清除」。
 """
 
@@ -18,13 +23,17 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
-__all__ = ["IMAGE_PLACEHOLDER", "IMAGE_PLACEHOLDER_NO_PATH", "ImageLimit"]
+__all__ = ["IMAGE_PLACEHOLDER", "IMAGE_PLACEHOLDER_NO_PATH", "IMAGE_SEEN_ONCE_HINT", "ImageLimit"]
 
-IMAGE_PLACEHOLDER = (
-    "[较早的图片已移出上下文（只留最近 {keep} 张）：{path}。要再看，用 inspect_screenshot 问，"
-    "或 read_file 重新读]"
+IMAGE_PLACEHOLDER = "[图片已移出上下文：{path}。要再看，用 inspect_screenshot 问，或 read_file 重新读]"
+IMAGE_PLACEHOLDER_NO_PATH = "[图片已移出上下文]"
+
+#: read_file 读到图片时附在图后面的一句。换成占位时连它一起去掉，历史里不留过期的提醒。
+#: ★ 措辞按线上 keep=0 写（runtime/context.py 的 _KEEP_IMAGES）；改 keep 时一起改
+IMAGE_SEEN_ONCE_HINT = (
+    "[这张图只在你这一次回复时可见，下一步起换成路径占位：要用的位置、数值、判断现在就写进回复的文字里。"
+    "之后要再看，用 inspect_screenshot 问，或 read_file 重新读]"
 )
-IMAGE_PLACEHOLDER_NO_PATH = "[较早的图片已移出上下文（只留最近 {keep} 张）]"
 
 
 def _has_image(message: BaseMessage) -> bool:
@@ -32,11 +41,11 @@ def _has_image(message: BaseMessage) -> bool:
 
 
 class ImageLimit:
-    """主上下文里最多留最近 keep 张工具结果里的图。"""
+    """主上下文里最多留最近 keep 张工具结果里的图（最后一批另算）；keep=0 = 只有最后一批的图可见。"""
 
     def __init__(self, *, keep: int = 2) -> None:
-        if keep < 1:
-            raise ValueError("至少留 1 张：模型刚读的图要能看到")
+        if keep < 0:
+            raise ValueError("keep 不能是负数")
         self._keep = keep
 
     def plan(self, messages: Sequence[BaseMessage]) -> list[ToolMessage]:
@@ -52,14 +61,11 @@ class ImageLimit:
 
     def _without_images(self, message: ToolMessage) -> ToolMessage:
         path = message.additional_kwargs.get("read_file_path")
-        note = (
-            IMAGE_PLACEHOLDER.format(keep=self._keep, path=path)
-            if path
-            else IMAGE_PLACEHOLDER_NO_PATH.format(keep=self._keep)
-        )
+        note = IMAGE_PLACEHOLDER.format(path=path) if path else IMAGE_PLACEHOLDER_NO_PATH
         blocks: list[Any] = [
             {"type": "text", "text": note} if block.get("type") == "image" else block
             for block in message.content_blocks
+            if block.get("text") != IMAGE_SEEN_ONCE_HINT
         ]
         return ToolMessage(
             content=blocks,

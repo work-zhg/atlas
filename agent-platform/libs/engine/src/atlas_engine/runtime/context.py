@@ -34,9 +34,10 @@ __all__ = ["ContextLimits", "ContextPorts", "ReminderSource", "context_pipeline"
 #: 不知道窗口时提醒的总量上限（知道时按 attachment_budget_ratio 算）
 _REMINDER_BUDGET_WITHOUT_WINDOW = 4_000
 
-#: 主上下文里最多留几张工具结果里的图（kernel/context/images.py）。留 2 张：模型常要对比点之前和
-#: 点之后；再多 MiniMax 这类模型明显变慢
-_KEEP_IMAGES = 2
+#: 主上下文里最多留几张工具结果里的图（kernel/context/images.py）。0 = 看一次就走：MiniMax 每次请求
+#: 都把上下文里的图重新处理一遍（2 张首字中位约 8 秒），留着就每步都慢；要对比前后，靠模型看图时写下的
+#: 要点或再读一次。★ 改这个值要一起改 IMAGE_SEEN_ONCE_HINT 的措辞
+_KEEP_IMAGES = 0
 
 
 @dataclass(frozen=True)
