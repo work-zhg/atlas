@@ -27,7 +27,13 @@ from atlas_engine.kernel.context.images import (
 from atlas_engine.kernel.middleware.filesystem import _scrub_unsupported_multimodal_content
 from atlas_engine.runtime.context import ContextLimits, ContextPorts, context_pipeline
 from atlas_engine.runtime.messages import tool_result_text
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    ToolMessage,
+)
 
 from tests.graphs import run_agent as run
 
@@ -204,15 +210,23 @@ async def test_read_image_is_seen_once_with_the_hint_then_replaced() -> None:
         context=context_pipeline(
             spec,
             ContextPorts(
-                offload_store=None, result_limit_tokens=100_000, batch_cap_tokens=200_000, limits=None
+                offload_store=None,
+                result_limit_tokens=100_000,
+                batch_cap_tokens=200_000,
+                limits=None,
             ),
         ),
     ):
         pass
 
     def first_shot(call: int) -> list[Any]:
-        [shot] = [m for m in model.seen[call] if isinstance(m, ToolMessage) and m.tool_call_id == "c1"]
-        return [b.get("type") if b.get("type") == "image" else b.get("text") for b in shot.content_blocks]
+        [shot] = [
+            m for m in model.seen[call] if isinstance(m, ToolMessage) and m.tool_call_id == "c1"
+        ]
+        return [
+            b.get("type") if b.get("type") == "image" else b.get("text")
+            for b in shot.content_blocks
+        ]
 
     assert first_shot(1) == ["image", IMAGE_SEEN_ONCE_HINT]
     assert first_shot(2) == [IMAGE_PLACEHOLDER.format(path=SHOTS[0])]

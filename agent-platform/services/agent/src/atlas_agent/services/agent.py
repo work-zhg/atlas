@@ -168,9 +168,7 @@ class AgentService:
         )
         owners = await self._repo.owner_names([a.created_by_uuid for a, _ in rows])
         used = (
-            await self._repo.last_used([a.agent_uuid for a, _ in rows], user_id=uid)
-            if uid
-            else {}
+            await self._repo.last_used([a.agent_uuid for a, _ in rows], user_id=uid) if uid else {}
         )
         out: builtins.list[AgentOut] = []
         for a, v in rows:

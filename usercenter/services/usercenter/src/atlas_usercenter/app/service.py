@@ -891,7 +891,7 @@ class AppService:
                 await self.session.delete(role)
                 await self.session.flush()
                 record(
-                self.session, self.actor, "role.delete", "role", role.uuid, role.name, **impact
+                    self.session, self.actor, "role.delete", "role", role.uuid, role.name, **impact
                 )
             return impact
         grants = int(

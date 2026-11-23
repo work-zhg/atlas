@@ -23,6 +23,8 @@ import logging
 from uuid import UUID, uuid4
 
 from atlas_engine.contracts.spec import AgentSpec, SubAgentSpec
+from atlas_redislock import LockError
+from atlas_tenancy import TenantScope
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -43,6 +45,9 @@ __all__ = [
 ]
 
 _TERMINAL = {"succeeded", "failed", "cancelled", "interrupted"}
+
+#: 等准入锁的上限。锁只在「数一次 + 插一行」期间持有，正常几毫秒；等不到说明同一时刻派的太多
+_ADMISSION_WAIT_S = 10.0
 
 
 class SubAgentRejected(RuntimeError):
@@ -150,7 +155,10 @@ class SubAgentService:
                 ).one_or_none()
             # run 树的根：父 run 的根；父 run 自己是根（用户输入的那个 run）就是它
             root_run_id = (parent.root_run_uuid if parent else None) or self._parent_run_id
-            await self._check_admission(root_run_id)
+            # 先查一遍：多数拒绝在这里给出，不为一个派不出去的 SubAgent 建会话、投技能。
+            # 算数的是建子 run 时在准入锁里的那一次（_start）
+            async with self._sessionmaker() as session:
+                await self._check_admission(session, root_run_id)
             run_id = await self._start(
                 sub,
                 task,
@@ -169,28 +177,27 @@ class SubAgentService:
 
     # ------------------------------------------------------------------ 准入
 
-    async def _check_admission(self, root_run_id: UUID) -> None:
-        async with self._sessionmaker() as session:
-            runs = RunRepository(session)
-            running = await runs.count_active_subruns()
-            if running >= self._settings.subagent_max_running:
-                msg = (
-                    f"当前已有 {running} 个 SubAgent 在执行（上限 "
-                    f"{self._settings.subagent_max_running}）。稍后重试，"
-                    f"或先自己处理一部分。"
-                )
-                raise SubAgentRejected(msg)
+    async def _check_admission(self, session: AsyncSession, root_run_id: UUID) -> None:
+        runs = RunRepository(session)
+        running = await runs.count_active_subruns()
+        if running >= self._settings.subagent_max_running:
+            msg = (
+                f"当前已有 {running} 个 SubAgent 在执行（上限 "
+                f"{self._settings.subagent_max_running}）。稍后重试，"
+                f"或先自己处理一部分。"
+            )
+            raise SubAgentRejected(msg)
 
-            # ★ 按整棵树数（含 SubAgent 再派出去的）：层数不设上限，按父 run 数的话
-            #   一条「A 派 A 再派 A……」的链永远撞不上限
-            used = await runs.count_subruns_in_tree(root_run_id)
-            if used >= self._settings.subagent_max_per_run:
-                msg = (
-                    f"这一轮已派出 {used} 个 SubAgent（含它们再派出去的），达到上限 "
-                    f"{self._settings.subagent_max_per_run}。剩下的工作请自己完成，"
-                    f"或在下一轮里继续。"
-                )
-                raise SubAgentRejected(msg)
+        # ★ 按整棵树数（含 SubAgent 再派出去的）：层数不设上限，按父 run 数的话
+        #   一条「A 派 A 再派 A……」的链永远撞不上限
+        used = await runs.count_subruns_in_tree(root_run_id)
+        if used >= self._settings.subagent_max_per_run:
+            msg = (
+                f"这一轮已派出 {used} 个 SubAgent（含它们再派出去的），达到上限 "
+                f"{self._settings.subagent_max_per_run}。剩下的工作请自己完成，"
+                f"或在下一轮里继续。"
+            )
+            raise SubAgentRejected(msg)
 
     # ------------------------------------------------------------------ 起子 run
 
@@ -214,19 +221,71 @@ class SubAgentService:
         run_id = uuid4()
         # 锁跟随租约（横向扩展设计 §4.4）：领到子 run 的执行器续它
         ttl = max(int(self._settings.run_lease_s), 1)
-        # ★ 锁的 TTL 不再覆盖整个 run，串行的权威与主会话一样在 DB：还有没跑完的 run
-        #   就不能再起一个（排队中没人续锁时，只靠 Redis 锁会放进第二个）
-        async with self._sessionmaker() as session:
-            busy = await RunRepository(session).active_run_of(thread_id) is not None
-        if busy or not await self._relay.acquire_thread_lock(thread_id, owner=run_id, ttl_s=ttl):
-            msg = (
-                f"{sub.name} 的会话正被另一个 run 占用。它持有会话，同名的必须串行 —— "
-                f"稍后重试，或改派给别的 SubAgent。"
-            )
-            raise SubAgentRejected(msg)
-
+        # ★ 准入的「数 → 建」在准入锁里做，一个事务：先数再建、中间不锁的话，同一批并发派出的
+        #   几个 SubAgent 数到的都是派之前的数，会一起通过（软上限）
         try:
-            async with self._sessionmaker() as session:
+            async with self._relay.subagent_admission_lock(TenantScope.require()).hold(
+                wait_s=_ADMISSION_WAIT_S
+            ):
+                await self._create_run(
+                    sub,
+                    description,
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    ttl=ttl,
+                    root_run_id=root_run_id,
+                    depth=depth,
+                    created_by=created_by,
+                    auth_uid=auth_uid,
+                    auth_subject=auth_subject,
+                    approval_mode=approval_mode,
+                )
+        except LockError as exc:
+            msg = "同时派 SubAgent 的太多了，这一个没排上。稍后重试，或先自己处理一部分。"
+            raise SubAgentRejected(msg) from exc
+
+        await self._dispatch(run_id)
+        logger.info(
+            "派出 SubAgent %s → 子会话 %s 子 run %s（父 run %s，深度 %d）",
+            sub.name,
+            thread_id,
+            run_id,
+            self._parent_run_id,
+            depth,
+        )
+        return run_id
+
+    async def _create_run(
+        self,
+        sub: SubAgentSpec,
+        description: str,
+        *,
+        run_id: UUID,
+        thread_id: UUID,
+        ttl: int,
+        root_run_id: UUID,
+        depth: int,
+        created_by: UUID | None,
+        auth_uid: UUID | None,
+        auth_subject: str | None,
+        approval_mode: str | None,
+    ) -> None:
+        """准入锁里：再数一次 → 占子会话 → 建子 run 和它的任务书，一个事务提交。"""
+        async with self._sessionmaker() as session:
+            await self._check_admission(session, root_run_id)
+            # ★ 锁的 TTL 不再覆盖整个 run，串行的权威与主会话一样在 DB：还有没跑完的 run
+            #   就不能再起一个（排队中没人续锁时，只靠 Redis 锁会放进第二个）
+            busy = await RunRepository(session).active_run_of(thread_id) is not None
+            if busy or not await self._relay.acquire_thread_lock(
+                thread_id, owner=run_id, ttl_s=ttl
+            ):
+                msg = (
+                    f"{sub.name} 的会话正被另一个 run 占用。它持有会话，同名的必须串行 —— "
+                    f"稍后重试，或改派给别的 SubAgent。"
+                )
+                raise SubAgentRejected(msg)
+
+            try:
                 await RunRepository(session).create(
                     run_id=run_id,
                     thread_id=thread_id,
@@ -242,32 +301,19 @@ class SubAgentService:
                     auth_subject=auth_subject,
                     approval_mode=approval_mode,
                 )
+                # 任务书就是子会话这一轮的输入（message 为事实源，执行器从表里重建）。
+                # ★ 与子 run 同一个事务：分两次提交的话，第二次失败就留下一个没有输入的 run，
+                #   兜底任务会把它领走、拿空输入跑一遍
+                await ThreadRepository(session).add_message(
+                    thread_id=thread_id,
+                    role="user",
+                    content=[{"type": "text", "text": description}],
+                    run_id=run_id,
+                )
                 await session.commit()
-        except Exception:
-            await self._relay.release_thread_lock(thread_id, owner=run_id)
-            raise
-
-        # 起一条投递到子会话的用户消息：子会话的历史与父会话完全分开，
-        # 任务书就是它这一轮的输入（message 为事实源，执行器从表里重建）。
-        async with self._sessionmaker() as session:
-            await ThreadRepository(session).add_message(
-                thread_id=thread_id,
-                role="user",
-                content=[{"type": "text", "text": description}],
-                run_id=run_id,
-            )
-            await session.commit()
-
-        await self._dispatch(run_id)
-        logger.info(
-            "派出 SubAgent %s → 子会话 %s 子 run %s（父 run %s，深度 %d）",
-            sub.name,
-            thread_id,
-            run_id,
-            self._parent_run_id,
-            depth,
-        )
-        return run_id
+            except BaseException:
+                await self._relay.release_thread_lock(thread_id, owner=run_id)
+                raise
 
     # ------------------------------------------------------------------ 会话解析
 

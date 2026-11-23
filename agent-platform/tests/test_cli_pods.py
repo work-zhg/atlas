@@ -465,4 +465,3 @@ async def test_a_launch_failure_is_reported(fake: FakeOpenSandbox, redis: Any) -
     fake.create_state = "Failed"
     with pytest.raises(SandboxUnavailableError):
         await _pods(fake, redis).ensure(_thread(), CLI)
-

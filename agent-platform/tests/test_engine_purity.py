@@ -181,7 +181,9 @@ def test_kernel_imports_from_the_host_only_via_contracts() -> None:
     import re
     from pathlib import Path
 
-    kernel = Path(__file__).resolve().parents[1] / "libs" / "engine" / "src" / "atlas_engine" / "kernel"
+    kernel = (
+        Path(__file__).resolve().parents[1] / "libs" / "engine" / "src" / "atlas_engine" / "kernel"
+    )
     pattern = re.compile(r"^\s*(?:from|import)\s+(atlas_engine[.\w]*)", re.M)
     offenders: list[str] = []
     for f in kernel.rglob("*.py"):

@@ -184,6 +184,24 @@ async def test_compaction_restores_working_set_from_filesystem() -> None:
     assert persisted[0]["summary"] == "摘要内容" and "/f3.py" in persisted[0]["restored_files"]
 
 
+async def test_compaction_reports_where_the_kept_turns_start() -> None:
+    """★ 自动压缩保留最近几个回合不进摘要：交给宿主的覆盖边界必须落在它们之前。
+
+    kept_from 是保留区第一条消息的 id（载入历史时就是库里那一行的身份）。宿主以前用「历史的最后
+    一条」当边界，下一轮按边界切历史时，保留的回合既不在摘要里、也不在原文里。
+    """
+    persisted: list[dict[str, Any]] = []
+
+    async def on_compacted(p: dict[str, Any]) -> None:
+        persisted.append(p)
+
+    mw = _mw(context_window=20_000, on_compacted=on_compacted)  # 保留最近 2 个回合
+    out = await mw.abefore_model({"messages": _history(6)})
+    assert out is not None
+    assert out["messages"][2].id == "h4"  # [0] 清空、[1] 摘要、[2] 起是保留区
+    assert persisted[0]["kept_from"] == "h4"
+
+
 async def test_circuit_breaker_stops_after_failures() -> None:
     calls = 0
 

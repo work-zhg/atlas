@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 import pytest
@@ -632,9 +632,9 @@ async def test_different_subagents_in_one_turn_run_in_parallel(client_factory) -
         },
     )
     assert agent.status_code == 201, agent.text
-    thread_id = (
-        await client.post("/v1/threads", json={"agent_id": agent.json()["id"]})
-    ).json()["id"]
+    thread_id = (await client.post("/v1/threads", json={"agent_id": agent.json()["id"]})).json()[
+        "id"
+    ]
 
     result = await run_turn(client, thread_id, "并发派给两个人")
     assert result["status"] == "succeeded", result
@@ -769,9 +769,7 @@ async def test_subagent_approvals_land_on_the_thread_stream(client_factory) -> N
         )
         stamped = await relay.publish(event, thread_id=UUID(thread_id), floor=floor)
         async with get_sessionmaker()() as session:
-            await EventArchive(session).archive_events(
-                [stamped], thread_id=UUID(thread_id)
-            )
+            await EventArchive(session).archive_events([stamped], thread_id=UUID(thread_id))
             await session.commit()
     finally:
         await redis.aclose()
@@ -812,3 +810,71 @@ async def test_the_forwarding_machinery_is_gone(client_factory) -> None:
 
     assert not hasattr(subagent_mod.SubAgentService, "_forward_approvals")
     assert not hasattr(subagent_mod, "get_stream_writer")
+
+
+async def test_admission_is_a_hard_limit_for_concurrent_spawns(client_factory, monkeypatch) -> None:
+    """★ 同一批并发派出的 SubAgent 不能一起冲过并发上限。
+
+    以前准入是「先数再建」、中间不锁：几个并发的 spawn 数到的都是派之前的数，于是一起通过。
+    现在「数 → 建子 run 和任务书」在准入锁里、一个事务里做。派发换成空操作，子 run 留在排队里
+    一直算数，结果不受子 run 跑多快影响。
+    """
+    from atlas_agent.redisx import make_redis
+    from atlas_agent.services.subagent import SubAgentRejected, SubAgentService
+    from atlas_agent.stream.relay import EventRelay
+    from atlas_engine.contracts.spec import AgentSpec, ModelSpec, SubAgentSpec
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "subagent_max_running", 2, raising=False)
+    client = await client_factory(TurnModel(scripts=[]), TurnModel(scripts=[]))
+    thread_id = await setup_thread(client, session_mode="ephemeral")
+    async with get_sessionmaker()() as session:
+        thread = await fetch_one(session, Thread, Thread.thread_uuid == UUID(thread_id))
+    assert thread is not None
+
+    async def no_dispatch(_run_id: UUID) -> None:
+        return None
+
+    redis = make_redis(settings)
+    try:
+        service = SubAgentService(
+            get_sessionmaker(),
+            settings,
+            no_dispatch,
+            EventRelay(redis),
+            parent_run_id=uuid4(),
+            parent_thread=thread,
+            parent_spec=AgentSpec(
+                slug="delegator",
+                name="委派者",
+                system_prompt="",
+                model=ModelSpec(model=PARENT_MODEL),
+                subagents=(
+                    SubAgentSpec(
+                        name="coder",
+                        description="写代码",
+                        system_prompt="",
+                        model=ModelSpec(model=CHILD_MODEL),
+                        session_mode="ephemeral",
+                    ),
+                ),
+            ),
+            agent_version_id=uuid4(),
+        )
+        outcomes = await asyncio.gather(
+            *(service.spawn("coder", f"第 {i} 份") for i in range(3)), return_exceptions=True
+        )
+    finally:
+        await redis.aclose()
+
+    rejected = [o for o in outcomes if isinstance(o, SubAgentRejected)]
+    assert len(rejected) == 1 and "上限" in str(rejected[0]), outcomes
+    runs = await child_runs()
+    assert len(runs) == 2
+    # 每个建出来的子 run 都带着它的任务书（同一个事务）
+    async with get_sessionmaker()() as session:
+        for run in runs:
+            briefs = (
+                await session.execute(select(Message).where(Message.run_uuid == run.run_uuid))
+            ).scalars()
+            assert len(list(briefs)) == 1

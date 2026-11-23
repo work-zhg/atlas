@@ -22,7 +22,16 @@ from sqlalchemy.ext.asyncio import create_async_engine
 TEST_DB = "atlas_modelgateway_test"
 _ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
 TEST_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{TEST_DB}"
-_TABLES = ("gw_model", "gw_api_key", "gw_audit", "gw_account", "gw_route", "gw_model_call")
+#: app_tenant_state：运营接口的租户状态（停用租户的用例改它），留下来会让后面的用例都被拒
+_TABLES = (
+    "gw_model",
+    "gw_api_key",
+    "gw_audit",
+    "gw_account",
+    "gw_route",
+    "gw_model_call",
+    "app_tenant_state",
+)
 #: 账号密钥的主密钥（测试专用）
 SECRET_KEY = "x3Gq2b6P0W9cJmUoq6a7mMb7aT1x0sQhYc8yFv0J3nE="
 

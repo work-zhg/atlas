@@ -1,0 +1,16 @@
+[project]
+name = "atlas-redis"
+version = "0.1.0"
+description = "Atlas Redis 客户端中间件 —— 三路连接舱壁隔离、可插拔拦截器链、单连接 PubSub 与标准高阶原语。"
+requires-python = ">=3.13"
+dependencies = [
+  "redis>=5.2",
+  "atlas-redislock",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/atlas_redis"]

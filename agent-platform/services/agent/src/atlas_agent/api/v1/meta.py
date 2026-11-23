@@ -62,9 +62,7 @@ async def list_tools(
         return await service.list_tools(mcp_agent=McpAgent(None, "", principal.auth_uid))
     agent = await agents.get(agent_id, principal=principal)
     # owner：网关上还没有这把 Key（接入前建的智能体）时补申请的负责人 = 当前编辑者
-    return await service.list_tools(
-        mcp_agent=McpAgent(agent.id, agent.name, principal.auth_uid)
-    )
+    return await service.list_tools(mcp_agent=McpAgent(agent.id, agent.name, principal.auth_uid))
 
 
 @router.get("/knowledge-sets", response_model=KnowledgeListResponse)

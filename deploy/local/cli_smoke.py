@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import argparse
 import json
-import threading
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -66,7 +66,7 @@ def ensure_agent() -> str:
     return created["id"]
 
 
-def auto_approve(run_id: str, stop: "threading.Event") -> None:
+def auto_approve(run_id: str, stop: threading.Event) -> None:
     """轮询 GET /approvals 并放行 —— 命令行里没有弹窗，用它代替人点头。
 
     ★ 轮询只是这个脚本图省事。真正的信号是 approval.required 事件，前端的
@@ -131,9 +131,10 @@ def main() -> None:
     agent_id = ensure_agent()
     print(f"agent = {agent_id}")
 
-    thread_id = args.thread or call(
-        "POST", "/v1/threads", {"agent_id": agent_id, "title": "CLI 冒烟"}
-    )["id"]
+    thread_id = (
+        args.thread
+        or call("POST", "/v1/threads", {"agent_id": agent_id, "title": "CLI 冒烟"})["id"]
+    )
     print(f"thread = {thread_id}")
 
     t0 = time.time()

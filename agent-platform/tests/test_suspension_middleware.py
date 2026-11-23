@@ -165,7 +165,8 @@ def _agent(model: TurnModel, gate: ScriptedGate, executed: list[str]) -> Any:
         model,
         tools=tools,
         middleware=[
-            # 图入口的补悬空调用也在 SuspensionMiddleware 里（原先是单独的 PatchToolCallsMiddleware）
+            # 图入口的补悬空调用也在 SuspensionMiddleware 里
+            # （原先是单独的 PatchToolCallsMiddleware）
             SuspensionMiddleware(),
             PermissionMiddleware(
                 effects={"danger": ToolEffect.EXTERNAL, "write": ToolEffect.WRITE},
@@ -212,7 +213,7 @@ async def test_a_pending_approval_stops_before_the_model_and_leaves_the_call_dan
     )
     final = await _final(
         _agent(model, ScriptedGate("pending"), executed),
-        {"messages": [HumanMessage(content="删掉 /tmp/x")]}
+        {"messages": [HumanMessage(content="删掉 /tmp/x")]},
     )
 
     assert executed == []
@@ -238,7 +239,7 @@ async def test_resume_starts_at_tools_without_a_checkpointer() -> None:
             "messages": list(_DANGLING),
             "waiting_on": {"c1": _wait("approval", TOKEN)},
             "decisions": {TOKEN: {"status": "approved"}},
-        }
+        },
     )
 
     assert executed == ["/tmp/x"], "被批准的工具没有执行 —— jump_to tools 失败"
@@ -257,8 +258,7 @@ async def test_resume_without_waiting_on_is_patched_as_cancelled() -> None:
     executed: list[str] = []
     model = TurnModel(scripts=[[AIMessageChunk(content="好的。")]])
     final = await _final(
-        _agent(model, ScriptedGate("approved"), executed),
-        {"messages": list(_DANGLING)}
+        _agent(model, ScriptedGate("approved"), executed), {"messages": list(_DANGLING)}
     )
 
     assert executed == []
@@ -275,7 +275,7 @@ async def test_a_rejected_decision_does_not_execute() -> None:
             "messages": list(_DANGLING),
             "waiting_on": {"c1": _wait("approval", TOKEN)},
             "decisions": {TOKEN: {"status": "rejected"}},
-        }
+        },
     )
 
     assert executed == []
@@ -304,7 +304,7 @@ async def test_parallel_batch_only_runs_the_released_call() -> None:
             "messages": history,
             "waiting_on": {"c1": _wait("approval", TOKEN)},
             "decisions": {TOKEN: {"status": "approved"}},
-        }
+        },
     )
 
     assert executed == ["/tmp/x"], executed

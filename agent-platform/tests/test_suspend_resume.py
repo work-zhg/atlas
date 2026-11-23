@@ -812,5 +812,55 @@ async def test_children_finishing_together_resume_the_parent_once(
     assert final["status"] == "succeeded", final
     assert parent.call_count == 2  # 一段发委派、一段收尾：没有多跑一段
     assert requeued.count(True) == 1, requeued
-    resumed = [e for e in await events_of(run_id) if e.type == "run.resumed"]
-    assert len(resumed) == 1
+    # 只续跑了一段：委派一段 + 续跑一段，各一条 run.started。★ 不数 run.resumed —— 那是换实例
+    # 接管时才发的（contracts/events.py），普通的挂起后续跑不发
+    events = await events_of(run_id)
+    assert [e.type for e in events].count("run.started") == 2
+    assert not [e for e in events if e.type == "run.resumed"]
+
+
+async def test_settling_a_cancel_happens_once_and_never_on_a_claimed_run(client_factory) -> None:
+    """★ 挂起中被取消的 run 由 settle_cancelled 收尾（没有进程在跑）。取消请求和续跑可能同时到：
+
+    · 同时收两次尾 → 只落一次终态、只发一条 run.cancelled
+    · run 已被领走（running，有进程在跑）→ 不碰它：那个进程看到取消位会自己收尾，这里再写一次
+      终态、放一次会话锁，就是同一个 run 收两次尾
+    """
+    from atlas_agent.executor.continuation import Continuation
+    from sqlalchemy import update
+
+    parent = TurnModel(scripts=[[AIMessageChunk(content="好的")], [AIMessageChunk(content="好的")]])
+    client, _ = await client_factory(parent, TurnModel(scripts=[]))
+    thread_id = await setup_thread(client)
+    settle = Continuation(get_sessionmaker(), get_settings(), instance="settle-test")
+
+    async def set_status(run_id: str, status: str) -> None:
+        async with get_sessionmaker()() as session:
+            await session.execute(
+                update(Run).where(Run.run_uuid == UUID(run_id)).values(status=status)
+            )
+            await session.commit()
+
+    async def status_of(run_id: str) -> str:
+        async with get_sessionmaker()() as session:
+            run = await fetch_one(session, Run, Run.run_uuid == UUID(run_id))
+            assert run is not None
+            return run.status
+
+    # 挂起中：两次收尾同时到，只算一次
+    first = await start_run(client, thread_id, "第一轮")
+    await wait_status(client, first, TERMINAL)
+    await set_status(first, "suspended")
+    await asyncio.gather(settle.settle_cancelled(UUID(first)), settle.settle_cancelled(UUID(first)))
+    assert await status_of(first) == "cancelled"
+    cancelled = [e for e in await events_of(first) if e.type == "run.cancelled"]
+    assert len(cancelled) == 1
+
+    # 已被领走：不碰
+    second = await start_run(client, thread_id, "第二轮")
+    await wait_status(client, second, TERMINAL)
+    await set_status(second, "running")
+    await settle.settle_cancelled(UUID(second))
+    assert await status_of(second) == "running"
+    assert not [e for e in await events_of(second) if e.type == "run.cancelled"]
+    await set_status(second, "succeeded")  # 别让清库前的兜底任务去接管它

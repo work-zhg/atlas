@@ -23,6 +23,7 @@ from ...deps import (
     SessionDep,
     SettingsDep,
     ThreadServiceDep,
+    get_executor,
 )
 from ...device.files import DeviceFiles
 from ...device.gateway import DeviceGateway
@@ -101,11 +102,23 @@ async def update_thread(
 
 @router.delete("/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_thread(
-    thread_id: UUID, service: ThreadServiceDep, session: SessionDep, principal: PrincipalDep
+    thread_id: UUID,
+    service: ThreadServiceDep,
+    session: SessionDep,
+    principal: PrincipalDep,
+    request: Request,
 ) -> Response:
-    """真删：message / run / run_file 由 ON DELETE CASCADE 带走。"""
+    """真删：连同整棵子会话树和挂在上面的行（ThreadRepository.delete）。
+
+    还有一轮在排队或在跑时 409；挂起中的（等审批、等回答）当场取消后再删。
+    """
+
+    async def cancel(run_id: UUID) -> None:
+        # 执行器用到才取：没有挂起的 run 时删会话不依赖它
+        await get_executor(request).cancel(run_id)
+
     await ensure_thread_owner(session, thread_id, principal, write=True)
-    await service.delete(thread_id)
+    await service.delete(thread_id, cancel=cancel)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -383,6 +396,8 @@ async def stream_thread_events(
     await service.ensure_thread(thread_id)
 
     gate = request.app.state.stream_gate
+    # 满了、在停机就在这里拒：响应还没开始，才能是 503 + Retry-After（main.py 的异常处理器）
+    gate.admit()
     # 归档段在这里读完：请求的 session 随本函数返回就关了，生成器里不能再用它
     frames = await service.open_thread_stream(thread_id, after_seq=resume_from)
     return StreamingResponse(

@@ -34,6 +34,7 @@ from typing import Any
 from uuid import UUID
 
 import httpx
+from atlas_opsapi import TenantGate
 from atlas_tenancy import TenantScope
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
@@ -89,7 +90,11 @@ def build_runtime(
     config = ConfigSnapshot(
         sm, SecretCipher(settings.master_keys()), watch, negative_ttl_s=settings.key_negative_ttl_s
     )
-    admission = Admission(config, QuotaGuard(redis), tenant_active=tenant_active)
+    # ★ 租户停用后这个租户的 Key 一律无效（运营接口，api/app.py）：没注入就按本库的租户状态判，
+    #   不能默认不查 —— 那样运营中心停用了租户，它的 Key 照样能调模型。TenantGate 进程内缓存几秒
+    admission = Admission(
+        config, QuotaGuard(redis), tenant_active=tenant_active or TenantGate(sm).is_active
+    )
     health = RouteHealth(redis)
     upstream = UpstreamClient(
         guard=guard or AddressGuard(settings.upstream_allow_cidrs),

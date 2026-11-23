@@ -283,3 +283,34 @@ def test_legacy_rows_without_tool_blocks_still_load() -> None:
     assert isinstance(restored[0], HumanMessage)
     assert isinstance(restored[1], AIMessage)
     assert restored[1].tool_calls == []
+
+
+def test_row_identity_goes_to_the_first_message_of_the_row_only() -> None:
+    """载入历史时行的身份（ref）成为它产出的第一条消息的 id —— 自动压缩据此定覆盖边界。
+
+    ★ 一行工具结果拆成几条 ToolMessage，只有第一条拿 id：同一个 id 给几条的话，图的 add_messages
+      会把后面的当成替换，前面的结果就丢了。没有 ref 的行（待写入的）不设 id。
+    """
+    restored = from_storage(
+        [
+            StoredMessage(
+                role="user",
+                kind=KIND_CHAT,
+                content=[{"type": "text", "text": "读两个文件"}],
+                ref="row-q",
+            ),
+            StoredMessage(
+                role="user",
+                kind=KIND_TOOL_RESULT,
+                content=[
+                    {"type": "tool_result", "tool_use_id": "t1", "content": "a"},
+                    {"type": "tool_result", "tool_use_id": "t2", "content": "b"},
+                ],
+                ref="row-results",
+            ),
+            StoredMessage(
+                role="assistant", kind=KIND_CHAT, content=[{"type": "text", "text": "好"}]
+            ),
+        ]
+    )
+    assert [m.id for m in restored] == ["row-q", "row-results", None, None]

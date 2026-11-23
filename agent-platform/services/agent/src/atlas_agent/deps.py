@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from typing import Annotated
 from uuid import UUID
 
@@ -12,7 +11,7 @@ from .config import Settings, get_settings
 from .db.session import SessionDep
 from .executor.base import RunExecutor
 from .identity import current_user
-from .redisx import make_redis
+from .redisx import get_redis_component, shared_redis
 from .services.agent import AgentService
 from .services.catalog import CatalogService
 from .services.meta import MetaService
@@ -25,12 +24,9 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 CurrentUserDep = Annotated[UUID, Depends(current_user)]
 
 
-async def get_redis(settings: SettingsDep) -> AsyncIterator[aioredis.Redis]:
-    client = make_redis(settings)
-    try:
-        yield client
-    finally:
-        await client.aclose()
+def get_redis() -> aioredis.Redis:
+    """共享的短命令客户端（redisx.RedisComponent）。★ 不关：连接池归组件，进程退出时统一关。"""
+    return shared_redis()
 
 
 RedisDep = Annotated[aioredis.Redis, Depends(get_redis)]
@@ -77,7 +73,8 @@ async def get_run_service(
     settings: SettingsDep,
     executor: ExecutorDep,
 ) -> RunService:
-    return RunService(session, redis, settings, executor)
+    # 事件流的阻塞读走单独的池（RedisComponent.streams），挂着的流再多也占不光短命令的连接
+    return RunService(session, redis, settings, executor, streams=get_redis_component().streams)
 
 
 RunServiceDep = Annotated[RunService, Depends(get_run_service)]

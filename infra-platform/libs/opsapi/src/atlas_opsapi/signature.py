@@ -1,10 +1,14 @@
 """运营接口的调用方凭据：每个系统一把运营密钥，请求用它签名（运营中心签，业务系统验）。
 
-    签名原文 = 方法 \\n 路径（含查询串）\\n 时间戳 \\n 请求体的 SHA-256
+    签名原文 = 方法 \\n 路径（含查询串）\\n 时间戳 \\n 请求体的 SHA-256 \\n 运营头
+    运营头   = OperatorStamp 的四个头（操作人、操作人名字、操作、幂等键），按固定顺序「名:值」逐行，
+               没带的值为空
     签名     = HMAC-SHA256(运营密钥, 签名原文)，十六进制
 
 ★ 用签名而不是明文令牌：日志或抓包里看到的请求重放不了（时间戳在 5 分钟窗口外就拒），
   一把密钥泄露只影响一个系统。写操作在窗口内的重放由幂等键挡住。
+★ 运营头必须进签名原文：业务系统按幂等键去重、按操作人记审计。不签的话，截到一个请求就能在
+  窗口内换一个幂等键重放（去重形同虚设），或者改掉操作人。
 ★ 签名和验证放在同一处，运营中心和各业务系统用同一份实现，不会各写一套对不上。
 """
 
@@ -14,6 +18,8 @@ import hashlib
 import hmac
 import time
 from collections.abc import Mapping
+
+from .stamp import IDEMPOTENCY, OPERATION, OPERATOR, OPERATOR_NAME, OperatorStamp
 
 __all__ = ["SIGNATURE", "TIMESTAMP", "SignatureError", "sign", "verify"]
 
@@ -28,18 +34,40 @@ class SignatureError(Exception):
     """签名不对、过期或缺失。"""
 
 
-def _canonical(method: str, path: str, timestamp: str, body: bytes) -> bytes:
+#: 进签名原文的运营头，顺序固定
+_SIGNED_HEADERS = (OPERATOR, OPERATOR_NAME, OPERATION, IDEMPOTENCY)
+
+
+def _header(headers: Mapping[str, str], name: str) -> str:
+    return headers.get(name) or headers.get(name.lower()) or ""
+
+
+def _canonical(
+    method: str, path: str, timestamp: str, body: bytes, headers: Mapping[str, str]
+) -> bytes:
     digest = hashlib.sha256(body).hexdigest()
-    return f"{method.upper()}\n{path}\n{timestamp}\n{digest}".encode()
+    stamped = "\n".join(f"{name.lower()}:{_header(headers, name)}" for name in _SIGNED_HEADERS)
+    return f"{method.upper()}\n{path}\n{timestamp}\n{digest}\n{stamped}".encode()
 
 
 def sign(
-    key: bytes, method: str, path: str, body: bytes = b"", *, at: int | None = None
+    key: bytes,
+    method: str,
+    path: str,
+    body: bytes = b"",
+    *,
+    stamp: OperatorStamp | None = None,
+    at: int | None = None,
 ) -> dict[str, str]:
-    """→ 要加到请求上的两个头。path 要和服务端看到的一致：含查询串，不含主机。"""
+    """→ 要加到请求上的头：时间戳、签名，以及 stamp 的运营头（它们一起签）。
+
+    path 要和服务端看到的一致：含查询串，不含主机。
+    """
+    stamped = stamp.to_headers() if stamp is not None else {}
     timestamp = str(int(time.time() if at is None else at))
-    mac = hmac.new(key, _canonical(method, path, timestamp, body), hashlib.sha256).hexdigest()
-    return {TIMESTAMP: timestamp, SIGNATURE: mac}
+    canonical = _canonical(method, path, timestamp, body, stamped)
+    mac = hmac.new(key, canonical, hashlib.sha256).hexdigest()
+    return {**stamped, TIMESTAMP: timestamp, SIGNATURE: mac}
 
 
 def verify(
@@ -62,6 +90,7 @@ def verify(
         raise SignatureError("时间戳格式不对") from exc
     if abs((time.time() if now is None else now) - at) > window:
         raise SignatureError("签名已过期")
-    expected = hmac.new(key, _canonical(method, path, timestamp, body), hashlib.sha256).hexdigest()
+    canonical = _canonical(method, path, timestamp, body, headers)
+    expected = hmac.new(key, canonical, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected, given):
         raise SignatureError("签名不对")

@@ -34,7 +34,7 @@ from atlas_agent.executor.segment_data import Segment
 from ..approval import ApprovalService
 from ..config import Settings
 from ..db.models import Run, Thread
-from ..redisx import make_redis
+from ..redisx import shared_redis
 from ..repositories.continuation import ContinuationQueries
 from ..repositories.event_archive import EventArchive
 from ..repositories.run import SUSPENDED_STATUSES, RunRepository
@@ -119,7 +119,8 @@ class Continuation:
         self._dangling = DanglingCallPolicy()
 
     def _redis(self) -> aioredis.Redis:
-        return make_redis(self._settings)
+        """共享的短命令客户端（redisx.RedisComponent）。★ 不关。"""
+        return shared_redis()
 
     # ------------------------------------------------------------------ 续跑
 
@@ -212,12 +213,7 @@ class Continuation:
     # ------------------------------------------------------------------ 取消
 
     async def cancel_requested(self, run_id: UUID) -> bool:
-        redis = self._redis()
-        try:
-            return await EventRelay(redis).is_cancelled(run_id)
-        finally:
-            with contextlib.suppress(Exception):
-                await redis.aclose()
+        return await EventRelay(self._redis()).is_cancelled(run_id)
 
     async def settle_cancelled(self, run_id: UUID) -> None:
         """把一个在等待中被取消的 run 收干净：落终态、发事件、放锁。
@@ -227,51 +223,49 @@ class Continuation:
           没有任何进程 —— 不自己收的话 run 会一直躺在 suspended，会话锁也
           一直不放。
         """
-        redis = self._redis()
-        relay = EventRelay(redis, ttl_s=self._settings.run_events_ttl_s)
-        try:
-            async with self._sessionmaker() as session:
-                run = await RunRepository(session).get(run_id)
-                if run is None:
-                    return
-                thread = await ThreadRepository(session).by_id(run.thread_uuid)
-                if thread is None:
-                    return
-                stream_thread_id = thread.stream_thread_id
-                archive = EventArchive(session)
+        relay = EventRelay(self._redis(), ttl_s=self._settings.run_events_ttl_s)
+        async with self._sessionmaker() as session:
+            # ★ 先锁住、再判状态：取消与续跑可能同时到（取消请求读到 suspended 的同时，子 run
+            #   跑完把它放回了排队、甚至已被领走）。已被领走的不收 —— 那时有进程在跑，它会看到
+            #   取消位自己收尾；这里再写一次终态、放一次锁，就是同一个 run 收两次尾
+            run = await RunRecordRepository(session).lock_unclaimed(run_id)
+            if run is None:
+                return
+            thread = await ThreadRepository(session).by_id(run.thread_uuid)
+            if thread is None:
+                return
+            stream_thread_id = thread.stream_thread_id
+            archive = EventArchive(session)
 
-                event = EventFactory(
-                    run_id,
-                    _utcnow,
-                    start_seq=run.last_seq,
-                    base_depth=run.depth,
-                ).make(EventType.RUN_CANCELLED, {"partial_text_len": 0})
-                # 序号在落库前盖好，与一段收尾同一条纪律
-                event = event.stamped(
-                    await relay.next_thread_seq(
-                        stream_thread_id,
-                        floor=await archive.thread_seq_floor(stream_thread_id),
-                    )
+            event = EventFactory(
+                run_id,
+                _utcnow,
+                start_seq=run.last_seq,
+                base_depth=run.depth,
+            ).make(EventType.RUN_CANCELLED, {"partial_text_len": 0})
+            # 序号在落库前盖好，与一段收尾同一条纪律
+            event = event.stamped(
+                await relay.next_thread_seq(
+                    stream_thread_id,
+                    floor=await archive.thread_seq_floor(stream_thread_id),
                 )
-                await RunRecordRepository(session).finish(
-                    run_id,
-                    status="cancelled",
-                    last_seq=event.seq,
-                    usage={},  # 累加语义下空字典 = 不动账
-                )
-                # 还挂着的审批一并作废：弹窗随之消失
-                await ApprovalService(session).expire_run(run_id)
-                await archive.archive_events([event], thread_id=stream_thread_id)
-                await session.commit()
-                thread_id = run.thread_uuid
+            )
+            await RunRecordRepository(session).finish(
+                run_id,
+                status="cancelled",
+                last_seq=event.seq,
+                usage={},  # 累加语义下空字典 = 不动账
+            )
+            # 还挂着的审批一并作废：弹窗随之消失
+            await ApprovalService(session).expire_run(run_id)
+            await archive.archive_events([event], thread_id=stream_thread_id)
+            await session.commit()
+            thread_id = run.thread_uuid
 
-            await relay.emit(event, thread_id=stream_thread_id)
-            with contextlib.suppress(Exception):
-                await relay.clear_cancel(run_id)
-                await relay.release_thread_lock(thread_id, owner=run_id)
-        finally:
-            with contextlib.suppress(Exception):
-                await redis.aclose()
+        await relay.emit(event, thread_id=stream_thread_id)
+        with contextlib.suppress(Exception):
+            await relay.clear_cancel(run_id)
+            await relay.release_thread_lock(thread_id, owner=run_id)
 
     # ------------------------------------------------------------------ 接管
 

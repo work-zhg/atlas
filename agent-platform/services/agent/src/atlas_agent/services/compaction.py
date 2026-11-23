@@ -12,7 +12,6 @@ engine 负责「何时压、从哪切、怎么摘要」（kernel/context 与 run
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -21,6 +20,7 @@ from atlas_engine.runtime.summarize import Summarizer
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..providers.llm.model_platform import ModelEndpoint
+from ..repositories.run import RunRepository
 from ..repositories.thread_context import ThreadContextRepository
 
 logger = logging.getLogger(__name__)
@@ -48,23 +48,29 @@ def thread_summarizer(
     return Summarizer(build, model=model, provider=provider)
 
 
-def make_persist_hook(
-    sessionmaker: async_sessionmaker[AsyncSession],
-    thread_id: UUID,
-    upto: datetime | None,
-):
-    """返回 on_compacted 回调：把摘要写进会话的上下文状态（thread_context）。
+def make_persist_hook(sessionmaker: async_sessionmaker[AsyncSession], thread_id: UUID):
+    """返回 on_compacted 回调：把摘要和覆盖边界写进会话的上下文状态（thread_context）。
 
-    `upto` 是本次 run 起始时历史里最后一条消息的时间 —— 摘要覆盖到那里。
-    ★ 它可以为 None：会话的第一轮没有历史，也就没有覆盖边界。
-      那种情况下不该写 summary_upto，否则下一轮会从一个错误的边界切历史。
+    覆盖边界 = 保留区第一条消息（payload 的 kept_from，库里那一行的身份）之前最后一条消息的时间。
+    ★ 不能用「本次 run 起始时历史的最后一条」：自动压缩留下最近几个回合不进摘要，边界落在历史
+      末尾的话，下一轮按边界切历史时这几个回合既不在摘要里、也不在原文里，就丢了。
+    ★ 找不到边界就不存（kept_from 不是这个会话里的消息、或者保留区前面没有消息）：存一个猜出来的
+      边界，不是丢回合就是重复；不存只是下一轮再压一次。
     """
 
     async def persist(payload: dict[str, Any]) -> None:
-        if upto is None:
+        kept_from = _message_id(payload.get("kept_from"))
+        if kept_from is None:
+            logger.warning("压缩结果没有保留区的起点，不存摘要 thread=%s", thread_id)
             return
         try:
             async with sessionmaker() as session:
+                upto = await RunRepository(session).last_before(thread_id, kept_from)
+                if upto is None:
+                    logger.warning(
+                        "保留区起点 %s 之前没有消息，不存摘要 thread=%s", kept_from, thread_id
+                    )
+                    return
                 # 成功一次就清零熔断计数
                 await ThreadContextRepository(session).save_summary(
                     thread_id, summary=str(payload.get("summary", "")), upto=upto
@@ -75,6 +81,17 @@ def make_persist_hook(
             logger.warning("摘要持久化失败 thread=%s", thread_id, exc_info=True)
 
     return persist
+
+
+def _message_id(value: Any) -> UUID | None:
+    """kept_from → 库里消息的身份。
+
+    框架自己分配的 id 也是 UUID：它们在库里查不到行，边界就是 None（见 last_before）。
+    """
+    try:
+        return UUID(str(value)) if value else None
+    except ValueError:
+        return None
 
 
 def make_failure_hook(sessionmaker: async_sessionmaker[AsyncSession], thread_id: UUID):

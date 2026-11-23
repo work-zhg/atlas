@@ -492,9 +492,7 @@ class FakeModel:
         self.replies = list(replies)
         self.prompts: list[str] = []
 
-    def __call__(
-        self, spec: Any, *, base_url: str, api_key: str, headers: Any = None
-    ) -> FakeModel:
+    def __call__(self, spec: Any, *, base_url: str, api_key: str, headers: Any = None) -> FakeModel:
         return self
 
     async def ainvoke(self, messages: list[Any]) -> Any:

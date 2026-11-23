@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class ContextContribution:
     """上下文管理为一段交出的东西。"""
@@ -108,9 +109,7 @@ class ContextManager:
             workspace=workspace,
             failure_count=segment.compaction_failures,
             on_failed=make_failure_hook(self._sessionmaker, segment.thread_id),
-            on_compacted=make_persist_hook(
-                self._sessionmaker, segment.thread_id, segment.history_upto
-            ),
+            on_compacted=make_persist_hook(self._sessionmaker, segment.thread_id),
             cache_expired=cache_expired,
             window_assumed=assumed,
         )

@@ -281,6 +281,14 @@ async def test_proxy_passes_the_allowlist_only_and_audits_writes(world: World) -
     ):
         r = await c.send(method, path, {})
         assert r.status_code == 403 and r.json()["code"] == "NOT_ALLOWED", (method, path)
+    # ★ 点段绕白名单：/apps/../tenants 会被 httpx 规整成 /tenants，带着运营签名直达白名单外的
+    #   接口。客户端发 %2e%2e（httpx 不规整编码过的点），进路由时解码成 ..
+    for method, path in (
+        ("POST", "/api/systems/usercenter/ops/apps/%2e%2e/tenants"),
+        ("GET", "/api/systems/alpha/ops/capacity/%2e%2e/tenant-states"),
+    ):
+        r = await c.send(method, path, {})
+        assert r.status_code == 422 and r.json()["code"] == "BAD_PATH", (method, path)
     async with get_sessionmaker()() as s:
         rows = list(await s.scalars(select(AuditEntry).where(AuditEntry.action == "system.post")))
     assert [r.target for r in rows] == ["usercenter /apps"]

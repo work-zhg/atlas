@@ -14,7 +14,6 @@ import importlib
 import inspect
 
 import pytest
-
 from atlas_engine.contracts import (
     DEFAULT_WORKDIR,
     EDIT_MAX_BYTES,
@@ -127,7 +126,7 @@ def test_old_protocol_module_is_gone() -> None:
     """
     for gone in (
         # 协议搬去 contracts、实现类删净之后，backends 包整体解散
-        #（utils 并入 middleware/_fs_utils）；_api 的弃用告警机制随
+        # （utils 并入 middleware/_fs_utils）；_api 的弃用告警机制随
         # deepagents 兼容路径一起删除 —— kernel 没有外部用户。
         "atlas_engine.kernel.backends",
         "atlas_engine.kernel._api",
@@ -146,5 +145,7 @@ def test_result_types_live_with_their_protocol() -> None:
     from atlas_engine.contracts import filesystem as fsp
     from atlas_engine.contracts import sandbox as sbp
 
-    assert {"ReadResult", "WriteResult", "EditResult", "DeleteResult", "FileData"} <= set(fsp.__all__)
+    assert {"ReadResult", "WriteResult", "EditResult", "DeleteResult", "FileData"} <= set(
+        fsp.__all__
+    )
     assert {"ExecuteResponse", "ExecuteArtifact"} <= set(sbp.__all__)

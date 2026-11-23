@@ -53,13 +53,27 @@ class StreamGate:
         """
         self._draining = True
 
-    def __enter__(self) -> StreamGate:
+    def admit(self) -> None:
+        """路由里先问一句：满了、在停机就当场拒 —— 这时响应还没开始，异常处理器能给出 503。
+
+        ★ 只问、不占。占用在 guard 里随迭代开始：生成器开始迭代时 200 已经发出去了，在那里才拒
+          就只能断流（客户端看到的是 200 然后连接断掉，分不清该重试还是放弃）。也不能在路由里占：
+          响应还没开始迭代就断开的连接，生成器从未启动、finally 不会执行，槽位就漏了。
+          代价是问与占之间的窄窗口：一起冲向最后一个槽位的几条里，晚到的在流开始时被拒（断流，
+          客户端带游标重连）。
+        """
+        self._check()
+
+    def _check(self) -> None:
         if self._draining:
             raise StreamsBusy("本实例正在停机，请重连")
         if self._active >= self._limit:
             logger.warning("SSE 连接已达上限 %d，拒绝新订阅", self._limit)
             msg = f"并发事件流连接已达上限（{self._limit}），请稍后重试"
             raise StreamsBusy(msg)
+
+    def __enter__(self) -> StreamGate:
+        self._check()
         self._active += 1
         return self
 

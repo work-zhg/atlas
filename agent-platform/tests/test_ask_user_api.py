@@ -139,9 +139,7 @@ async def test_answers_that_do_not_fit_are_refused(client: httpx.AsyncClient) ->
 
 
 @pytest.mark.usefixtures("clean_db")
-async def test_a_blind_approval_takes_the_recommendations(
-    client: httpx.AsyncClient, app
-) -> None:
+async def test_a_blind_approval_takes_the_recommendations(client: httpx.AsyncClient, app) -> None:
     """不认识问题的调用方（bench、开放接口）照常「批准」：按推荐继续，不卡住（设计 D8）。"""
     run_id, pending = await _start(client)
     res = await client.post(

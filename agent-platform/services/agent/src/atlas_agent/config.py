@@ -61,6 +61,9 @@ class Settings(BaseSettings):
 
     database_url: str
     redis_url: str
+    #: 共享连接池（redisx.RedisComponent）里短命令那个池的连接上限，和用满时等空出连接的上限
+    redis_max_connections: int = 100
+    redis_pool_timeout_s: float = 10.0
 
     #: 单次模型调用的超时（流式时是两段数据之间的最大间隔）。不是一轮的上限
     model_timeout_s: float = 120.0
@@ -267,8 +270,8 @@ class Settings(BaseSettings):
     cli_ws_connect_timeout_s: float = 10.0
     #: 两条 update 之间的最大静默（在等模型）—— CLI 卡死的唯一探测器。
     #: ★ 一轮本身没有时间上限：CLI 在干活就不中断。open 时下发为 bridge 的 idleS。
-    #: 等模型时 CLI 不吐任何 update：长会话缓存过期后冷算首包可达 3 分钟（57k token + 18 张截图实测 176s），
-    #: 门槛低于它会把在干活的一轮当卡死取消。
+    #: 等模型时 CLI 不吐任何 update：长会话缓存过期后冷算首包可达 3 分钟
+    #: （57k token + 18 张截图实测 176s），门槛低于它会把在干活的一轮当卡死取消。
     cli_prompt_idle_timeout_s: float = 600.0
     #: 有工具在执行时的最大静默（长命令可以很久没有输出）。下发为 bridge 的 toolIdleS。
     cli_tool_idle_timeout_s: float = 600.0

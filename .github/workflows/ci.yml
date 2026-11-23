@@ -15,10 +15,12 @@ jobs:
         env:
           POSTGRES_USER: atlas
           POSTGRES_PASSWORD: atlas
-          POSTGRES_DB: atlas
+          # ★ Agent 服务的测试会清表，conftest 只认库名以 _test 结尾的库；
+          #   其余服务的测试自己建各自的 *_test 库
+          POSTGRES_DB: atlas_test
         ports: ["5433:5432"]
         options: >-
-          --health-cmd "pg_isready -U atlas -d atlas"
+          --health-cmd "pg_isready -U atlas -d atlas_test"
           --health-interval 3s --health-timeout 3s --health-retries 20
       redis:
         image: redis:7-alpine
@@ -28,8 +30,8 @@ jobs:
           --health-interval 3s --health-timeout 3s --health-retries 20
 
     env:
-      DATABASE_URL: postgresql+asyncpg://atlas:atlas@localhost:5433/atlas
-      REDIS_URL: redis://localhost:6380/0
+      DATABASE_URL: postgresql+asyncpg://atlas:atlas@localhost:5433/atlas_test
+      REDIS_URL: redis://localhost:6380/15
       DEFAULT_USER_ID: 00000000-0000-0000-0000-000000000001
 
     steps:
@@ -57,5 +59,30 @@ jobs:
           cd agent-platform/services/agent && uv run alembic upgrade head
           uv run python -m atlas_agent migrate-appconfig
 
+      # ★ 按目录逐个跑：各服务的 conftest 和同名测试文件在一个进程里会互相顶掉
       - name: Test
-        run: uv run pytest -q
+        run: scripts/test-all.sh
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install (locked)
+        run: pnpm install --frozen-lockfile
+
+      # 类型检查覆盖 workspace 里的全部前端与共享包；控制台另查局域网 HTTP 下不可用的浏览器 API
+      - name: Typecheck
+        run: |
+          pnpm -r typecheck
+          pnpm --filter atlas-web check:browser-apis
+
+      - name: Unit tests
+        run: pnpm -r --if-present test

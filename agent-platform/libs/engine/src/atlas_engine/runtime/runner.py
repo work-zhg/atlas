@@ -174,6 +174,10 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+#: 两帧之间最多隔多久查一次取消位（秒）。用户点停止后最多多吐这么久的字
+_FRAME_CANCEL_CHECK_S = 0.25
+
+
 def _graph_input(
     history: Sequence[BaseMessage],
     input_content: str | list[dict],
@@ -396,8 +400,19 @@ async def run(
             stream_mode=["updates", "messages", "custom", "values"],
             subgraphs=True,
         )
+        loop = asyncio.get_running_loop()
+        next_check = 0.0
         async for ns, mode, chunk in watch.frames(stream):
-            if await cancel.is_cancelled():
+            # ★ 两帧之间查取消位，按时间节流：流式输出时一个 token 就是一帧，逐帧查等于每个
+            #   token 多一次 Redis 往返。等帧期间（工具在跑、模型在想）由 _CancelWatch 每
+            #   cancel_poll_s 盯着；看门狗已经发过取消的（被图吞掉了）不用再问 Redis
+            now = loop.time()
+            if watch.fired or now >= next_check:
+                next_check = now + _FRAME_CANCEL_CHECK_S
+                cancelled = watch.fired or await cancel.is_cancelled()
+            else:
+                cancelled = False
+            if cancelled:
                 watch.claim()  # 盯取消位的那边发过取消、被图吞掉了：收回，别留给后面的 await
                 if usage:  # 取消前已经花掉的也要入账（见下面失败分支的说明）
                     yield events.make(EventType.USAGE_UPDATED, dict(usage))

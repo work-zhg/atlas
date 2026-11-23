@@ -116,9 +116,7 @@ async def test_images_are_admitted_per_profile(fake: FakeOpenSandbox, redis: Any
 
 async def test_quota_counts_per_person(fake: FakeOpenSandbox, redis: Any) -> None:
     """一个人的工作区共用一个沙箱，只占一个配额；要另建（换了镜像）才数第二个。"""
-    c = component(
-        fake, redis, sandbox_quota_per_user=1, sandbox_image_allow_prefixes=["other/"]
-    )
+    c = component(fake, redis, sandbox_quota_per_user=1, sandbox_image_allow_prefixes=["other/"])
     ws = new_workspace()
     ref = await c.native.ensure(ws, SandboxSpec())
     same_person = type(ws)(new_workspace().root_thread_uuid, ws.user_uuid)

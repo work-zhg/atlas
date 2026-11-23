@@ -16,6 +16,7 @@ import hashlib
 import logging
 import secrets
 from typing import Any
+from urllib.parse import unquote
 
 import httpx
 from fastapi import Request
@@ -163,6 +164,10 @@ class CapabilityProxy:
         upstream = binding["upstreams"].get(upstream_id)
         if upstream is None:
             return _error(404, "not_found", f"这个会话没有上游 {upstream_id}")
+        if any(unquote(segment) in (".", "..") for segment in path.split("/")):
+            # ★ httpx 会把点段规整掉：上游地址是 …/mcp/serpapi 时，../../internal 就出了这个上游
+            #   的范围，带着换上的真实凭据和身份去调同一台主机上的别的接口
+            return _error(400, "bad_path", "路径里不能有 . 或 .. 段")
         await self._store.touch(binding)
         target = upstream["url"] if not path else upstream["url"].rstrip("/") + "/" + path
         if request.url.query:

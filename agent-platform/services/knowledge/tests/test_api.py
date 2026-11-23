@@ -487,9 +487,7 @@ async def test_multi_retrieve_threshold_and_mixed_models(client: Any, rt: Any) -
     loose = await ask([a["id"], b["id"]])
     assert loose[0]["dataset_name"] == "B" and any(r["dataset_name"] == "A" for r in loose)
     # 开门槛：每个库先按自己的分数筛，A 的无关内容在合并前就被筛掉
-    strict = await ask(
-        [a["id"], b["id"]], score_threshold_enabled=True, score_threshold=0.3
-    )
+    strict = await ask([a["id"], b["id"]], score_threshold_enabled=True, score_threshold=0.3)
     assert strict and {r["dataset_name"] for r in strict} == {"B"}
     # 向量模型不同：按名次合并 —— 各库的第一名先排（同分按库的顺序），而不是直接比分数
     mixed = await ask([a["id"], c["id"]])

@@ -149,9 +149,7 @@ def _seal_dangling_tool_calls(
         following = stored[index] if index < len(stored) else None
         if following is not None and following.kind == KIND_TOOL_RESULT:
             satisfied = {
-                block.get("tool_use_id")
-                for block in following.content
-                if isinstance(block, dict)
+                block.get("tool_use_id") for block in following.content if isinstance(block, dict)
             }
             missing = [call_id for call_id in wanted if call_id not in satisfied]
             if missing:
@@ -223,7 +221,8 @@ def tool_result_text(message: ToolMessage) -> str:
       （一张截图几十万字符，2026-11-17 交还接管后一轮连压三次）。原文件还在工作区，要看再读。
     ★ tool.completed 事件的 result 也用它（translator.tool_result_from）：事件同样落库，
       打开会话时历史轨迹和 SSE 回放都要整份下载（2026-11-17 一个会话 22 张截图共 9 MB）。
-    ★ 读图时附的「只在这一步可见」提醒不落库：图本来就不进库，留着它下一轮就是过期的话，界面上也是噪音。
+    ★ 读图时附的「只在这一步可见」提醒不落库：图本来就不进库，留着它下一轮就是过期的话，
+      界面上也是噪音。
     """
     content = message.content
     if isinstance(content, str):
@@ -267,12 +266,11 @@ def from_storage(rows: Sequence[StoredLike]) -> list[BaseMessage]:
     for row in rows:
         blocks = row.content if isinstance(row.content, list) else []
         kind = getattr(row, "kind", KIND_CHAT) or KIND_CHAT
+        start = len(out)
 
         if kind == KIND_TOOL_RESULT:
             out.extend(_tool_messages(blocks))
-            continue
-
-        if row.role == "assistant":
+        elif row.role == "assistant":
             out.append(
                 AIMessage(
                     content=[b for b in blocks if _is_preserved(b)],
@@ -281,6 +279,13 @@ def from_storage(rows: Sequence[StoredLike]) -> list[BaseMessage]:
             )
         else:
             out.append(HumanMessage(content=[b for b in blocks if _is_preserved(b)]))
+
+        # ★ 行的身份只给它产出的第一条消息：一行工具结果会拆成几条 ToolMessage，同一个 id
+        #   给几条的话，图的 add_messages 会按 id 把后面的当成替换、前面的就丢了。
+        #   其余的由图自己分配 id
+        ref = getattr(row, "ref", None)
+        if ref and len(out) > start:
+            out[start].id = ref
     return out
 
 

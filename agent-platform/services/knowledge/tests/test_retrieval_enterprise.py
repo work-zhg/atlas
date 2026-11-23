@@ -110,6 +110,18 @@ def test_filter_validation_and_compile() -> None:
     assert compile_filter(expr, fields) is not None
 
 
+def test_rrf_writes_the_fused_score_back_onto_hits() -> None:
+    """混合检索融合的是 Hit：融合后的分数要写回，不能留着融合前某一路的原始分（余弦或 BM25）。"""
+    from atlas_knowledge.index.vdb import Hit
+
+    semantic = [Hit("a", 0.91, {}), Hit("b", 0.80, {})]
+    full_text = [Hit("b", 12.5, {}), Hit("a", 3.0, {})]
+    out = rrf([semantic, full_text], key=lambda h: h.id)
+    # 两路各排一次第一、一次第二：融合分相同，而且是 RRF 的量纲（远小于 1），不是 12.5 这样的 BM25
+    assert {h.id for h in out} == {"a", "b"}
+    assert out[0].score == out[1].score < 1
+
+
 def test_rrf_rewards_items_ranked_high_in_many_lists() -> None:
     out = rrf([["a", "b", "c"], ["b", "c", "a"], ["b", "d"]], key=lambda x: x)
     assert out[0] == "b" and set(out) == {"a", "b", "c", "d"}

@@ -3,7 +3,7 @@ name = "atlas"
 version = "0.1.0"
 description = "Atlas — agent platform (workspace root)"
 requires-python = ">=3.13"
-dependencies = ["atlas-acp", "atlas-agent", "atlas-appconfig", "atlas-bench", "atlas-bridge", "atlas-connect", "atlas-devicegw", "atlas-devicelink", "atlas-engine", "atlas-host", "atlas-jobs", "atlas-jsonrpc", "atlas-knowledge", "atlas-mcpgateway", "atlas-memory", "atlas-modelgateway", "atlas-opscenter", "atlas-opsapi", "atlas-redislock", "atlas-skill", "atlas-teamflow", "atlas-tenancy", "atlas-usercenter"]
+dependencies = ["atlas-acp", "atlas-agent", "atlas-appconfig", "atlas-bench", "atlas-bridge", "atlas-connect", "atlas-devicegw", "atlas-devicelink", "atlas-engine", "atlas-host", "atlas-jobs", "atlas-jsonrpc", "atlas-knowledge", "atlas-mcpgateway", "atlas-memory", "atlas-modelgateway", "atlas-opscenter", "atlas-opsapi", "atlas-redis", "atlas-redislock", "atlas-skill", "atlas-teamflow", "atlas-tenancy", "atlas-usercenter"]
 
 # Workspace root is a container, not an installable package.
 [tool.uv]
@@ -24,6 +24,7 @@ members = [
   "infra-platform/libs/appconfig",
   "infra-platform/libs/jobs",
   "infra-platform/libs/opsapi",
+  "infra-platform/libs/redis",
   "infra-platform/libs/redislock",
   "infra-platform/libs/tenancy",
   "agent-platform/services/knowledge",
@@ -55,6 +56,7 @@ atlas-memory = { workspace = true }
 atlas-modelgateway = { workspace = true }
 atlas-opscenter = { workspace = true }
 atlas-opsapi = { workspace = true }
+atlas-redis = { workspace = true }
 atlas-redislock = { workspace = true }
 atlas-skill = { workspace = true }
 atlas-teamflow = { workspace = true }
@@ -80,7 +82,7 @@ dev = [
 # ★ 依赖单向的硬约束（文档 §2.1）。engine 一旦 import server/db/web 就 CI 红。
 # ---------------------------------------------------------------------------
 [tool.importlinter]
-root_packages = ["atlas_acp", "atlas_agent", "atlas_appconfig", "atlas_bench", "atlas_bridge", "atlas_connect", "atlas_devicegw", "atlas_devicelink", "atlas_engine", "atlas_host", "atlas_jobs", "atlas_jsonrpc", "atlas_knowledge", "atlas_mcpgateway", "atlas_memory", "atlas_modelgateway", "atlas_opscenter", "atlas_opsapi", "atlas_redislock", "atlas_skill", "atlas_teamflow", "atlas_tenancy", "atlas_usercenter"]
+root_packages = ["atlas_acp", "atlas_agent", "atlas_appconfig", "atlas_bench", "atlas_bridge", "atlas_connect", "atlas_devicegw", "atlas_devicelink", "atlas_engine", "atlas_host", "atlas_jobs", "atlas_jsonrpc", "atlas_knowledge", "atlas_mcpgateway", "atlas_memory", "atlas_modelgateway", "atlas_opscenter", "atlas_opsapi", "atlas_redis", "atlas_redislock", "atlas_skill", "atlas_teamflow", "atlas_tenancy", "atlas_usercenter"]
 # forbidden_modules 里有第三方包（fastapi/sqlalchemy/...），必须打开这个开关
 include_external_packages = true
 
@@ -207,21 +209,14 @@ unmatched_ignore_imports_alerting = "none"
 # server 只许认技能应用的**对外契约**（schemas，只依赖 pydantic），不许碰它的
 # 库、存储、服务层。两边同是 Python，越界只要一行 import —— 所以要 CI 拦
 # （doc/skill-mcp-backend-design.html §4.1）。
+# ★ 禁止整个包、只放行 schemas：逐个列子模块的话，技能应用一重构（改包名、加领域包）列表就过期了，
+#   守卫形同虚设 —— 按领域分包之后的 access / check / market / store / versions 就漏过一回
 [[tool.importlinter.contracts]]
 name = "server 只认 atlas_skill 的 schemas"
 type = "forbidden"
 source_modules = ["atlas_agent"]
-forbidden_modules = [
-  "atlas_skill.db",
-  "atlas_skill.skill",
-  "atlas_skill.api",
-  "atlas_skill.storage",
-  "atlas_skill.audit",
-  "atlas_skill.auth",
-  "atlas_skill.settings",
-  "atlas_skill.errors",
-  "atlas_skill.register",
-]
+forbidden_modules = ["atlas_skill"]
+ignore_imports = ["atlas_agent.** -> atlas_skill.schemas"]
 
 # 技能应用不认识运行时：调用方向只有 server → skill。
 [[tool.importlinter.contracts]]
@@ -492,6 +487,8 @@ forbidden_modules = ["sqlalchemy", "fastapi", "redis", "alembic", "pydantic_sett
 line-length = 100
 target-version = "py313"
 extend-exclude = [
+  # 早期 pip install --target 留下的第三方包（pydantic 等），仓库里没有任何地方用它
+  ".linux-deps",
   # 智能体评测的任务夹具（初始文件 / 校验脚本 / 参考答案）：内容就是题目本身，不做格式化与 lint
   "agent-platform/bench/agent-tasks",
   "agent-platform/services/agent/migrations/versions",
@@ -534,7 +531,7 @@ exclude = ["agent-platform/libs/engine/src/atlas_engine/kernel/**"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["agent-platform/tests", "agent-platform/libs/devicelink/tests", "agent-platform/services/devicegw/tests", "agent-platform/device/connector/tests", "agent-platform/services/skill/tests", "usercenter/services/usercenter/tests", "teamflow/services/teamflow/tests", "agent-platform/services/knowledge/tests", "agent-platform/services/memory/tests", "agent-platform/services/mcpgateway/tests", "agent-platform/services/modelgateway/tests", "agent-platform/bench/tests", "infra-platform/libs/redislock/tests", "infra-platform/libs/appconfig/tests", "infra-platform/libs/jobs/tests", "infra-platform/libs/tenancy/tests", "infra-platform/libs/opsapi/tests", "opscenter/services/opscenter/tests"]
+testpaths = ["agent-platform/tests", "agent-platform/libs/acp/tests", "agent-platform/libs/host/tests", "agent-platform/libs/jsonrpc/tests", "agent-platform/pod/bridge/tests", "agent-platform/pod/browserd/tests", "agent-platform/libs/devicelink/tests", "agent-platform/services/devicegw/tests", "agent-platform/device/connector/tests", "agent-platform/services/skill/tests", "usercenter/services/usercenter/tests", "teamflow/services/teamflow/tests", "agent-platform/services/knowledge/tests", "agent-platform/services/memory/tests", "agent-platform/services/mcpgateway/tests", "agent-platform/services/modelgateway/tests", "agent-platform/bench/tests", "infra-platform/libs/redis/tests", "infra-platform/libs/redislock/tests", "infra-platform/libs/appconfig/tests", "infra-platform/libs/jobs/tests", "infra-platform/libs/tenancy/tests", "infra-platform/libs/opsapi/tests", "opscenter/services/opscenter/tests"]
 addopts = "-ra"
 
 [tool.mypy]
@@ -548,7 +545,15 @@ exclude = ["agent-platform/libs/engine/src/atlas_engine/vendor", "agent-platform
 name = "atlas_redislock 不依赖本仓任何其它包"
 type = "forbidden"
 source_modules = ["atlas_redislock"]
-forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_skill", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_agent", "atlas_teamflow", "atlas_usercenter"]
+forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_skill", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_agent", "atlas_teamflow", "atlas_usercenter", "atlas_mcpgateway", "atlas_modelgateway", "atlas_memory", "atlas_devicegw", "atlas_connect", "atlas_devicelink", "atlas_opscenter", "atlas_opsapi", "atlas_redis", "atlas_tenancy"]
+
+[[tool.importlinter.contracts]]
+# Redis 中间件是纯基础设施库（c4-model/infra-platform/code-redis.html）：只复用 atlas_redislock，
+# 不认识任何业务服务，也不拖入 SQLAlchemy / FastAPI / atlas_tenancy
+name = "atlas_redis 只依赖 atlas_redislock，不认识业务服务与 Web/DB 框架"
+type = "forbidden"
+source_modules = ["atlas_redis"]
+forbidden_modules = ["atlas_acp", "atlas_agent", "atlas_appconfig", "atlas_bench", "atlas_bridge", "atlas_connect", "atlas_devicegw", "atlas_devicelink", "atlas_engine", "atlas_host", "atlas_jobs", "atlas_jsonrpc", "atlas_knowledge", "atlas_mcpgateway", "atlas_memory", "atlas_modelgateway", "atlas_opscenter", "atlas_opsapi", "atlas_skill", "atlas_teamflow", "atlas_tenancy", "atlas_usercenter", "fastapi", "sqlalchemy", "langchain", "langgraph"]
 
 [[tool.importlinter.contracts]]
 # 应用配置嵌入宿主应用（c4-model/infra-platform/code-appconfig.html）：Atlas、TeamFlow、用户中心都可以用，
@@ -556,14 +561,14 @@ forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_skill", 
 name = "atlas_appconfig 不依赖本仓任何其它包"
 type = "forbidden"
 source_modules = ["atlas_appconfig"]
-forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_skill", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_agent", "atlas_teamflow", "atlas_usercenter", "atlas_redislock"]
+forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_skill", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_agent", "atlas_teamflow", "atlas_usercenter", "atlas_redislock", "atlas_mcpgateway", "atlas_modelgateway", "atlas_memory", "atlas_devicegw", "atlas_connect", "atlas_devicelink", "atlas_opscenter", "atlas_opsapi", "atlas_tenancy"]
 
 [[tool.importlinter.contracts]]
 # 定时任务嵌入宿主应用（c4-model/infra-platform/code-jobs.html）：谁都可以用，因此它不能认识其中任何一个
 name = "atlas_jobs 不依赖本仓任何其它包"
 type = "forbidden"
 source_modules = ["atlas_jobs"]
-forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_skill", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_agent", "atlas_teamflow", "atlas_usercenter", "atlas_redislock", "atlas_appconfig"]
+forbidden_modules = ["atlas_acp", "atlas_bench", "atlas_bridge", "atlas_skill", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_agent", "atlas_teamflow", "atlas_usercenter", "atlas_redislock", "atlas_appconfig", "atlas_mcpgateway", "atlas_modelgateway", "atlas_memory", "atlas_devicegw", "atlas_connect", "atlas_devicelink", "atlas_opscenter", "atlas_opsapi", "atlas_tenancy"]
 
 [[tool.importlinter.contracts]]
 # 租户隔离嵌入每个业务服务（c4-model/infra-platform/code-tenancy.html）：谁都可以用，因此它不能认识其中任何一个
@@ -592,3 +597,32 @@ name = "业务系统不认识 atlas_opscenter"
 type = "forbidden"
 source_modules = ["atlas_agent", "atlas_knowledge", "atlas_skill", "atlas_mcpgateway", "atlas_modelgateway", "atlas_memory", "atlas_usercenter", "atlas_teamflow", "atlas_devicegw", "atlas_opsapi"]
 forbidden_modules = ["atlas_opscenter"]
+
+[[tool.importlinter.contracts]]
+# 本机 CLI 的连接（agent-platform/doc/design/device-cli-design.html）：连接器和设备网关两头共用的多路复用协议。
+# 要装到使用者电脑上（随连接器），所以它是叶子：不认识本仓任何其它包
+name = "atlas_devicelink 不依赖本仓任何其它包"
+type = "forbidden"
+source_modules = ["atlas_devicelink"]
+forbidden_modules = ["atlas_acp", "atlas_agent", "atlas_appconfig", "atlas_bench", "atlas_bridge", "atlas_connect", "atlas_devicegw", "atlas_engine", "atlas_host", "atlas_jobs", "atlas_jsonrpc", "atlas_knowledge", "atlas_mcpgateway", "atlas_memory", "atlas_modelgateway", "atlas_opscenter", "atlas_opsapi", "atlas_redislock", "atlas_skill", "atlas_teamflow", "atlas_tenancy", "atlas_usercenter"]
+
+[[tool.importlinter.contracts]]
+# 连接器装在使用者电脑上：只认连接协议（devicelink）和 bridge 的上游协议（host），不认识平台的服务，
+# 也不碰服务端的重依赖 —— 拖进来就等于让每台电脑装上数据库驱动和 Web 框架
+name = "atlas_connect 只认 atlas_devicelink、atlas_host"
+type = "forbidden"
+source_modules = ["atlas_connect"]
+forbidden_modules = ["atlas_acp", "atlas_agent", "atlas_appconfig", "atlas_bench", "atlas_bridge", "atlas_devicegw", "atlas_engine", "atlas_jobs", "atlas_jsonrpc", "atlas_knowledge", "atlas_mcpgateway", "atlas_memory", "atlas_modelgateway", "atlas_opscenter", "atlas_opsapi", "atlas_redislock", "atlas_skill", "atlas_teamflow", "atlas_tenancy", "atlas_usercenter", "sqlalchemy", "fastapi", "redis", "langchain", "langgraph"]
+
+[[tool.importlinter.contracts]]
+# 设备网关是独立部署物：Agent 服务只经 HTTP / WS 调它，它也只认连接协议
+name = "atlas_devicegw 只认 atlas_devicelink"
+type = "forbidden"
+source_modules = ["atlas_devicegw"]
+forbidden_modules = ["atlas_acp", "atlas_agent", "atlas_appconfig", "atlas_bench", "atlas_bridge", "atlas_connect", "atlas_engine", "atlas_host", "atlas_jobs", "atlas_jsonrpc", "atlas_knowledge", "atlas_mcpgateway", "atlas_memory", "atlas_modelgateway", "atlas_opscenter", "atlas_opsapi", "atlas_redislock", "atlas_skill", "atlas_teamflow", "atlas_tenancy", "atlas_usercenter", "langchain", "langgraph"]
+
+[[tool.importlinter.contracts]]
+name = "atlas 其它包不认识 atlas_devicegw、atlas_connect"
+type = "forbidden"
+source_modules = ["atlas_acp", "atlas_agent", "atlas_bench", "atlas_bridge", "atlas_engine", "atlas_host", "atlas_jsonrpc", "atlas_knowledge", "atlas_mcpgateway", "atlas_memory", "atlas_modelgateway", "atlas_skill", "atlas_teamflow", "atlas_usercenter"]
+forbidden_modules = ["atlas_devicegw", "atlas_connect"]

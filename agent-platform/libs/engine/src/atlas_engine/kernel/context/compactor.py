@@ -230,8 +230,15 @@ class Compactor:
         # ★ 回合内的摘要不落库：它覆盖的是本轮内部的过程，而本轮完整的历史会在结束时
         #   照常落库 —— 落了的话下一轮会「摘要 + 原文」重复。下一轮有了新的用户回合，
         #   就能按回合正常压缩。
+        # ★ kept_from：保留区第一条消息的 id。按回合切时它是某一轮的提问，来自历史（载入时 id 就是
+        #   库里那一行的身份）—— 宿主据此把覆盖边界落在它之前，保留的回合不会被当成「已进摘要」
         if self._on_compacted is not None and not degraded and not intra_turn:
-            await self._on_compacted({k: v for k, v in payload.items() if k != "kind"})
+            await self._on_compacted(
+                {
+                    **{k: v for k, v in payload.items() if k != "kind"},
+                    "kept_from": kept[0].id if kept else None,
+                }
+            )
         return after_messages
 
     async def _restore_working_set(self, head: Sequence[BaseMessage]) -> tuple[str, list[str]]:

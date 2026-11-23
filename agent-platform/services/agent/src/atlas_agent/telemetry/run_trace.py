@@ -125,9 +125,7 @@ class RunTrace:
     # ------------------------------------------------------------------ 构造
 
     @classmethod
-    def start(
-        cls, segment: Segment, *, run_id: str, parent_run_id: str | None = None
-    ) -> RunTrace:
+    def start(cls, segment: Segment, *, run_id: str, parent_run_id: str | None = None) -> RunTrace:
         import time
 
         from opentelemetry import trace as ot

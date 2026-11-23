@@ -40,7 +40,9 @@ def now_default() -> sa.TextClause:
     PG 用 now()；MySQL 必须写成 CURRENT_TIMESTAMP(6) —— 不带精度的话
     默认值是秒级，而列本身是 DATETIME(6)，MySQL 会直接拒绝（1067）。
     """
-    return sa.text("CURRENT_TIMESTAMP(6)") if dialect() in ("mysql", "mariadb") else sa.text("now()")
+    return (
+        sa.text("CURRENT_TIMESTAMP(6)") if dialect() in ("mysql", "mariadb") else sa.text("now()")
+    )
 
 
 def uuid_pk_default() -> sa.TextClause | None:

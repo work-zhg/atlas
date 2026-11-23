@@ -374,9 +374,7 @@ async def test_a_read_only_tool_is_never_gated() -> None:
     """只读工具（MCP 约定的 readOnlyHint）任何模式都放行 —— 每个工具都弹窗等于没有门禁。"""
     gate = ScriptedGate("approved")
     for mode in ("plan", "manual", "auto"):
-        events = await _collect(
-            _spec(mode), gate, model=_calls(("lookup", '{"q":"x"}')), mode=mode
-        )
+        events = await _collect(_spec(mode), gate, model=_calls(("lookup", '{"q":"x"}')), mode=mode)
         assert EventType.TOOL_COMPLETED in [e.type for e in events], mode
     assert gate.asked == []
 

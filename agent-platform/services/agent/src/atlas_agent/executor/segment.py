@@ -39,7 +39,7 @@ from ..approval import ApprovalService
 from ..config import Settings
 from ..db.models import AgentVersion, Message, Run, Thread
 from ..outbound import CallIdentity, use_identity
-from ..redisx import make_redis
+from ..redisx import shared_redis
 from ..repositories.cli_session import CliSessionRepository
 from ..repositories.event_archive import EventArchive
 from ..repositories.run import LeaseLost, RunRepository
@@ -150,7 +150,7 @@ class SegmentLoader:
         from ..repositories.agent import AgentRepository
 
         found = await AgentRepository(session).get(thread.agent_uuid)
-        # agent 行理论上必然存在（thread.agent_id 有外键），兜底只为不炸
+        # agent 行理论上必然存在（删 agent 是归档、不删行），兜底只为不炸
         slug, name = (found[0].slug, found[0].name) if found is not None else ("agent", "agent")
 
         spec = _spec_from_version(version, slug=slug, name=name)
@@ -217,7 +217,11 @@ class SegmentLoader:
         resume = input_index is not None and input_index < len(rows) - 1
 
         # 历史交存储格式：转成框架的消息是原生运行时自己的事（runtime.messages）
-        stored = [StoredMessage(role=r.role, kind=r.kind, content=r.content) for r in rows]
+        # ref：行的身份随消息带进运行时，自动压缩据此定覆盖边界（services/compaction.py）
+        stored = [
+            StoredMessage(role=r.role, kind=r.kind, content=r.content, ref=str(r.message_uuid))
+            for r in rows
+        ]
         if input_index is None or resume:
             history = stored
             input_content: Any = ""
@@ -327,7 +331,8 @@ class SegmentExecution:
         self._loader = SegmentLoader()
 
     def _redis(self) -> aioredis.Redis:
-        return make_redis(self._settings)
+        """共享的短命令客户端（redisx.RedisComponent）。★ 不关。"""
+        return shared_redis()
 
     async def run(
         self, run_id: UUID, slot: SegmentControl, takeover: str | None = None
@@ -592,8 +597,6 @@ class SegmentExecution:
                     if thread_id is not None:
                         # owner=run_id：锁若已过期并被下一个 run 持有，这里不会误删（H3）
                         await relay.release_thread_lock(thread_id, owner=run_id)
-            with contextlib.suppress(Exception):
-                await redis.aclose()
 
     async def _checkpoint(
         self,

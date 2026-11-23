@@ -86,8 +86,8 @@ def ops_request(method: str, path: str, body: object = None) -> dict[str, object
     from atlas_opsapi import OperatorStamp, sign
 
     raw = b"" if body is None else json.dumps(body).encode()
-    headers = sign(b"test-ops-key", method, path, raw)
-    headers.update(OperatorStamp(operator_name="值班", idempotency_key=uuid4()).to_headers())
+    stamp = OperatorStamp(operator_name="值班", idempotency_key=uuid4())
+    headers = sign(b"test-ops-key", method, path, raw, stamp=stamp)
     if body is not None:
         headers["Content-Type"] = "application/json"
     return {"content": raw, "headers": headers}

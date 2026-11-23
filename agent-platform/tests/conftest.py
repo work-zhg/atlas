@@ -19,6 +19,7 @@ from uuid import UUID
 import pytest
 from atlas_agent.config import Settings, get_settings
 from atlas_agent.db.session import get_engine, get_sessionmaker
+from atlas_agent.redisx import get_redis_component
 from atlas_tenancy import TenantScope
 
 from tests.fake_model_platform import FakeModelPlatform
@@ -44,6 +45,24 @@ _OBJECT_STORAGE_KEYS = (
     "OSS_ADDRESSING_STYLE",
     "OSS_REGION",
 )
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _only_on_a_test_database() -> None:
+    """★ 库名不以 _test 结尾就一条都不跑。
+
+    这里的夹具会清表（clean_db 删掉全部会话、智能体、run……），而 DATABASE_URL 默认从 .env 读 ——
+    那是开发库。靠「记得在命令行带上测试库」不够，开发库因此被清过不止一次。
+    """
+    from sqlalchemy.engine import make_url
+
+    name = make_url(get_settings().database_url).database or ""
+    if not name.endswith("_test"):
+        pytest.exit(
+            f"Agent 服务的测试会清表，必须连独立的测试库（库名以 _test 结尾），现在是 {name!r}。"
+            "用环境变量 DATABASE_URL 指过去，例如 …/atlas_test",
+            returncode=2,
+        )
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -74,7 +93,8 @@ def _localhost_is_never_proxied() -> Iterator[None]:
     # 一个指向黑洞的代理 —— 它存在的唯一目的是让 bypass 逻辑走环境变量分支。
     # 真被用上就说明 bypass 没生效，那时连接会立刻失败，而不是默默走代理。
     os.environ["ALL_PROXY"] = "http://127.0.0.1:1"
-    os.environ["all_proxy"] = "http://127.0.0.1:1"
+    # 小写的那份也要设：不少库（urllib 之外）只认小写
+    os.environ["all_proxy"] = "http://127.0.0.1:1"  # noqa: SIM112
     os.environ["NO_PROXY"] = "127.0.0.1,localhost,::1"
     os.environ["no_proxy"] = "127.0.0.1,localhost,::1"
     try:
@@ -194,11 +214,15 @@ def fake_model_platform() -> Iterator[FakeModelPlatform]:
 
 @pytest.fixture(autouse=True)
 async def _reset_db_singletons() -> AsyncIterator[None]:
+    """数据库引擎和 Redis 的共享连接池（redisx.RedisComponent）都是进程级单例、连接绑定 loop：
+    每个用例结束时在 loop 还活着的时候关掉，下一个用例在自己的 loop 上重建。"""
     yield
     engine = get_engine()
     await engine.dispose()
     get_engine.cache_clear()
     get_sessionmaker.cache_clear()
+    await get_redis_component().aclose()
+    get_redis_component.cache_clear()
 
 
 #: 测试会写的表，按删除顺序。model_catalog 这类迁移种子不在里面。

@@ -20,6 +20,10 @@ OWNER = "0193f1a0-0000-7000-8000-0000000000aa"
 GOOD_TOKEN = "dev_good"
 
 
+#: Agent 服务调内部接口时带的服务令牌（夹具里网关配的 internal_token）
+INTERNAL_AUTH = {"Authorization": "Bearer internal-secret"}
+
+
 def agent_api(request: httpx.Request) -> httpx.Response:
     """假 Agent 服务：核对设备令牌、兑换配对码。"""
     body = json.loads(request.content or b"{}")

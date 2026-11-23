@@ -92,8 +92,7 @@ class OpsClient:
         body = b"" if json is None else _json.dumps(json, default=str).encode()
         target = httpx.URL(url, params=params)
         headers = {
-            **sign(self.key, method, target.raw_path.decode(), body),
-            **self.stamp.to_headers(),
+            **sign(self.key, method, target.raw_path.decode(), body, stamp=self.stamp),
             "Content-Type": "application/json",
         }
         return await self.http.request(method, target, content=body, headers=headers)

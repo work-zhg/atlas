@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Redis 中间件设计</title>
+<style>
+  body { margin: 0; background: #fff; color: #333; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { max-width: 1280px; padding: 24px 32px 64px; }
+  h1 { margin: 8px 0 12px; font-size: 22px; font-weight: 600; color: #222; }
+  h2 { margin: 40px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #e3e3e3; font-size: 17px; font-weight: 600; color: #222; }
+  h3 { margin: 28px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  p { max-width: 1100px; margin: 0 0 8px; font-size: 14px; line-height: 1.8; }
+  p.lead { padding: 10px 14px; border-left: 3px solid #1168bd; background: #f4f8fc; }
+  code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  a { color: #1168bd; }
+  table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  th, td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; }
+  ol.steps { margin: 8px 0 0; padding: 0; list-style: none; }
+  ol.steps li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  ol.steps li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  svg { display: block; max-width: 100%; height: auto; margin: 8px 0 4px; }
+  svg text { font-size: 13px; fill: #444; }
+  svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  svg .t-key { font-size: 12px; fill: #888; }
+  svg .t-lab { font-size: 12px; fill: #666; }
+  svg .t-hot { font-size: 12px; fill: #d9480f; }
+  svg .t-mute { font-size: 12px; fill: #aaa; }
+  svg .hot { fill: #d9480f; }
+  svg .mid { text-anchor: middle; }
+  svg .end { text-anchor: end; }
+  svg .b { font-weight: 700; }
+  svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  svg .node-hot { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.6; }
+  svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  svg .band-a { fill: #eef4fb; stroke: #1168bd; stroke-width: 1.2; }
+  svg .band-b { fill: #fff3ea; stroke: #d9480f; stroke-width: 1.2; }
+  svg .cell { fill: #fff; stroke: #bbb; stroke-width: 1.2; }
+  svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  svg .e-dash { fill: none; stroke: #444; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.2; }
+  svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
+</style>
+</head>
+<body>
+<main>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <marker id="a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+      <marker id="h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+      <marker id="m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+    </defs>
+  </svg>
+
+  <h1>Redis 中间件设计：连接按用途隔离，横切治理收进拦截链，高频模式做成标准原语</h1>
+  <p class="lead">一句话：<b>各业务服务不再裸调 <code>redis.asyncio.from_url</code>，而是统一接入嵌入式公共库 <code>atlas_redis</code>——底层按「短命令 / 阻塞流 / 单连接 PubSub」三路舱壁隔离，中层经可插拔拦截器链统一做护栏、命名空间、可观测与分级熔断，上层提供经验证的高阶并发原语（事件流、单连接订阅、脚本注册、原子限流、单飞缓存、分布式锁）。</b></p>
+  <p>这份设计回答五个问题：为什么选进程内客户端中间件而不是独立 Proxy；三类连接为什么要物理拆池并配不同超时；拦截器链怎么在不侵入业务的前提下统一做大 Key 护栏、OTel 观测和分级容灾；PubSub 多路复用如何用 1 条连接替代 N 条长连接；以及 5 个现有服务（Agent、模型网关、设备网关、知识库、TeamFlow）如何零破坏分阶段迁入。类结构与职责见<a href="code-redis.html">代码图</a>，运行时协作见<a href="dynamic-redis-runtime.html">动态图</a>。</p>
+
+  <h2>先认识几个词</h2>
+  <table>
+    <thead><tr><th style="width: 15%">词</th><th style="width: 45%">意思</th><th>Atlas 里的例子</th></tr></thead>
+    <tbody>
+      <tr><td>客户端中间件</td><td>嵌入每个服务进程的统一数据访问底座（参考 Go <code>go-redis</code> Hook 链、Java Lettuce / Redisson），区别于独立部署的网络 Proxy（Twemproxy / Predixy）。</td><td><code>infra-platform/libs/redis</code>（包名 <code>atlas_redis</code>），与 <code>atlas_tenancy</code>、<code>atlas_jobs</code> 同级。</td></tr>
+      <tr><td>舱壁隔离</td><td>把短命令、阻塞读（<code>XREAD BLOCK</code>）、长订阅（<code>SUBSCRIBE</code>）拆进互不干扰的连接资源，一类慢或满不会拖垮另一类。</td><td>短命令池设 <code>socket_timeout=2s</code>；阻塞流池配独立上限；PubSub 只占 1 条专用连接。</td></tr>
+      <tr><td>拦截器链</td><td>命令执行前后的洋葱模型（<code>Guard → Telemetry → Resilience</code>），横切关注点插拔组合，业务代码只写逻辑。</td><td>拦截 <code>KEYS</code>/超大 value、自动打 OTel Span 与慢日志、连续超时触发软状态熔断。</td></tr>
+      <tr><td>PubSub 多路复用</td><td>进程内只维护 1 条带自动重连的订阅连接，按 channel 路由分发到协程队列；重连后投递哨兵通知业务回库补查。</td><td>500 个等审批的 CLI 协程共用 1 条连接，不再各自占 1 条短命令池连接。</td></tr>
+      <tr><td>ScriptRegistry</td><td>集中管理 Lua 脚本，自动走 <code>EVALSHA</code>（遇到 <code>NOSCRIPT</code> 重灌 <code>EVAL</code>），消除每次传输完整 Lua 源码的开销。</td><td>序号分配、<code>INCR+EXPIRE</code> 原子限流、设备在线续期、分布式锁续租。</td></tr>
+      <tr><td>分级容灾</td><td>按原语一致性要求明确区分 <b>Fail-Closed</b>（出错必拒）与 <b>Fail-Open</b>（出错降级放行或读旧缓存）。</td><td>锁与序号必须 Fail-Closed；限流、缓存、失效通知可 Fail-Open + 熔断快返。</td></tr>
+      <tr><td>Singleflight</td><td>缓存过期瞬间只放行 1 个协程回源查库，同键并发请求共享同一个 <code>Future</code>；回源失败时在宽限期内返回旧值。</td><td>模型网关 <code>TenantGate</code> 每 5 秒过期不再产生 DB 惊群，DB 闪断也不再 500。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>现状痛点与架构选型</h2>
+  <p>业界 Redis 中间件分「独立代理层 Proxy」和「进程内客户端中间件」两条路线。Atlas 当前单集群下瓶颈不在数万客户端连接或分片路由透明化，而在 <b>5 个 Python 服务各自裸调 <code>from_url</code> 带来的治理碎片化与线上隐患</b>：</p>
+  <table>
+    <thead><tr><th style="width: 14%">服务</th><th style="width: 34%">当前用法</th><th>暴露出的问题</th></tr></thead>
+    <tbody>
+      <tr><td><code>atlas_agent</code></td><td>自建 <code>redisx.py</code> 双池、<code>relay.py</code> 事件流、<code>approval/channel.py</code> 审批订阅、<code>redislock</code></td><td>短命令池被迫 <code>socket_timeout=None</code>；CLI 审批 <code>pubsub.subscribe()</code> 长占短命令池；<code>tail_thread</code> 末尾重连仍扫全流；<code>EVAL</code> 未走 <code>EVALSHA</code>。</td></tr>
+      <tr><td><code>atlas_modelgateway</code></td><td>裸 <code>from_url</code> + <code>QuotaGuard</code> 限流与预算 + <code>TenantGate</code> 查 PG</td><td><code>incr</code> 与 <code>expire</code> 分两次调用非原子泄漏；<code>TenantGate</code> 5 秒过期击穿且 DB 闪断直接 500；多副本缺少租户停用即时广播。</td></tr>
+      <tr><td><code>atlas_devicegw</code></td><td>裸 <code>from_url</code> + <code>store.py</code> 手写 <code>eval</code> Lua</td><td>无连接池上限、无超时治理、每次 <code>eval</code> 传完整 Lua 源码、无 OTel/慢日志。</td></tr>
+      <tr><td><code>atlas_teamflow</code></td><td>裸 <code>from_url</code> + <code>process/bus.py</code> 自写 PubSub 与 Lua 锁</td><td>与 <code>atlas_redislock</code> 重复造轮子；缺少连接池治理与指标监控。</td></tr>
+      <tr><td><code>atlas_knowledge</code></td><td>裸 <code>from_url</code> + <code>RedisLock</code> + Celery broker</td><td>无统一超时与观测；键前缀未标准化，与其它服务共享 Redis 实例时难排查大 Key。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>原理 1　三类连接舱壁隔离，超时各归其位</h2>
+  <p><code>redis-py 8</code> 默认 <code>socket_timeout=5s</code> 会误杀 15 秒的 <code>XREAD BLOCK</code>，但为了兼容阻塞读把所有连接都改成 <code>socket_timeout=None</code>，又会让短命令在半开 TCP 僵死时挂满 30 秒才被健康检查发现。解法是按工作负载把连接拆成三路，各自配置独立的池上限与超时：</p>
+  <svg width="1240" viewBox="0 0 1240 280" role="img" aria-label="三类连接舱壁隔离">
+    <rect class="node" x="20" y="96" width="210" height="72" rx="4"/>
+    <text class="t-name" x="125" y="124">RedisRuntime</text>
+    <text class="t-sub" x="125" y="146">每进程单例 · lifespan 管理</text>
+
+    <path class="e" d="M230 112 H308 V48 H348" marker-end="url(#a)"/>
+    <path class="e" d="M230 132 H348" marker-end="url(#a)"/>
+    <path class="e-hot" d="M230 152 H308 V218 H348" marker-end="url(#h)"/>
+
+    <rect class="band-a" x="350" y="16" width="520" height="64" rx="4"/>
+    <text class="t-head" x="368" y="40">1. commands 池（短命令 / Pipeline / Lua）</text>
+    <text class="t-lab" x="368" y="62">BlockingPool(max=100) · socket_timeout=2s · 遇半开连接 2 秒快败</text>
+
+    <rect class="band-a" x="350" y="100" width="520" height="64" rx="4"/>
+    <text class="t-head" x="368" y="124">2. blocking 池（Stream XREAD BLOCK / BLPOP）</text>
+    <text class="t-lab" x="368" y="146">BlockingPool(max=sse+16) · socket_timeout=None · 服务端 block 参数封顶</text>
+
+    <rect class="band-b" x="350" y="186" width="520" height="64" rx="4"/>
+    <text class="t-head" x="368" y="210" style="fill:#d9480f">3. pubsub 专用单连接（PubSubHub 多路复用）</text>
+    <text class="t-lab" x="368" y="232">进程内仅 1 条长连接 · 心跳保活 · 断线重连后自动重订阅全量 channel</text>
+
+    <path class="e" d="M870 48 H978" marker-end="url(#a)"/>
+    <path class="e" d="M870 132 H978" marker-end="url(#a)"/>
+    <path class="e-hot" d="M870 218 H978" marker-end="url(#h)"/>
+
+    <rect class="node" x="980" y="36" width="230" height="200" rx="4"/>
+    <text class="t-name" x="1095" y="114">Redis 7</text>
+    <text class="t-sub" x="1095" y="138">单机 / Sentinel / Cluster</text>
+    <text class="t-sub" x="1095" y="162">三类流量互不挤占连接槽位</text>
+
+    <g class="badge"><circle cx="350" cy="16" r="10"/><text x="350" y="20">1</text></g>
+    <g class="badge"><circle cx="350" cy="100" r="10"/><text x="350" y="104">2</text></g>
+    <g class="badge"><circle cx="350" cy="186" r="10"/><text x="350" y="190">3</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>短命令池不再迁就阻塞读，恢复严格的 <code>socket_timeout=2s</code> 与 <code>connect_timeout=3s</code>，配合 <code>BlockingConnectionPool</code> 在瞬间突发时短暂排队而不是立刻报错。</li>
+    <li><span class="n">2</span>阻塞流池专供 SSE <code>XREAD BLOCK</code>，连接上限由宿主的 <code>StreamGate</code> 协同封顶，即使挂满 200 条长 SSE 也不影响任何一次锁、序号或缓存读写。</li>
+    <li><span class="n">3</span>PubSub 彻底移出短命令池：无论进程内有多少协程在等审批或听失效广播，对外永远只消耗 1 条 TCP 连接。</li>
+  </ol>
+
+  <h2>原理 2　可插拔拦截器链与分级容灾</h2>
+  <p>借鉴 <code>go-redis</code> Hook 链模式，<code>RedisClient</code> 将每次单命令、Pipeline 与 Lua 脚本调用封装为 <code>CommandContext</code>，依次穿过可插拔中间件栈，再交给底层 <code>redis-py</code> 执行：</p>
+  <svg width="1240" viewBox="0 0 1240 240" role="img" aria-label="拦截器链与分级容灾">
+    <rect class="node" x="20" y="36" width="160" height="64" rx="4"/>
+    <text class="t-name" x="100" y="64">业务 / 原语</text>
+    <text class="t-sub" x="100" y="84">KeySpace 构键</text>
+    <path class="e" d="M180 68 H228" marker-end="url(#a)"/>
+
+    <rect class="bnd" x="230" y="16" width="760" height="106" rx="6"/>
+    <text class="t-key" x="242" y="32">RedisClient 拦截器链（洋葱模型）</text>
+
+    <rect class="node" x="248" y="44" width="210" height="62" rx="4"/>
+    <text class="t-name" x="353" y="70">GuardMiddleware</text>
+    <text class="t-sub" x="353" y="90">禁 KEYS · 大 Value 告警/拦截</text>
+    <path class="e" d="M458 75 H498" marker-end="url(#a)"/>
+
+    <rect class="node" x="500" y="44" width="220" height="62" rx="4"/>
+    <text class="t-name" x="610" y="70">TelemetryMiddleware</text>
+    <text class="t-sub" x="610" y="90">OTel Span · 指标 · 慢日志</text>
+    <path class="e" d="M720 75 H760" marker-end="url(#a)"/>
+
+    <rect class="node-hot" x="762" y="44" width="210" height="62" rx="4"/>
+    <text class="t-name" x="867" y="70" style="fill:#d9480f">ResilienceMiddleware</text>
+    <text class="t-sub" x="867" y="90">幂等读重试 · 轻量熔断器</text>
+
+    <path class="e" d="M972 75 H1038" marker-end="url(#a)"/>
+    <rect class="node" x="1040" y="44" width="170" height="62" rx="4"/>
+    <text class="t-name" x="1125" y="70">commands 池</text>
+    <text class="t-sub" x="1125" y="90">RESP3 / TCP</text>
+
+    <path class="e-hot" d="M867 106 V152" marker-end="url(#h)"/>
+    <rect class="band-b" x="248" y="154" width="440" height="64" rx="4"/>
+    <text class="t-head" x="264" y="178" style="fill:#d9480f">Fail-Closed（锁 / 序号 / 幂等）</text>
+    <text class="t-lab" x="264" y="200">熔断或超时立刻抛 RedisUnavailable，绝不悄悄放行</text>
+
+    <rect class="band-a" x="712" y="154" width="498" height="64" rx="4"/>
+    <text class="t-head" x="728" y="178">Fail-Open（限流 / 缓存 / 失效广播）</text>
+    <text class="t-lab" x="728" y="200">熔断开启时 0ms 直接短路返回降级值，不拖垮 FastAPI 工作线程</text>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span><b>键空间规范（<code>KeySpace</code>）</b>：所有新 Key 经 <code>KeySpace(service, domain)</code> 生成，统一形状 <code>atlas:{service}:{scope}:{domain}:{id}</code>；多 Key 原子脚本显式使用 <code>{hash_tag}</code>（如 <code>atlas:agent:{t:&lt;thread_id&gt;}:seq</code> 与 <code>:events</code>），提前兼容 Redis Cluster 同槽约束。</li>
+    <li><span class="n">2</span><b>可观测脱敏</b>：<code>TelemetryMiddleware</code> 只记录脱敏后的键模式（如 <code>atlas:agent:thread:*:events</code>），不记真实 value 与 UUID，防止 OTel / Prometheus 指标基数爆炸与凭据泄露。</li>
+    <li><span class="n">3</span><b>写命令绝不盲目重试</b>：<code>ResilienceMiddleware</code> 仅对幂等读命令（<code>GET</code>/<code>MGET</code>/<code>EXISTS</code>）在瞬时断连时重试 1 次；<code>INCR</code>/<code>XADD</code> 等写命令失败直接上报，避免重复扣费或重复事件。</li>
+  </ol>
+
+  <h2>原理 3　单连接多路复用 PubSubHub 与断线自愈</h2>
+  <p>审批通知、权限失效、租户停用广播有一个共同特点：<b>信号只是「去回库看一眼」的提示，真相永远在数据库里</b>。<code>PubSubHub</code> 把进程内所有订阅收口到 1 条后台连接，彻底消除连接数随等待协程线性增长的问题：</p>
+  <svg width="1240" viewBox="0 0 1240 230" role="img" aria-label="PubSubHub 单连接多路复用">
+    <rect class="node" x="20" y="22" width="230" height="48" rx="4"/>
+    <text class="t-name" x="135" y="45">CLI 审批等待 × N</text>
+    <text class="t-sub" x="135" y="62">approval:decided:{id}</text>
+
+    <rect class="node" x="20" y="88" width="230" height="48" rx="4"/>
+    <text class="t-name" x="135" y="111">租户停用监听</text>
+    <text class="t-sub" x="135" y="128">tenant:state:changed</text>
+
+    <rect class="node" x="20" y="154" width="230" height="48" rx="4"/>
+    <text class="t-name" x="135" y="177">授权快照失效 / 流程唤醒</text>
+    <text class="t-sub" x="135" y="194">authz:invalidated · teamflow:*</text>
+
+    <path class="e" d="M250 46 H340 V112 H398" marker-end="url(#a)"/>
+    <path class="e" d="M250 112 H398" marker-end="url(#a)"/>
+    <path class="e" d="M250 178 H340 V112 H398" marker-end="url(#a)"/>
+
+    <rect class="node-hot" x="400" y="46" width="350" height="132" rx="4"/>
+    <text class="t-name" x="575" y="76" style="fill:#d9480f">PubSubHub（进程级单例）</text>
+    <text class="t-lab" x="420" y="102">· 维护 channel → set[Queue] 本地路由表</text>
+    <text class="t-lab" x="420" y="122">· 首个订阅者发 SUBSCRIBE，最后一个退订发 UNSUBSCRIBE</text>
+    <text class="t-lab" x="420" y="142">· 断线指数退避重连 → 全量重订阅 → 投递 Resubscribed 哨兵</text>
+    <text class="t-lab" x="420" y="162">· 慢消费者有界队列保护（丢旧/告警，不拖慢分发循环）</text>
+
+    <path class="e-hot" d="M750 112 H968" marker-end="url(#h)"/>
+    <text class="t-hot mid" x="859" y="102">永远只有 1 条 TCP 连接</text>
+    <text class="t-sub" x="859" y="128">RESP3 PubSub + 30s PING</text>
+
+    <rect class="node" x="970" y="66" width="240" height="92" rx="4"/>
+    <text class="t-name" x="1090" y="104">Redis Pub/Sub</text>
+    <text class="t-sub" x="1090" y="128">跨副本轻量广播通道</text>
+  </svg>
+  <p><b>关键设计点</b>：Redis PubSub 断线期间不留离线消息，因此 <code>PubSubHub</code> 在每次重连重订阅成功后，向所有在听队列投递一个 <code>Resubscribed</code> 哨兵对象——业务监听方（如 <code>DecisionChannel</code>、<code>TenantGate</code>）收到哨兵即立刻回库查一次最新状态，关闭断线期间漏信号窗口。</p>
+
+  <h2>原理 4　标准高阶原语与各服务痛点对应</h2>
+  <table>
+    <thead><tr><th style="width: 17%">原语</th><th style="width: 45%">解决的核心机制</th><th>直接替换 / 修复的现状问题</th></tr></thead>
+    <tbody>
+      <tr><td><code>ScriptRegistry</code></td><td>集中登记 Lua 脚本，首次编译缓存 SHA1，调用走 <code>EVALSHA</code>，遇 <code>NOSCRIPT</code> 自动回退 <code>EVAL</code>。</td><td>收编 <code>relay.py</code>、<code>devicegw/store.py</code>、<code>teamflow/bus.py</code>、<code>redislock</code> 全部散落 Lua。</td></tr>
+      <tr><td><code>StreamChannel</code></td><td>支持 <code>EVALSHA</code> 序号+写入；<code>tail(after_seq)</code> 先 <code>XREVRANGE COUNT 1</code> 快判流尾（命中直接 <code>XREAD</code>，O(1) 跳过 1 万条扫描），分页回放并跳过单条坏 JSON。</td><td>修复 <code>atlas_agent/stream/relay.py</code> 末尾重连扫全流与单条坏数据掐断 SSE 的问题。</td></tr>
+      <tr><td><code>AtomicQuota</code></td><td>单条 Lua 原子执行 <code>INCR + if 1 then EXPIRE</code> 与浮点/整数额度累加，默认 <code>fail_open=True</code>。</td><td>修复 <code>atlas_modelgateway/gateway/admission.py</code> 中 <code>incr</code>/<code>expire</code> 非原子永久 key 泄漏。</td></tr>
+      <tr><td><code>CoalescedCache</code></td><td>内存 L1 + Singleflight 单飞锁防击穿 + <code>stale_ttl_s</code> 异常降级读旧值 + 可选接 <code>PubSubHub</code> 收跨副本失效广播。</td><td>修复 <code>modelgateway</code> 数据面 <code>TenantGate</code> 每 5 秒缓存击穿、DB 闪断 500 及停用 5 秒延迟。</td></tr>
+      <tr><td><code>PubSubHub</code></td><td>单连接多路复用 + 自动重连重订阅 + <code>Resubscribed</code> 哨兵。</td><td>替换 <code>agent/approval/channel.py</code>（释放短命令池）、<code>agent/auth/service.py</code>、<code>teamflow/process/bus.py</code>。</td></tr>
+      <tr><td><code>DistributedLock</code></td><td>复用现有 <code>atlas_redislock</code>（Lua 原子续租/释放 + 单调时钟 + Python 3.13 <code>uncancel()</code>），由 <code>RedisRuntime</code> 注入 <code>commands</code> 客户端与脚本表。</td><td>保持 <code>atlas_redislock</code> 为独立叶子包，零破坏复用并删掉 <code>teamflow</code> 重复锁实现。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>架构边界与依赖方向</h2>
+  <table>
+    <thead><tr><th style="width: 22%">边界约束</th><th>约定与 <code>import-linter</code> 守卫</th></tr></thead>
+    <tbody>
+      <tr><td>纯基础设施叶子包</td><td><code>atlas_redis</code> 只依赖 <code>redis</code>、<code>opentelemetry-api</code>（可选）与 <code>atlas_redislock</code>，<b>不依赖任何业务服务包</b>，也<b>不依赖 <code>atlas_tenancy</code></b>（保持与 <code>atlas_appconfig</code> / <code>atlas_jobs</code> 一致的独立性；租户标识由宿主在构键时经 <code>KeySpace.tenant(uid)</code> 显式传入或注册 getter 回调）。</td></tr>
+      <tr><td>单向依赖与防绕过</td><td>所有业务服务只经 <code>atlas_redis</code> 构造和使用 Redis；Phase 3 迁完后在 <code>pyproject.toml</code> 新增 <code>import-linter</code> 规则：禁止业务服务直接调用 <code>redis.asyncio.from_url</code>（除 Celery 配置 URL 外）。</td></tr>
+      <tr><td>测试友好</td><td>内置 <code>IsolatedPrefix</code>（每个用例随机前缀 + 结束自动清理）与内存替身，单测可脱离 Redis 或安全共用同一测试实例不互相污染。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>渐进式三阶段迁移路线</h2>
+  <ol class="steps">
+    <li><span class="n">1</span><b>Phase 1（建库 + 止血高危问题）</b>：新建 <code>infra-platform/libs/redis</code>，落地 <code>RedisRuntime</code>、拦截器链、<code>ScriptRegistry</code>、<code>PubSubHub</code>、<code>CoalescedCache</code>、<code>AtomicQuota</code>、<code>StreamChannel</code>；优先接入 <code>atlas_agent</code>（释放 CLI 审批短命令池 + 流尾快跳）与 <code>atlas_modelgateway</code>（修复 <code>TenantGate</code> 击穿/DB 降级 + <code>QuotaGuard</code> 原子化）。</li>
+    <li><span class="n">2</span><b>Phase 2（全服务收编）</b>：将 <code>atlas_devicegw</code>、<code>atlas_knowledge</code>、<code>atlas_teamflow</code> 迁入 <code>atlas_redis</code>，删除 <code>teamflow/process/bus.py</code> 重复锁与手写 PubSub，删除 <code>atlas_agent/redisx.py</code> 重复建池逻辑。</li>
+    <li><span class="n">3</span><b>Phase 3（护栏固化）</b>：接入 <code>import-linter</code> 禁止业务服务绕过 <code>atlas_redis</code> 建连；统一开启 OTel Redis 延迟、连接池水位与大 Key 告警。</li>
+  </ol>
+
+  <h2>配套 C4 架构图</h2>
+  <ul>
+    <li><a href="code-redis.html">代码图：基础设施平台 - 公共库 - Redis 中间件</a>（类结构、对外能力表、设计决策表、元素职责表）</li>
+    <li><a href="dynamic-redis-runtime.html">动态图：基础设施平台 - Redis 中间件运行时协作</a>（受保护命令拦截、单飞缓存防击穿降级与 PubSub 断线自愈时序）</li>
+  </ul>
+</main>
+</body>
+</html>

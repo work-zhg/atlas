@@ -56,6 +56,26 @@ def test_signature_round_trip_and_tampering() -> None:
         verify(KEY, "POST", "/x", b"", {}, now=1000)
 
 
+def test_operator_headers_are_signed_too() -> None:
+    """★ 操作人和幂等键进签名原文：截到一个请求，不能在窗口内改掉操作人，也不能换个幂等键重放
+    （业务系统按幂等键去重，不签它的话去重形同虚设）。"""
+    path, body = "/ops/v1/tenants/x/suspend", b"{}"
+    stamp = OperatorStamp(uuid4(), "小周", uuid4(), uuid4())
+    headers = sign(KEY, "POST", path, body, stamp=stamp, at=1000)
+    assert OperatorStamp.from_headers(headers) == stamp  # 运营头随签名一起给出
+    verify(KEY, "POST", path, body, headers, now=1000)
+
+    replayed = {**headers, "Idempotency-Key": str(uuid4())}
+    with pytest.raises(SignatureError, match="签名不对"):
+        verify(KEY, "POST", path, body, replayed, now=1000)
+    forged = {**headers, "X-Ops-Operator": str(uuid4())}
+    with pytest.raises(SignatureError, match="签名不对"):
+        verify(KEY, "POST", path, body, forged, now=1000)
+    added = {**sign(KEY, "POST", path, body, at=1000), "X-Ops-Operator-Name": "%E5%86%92%E5%85%85"}
+    with pytest.raises(SignatureError, match="签名不对"):
+        verify(KEY, "POST", path, body, added, now=1000)
+
+
 def test_operator_stamp_survives_headers_with_chinese_name() -> None:
     stamp = OperatorStamp(uuid4(), "小周", uuid4(), uuid4())
     headers = stamp.to_headers()
@@ -127,7 +147,7 @@ class Signed:
     ) -> httpx.Response:
         raw = b"" if body is None else json.dumps(body).encode()
         stamp = OperatorStamp(uuid4(), "小周", uuid4(), key)
-        headers = {**sign(KEY, method, path, raw), **stamp.to_headers()}
+        headers = sign(KEY, method, path, raw, stamp=stamp)
         if raw:
             headers["Content-Type"] = "application/json"
         return await self.client.request(method, path, content=raw, headers=headers)

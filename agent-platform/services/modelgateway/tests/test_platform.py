@@ -377,9 +377,10 @@ async def gateway(upstream: FakeUpstream) -> AsyncIterator[tuple[httpx.AsyncClie
         settings, transport=upstream.transport(), guard=AddressGuard(enabled=False)
     )
     app = create_gateway_app(settings, runtime=runtime)
-    async with app.router.lifespan_context(app), httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://gw"
-    ) as c:
+    async with (
+        app.router.lifespan_context(app),
+        httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gw") as c,
+    ):
         yield c, runtime
     await runtime.upstream.aclose()
 

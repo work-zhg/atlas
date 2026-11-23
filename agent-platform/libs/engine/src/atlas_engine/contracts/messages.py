@@ -55,6 +55,9 @@ class StoredMessage:
     role: str
     kind: str
     content: list[dict[str, Any]]
+    #: 这一行在库里的身份（message_uuid）。载入历史时带上，转成框架消息时成为第一条消息的 id ——
+    #: 自动压缩据此找到「保留区从哪一行开始」，覆盖边界不靠时间或位置去猜。待写入的行没有
+    ref: str | None = None
 
 
 #: 补给中断的工具调用的结果文本。

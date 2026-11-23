@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -126,15 +127,20 @@ class UpstreamCredential:
 
 
 class TokenCache:
-    """OAuth2 client_credentials 换来的 Token。"""
+    """OAuth2 client_credentials 换来的 Token。
+
+    ★ 缓存键带上 secret 的摘要：只按 (地址, client_id, scope) 缓存的话，另一个租户填同样的
+      token 地址和 client_id、随便写个 secret，就能从缓存里拿到别人换来的 Token —— client_id
+      不是秘密。secret 相同就是同一份凭据，共用 Token 没有问题。
+    """
 
     def __init__(self, http: httpx.AsyncClient) -> None:
         self._http = http
-        self._rows: dict[tuple[str, str, str | None], tuple[float, str]] = {}
+        self._rows: dict[tuple[str, str, str | None, str], tuple[float, str]] = {}
         self._lock = asyncio.Lock()
 
     async def token(self, url: str, client_id: str, secret: str, scope: str | None) -> str:
-        key = (url, client_id, scope)
+        key = (url, client_id, scope, hashlib.sha256(secret.encode()).hexdigest())
         row = self._rows.get(key)
         if row is not None and row[0] > time.monotonic():
             return row[1]

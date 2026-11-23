@@ -102,9 +102,7 @@ class ConfigRepository:
         """系统值；给了租户就只列这个租户的值。"""
         rows = (
             await session.execute(
-                sa.select(C)
-                .where(C.c.tenant_uuid == _row_tenant(tenant_uuid))
-                .order_by(C.c.key)
+                sa.select(C).where(C.c.tenant_uuid == _row_tenant(tenant_uuid)).order_by(C.c.key)
             )
         ).all()
         return [_item(row) for row in rows]

@@ -501,6 +501,23 @@ function freshTurn(): Omit<RunState, "lastSeq" | "missingSeqs" | "activeRunId"> 
 /** 记多少个「跳过了、还没到」的序号。并发发布的交错只有几条，留足余量 */
 const MAX_MISSING = 64;
 
+/** 重连时只为离最新不超过这么多个序号的缺口往回要（见 resumeCursor） */
+const RESUME_HOLE_WINDOW = 200;
+
+/**
+ * 断线重连的游标：从哪个 thread_seq 之后接着要。
+ *
+ * ★ 不能直接用 lastSeq（收到过的最大值）：有跳过了、还没到的序号时（终态 / 挂起事件先领序号、
+ *   落库后才发布，见 applyEvent），带着最大值重连，服务端只回放它之后的 —— 那条晚到的事件
+ *   恰好在断线期间发出的话，就再也收不到了。从最早的缺口之前接着要，多回放的由去重丢掉。
+ * ★ 只看最近的缺口：一个永远补不上的缺口（序号领了、进程没来得及发就退出了）会让每次重连都从
+ *   它那里开始回放。离最新超过 RESUME_HOLE_WINDOW 的，晚到的早就该到了，不再为它往回要。
+ */
+export function resumeCursor(state: Pick<RunState, "lastSeq" | "missingSeqs">): number {
+  const recent = state.missingSeqs.filter((s) => state.lastSeq - s <= RESUME_HOLE_WINDOW);
+  return recent.length > 0 ? Math.min(...recent) - 1 : state.lastSeq;
+}
+
 export function applyEvent(state: RunState, event: AnyTraceEvent): RunState {
   // 规则 2：thread_seq 在会话内唯一。重连边界可能重发，收过的直接丢弃。
   //

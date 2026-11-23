@@ -140,9 +140,7 @@ async def verify_approval(c: httpx.AsyncClient) -> None:
     )
 
     # ④ 决策 → 唤醒 → 续跑 → 工具真的执行
-    await api(
-        c, "POST", f"/v1/runs/{rid}/approvals/{approval_id}", json={"decision": "approved"}
-    )
+    await api(c, "POST", f"/v1/runs/{rid}/approvals/{approval_id}", json={"decision": "approved"})
     final = await wait_status(c, rid, {"succeeded", "failed", "cancelled"})
     check(final["status"] == "succeeded", "决策后续跑到终态", final["status"])
 
@@ -219,9 +217,7 @@ async def verify_delegation(c: httpx.AsyncClient) -> None:
         "挂起不是终态 —— 后面还跟着真正的结束",
     )
     check(any(e["depth"] == 1 for e in events), "子智能体的事件带 depth=1（在同一条流上）")
-    check(
-        any(e["type"] == "subagent.started" for e in events), "委派边界事件可见"
-    )
+    check(any(e["type"] == "subagent.started" for e in events), "委派边界事件可见")
 
 
 async def main() -> None:

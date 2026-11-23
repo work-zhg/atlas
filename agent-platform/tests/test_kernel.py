@@ -68,7 +68,6 @@ def test_no_third_party_deepagents_installed() -> None:
     assert result.returncode != 0, "环境里存在同名第三方包，会与 kernel 混淆"
 
 
-
 @pytest.mark.parametrize("module", ["langchain_google_genai", "av"])
 def test_optional_deps_remain_absent(module: str) -> None:
     """kernel 的可选功能仍然关着。哪天它变成必需，这条会失败提醒重新决定。

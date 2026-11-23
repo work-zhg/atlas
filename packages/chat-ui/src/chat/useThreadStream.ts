@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { qk } from "../api/keys";
 import { useAtlasClient } from "../client";
-import { applyEvent, initialRunState, type RunState } from "../lib/run-reducer";
+import { applyEvent, initialRunState, resumeCursor, type RunState } from "../lib/run-reducer";
 import { streamThreadEvents } from "../lib/sse";
 
 export interface UseThreadStreamOptions {
@@ -99,6 +99,10 @@ export function useThreadStream({
       lastSeq: lastSeqRef.current,
       signal: ctrl.signal,
       onOpen: () => setReconnecting(false),
+      // 断了、正在退避重连：界面上显示「重新连接中」，连上（onOpen）再复位
+      onDisconnect: () => setReconnecting(true),
+      // ★ 重连按连续收到的位置接着要，不按收到过的最大序号（resumeCursor 的说明）
+      cursor: () => resumeCursor(stateRef.current),
       onEvent: (event) => {
         setState((prev) => {
           const next = applyEvent(prev, event);

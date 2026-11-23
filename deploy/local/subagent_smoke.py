@@ -56,9 +56,26 @@ def sql(query: str) -> list[list[str]]:
       本脚本要给子 run 的审批点头，只能直接查库。
     """
     out = subprocess.run(
-        ["docker", "exec", "atlas-pg", "psql", "-U", "atlas", "-d", "atlas", "-tA", "-F", "|",
-         "-v", "ON_ERROR_STOP=1", "-c", query],
-        capture_output=True, text=True, check=False,
+        [
+            "docker",
+            "exec",
+            "atlas-pg",
+            "psql",
+            "-U",
+            "atlas",
+            "-d",
+            "atlas",
+            "-tA",
+            "-F",
+            "|",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-c",
+            query,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
     )
     # ★ 必须把 psql 的错误抛出来。早先这里 check=False 又不看 stderr，写错列名
     #   （approval 是 status 不是 decision）只表现为「查不到待审批」—— 于是
@@ -122,9 +139,8 @@ def auto_approve(thread_id: str, stop: threading.Event) -> None:
             seen.add(approval_id)
             print(f"    >> 放行审批：{tool_name}（run {run_id[:8]}）")
             try:
-                call("POST", f"/v1/runs/{run_id}/approvals/{approval_id}",
-                     {"decision": "approved"})
-            except Exception as exc:  # noqa: BLE001
+                call("POST", f"/v1/runs/{run_id}/approvals/{approval_id}", {"decision": "approved"})
+            except Exception as exc:
                 print(f"    !! 放行失败：{exc}")
 
 
@@ -148,8 +164,11 @@ def stream(run_id: str, timeout_s: float = 900.0) -> None:
                 continue
             if etype == "thinking.delta":
                 continue
-            brief = {k: v for k, v in data.items()
-                     if k in ("name", "task", "status", "subagent_run_id", "reason")}
+            brief = {
+                k: v
+                for k, v in data.items()
+                if k in ("name", "task", "status", "subagent_run_id", "reason")
+            }
             print(f"  [{e.get('seq')}] {etype} {brief if brief else ''}")
             if etype in ("run.finished", "run.succeeded", "run.failed", "run.cancelled"):
                 break
@@ -169,9 +188,15 @@ def main() -> None:
     run = call(
         "POST",
         f"/v1/threads/{thread_id}/runs",
-        {"content": [{"type": "text", "text":
-                      "请委派子智能体在工作区新建 report.md，内容只写一行："
-                      "来自子智能体。完成后你自己读回这个文件，把内容告诉我。"}]},
+        {
+            "content": [
+                {
+                    "type": "text",
+                    "text": "请委派子智能体在工作区新建 report.md，内容只写一行："
+                    "来自子智能体。完成后你自己读回这个文件，把内容告诉我。",
+                }
+            ]
+        },
     )
     print("父的事件流：")
     try:

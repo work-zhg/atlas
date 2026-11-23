@@ -64,9 +64,14 @@ class TenantDataPurge:
         for table in self._tables:
             if budget <= 0:
                 break
+            # ★ 按主键第一列分批：复合主键（分区表的主键要带分区键，如 gw_model_call）的第一列
+            #   不保证跨租户唯一，外层也带上租户条件，删不到别的租户
             pk = next(iter(table.primary_key.columns))
-            ids = sa.select(pk).where(table.c.tenant_uuid == tenant_uuid).limit(budget)
-            result = await session.execute(sa.delete(table).where(pk.in_(ids.scalar_subquery())))
+            mine = table.c.tenant_uuid == tenant_uuid
+            ids = sa.select(pk).where(mine).limit(budget)
+            result = await session.execute(
+                sa.delete(table).where(mine, pk.in_(ids.scalar_subquery()))
+            )
             n = result.rowcount or 0
             if n:
                 report.deleted[table.name] = n

@@ -24,6 +24,7 @@ from uuid import UUID
 
 import redis.asyncio as aioredis
 from atlas_engine.contracts.events import TERMINAL_EVENTS, EventType, TraceEvent
+from atlas_redislock import RedisLock
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,9 @@ _SEQ_TTL_S = 30 * 86_400
 #:   回放走 §10.2 的情形 2。
 _STREAM_MAXLEN = 10_000
 
+#: 重连时读流里已有事件的每页条数
+_REPLAY_PAGE = 500
+
 
 class EventRelay:
     def __init__(self, redis: aioredis.Redis, *, ttl_s: int = 86_400) -> None:
@@ -130,19 +134,22 @@ class EventRelay:
         await self._emit(thread_stream_key(thread_id), event)
 
     async def _emit(self, key: str, event: TraceEvent) -> None:
-        await self._redis.xadd(
-            key,
-            {
-                "seq": str(event.seq),
-                "thread_seq": str(event.thread_seq),
-                "type": event.type.value,
-                "payload": event.model_dump_json(),
-            },
-            maxlen=_STREAM_MAXLEN,
-            approximate=True,
-        )
-        # 每次都续期：run 可能跑很久，避免中途过期
-        await self._redis.expire(key, self._ttl_s)
+        # ★ XADD 和续期一次往返发出去（pipeline，不开事务）：流式输出时每个 token 一个事件，
+        #   两条命令各等一次往返就是每个 token 多一次。续期每次都做：run 可能跑很久，避免中途过期
+        async with self._redis.pipeline(transaction=False) as pipe:
+            pipe.xadd(
+                key,
+                {
+                    "seq": str(event.seq),
+                    "thread_seq": str(event.thread_seq),
+                    "type": event.type.value,
+                    "payload": event.model_dump_json(),
+                },
+                maxlen=_STREAM_MAXLEN,
+                approximate=True,
+            )
+            pipe.expire(key, self._ttl_s)
+            await pipe.execute()
 
     # ------------------------------------------------------------------ 会话流
 
@@ -163,11 +170,18 @@ class EventRelay:
         key = thread_stream_key(thread_id)
         last_id = "0-0"
 
-        # 先把流里已有的读完，同时把游标推到末尾
-        for entry_id, fields in await self._redis.xrange(key):
-            last_id = entry_id
-            if int(fields.get("thread_seq", 0)) > after_seq:
-                yield TraceEvent.model_validate_json(fields["payload"])
+        # 先把流里已有的读完，同时把游标推到末尾。★ 分页读：流最多留一万条，一次 XRANGE 全读进
+        #   内存再丢掉游标之前的，重连一次就是一次内存尖峰
+        start = "-"
+        while True:
+            page = await self._redis.xrange(key, min=start, count=_REPLAY_PAGE)
+            for entry_id, fields in page:
+                last_id = entry_id
+                if int(fields.get("thread_seq", 0)) > after_seq:
+                    yield TraceEvent.model_validate_json(fields["payload"])
+            if len(page) < _REPLAY_PAGE:
+                break
+            start = f"({last_id}"  # 不含上一页的最后一条
 
         while True:
             resp = await self._redis.xread({key: last_id}, block=block_ms, count=100)
@@ -192,6 +206,14 @@ class EventRelay:
         await self._redis.delete(cancel_key(run_id))
 
     # ------------------------------------------------------------------ 串行锁
+
+    def subagent_admission_lock(self, tenant: UUID) -> RedisLock:
+        """派 SubAgent 的准入锁：同一租户里「数在跑的子 run → 建子 run」同一时刻只有一个在做。
+
+        ★ 不锁的话准入是软上限：同一批并发派出的几个 SubAgent 先后数到的都是派之前的数，
+          一起通过。持有时间只有一次计数加一次插入；计数按租户（run 表自动按租户过滤），锁也按租户。
+        """
+        return RedisLock(self._redis, f"run:subagent-admission:{tenant}", ttl_s=30)
 
     #: 只删自己持有的锁（compare-and-delete 必须原子，GET+DEL 两步之间
     #: 锁可能过期又被新 run 拿走）

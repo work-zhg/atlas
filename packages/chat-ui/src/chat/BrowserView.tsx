@@ -5,6 +5,7 @@ import { Button } from "antd";
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
 import { useBrowserClipboard, useBrowserViewUrl } from "../api/browser";
+import { copyText } from "../lib/clipboard";
 import styles from "./chat.module.css";
 
 interface Props {
@@ -188,10 +189,10 @@ function useRemoteKeys(
         return;
       }
       if (!text) return;
-      try {
-        await navigator.clipboard.writeText(text);
+      // 内网 http 下没有 navigator.clipboard：copyText 退到 execCommand
+      if (await copyText(text)) {
         notify("已复制到你的剪贴板");
-      } catch {
+      } else {
         notify("浏览器不让写剪贴板：请在地址栏旁允许剪贴板权限");
       }
     };

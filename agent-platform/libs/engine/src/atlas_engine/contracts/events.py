@@ -43,10 +43,10 @@ class EventType(StrEnum):
     #: ★ 不是终止事件，紧随其后是新一段的 run.started（与挂起后续跑同形）。
     RUN_RESUMED = "run.resumed"
 
-    # ⚠️ THINKING_DELTA 目前无法通过 litellm 网关产出：
-    #    实测 thinking.display="summarized" 不透传，返回的 thinking block
-    #    文本恒为空（仅带 signature）。可用的只有"是否思考过"与 thinking_tokens
-    #    计数，两者都随 USAGE_UPDATED 上报。保留该类型以备网关放开后启用。
+    # ⚠️ 原生运行时目前不产出 THINKING_DELTA（CLI 智能体的思考片段会翻成它）：当初经 LiteLLM
+    #    网关实测 thinking.display="summarized" 不透传，thinking block 文本恒为空（仅带
+    #    signature）。网关已换成自研的模型网关，还没重新实测。可用的只有"是否思考过"与
+    #    thinking_tokens 计数，两者都随 USAGE_UPDATED 上报。
     THINKING_DELTA = "thinking.delta"
     MESSAGE_DELTA = "message.delta"
     MESSAGE_COMPLETED = "message.completed"

@@ -37,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..capacity import CapacityService
 from ..config import Settings
-from ..redisx import make_redis
+from ..redisx import shared_redis
 from ..repositories.run import SUSPENDED_STATUSES, LeaseLost, RunRepository
 from ..repositories.run_queue import RunQueue
 from ..stream.relay import EventRelay
@@ -199,11 +199,7 @@ class RunWorker:
         return True
 
     async def cancel(self, run_id: UUID) -> None:
-        redis = self._redis()
-        try:
-            await EventRelay(redis).request_cancel(run_id)
-        finally:
-            await redis.aclose()
+        await EventRelay(self._redis()).request_cancel(run_id)
 
         # ★ 挂起中的 run **没有进程**会读到这个取消位。
         #
@@ -379,7 +375,8 @@ class RunWorker:
             logger.info("run %s 已交接", run_id)
 
     def _redis(self) -> aioredis.Redis:
-        return make_redis(self._settings)
+        """共享的短命令客户端（redisx.RedisComponent）。★ 不关。"""
+        return shared_redis()
 
     # ------------------------------------------------------------------ 交接
 
@@ -544,21 +541,16 @@ class LeaseRenewer(Job):
                     list(live), owner=self._instance, lease_s=self._settings.run_lease_s
                 )
                 await session.commit()
-        redis = make_redis(self._settings)
-        try:
-            relay = EventRelay(redis)
-            for run_id, slot in live.items():
-                if slot.settled:  # 续租期间刚好收尾了
-                    continue
-                if run_id not in held:
-                    logger.warning("run %s 的租约已被别的实例抢走，停止本地执行", run_id)
-                    slot.stop_lost()
-                elif slot.thread_id is not None:
-                    # 会话锁跟随租约（§4.4）
-                    with contextlib.suppress(Exception):
-                        await relay.renew_thread_lock(
-                            slot.thread_id, owner=run_id, ttl_s=self._settings.run_lease_s
-                        )
-        finally:
-            with contextlib.suppress(Exception):
-                await redis.aclose()
+        relay = EventRelay(shared_redis())
+        for run_id, slot in live.items():
+            if slot.settled:  # 续租期间刚好收尾了
+                continue
+            if run_id not in held:
+                logger.warning("run %s 的租约已被别的实例抢走，停止本地执行", run_id)
+                slot.stop_lost()
+            elif slot.thread_id is not None:
+                # 会话锁跟随租约（§4.4）
+                with contextlib.suppress(Exception):
+                    await relay.renew_thread_lock(
+                        slot.thread_id, owner=run_id, ttl_s=self._settings.run_lease_s
+                    )

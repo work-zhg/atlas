@@ -90,9 +90,7 @@ async def test_concurrent_allocation_never_collides(relay) -> None:
     r, redis = relay
     thread_id = uuid4()
     try:
-        got = await asyncio.gather(
-            *[r.next_thread_seq(thread_id, floor=0) for _ in range(50)]
-        )
+        got = await asyncio.gather(*[r.next_thread_seq(thread_id, floor=0) for _ in range(50)])
         assert sorted(got) == list(range(1, 51)), f"撞号或有空洞：{sorted(got)}"
     finally:
         await redis.delete(thread_seq_key(thread_id))

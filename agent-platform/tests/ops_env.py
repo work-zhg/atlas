@@ -39,13 +39,12 @@ async def ops_call(
 ) -> httpx.Response:
     """签好名的运营请求。写请求不给幂等键就每次新生成一个（不同的请求）。"""
     raw = b"" if body is None else json.dumps(body).encode()
-    headers = sign(key.encode(), method, path, raw)
     stamp = OperatorStamp(
         operator_uuid=OPERATOR,
         operator_name="值班",
         idempotency_key=idempotency_key or (uuid4() if method != "GET" else None),
     )
-    headers.update(stamp.to_headers())
+    headers = sign(key.encode(), method, path, raw, stamp=stamp)
     if body is not None:
         headers["Content-Type"] = "application/json"
     return await client.request(method, path, content=raw, headers=headers)

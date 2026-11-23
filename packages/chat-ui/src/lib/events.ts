@@ -275,6 +275,21 @@ export interface SubagentStepData {
   summary: string;
 }
 
+/** subagent.finished：委派（task 调用）有了结论。字段同 tool.completed，外加子 run 和成败 */
+export interface SubagentFinishedData {
+  subagent_run_id: string;
+  failed: boolean;
+  call_id?: string;
+  name?: string;
+  status?: string;
+  /** 结论正文 */
+  result?: string;
+  result_preview?: string;
+  /** 旧事件：挂起时也发过一条，带它表示子智能体还在跑、只是不再占着进程等 */
+  suspended?: boolean;
+  duration_ms?: number;
+}
+
 export interface ContextCompactedData {
   messages_summarized: number;
   tokens_before: number;
@@ -501,7 +516,7 @@ export type TraceEvent =
   | Envelope<typeof EventType.ToolFailed, ToolFailedData>
   | Envelope<typeof EventType.SubagentStarted, SubagentStartedData>
   | Envelope<typeof EventType.SubagentStep, SubagentStepData>
-  | Envelope<typeof EventType.SubagentFinished, SubagentStepData>
+  | Envelope<typeof EventType.SubagentFinished, SubagentFinishedData>
   | Envelope<typeof EventType.FileWritten, FileWrittenData>
   | Envelope<typeof EventType.FileDeleted, FileDeletedData>
   | Envelope<typeof EventType.UsageUpdated, UsageUpdatedData>

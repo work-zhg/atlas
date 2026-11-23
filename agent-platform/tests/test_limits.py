@@ -316,8 +316,7 @@ async def _delegate(spec: AgentSpec, target: str) -> tuple[list, Spawner]:
     )
     spawner = Spawner()
     events = [
-        e
-        async for e in run(spec, run_id=RUN_ID, model=model, input_content="去", spawner=spawner)
+        e async for e in run(spec, run_id=RUN_ID, model=model, input_content="去", spawner=spawner)
     ]
     return events, spawner
 

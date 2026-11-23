@@ -12,7 +12,8 @@ sync:    ; uv sync --all-packages
 lint:    ; uv run ruff check . && uv run ruff format --check .
 types:   ; uv run mypy agent-platform/libs/engine/src agent-platform/services/agent/src
 arch:    ; uv run lint-imports
-test:    ; uv run pytest -q
+# 按目录逐个跑（各服务的 conftest / 同名测试文件在一个进程里会互相顶掉）；Agent 的测试要 DATABASE_URL=…/atlas_test
+test:    ; scripts/test-all.sh
 # 应用配置库（atlas_appconfig）的表跟在 Atlas 自己的迁移后面，版本表单独一张
 migrate: ; cd agent-platform/services/agent && uv run alembic upgrade head && uv run python -m atlas_agent migrate-appconfig
 serve:   ; uv run uvicorn atlas_agent.main:app --reload --port 8000

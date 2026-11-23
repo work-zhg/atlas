@@ -35,3 +35,8 @@ var/
 docker/app/requirements.txt
 # 按目标集群生成（deploy/local/egress-rules.sh）
 docker/egress/deny.always
+
+# 早期 pip install --target 留下的第三方包，仓库里没有任何地方用它（已入库的部分要 git rm -r --cached 移出）
+.linux-deps/
+# import-linter 的本地缓存
+.import_linter_cache/

@@ -285,4 +285,3 @@ async def test_saving_new_mcp_tool_requires_grant(env: Any) -> None:
     await service._check_mcp(previous, previous=None, agent=None)
     with pytest.raises(InvalidReference, match="只能选公开的 MCP 服务"):
         await service._check_mcp(spec, previous=None, agent=None)
-

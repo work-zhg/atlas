@@ -77,10 +77,9 @@ async def test_summary_is_reused_not_recomputed(client: httpx.AsyncClient) -> No
         all_messages = await RunRepository(session).history(thread.thread_uuid)
         assert len(all_messages) >= 6, "没造出足够的消息"
 
-        # 手工模拟一次压缩落库
-        cutoff = all_messages[2].created_at
-        await make_persist_hook(get_sessionmaker(), thread.thread_uuid, cutoff)(
-            {"summary": "早期摘要正文"}
+        # 手工模拟一次压缩落库：保留区从第 4 条开始，前 3 条进了摘要
+        await make_persist_hook(get_sessionmaker(), thread.thread_uuid)(
+            {"summary": "早期摘要正文", "kept_from": str(all_messages[3].message_uuid)}
         )
 
     async with get_sessionmaker()() as session:
@@ -107,8 +106,8 @@ async def test_message_table_is_never_touched(client: httpx.AsyncClient) -> None
             await session.execute(select(Thread).where(Thread.thread_uuid == tid))
         ).scalar_one()
         rows = await RunRepository(session).history(thread.thread_uuid)
-        await make_persist_hook(get_sessionmaker(), thread.thread_uuid, rows[2].created_at)(
-            {"summary": "摘要"}
+        await make_persist_hook(get_sessionmaker(), thread.thread_uuid)(
+            {"summary": "摘要", "kept_from": str(rows[3].message_uuid)}
         )
 
     after = (await client.get(f"/v1/threads/{tid}/messages")).json()["data"]
@@ -123,9 +122,9 @@ async def test_compact_count_accumulates(client: httpx.AsyncClient) -> None:
 
     async with get_sessionmaker()() as session:
         rows = await RunRepository(session).history(tid)
-    hook = make_persist_hook(get_sessionmaker(), tid, rows[1].created_at)
-    await hook({"summary": "一"})
-    await hook({"summary": "二"})
+    hook = make_persist_hook(get_sessionmaker(), tid)
+    await hook({"summary": "一", "kept_from": str(rows[2].message_uuid)})
+    await hook({"summary": "二", "kept_from": str(rows[2].message_uuid)})
 
     async with get_sessionmaker()() as session:
         context = await ThreadContextRepository(session).get(tid)
@@ -135,13 +134,53 @@ async def test_compact_count_accumulates(client: httpx.AsyncClient) -> None:
 
 
 @pytest.mark.usefixtures("clean_db")
-async def test_persist_failure_does_not_raise() -> None:
-    """摘要没存住只是下轮重压一次，不该让本轮 run 失败。"""
-    from datetime import UTC, datetime
+async def test_kept_turns_are_not_hidden_behind_the_boundary(client: httpx.AsyncClient) -> None:
+    """★ 自动压缩保留最近几个回合不进摘要：下一轮载入的历史里必须还有它们。
+
+    以前覆盖边界取「本次 run 起始时历史的最后一条」，保留的回合落在边界之前 —— 既不在摘要里、
+    也不在原文里，模型就再也看不到它们了。
+    """
+    tid = await _thread_with_messages(client, rounds=3)  # 问 0 答 0 问 1 答 1 问 2 答 2
+    async with get_sessionmaker()() as session:
+        rows = await RunRepository(session).history(tid)
+    kept = [r for r in rows if r.role == "user"][1]  # 保留后两个回合：从「第 1 问」开始
+
+    await make_persist_hook(get_sessionmaker(), tid)(
+        {"summary": "第 0 轮的摘要", "kept_from": str(kept.message_uuid)}
+    )
+
+    async with get_sessionmaker()() as session:
+        context = await ThreadContextRepository(session).get(tid)
+        assert context is not None
+        after = await RunRepository(session).history(tid, after=context.summary_upto)
+    assert after[0].message_uuid == kept.message_uuid
+    assert [r.message_uuid for r in after] == [r.message_uuid for r in rows[rows.index(kept) :]]
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_no_boundary_no_summary(client: httpx.AsyncClient) -> None:
+    """保留区起点不是库里的消息（或前面没有消息）：不存摘要，下一轮再压，不存猜出来的边界。"""
     from uuid import uuid4
 
-    hook = make_persist_hook(get_sessionmaker(), uuid4(), datetime.now(UTC))
-    await hook({"summary": "x"})  # thread 不存在，UPDATE 影响 0 行，不抛
+    tid = await _thread_with_messages(client, rounds=2)
+    async with get_sessionmaker()() as session:
+        rows = await RunRepository(session).history(tid)
+    hook = make_persist_hook(get_sessionmaker(), tid)
+    await hook({"summary": "框架分配的 id", "kept_from": str(uuid4())})
+    await hook({"summary": "没有起点"})
+    await hook({"summary": "前面没有消息", "kept_from": str(rows[0].message_uuid)})
+
+    async with get_sessionmaker()() as session:
+        assert await ThreadContextRepository(session).get(tid) is None
+
+
+@pytest.mark.usefixtures("clean_db")
+async def test_persist_failure_does_not_raise() -> None:
+    """摘要没存住只是下轮重压一次，不该让本轮 run 失败。"""
+    from uuid import uuid4
+
+    hook = make_persist_hook(get_sessionmaker(), uuid4())
+    await hook({"summary": "x", "kept_from": str(uuid4())})  # thread 不存在：找不到边界，不存、不抛
 
 
 async def test_summarizer_uses_injected_builder_and_endpoint() -> None:

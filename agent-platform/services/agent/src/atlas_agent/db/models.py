@@ -852,9 +852,7 @@ class ServiceModel(TenantOwned, Base):
         UTCDateTime, server_default=func.now(), onupdate=func.now(), nullable=False
     )
 
-    __table_args__ = (
-        UniqueConstraint("tenant_uuid", "purpose", name="uk_service_model_purpose"),
-    )
+    __table_args__ = (UniqueConstraint("tenant_uuid", "purpose", name="uk_service_model_purpose"),)
 
 
 class Instruction(TenantOwned, Base):
@@ -1294,6 +1292,4 @@ class StorageUsageRow(TenantOwned, Base):
         UTCDateTime, server_default=func.now(), nullable=False
     )
 
-    __table_args__ = (
-        UniqueConstraint("tenant_uuid", "user_uuid", name="uk_storage_usage_user"),
-    )
+    __table_args__ = (UniqueConstraint("tenant_uuid", "user_uuid", name="uk_storage_usage_user"),)

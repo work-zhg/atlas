@@ -57,6 +57,7 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
+
 class FileData(TypedDict):
     """Data structure for storing file contents with metadata."""
 
@@ -71,6 +72,7 @@ class FileData(TypedDict):
 
     modified_at: NotRequired[str]
     """ISO 8601 timestamp of last modification."""
+
 
 @dataclass
 class ReadResult:
@@ -121,9 +123,15 @@ class ReadResult:
             msg = "ReadResult.start_line and end_line must be set together or both left unset"
             raise ValueError(msg)
         if self.no_lines_requested and (
-            self.error is not None or self.start_line is not None or self.next_offset is not None or self.total_lines is not None
+            self.error is not None
+            or self.start_line is not None
+            or self.next_offset is not None
+            or self.total_lines is not None
         ):
-            msg = "ReadResult.no_lines_requested describes an uninspected window; it cannot be combined with error or pagination fields"
+            msg = (
+                "ReadResult.no_lines_requested describes an uninspected window; "
+                "it cannot be combined with error or pagination fields"
+            )
             raise ValueError(msg)
         if self.next_offset is not None and self.start_line is None:
             msg = "ReadResult.next_offset requires start_line and end_line to be set"
@@ -136,14 +144,24 @@ class ReadResult:
         # bound together above, so testing `start_line` covers both.
         if self.start_line is not None and self.end_line is not None:
             if self.start_line < 1 or self.end_line < self.start_line:
-                msg = f"ReadResult window must satisfy 1 <= start_line <= end_line, got start_line={self.start_line}, end_line={self.end_line}"
+                msg = (
+                    "ReadResult window must satisfy 1 <= start_line <= end_line, "
+                    f"got start_line={self.start_line}, end_line={self.end_line}"
+                )
                 raise ValueError(msg)
             if self.total_lines is not None and self.total_lines < self.end_line:
-                msg = f"ReadResult.total_lines ({self.total_lines}) cannot be less than end_line ({self.end_line})"
+                msg = (
+                    f"ReadResult.total_lines ({self.total_lines}) "
+                    f"cannot be less than end_line ({self.end_line})"
+                )
                 raise ValueError(msg)
             if self.next_offset is not None and self.next_offset != self.end_line:
-                msg = f"ReadResult.next_offset ({self.next_offset}) must equal end_line ({self.end_line}), the 0-indexed line after the last shown"
+                msg = (
+                    f"ReadResult.next_offset ({self.next_offset}) must equal end_line "
+                    f"({self.end_line}), the 0-indexed line after the last shown"
+                )
                 raise ValueError(msg)
+
 
 @dataclass
 class WriteResult:
@@ -160,6 +178,7 @@ class WriteResult:
 
     error: str | None = None
     path: str | None = None
+
 
 @dataclass
 class EditResult:
@@ -178,6 +197,7 @@ class EditResult:
     error: str | None = None
     path: str | None = None
     occurrences: int | None = None
+
 
 @dataclass
 class DeleteResult:
@@ -326,7 +346,10 @@ def _normalize_content(file_data: FileData) -> str:
     if isinstance(content, list) and all(isinstance(line, str) for line in content):
         return "\n".join(content)
     if not isinstance(content, str):
-        msg = f"File content must be a string or a legacy list of strings, got {type(content).__name__}."
+        msg = (
+            "File content must be a string or a legacy list of strings, "
+            f"got {type(content).__name__}."
+        )
         raise TypeError(msg)
     return content
 
@@ -478,7 +501,9 @@ def slice_read_response(
     # via the blank-content branch above (its `ReadResult` is otherwise
     # identical: empty content, no pagination metadata).
     if limit == 0:
-        return ReadResult(file_data=_copy_file_data_with_content(file_data, ""), no_lines_requested=True)
+        return ReadResult(
+            file_data=_copy_file_data_with_content(file_data, ""), no_lines_requested=True
+        )
 
     # `splitlines(keepends=True)` retains each line's terminator, including
     # the absence of one on the final line. Joining with `""` therefore

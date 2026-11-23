@@ -40,6 +40,15 @@ export interface ThreadStreamOptions {
   onEvent: (event: AnyTraceEvent) => void;
   /** 每次（重）连成功。用于复位 UI 上的"重新连接中"。 */
   onOpen?: () => void;
+  /** 连接意外断开、马上要退避重连。用于显示"重新连接中"（onOpen 时复位）。 */
+  onDisconnect?: () => void;
+  /**
+   * 重连时从哪个 thread_seq 之后接着要。不给就用收到过的最大 thread_seq。
+   *
+   * ★ 有跳过了、还没到的序号时不能用最大值（晚发布的事件在断线期间发出就再也收不到了），
+   *   调用方按自己的去重状态给出连续收到的位置，见 run-reducer 的 resumeCursor。
+   */
+  cursor?: () => number;
   /**
    * 一轮结束（收到 run.finished / failed / cancelled）。
    *
@@ -112,7 +121,18 @@ function frameData(frame: string): string | null {
  *   （doc/detail/suspension.html §06）。
  */
 export async function streamThreadEvents(opts: ThreadStreamOptions): Promise<void> {
-  const { client, threadId, signal, onEvent, onOpen, onTurnEnd, onError, maxRetries = 6 } = opts;
+  const {
+    client,
+    threadId,
+    signal,
+    onEvent,
+    onOpen,
+    onDisconnect,
+    onTurnEnd,
+    onError,
+    cursor,
+    maxRetries = 6,
+  } = opts;
 
   let lastSeq = opts.lastSeq ?? 0;
   let attempt = 0;
@@ -121,7 +141,8 @@ export async function streamThreadEvents(opts: ThreadStreamOptions): Promise<voi
     try {
       const headers: Record<string, string> = { Accept: SSE_MIME, ...(client.headers?.() ?? {}) };
       // ★ 续传游标（thread_seq）。不带 = 让服务端给默认窗口，而不是全量回放。
-      if (lastSeq > 0) headers["Last-Event-ID"] = String(lastSeq);
+      const from = cursor ? cursor() : lastSeq;
+      if (from > 0) headers["Last-Event-ID"] = String(from);
 
       const res = await fetch(apiUrl(`/v1/threads/${threadId}/events`, undefined, client.apiBase), {
         headers,
@@ -164,6 +185,7 @@ export async function streamThreadEvents(opts: ThreadStreamOptions): Promise<voi
     }
 
     if (signal.aborted) break;
+    onDisconnect?.();
 
     if (++attempt > maxRetries) {
       onError?.(new Error(`事件流连接中断，已重试 ${maxRetries} 次`));

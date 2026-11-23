@@ -800,6 +800,8 @@ def rrf[T](lists: list[list[T]], *, key: Any, k: int = _RRF_K) -> list[T]:
         item = first[kk]
         if isinstance(item, Document):
             item.metadata["score"] = scores[kk]
-        elif isinstance(item, RetrievedSegment):
+        elif isinstance(item, RetrievedSegment | Hit):
+            # ★ Hit 也要写回：混合检索融合的就是 Hit，不写回的话后面拿到的还是融合前某一路的原始分
+            #   （语义的余弦或全文的 BM25，两种量纲混在一起）
             item.score = scores[kk]
     return [first[kk] for kk in out]

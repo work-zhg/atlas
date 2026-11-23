@@ -35,7 +35,7 @@ from .maintainer import Maintainer
 from .memory import Backfiller, make_memory_runtime
 from .ops import mount_ops
 from .outbound import IdentityScopeMiddleware
-from .redisx import make_redis
+from .redisx import get_redis_component, make_redis, shared_redis
 from .runtime_config import RuntimeConfig
 from .sandbox.base.lifecycle.templates import template_publisher
 from .sandbox.component import SandboxComponent
@@ -98,9 +98,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
     await app.state.runtime_config.config.register()
     # CLI 智能体的执行环境：沙箱组件的会话 Pod（c4-model/agent/sandbox/
     # code-sandbox-session-pod.html），由 OpenSandbox 的 opensandbox-cli 建。
-    # ★ 进程级的 Redis 客户端：建沙箱的效率锁在 Redis
-    pods_redis = make_redis(settings)
-    pods_sandbox = SandboxComponent.build(settings, pods_redis)
+    # 建沙箱的效率锁在 Redis：用进程级的共享连接（redisx.RedisComponent）
+    pods_sandbox = SandboxComponent.build(settings, shared_redis())
     # 浏览器的附加件：开了浏览器的 CLI 智能体，会话 Pod 建好时导入登录态、拉起守护
     BrowserComponent.attach(settings, pods_sandbox)
     pods = pods_sandbox.pods
@@ -183,12 +182,14 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         for task in background:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
-        with contextlib.suppress(Exception):
-            await pods_redis.aclose()
         if maintainer is not None:
             await maintainer.stop()
             await maintainer.release()
         await app.state.uc.aclose()
+        # Redis 的共享连接池最后关：上面的交接、让位都还要用它
+        with contextlib.suppress(Exception):
+            await get_redis_component().aclose()
+        get_redis_component.cache_clear()
         # ★ executor 停完再 flush：最后那批 span 往往正是收尾阶段产生的，
         #   顺序反过来就会把它们丢在缓冲里。
         shutdown_telemetry()

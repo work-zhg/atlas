@@ -515,8 +515,10 @@ class OpenSandboxRuntime:
     async def _log_orphan(self, sb: RemoteSandbox, owner: SandboxInstance | None) -> None:
         # 生命周期日志是租户表：租户取登记的实例，没有就看 Pod 上的租户标签；
         # 都没有（多租户之前建的存量沙箱）就只写进程日志，沙箱照删
-        tenant = owner.tenant_uuid if owner is not None else parse_tenant(
-            sb.labels.get(TenantNaming.LABEL)
+        tenant = (
+            owner.tenant_uuid
+            if owner is not None
+            else parse_tenant(sb.labels.get(TenantNaming.LABEL))
         )
         if tenant is None:
             logger.warning(

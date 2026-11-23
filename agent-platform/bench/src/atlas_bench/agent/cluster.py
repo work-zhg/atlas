@@ -71,7 +71,7 @@ async def _run(argv: list[str], stdin: str | None, timeout: float) -> str:
 #: 在会话 Pod 里结束一个会话的 CLI：找到这个会话的 bridge（按人共用的 Pod 里每个会话一个，
 #: pid 在 /tmp/atlas-bridge/<会话>.pid；一会话一 Pod 的旧布局里只有一个），SIGKILL 它的子进程
 #: （adapter）。镜像是 python-slim，没有 pkill，用 python 读 /proc。
-_KILL_CLI = r'''
+_KILL_CLI = r"""
 import os, signal, sys
 session = sys.argv[1]
 
@@ -104,7 +104,7 @@ if not kids:
 for p in kids:
     os.kill(p, signal.SIGKILL)
 print(" ".join(f"{p}={cmdline(p)[:60] or '?'}" for p in kids))
-'''
+"""
 
 #: 会话的 bridge 还在不在：alive / gone；没有 /tmp/atlas-bridge 是一会话一 Pod 的旧布局（legacy），
 #: 那里 bridge 就是 Pod 本身，看 Pod 在不在

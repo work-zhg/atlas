@@ -17,6 +17,7 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
+from urllib.parse import unquote
 from uuid import UUID
 
 import httpx
@@ -161,8 +162,12 @@ class OpsClient:
         key = self._keys.get(system)
         if not key:
             raise CallFailed(system, "没有配置这个系统的运营密钥", retryable=False)
+        if has_dot_segments(path):
+            # 点段会被 httpx 规整掉，签名发出去的就不是调用方给的那个路径了
+            raise CallFailed(system, "路径里不能有 . 或 .. 段", retryable=False)
         url = httpx.URL(f"{entry.base_url}{PREFIX}{path}", params=params)
-        headers = {**sign(key, method, url.raw_path.decode(), body), **stamp.to_headers()}
+        # 运营头（操作人、幂等键）随签名一起签，见 atlas_opsapi.signature
+        headers = sign(key, method, url.raw_path.decode(), body, stamp=stamp)
         if body and content_type:
             headers["Content-Type"] = content_type
         try:
@@ -254,7 +259,19 @@ _RULES: dict[Capability, list[tuple[frozenset[str], re.Pattern[str]]]] = {
 }
 
 
+def has_dot_segments(path: str) -> bool:
+    """路径里有没有 `.` / `..` 段（含百分号编码的 %2e）。
+
+    ★ httpx 构造 URL 时会把点段规整掉（/apps/../tenants/x → /tenants/x）：白名单按原样匹配、
+      发出去的却是规整后的路径，带着运营签名直达白名单外的接口。所以有点段的一律不转发。
+    """
+    return any(unquote(segment) in (".", "..") for segment in path.split("/"))
+
+
 def proxy_allowed(entry: SystemEntry, method: str, path: str) -> bool:
+    """★ 有点段的一律不放行（见 has_dot_segments）：白名单只对规整的路径有意义。"""
+    if has_dot_segments(path):
+        return False
     method = method.upper()
     for cap in entry.capabilities:
         for methods, pattern in _RULES.get(cap, []):

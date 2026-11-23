@@ -18,10 +18,10 @@ __all__ = [
     "SESSION_ENDED",
     "SESSION_OPEN",
     "SESSION_STATE",
+    "TOOL_CALL",
     "TURN_CANCEL",
     "TURN_START",
     "TURN_STATE",
-    "TOOL_CALL",
 ]
 
 # server → bridge

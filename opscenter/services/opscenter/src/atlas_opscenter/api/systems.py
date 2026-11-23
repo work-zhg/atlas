@@ -18,8 +18,8 @@ from uuid import uuid4
 from fastapi import APIRouter, Request, Response
 
 from ..audit import record
-from ..errors import Forbidden, NotFound, Upstream
-from ..gateway import CallFailed, proxy_allowed, stamp_of
+from ..errors import Forbidden, Invalid, NotFound, Upstream
+from ..gateway import CallFailed, has_dot_segments, proxy_allowed, stamp_of
 from .deps import ClientDep, OperatorDep, SessionDep, SettingsDep
 
 router = APIRouter(prefix="/api/systems", tags=["systems"])
@@ -46,6 +46,8 @@ async def proxy(
         raise NotFound("SYSTEM_NOT_FOUND", f"没有登记系统 {system}")
     method = request.method.upper()
     sub = "/" + path.lstrip("/")
+    if has_dot_segments(sub):
+        raise Invalid("BAD_PATH", "路径里不能有 . 或 .. 段")
     if not proxy_allowed(entry, method, sub):
         raise Forbidden("NOT_ALLOWED", f"{entry.name} 的 {method} {sub} 不能从这里调")
     write = method != "GET"

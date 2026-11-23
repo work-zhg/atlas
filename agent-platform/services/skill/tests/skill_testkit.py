@@ -55,8 +55,6 @@ def ops_signed(request: Any) -> Any:
 
     raw = request.read()
     path = request.url.raw_path.decode()
-    request.headers.update(sign(OPS_KEY.encode(), request.method, path, raw))
-    request.headers.update(
-        OperatorStamp(operator_name="值班", idempotency_key=uuid4()).to_headers()
-    )
+    stamp = OperatorStamp(operator_name="值班", idempotency_key=uuid4())
+    request.headers.update(sign(OPS_KEY.encode(), request.method, path, raw, stamp=stamp))
     return request

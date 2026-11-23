@@ -189,7 +189,8 @@ def test_bash_alone_is_supported() -> None:
 
     以前声明了「bash 要求 filesystem」，run 开始时把 bash 报成不支持，装配却照常给了
     execute —— 报的和实际的对不上。
-    部署是否开启沙箱不在这里判：没开时装配期明确报错（SandboxNotEnabled），见 test_sandbox_provider。
+    部署是否开启沙箱不在这里判：没开时装配期明确报错（SandboxNotEnabled），
+    见 test_sandbox_provider。
     """
     from atlas_engine.runtime.tool_registry import unsupported_tools
 
@@ -218,10 +219,10 @@ def test_filesystem_and_sandbox_middlewares_are_independent() -> None:
     class _Box:
         id = "probe"
 
-        def execute(self, command, *, timeout=None, cwd=None):  # noqa: ANN001, ANN202
+        def execute(self, command, *, timeout=None, cwd=None):
             raise NotImplementedError
 
-        async def aexecute(self, command, **kw):  # noqa: ANN001, ANN202
+        async def aexecute(self, command, **kw):
             raise NotImplementedError
 
     assert [t.name for t in SandboxMiddleware(sandbox=_Box()).tools] == ["execute"]

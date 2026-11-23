@@ -6,6 +6,7 @@ import asyncio
 import base64
 import binascii
 import logging
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
@@ -40,7 +41,7 @@ from ..errors import (
 from ..pagination import InvalidCursor, decode_cursor, encode_cursor
 from ..providers.filesystem import PathEscape, WorkspaceListing, WorkspaceRouting, make_workspace
 from ..providers.filesystem.skill_copy import resolve_skills, seed_session_skills
-from ..redisx import make_redis
+from ..redisx import shared_redis
 from ..repositories.agent import AgentRepository
 from ..repositories.device import DeviceRepository
 from ..repositories.run import RunRepository
@@ -502,8 +503,21 @@ class ThreadService:
         await self._session.refresh(thread)
         return _to_out(thread, agent)
 
-    async def delete(self, thread_id: UUID) -> None:
+    async def delete(
+        self, thread_id: UUID, *, cancel: Callable[[UUID], Awaitable[None]] | None = None
+    ) -> None:
+        """删会话（连同整棵子会话树）。cancel：执行器的取消，用来收掉挂起中的 run。
+
+        ★ 还有 run 在排队或在跑时不删（409）：执行器的下一个检查点会把消息写回已删掉的会话，
+          留下孤儿行。挂起中的 run 没有进程在跑（在等审批、等回答），当场取消收尾后再删。
+        """
         thread, _ = await self._require(thread_id)
+        unfinished = await self._repo.unfinished_runs(await self._repo.tree_ids(thread))
+        if any(status != "suspended" for _, status in unfinished) or (unfinished and not cancel):
+            raise Conflict("会话里还有一轮在执行，先停止再删除", thread_id=str(thread_id))
+        for run_id, _ in unfinished:
+            assert cancel is not None
+            await cancel(run_id)
         await self._repo.delete(thread)
         if thread.device_uuid is not None:
             # 本机 CLI：作废会话令牌（尽力而为，登记会自己过期）
@@ -511,19 +525,13 @@ class ThreadService:
             await devices.release(thread.thread_uuid)
         # 沙箱级联：经沙箱组件释放这个会话的业务（会话 Pod、工作区沙箱），失败不挡住会话删除
         #   （只记日志），残留由维护者的孤儿回收兜底
-        redis = make_redis(self._settings)
-        try:
-            sandbox = SandboxComponent.build(self._settings, redis)
-            # 浏览器的附加件：沙箱因此退役时先导出登录态
-            BrowserComponent.attach(self._settings, sandbox)
-            await sandbox.pods.release(thread.thread_uuid, thread.created_by_uuid)
-            if self._settings.sandbox_enabled and thread.sandbox_thread_id == thread.thread_uuid:
-                # 原生沙箱按会话树的根绑定：删的是根会话时它才有沙箱
-                await sandbox.native.release(
-                    WorkspaceRef(thread.thread_uuid, thread.created_by_uuid)
-                )
-        finally:
-            await redis.aclose()
+        sandbox = SandboxComponent.build(self._settings, shared_redis())
+        # 浏览器的附加件：沙箱因此退役时先导出登录态
+        BrowserComponent.attach(self._settings, sandbox)
+        await sandbox.pods.release(thread.thread_uuid, thread.created_by_uuid)
+        if self._settings.sandbox_enabled and thread.sandbox_thread_id == thread.thread_uuid:
+            # 原生沙箱按会话树的根绑定：删的是根会话时它才有沙箱
+            await sandbox.native.release(WorkspaceRef(thread.thread_uuid, thread.created_by_uuid))
 
     # ------------------------------------------------------------------ 工作区文件
 
@@ -549,20 +557,16 @@ class ThreadService:
 
     async def put_file(self, thread_id: UUID, path: str, data: bytes) -> int:
         """用户上传：和模型的写走同一个选路 —— 沙箱在跑时经沙箱写，只有一个写入方。"""
-        redis = make_redis(self._settings) if self._settings.sandbox_enabled else None
+        redis = shared_redis() if self._settings.sandbox_enabled else None
+        listing = await self._listing(thread_id, redis=redis)
+        if listing is None:
+            raise NotFound("没有配置对象存储，这个部署没有文件能力")
         try:
-            listing = await self._listing(thread_id, redis=redis)
-            if listing is None:
-                raise NotFound("没有配置对象存储，这个部署没有文件能力")
-            try:
-                return await listing.put(path, data)
-            except PathEscape as exc:
-                raise BadRequest(str(exc), path=path) from exc
-            except OSError as exc:  # 沙箱在跑却不响应：不悄悄改写对象存储
-                raise DependencyUnavailable(str(exc), thread_id=str(thread_id)) from exc
-        finally:
-            if redis is not None:
-                await redis.aclose()
+            return await listing.put(path, data)
+        except PathEscape as exc:
+            raise BadRequest(str(exc), path=path) from exc
+        except OSError as exc:  # 沙箱在跑却不响应：不悄悄改写对象存储
+            raise DependencyUnavailable(str(exc), thread_id=str(thread_id)) from exc
 
     # ------------------------------------------------------------------ 沙箱
 
@@ -583,10 +587,9 @@ class ThreadService:
         if sum(len(data) for _, data in files) > SANDBOX_EXEC_FILES_MAX:
             raise BadRequest(f"文件合计超过 {SANDBOX_EXEC_FILES_MAX // 1024 // 1024} MB")
         settings = self._settings
-        redis = make_redis(settings)
         try:
             logger.info("会话 %s 在评测档沙箱里直接执行命令", thread_id)
-            sandbox = SandboxComponent.build(settings, redis)
+            sandbox = SandboxComponent.build(settings, shared_redis())
             result = await exec_in_running(
                 sandbox.native,
                 sandbox.exec,
@@ -609,8 +612,6 @@ class ThreadService:
         except SandboxUnavailable as exc:
             # 执行途中沙箱没了 / 连不上：校验没做成，不是校验没通过
             raise DependencyUnavailable(str(exc), thread_id=str(thread_id)) from exc
-        finally:
-            await redis.aclose()
         return SandboxExecOut(
             exit_code=result.exit_code, output=result.output, truncated=result.truncated
         )

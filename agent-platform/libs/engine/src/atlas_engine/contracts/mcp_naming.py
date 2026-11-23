@@ -39,4 +39,3 @@ def model_name(server: str, tool: str) -> str | None:
     """模型侧名。线上名不合规（字符集 / 超长）时返回 None —— 该工具不可用。"""
     name = f"{server}{SEP}{tool}"
     return name if _MODEL_NAME.match(name) else None
-

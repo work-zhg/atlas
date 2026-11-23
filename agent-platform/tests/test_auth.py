@@ -29,10 +29,16 @@ TEXT = {"content": [{"type": "text", "text": "hi"}]}
 
 
 class _NoopExecutor:
-    """只接住 dispatch：这里测的是归属与发起人，不需要 run 真跑起来。"""
+    """只接住 dispatch：这里测的是归属与发起人，不需要 run 真跑起来。cancel 记下被取消的 run。"""
+
+    def __init__(self) -> None:
+        self.cancelled: list[Any] = []
 
     async def dispatch(self, run_id: Any) -> None:
         return None
+
+    async def cancel(self, run_id: Any) -> None:
+        self.cancelled.append(run_id)
 
 
 def _app() -> Any:
@@ -149,21 +155,80 @@ async def test_run_records_auth_uid(clean_db: None) -> None:
 
 
 async def test_thread_delete_removes_dependent_rows(clean_db: None) -> None:
-    """0013 去掉外键后没有级联：删会话要把 message / run 一起删掉，不留孤儿。"""
-    from atlas_agent.db.models import Message, Run
+    """0013 去掉外键后没有级联：删会话要把整棵子会话树和挂在上面的行一起删掉，不留孤儿。
+
+    ★ 还有一轮在排队或在跑时 409（执行器的下一个检查点会把消息写回已删的会话）；挂起中的当场
+      取消后再删。
+    """
+    from atlas_agent.db.models import (
+        CliSession,
+        MemoryBackfill,
+        Message,
+        MessageFeedback,
+        Run,
+        Thread,
+        ThreadContext,
+        ThreadMemory,
+    )
     from atlas_agent.db.session import get_sessionmaker
-    from sqlalchemy import func, select
+    from sqlalchemy import func, select, update
 
     app = _app()
     async with _client(app, str(uuid.uuid4())) as c:
         aid = await _agent(c)
         t = (await c.post("/v1/threads", json={"agent_id": aid})).json()
-        assert (await c.post(f"/v1/threads/{t['id']}/runs", json=TEXT)).status_code == 202
+        r = await c.post(f"/v1/threads/{t['id']}/runs", json=TEXT)
+        assert r.status_code == 202
+        tid, rid = uuid.UUID(t["id"]), uuid.UUID(r.json()["run_id"])
+
+        # 子会话、孙会话（SubAgent 再派 SubAgent），以及挂在会话上的几张表
+        async with get_sessionmaker()() as s:
+            root = await fetch_one(s, Thread, Thread.thread_uuid == tid)
+            assert root is not None
+            child, grandchild = uuid.uuid4(), uuid.uuid4()
+            for me, parent in ((child, tid), (grandchild, child)):
+                s.add(
+                    Thread(
+                        thread_uuid=me,
+                        agent_uuid=root.agent_uuid,
+                        created_by_uuid=root.created_by_uuid,
+                        title="子",
+                        parent_thread_uuid=parent,
+                        root_thread_uuid=tid,
+                        subagent_name="coder",
+                        workspace_dir=root.workspace_dir,
+                    )
+                )
+            for one in (tid, child, grandchild):
+                s.add(ThreadContext(thread_uuid=one, compact_count=0, failure_count=0))
+            s.add(CliSession(thread_uuid=grandchild, agent_session_id="s-1"))
+            await s.commit()
+
+        # 还在排队：不删
+        assert (await c.delete(f"/v1/threads/{t['id']}")).status_code == 409
+        # 挂起中（等审批）：当场取消，然后删
+        async with get_sessionmaker()() as s:
+            await s.execute(update(Run).where(Run.run_uuid == rid).values(status="suspended"))
+            await s.commit()
         assert (await c.delete(f"/v1/threads/{t['id']}")).status_code == 204
-    tid = uuid.UUID(t["id"])
+        assert app.state.executor.cancelled == [rid]
+
+    tree = [tid, child, grandchild]
     async with get_sessionmaker()() as s:
-        assert await s.scalar(select(func.count()).where(Message.thread_uuid == tid)) == 0
-        assert await s.scalar(select(func.count()).where(Run.thread_uuid == tid)) == 0
+        for model in (
+            Thread,
+            Message,
+            Run,
+            ThreadContext,
+            CliSession,
+            MessageFeedback,
+            ThreadMemory,
+            MemoryBackfill,
+        ):
+            left = await s.scalar(
+                select(func.count()).select_from(model).where(model.thread_uuid.in_(tree))
+            )
+            assert left == 0, model.__name__
 
 
 # ───────────────────────────── 请求头身份 + 用户中心授权快照（登记具体的人测权限）

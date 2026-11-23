@@ -409,9 +409,7 @@ def test_subagent_shares_parent_workspace(s3) -> None:
     parent = Workspace(
         s3, bucket=BUCKET, user_id=USER, thread_id="t-parent", workspace_dir="Q3 分析"
     )
-    child = Workspace(
-        s3, bucket=BUCKET, user_id=USER, thread_id="t-child", workspace_dir="Q3 分析"
-    )
+    child = Workspace(s3, bucket=BUCKET, user_id=USER, thread_id="t-child", workspace_dir="Q3 分析")
 
     assert child.workdir == parent.workdir == "/data/files/Q3 分析"  # 同一份工作区
     assert child.layout.atlas_dir != parent.layout.atlas_dir  # 隐藏目录各自一个

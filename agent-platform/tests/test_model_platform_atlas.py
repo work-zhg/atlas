@@ -30,8 +30,20 @@ from tests.test_runs_api import wait_for_status
 
 GATEWAY = "http://gateway.test:8091/universal"
 CATALOG = [
-    {"name": "m1", "display_name": "模型一", "provider": "deepseek", "max_input_tokens": 131072, "max_output_tokens": 8192},
-    {"name": "m2", "display_name": "模型二", "provider": "anthropic", "max_input_tokens": 200000, "max_output_tokens": 64000},
+    {
+        "name": "m1",
+        "display_name": "模型一",
+        "provider": "deepseek",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 8192,
+    },
+    {
+        "name": "m2",
+        "display_name": "模型二",
+        "provider": "anthropic",
+        "max_input_tokens": 200000,
+        "max_output_tokens": 64000,
+    },
     {"name": "m-title", "display_name": "标题模型", "provider": "deepseek"},
 ]
 
@@ -104,7 +116,9 @@ def calls() -> list[dict[str, Any]]:
 
 
 @pytest.fixture
-async def client(platform: FakePlatform, calls: list[dict[str, Any]]) -> AsyncIterator[httpx.AsyncClient]:
+async def client(
+    platform: FakePlatform, calls: list[dict[str, Any]]
+) -> AsyncIterator[httpx.AsyncClient]:
     def builder(spec: Any, *, base_url: str, api_key: str, **_: Any) -> Any:
         calls.append({"spec": spec, "base_url": base_url, "api_key": api_key})
         return text_model("回答" if spec.max_output_tokens != 64 else "生成的标题")
@@ -241,7 +255,7 @@ async def test_title_uses_the_configured_service_model(
     assert title_calls[0]["spec"].model == "m-title"
     # 显式关思考：DeepSeek 默认思考，64 个 token 会全花在思考块上
     assert title_calls[0]["spec"].thinking == "off"
-    thread =(await client.get(f"/v1/threads/{run['thread_id']}")).json()
+    thread = (await client.get(f"/v1/threads/{run['thread_id']}")).json()
     assert thread["title"] == "生成的标题"
 
     listed = (await client.get("/v1/service-models")).json()

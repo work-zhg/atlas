@@ -413,3 +413,67 @@ async def test_the_gate_releases_on_client_disconnect() -> None:
     assert gate.active == 1
     await wrapped.aclose()
     assert gate.active == 0, "断开后槽位没释放 —— 会一路泄漏到 503"
+
+
+async def test_a_full_gate_answers_503_before_the_stream_starts() -> None:
+    """★ 超限要是 503 + Retry-After，不能是 200 然后断流。
+
+    以前占用（以及超限的拒绝）都在生成器里：生成器开始迭代时响应头已经发出去了，异常处理器给不出
+    503 —— 客户端看到的是 200 然后连接断掉，分不清该重试还是放弃。
+    """
+    app = make_app()
+    app.state.stream_gate = StreamGate(0)
+    transport = ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=AS_USER) as c:
+        thread_id = await setup_thread(c)
+        resp = await c.get(f"/v1/threads/{thread_id}/events")
+    assert resp.status_code == 503
+    assert resp.headers["Retry-After"] == "5"
+    assert resp.json()["error"]["kind"] == "streams_busy"
+
+
+def test_admit_only_asks() -> None:
+    """路由里只问、不占：占用随迭代开始（见 StreamGate.admit 的说明）。"""
+    gate = StreamGate(1)
+    gate.admit()
+    assert gate.active == 0
+    with gate, pytest.raises(StreamsBusy):
+        gate.admit()
+    gate.drain()
+    with pytest.raises(StreamsBusy):
+        gate.admit()
+
+
+async def test_replay_from_redis_reads_in_pages_and_misses_nothing() -> None:
+    """重连时流里已有的事件分页读（一页 500 条）：跨页的、游标之后的一条不少、一条不重。
+
+    以前一次 XRANGE 把整条流（最多一万条）读进内存，再丢掉游标之前的。
+    """
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from atlas_agent.redisx import make_redis
+    from atlas_agent.stream.relay import EventRelay, thread_seq_key, thread_stream_key
+    from atlas_engine.contracts.events import EventFactory, EventType
+
+    thread_id, run_id = uuid4(), uuid4()
+    redis = make_redis(get_settings())
+    try:
+        relay = EventRelay(redis)
+        factory = EventFactory(run_id, lambda: datetime.now(UTC))
+        for _ in range(1203):
+            await relay.publish(
+                factory.make(EventType.MESSAGE_DELTA, {"text": "x"}), thread_id=thread_id
+            )
+
+        seen: list[int] = []
+        tail = relay.tail_thread(thread_id, after_seq=600, block_ms=10)
+        async for event in tail:
+            if event is None:  # 读完已有的、开始等新事件了
+                break
+            seen.append(event.thread_seq)
+        await tail.aclose()
+        assert seen == list(range(601, 1204))
+    finally:
+        await redis.delete(thread_stream_key(thread_id), thread_seq_key(thread_id))
+        await redis.aclose()

@@ -96,9 +96,7 @@ async def test_a_sub_run_marks_all_its_events(fake_model_ok=None) -> None:
     """子 run 产出的每一个事件都带 depth=1 —— 前端据此决定渲染位置。"""
     events = await _collect(base_depth=1)
     assert events, "应当有事件"
-    assert all(e.depth == 1 for e in events), [
-        (e.type, e.depth) for e in events if e.depth != 1
-    ]
+    assert all(e.depth == 1 for e in events), [(e.type, e.depth) for e in events if e.depth != 1]
 
 
 async def test_a_main_run_marks_nothing() -> None:
@@ -140,9 +138,7 @@ async def test_sub_run_tool_calls_are_not_dropped() -> None:
     events = await _collect(base_depth=1, model=model)
 
     tool_events = [
-        e
-        for e in events
-        if e.type in (EventType.TOOL_STARTED, EventType.TOOL_COMPLETED)
+        e for e in events if e.type in (EventType.TOOL_STARTED, EventType.TOOL_COMPLETED)
     ]
     assert tool_events, "子 run 的工具事件被丢掉了"
     assert all(e.depth == 1 for e in tool_events)

@@ -37,6 +37,8 @@ __all__ = [
     "SeqRange",
     "SessionEndedParams",
     "SessionStateParams",
+    "ToolCallParams",
+    "ToolCallResult",
     "TurnCancelParams",
     "TurnCancelResult",
     "TurnRef",
@@ -44,8 +46,6 @@ __all__ = [
     "TurnStartResult",
     "TurnStateParams",
     "TurnStats",
-    "ToolCallParams",
-    "ToolCallResult",
 ]
 
 Seq = Field(ge=1)

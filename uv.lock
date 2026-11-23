@@ -32,6 +32,7 @@ members = [
     "atlas-modelgateway",
     "atlas-opsapi",
     "atlas-opscenter",
+    "atlas-redis",
     "atlas-redislock",
     "atlas-skill",
     "atlas-teamflow",
@@ -356,6 +357,7 @@ dependencies = [
     { name = "atlas-modelgateway" },
     { name = "atlas-opsapi" },
     { name = "atlas-opscenter" },
+    { name = "atlas-redis" },
     { name = "atlas-redislock" },
     { name = "atlas-skill" },
     { name = "atlas-teamflow" },
@@ -395,6 +397,7 @@ requires-dist = [
     { name = "atlas-modelgateway", editable = "agent-platform/services/modelgateway" },
     { name = "atlas-opsapi", editable = "infra-platform/libs/opsapi" },
     { name = "atlas-opscenter", editable = "opscenter/services/opscenter" },
+    { name = "atlas-redis", editable = "infra-platform/libs/redis" },
     { name = "atlas-redislock", editable = "infra-platform/libs/redislock" },
     { name = "atlas-skill", editable = "agent-platform/services/skill" },
     { name = "atlas-teamflow", editable = "teamflow/services/teamflow" },
@@ -908,6 +911,21 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.6" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+]
+
+[[package]]
+name = "atlas-redis"
+version = "0.1.0"
+source = { editable = "infra-platform/libs/redis" }
+dependencies = [
+    { name = "atlas-redislock" },
+    { name = "redis" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlas-redislock", editable = "infra-platform/libs/redislock" },
+    { name = "redis", specifier = ">=5.2" },
 ]
 
 [[package]]

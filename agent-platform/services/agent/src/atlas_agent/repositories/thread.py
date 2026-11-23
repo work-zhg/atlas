@@ -343,30 +343,55 @@ class ThreadRepository:
         )
         return int((await self._session.execute(stmt)).scalar_one())
 
+    async def tree_ids(self, thread: Thread) -> list[UUID]:
+        """这个会话和它下面的全部子会话（SubAgent 可以继续派 SubAgent，子会话是一棵树）。"""
+        ids = [thread.thread_uuid]
+        frontier = [thread.thread_uuid]
+        while frontier:
+            frontier = list(
+                await self._session.scalars(
+                    select(Thread.thread_uuid).where(Thread.parent_thread_uuid.in_(frontier))
+                )
+            )
+            ids.extend(frontier)
+        return ids
+
+    async def unfinished_runs(self, ids: Sequence[UUID]) -> list[tuple[UUID, str]]:
+        """这些会话里还没结束的 run：(run_id, 状态)。"""
+        rows = await self._session.execute(
+            select(Run.run_uuid, Run.status).where(
+                Run.thread_uuid.in_(ids), Run.status.in_(("queued", "running", "suspended"))
+            )
+        )
+        return [(run_id, status) for run_id, status in rows]
+
     async def delete(self, thread: Thread) -> None:
-        """会话是真删：连同子会话，以及它们的 message / run / run_event / run_state /
-        approval / run_file / sandbox_execution。
+        """会话是真删：连同整棵子会话树，以及挂在它们上面的全部行。
 
         ★ 迁移 0013 去掉了外键（引用完整性由代码保证），ON DELETE CASCADE 不复存在 ——
           只删 thread 行会留下大量孤儿行（残留的未结束 run 还会占用全局的子智能体名额）。
+          新增挂在会话或 run 上的表，要在这里补上。
+        ★ 子会话要整棵删：SubAgent 再派的 SubAgent 挂在它自己的会话下面，只删一层会留下孙辈。
+        ★ 还有没结束的 run 时不能删（调用方先判，见 ThreadService.delete）：执行器的下一个检查点
+          会把消息写回一个已经删掉的会话。
         与 agent 不同：会话没有"别的行还指着它"的问题。
         """
         from ..db.models import (
             Approval,
+            CliSession,
+            MemoryBackfill,
             Message,
+            MessageFeedback,
             Run,
             RunEvent,
             RunFile,
             RunState,
             SandboxExecution,
+            ThreadContext,
+            ThreadMemory,
         )
 
-        ids = [
-            thread.thread_uuid,
-            *await self._session.scalars(
-                select(Thread.thread_uuid).where(Thread.parent_thread_uuid == thread.thread_uuid)
-            ),
-        ]
+        ids = await self.tree_ids(thread)
         run_ids = select(Run.run_uuid).where(Run.thread_uuid.in_(ids)).scalar_subquery()
         for stmt in (
             delete(Approval).where(Approval.run_uuid.in_(run_ids)),
@@ -374,9 +399,14 @@ class ThreadRepository:
             delete(SandboxExecution).where(SandboxExecution.run_uuid.in_(run_ids)),
             delete(RunEvent).where(RunEvent.thread_uuid.in_(ids)),
             delete(RunFile).where(RunFile.thread_uuid.in_(ids)),
+            delete(MessageFeedback).where(MessageFeedback.thread_uuid.in_(ids)),
             delete(Message).where(Message.thread_uuid.in_(ids)),
             delete(Run).where(Run.thread_uuid.in_(ids)),
-            delete(Thread).where(Thread.parent_thread_uuid == thread.thread_uuid),
+            delete(ThreadContext).where(ThreadContext.thread_uuid.in_(ids)),
+            delete(CliSession).where(CliSession.thread_uuid.in_(ids)),
+            delete(ThreadMemory).where(ThreadMemory.thread_uuid.in_(ids)),
+            delete(MemoryBackfill).where(MemoryBackfill.thread_uuid.in_(ids)),
+            delete(Thread).where(Thread.thread_uuid.in_(ids[1:])),
         ):
             await self._session.execute(stmt)
         await self._session.delete(thread)

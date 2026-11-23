@@ -34,7 +34,7 @@ from sqlalchemy import select
 from .browser.component import BrowserComponent
 from .db.models import SandboxAccountRow
 from .instance import instance_id
-from .redisx import make_redis
+from .redisx import shared_redis
 from .repositories.thread import ThreadRepository
 from .sandbox.component import SandboxComponent
 
@@ -85,7 +85,8 @@ class Maintainer:
     async def run_forever(self) -> None:
         tick = max(self._settings.maintainer_lease_s / 3, 0.5)
         while True:
-            redis = make_redis(self._settings)
+            # 共享的短命令客户端（redisx.RedisComponent），不关
+            redis = shared_redis()
             try:
                 await redis.set(INSTANCE_PREFIX + self._me, "1", px=self._lease_ms)
                 await self._elect(redis)
@@ -95,22 +96,16 @@ class Maintainer:
                 raise
             except Exception:
                 logger.warning("维护者这一轮失败", exc_info=True)
-            finally:
-                with contextlib.suppress(Exception):
-                    await redis.aclose()
             await asyncio.sleep(tick)
 
     async def release(self) -> None:
         """停机时让位，别的实例下一个节拍就能接任（而不是等租约过期）。"""
-        redis = make_redis(self._settings)
+        redis = shared_redis()
         try:
             await redis.eval(_RELEASE, 1, LEADER_KEY, self._me)
             await redis.delete(INSTANCE_PREFIX + self._me)
         except Exception:
             logger.warning("维护者让位失败", exc_info=True)
-        finally:
-            with contextlib.suppress(Exception):
-                await redis.aclose()
 
     async def _elect(self, redis: Any) -> None:
         held = bool(await redis.eval(_RENEW, 1, LEADER_KEY, self._me, str(self._lease_ms)))

@@ -123,8 +123,8 @@ def test_agent_summary_exposes_capabilities() -> None:
     assert (out.kind, out.builtin_tool_count, out.skill_count) == ("native", 2, 2)
     assert out.mcp_servers == ["github", "serpapi"]
     assert out.subagents == [
-        {"name": "claude-code", "kind": "cli", "permission_mode": "auto"},
-        {"name": "searcher", "kind": "native", "permission_mode": None},
+        {"name": "claude-code", "kind": "cli", "permission_mode": "auto", "placement": "pod"},
+        {"name": "searcher", "kind": "native", "permission_mode": None, "placement": None},
     ]
     # 历史快照没有这些字段也不出错
     bare = AgentVersion(

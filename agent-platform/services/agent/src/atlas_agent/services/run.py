@@ -83,7 +83,10 @@ class RunService:
         redis: aioredis.Redis,
         settings: Settings,
         executor: RunExecutor,
+        *,
+        streams: aioredis.Redis | None = None,
     ) -> None:
+        """streams：会话事件流阻塞读（XREAD block）用的客户端，没给就和短命令共用 redis。"""
         self._session = session
         self._settings = settings
         self._executor = executor
@@ -93,6 +96,9 @@ class RunService:
         self._threads = ThreadRepository(session)
         self._agents = AgentRepository(session)
         self._relay = EventRelay(redis, ttl_s=settings.run_events_ttl_s)
+        self._stream_relay = (
+            EventRelay(streams, ttl_s=settings.run_events_ttl_s) if streams else self._relay
+        )
 
     # ------------------------------------------------------------------ 创建
 
@@ -358,7 +364,7 @@ class RunService:
         # ★ 归档读完与 Redis 开始读之间的新事件不会丢 —— tail_thread 从流的
         #   头部 XRANGE 起，按 thread_seq 过滤，缺口由游标本身兜住。
         block_ms = self._settings.sse_heartbeat_s * 1000
-        async for item in self._relay.tail_thread(
+        async for item in self._stream_relay.tail_thread(
             thread_id, after_seq=cursor, block_ms=block_ms
         ):
             if item is None:

@@ -287,8 +287,6 @@ def test_answers_are_checked_against_the_questions() -> None:
     assert ok[1] == {"selected": [], "other": "回退", "by": "user"}
 
 
-
-
 @pytest.mark.parametrize(
     "answers",
     [

@@ -45,9 +45,7 @@ QUESTIONS = [
 def _points(task: Task) -> list[str]:
     """校验脚本里的要点（POINTS）—— 从脚本源码取，避免两处各写一份。"""
     tree = ast.parse((Path(task.dir) / "verifier" / "verify.py").read_text(encoding="utf-8"))
-    node = next(
-        n for n in tree.body if isinstance(n, ast.Assign) and n.targets[0].id == "POINTS"
-    )
+    node = next(n for n in tree.body if isinstance(n, ast.Assign) and n.targets[0].id == "POINTS")
     return ast.literal_eval(node.value)
 
 

@@ -55,7 +55,10 @@ class Env:
     host: SessionHost
 
     async def register(self, *, project: str, mode: str = "auto", create: bool = True) -> None:
-        async with httpx.AsyncClient(base_url=self.gw, trust_env=False) as client:
+        # 扮演 Agent 服务：调设备网关的内部接口要带服务令牌
+        async with httpx.AsyncClient(
+            base_url=self.gw, trust_env=False, headers={"Authorization": f"Bearer {INTERNAL}"}
+        ) as client:
             resp = await client.put(
                 f"/internal/sessions/{THREAD}",
                 json={
@@ -215,7 +218,9 @@ async def test_files_through_the_gateway(tmp_path: Path) -> None:
         project = env.root / "shop"
         project.mkdir()
         (project / "a.txt").write_text("hello")
-        async with httpx.AsyncClient(base_url=env.gw, trust_env=False) as client:
+        async with httpx.AsyncClient(
+            base_url=env.gw, trust_env=False, headers={"Authorization": f"Bearer {INTERNAL}"}
+        ) as client:
             got = await client.post(
                 f"/internal/files/{DEVICE}",
                 json={"op": "fetch", "project_dir": str(project), "path": "a.txt"},

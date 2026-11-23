@@ -295,9 +295,7 @@ async def executors() -> AsyncIterator[list[RunWorker]]:
         await ex.shutdown()
 
 
-def _executor(
-    made: list[RunWorker], name: str, builder: Any, **overrides: Any
-) -> RunWorker:
+def _executor(made: list[RunWorker], name: str, builder: Any, **overrides: Any) -> RunWorker:
     settings = get_settings().model_copy(update=overrides) if overrides else get_settings()
     # 同一个进程里扮演两个实例
     ex = build_executor(get_sessionmaker(), settings, model_builder=builder, instance=name)
@@ -390,9 +388,7 @@ async def test_takeover_marks_a_tool_that_was_running_as_unknown(
         await _recover(b)
         await _until(lambda: _run(run_id), lambda r: r.status == "succeeded")
 
-    tool_results = [
-        m for m in SEEN[0] if isinstance(m, ToolMessage) and m.tool_call_id == "c9"
-    ]
+    tool_results = [m for m in SEEN[0] if isinstance(m, ToolMessage) and m.tool_call_id == "c9"]
     assert len(tool_results) == 1
     assert "未知" in str(tool_results[0].content) and tool_results[0].status == "error"
 

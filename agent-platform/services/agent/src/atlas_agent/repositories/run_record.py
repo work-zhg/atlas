@@ -19,10 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db.models import AgentVersion, Message, Run, RunState, Thread
 from .run import (
     _LEASED,
+    SUSPENDED_STATUSES,
     LeaseLost,
     _held_by,
     _usage_increments,
 )
+
+#: 没有进程在跑、也没被领走的 run：挂起中，或续跑刚放回排队
+_UNCLAIMED = (*SUSPENDED_STATUSES, "queued")
 
 
 class RunRecordRepository:
@@ -61,6 +65,18 @@ class RunRecordRepository:
                 started_at=func.coalesce(Run.started_at, datetime.now(UTC)),
             )
         )
+
+    async def lock_unclaimed(self, run_id: UUID) -> Run | None:
+        """锁住还没被任何实例领走的 run 行（挂起，或续跑刚放回排队），给没有进程在跑时的收尾用。
+
+        ★ 行锁一直持到事务结束：同时到的续跑（requeue 的 CAS）、抢锁（take）会等它提交，
+          再看到的已经是终态，不会再把它放回去跑。已经被领走的（running）返回 None ——
+          那时有进程在跑，由它自己看取消位收尾。
+        """
+        stmt = (
+            select(Run).where(Run.run_uuid == run_id, Run.status.in_(_UNCLAIMED)).with_for_update()
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
 
     async def finish(
         self,

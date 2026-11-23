@@ -18,13 +18,14 @@
 
 from __future__ import annotations
 
+import hmac
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
 import redis.asyncio as aioredis
-from fastapi import FastAPI, Request, WebSocket
+from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 
@@ -158,20 +159,33 @@ def create_app(
 
     # ------------------------------------------------------------------ 内部
 
-    @app.get("/internal/presence/{device}")
+    def internal_only(request: Request) -> None:
+        """内部 HTTP 接口校验服务令牌，和 WS 的两条（host、view）一样。
+
+        ★ nginx 挡掉 /internal 只是第一道：集群里谁连得上设备网关，谁就能登记会话能力、
+          读使用者电脑上的文件。没配令牌（本机开发）不校验。
+        """
+        token = settings.internal_token
+        given = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+        if token and not hmac.compare_digest(given.encode(), token.encode()):
+            raise HTTPException(401, "缺少或错误的服务令牌")
+
+    internal = [Depends(internal_only)]
+
+    @app.get("/internal/presence/{device}", dependencies=internal)
     async def presence(device: str, request: Request) -> Response:
         found = await request.app.state.links.presence(device)
         if found is None:
             return _error(404, "offline", "设备不在线")
         return JSONResponse(found)
 
-    @app.post("/internal/devices/{device}/disconnect")
+    @app.post("/internal/devices/{device}/disconnect", dependencies=internal)
     async def disconnect(device: str, body: DisconnectIn, request: Request) -> dict[str, Any]:
         sessions = await request.app.state.registry.revoke_device(device)
         dropped = await request.app.state.links.disconnect(device, body.reason)
         return {"disconnected": dropped, "sessions": sessions}
 
-    @app.put("/internal/sessions/{thread}")
+    @app.put("/internal/sessions/{thread}", dependencies=internal)
     async def register(thread: str, body: RegisterIn, request: Request) -> dict[str, Any]:
         return await request.app.state.registry.register(  # type: ignore[no-any-return]
             thread,
@@ -181,7 +195,7 @@ def create_app(
             upstreams=[u.model_dump() for u in body.upstreams],
         )
 
-    @app.delete("/internal/sessions/{thread}", status_code=204)
+    @app.delete("/internal/sessions/{thread}", status_code=204, dependencies=internal)
     async def revoke(thread: str, request: Request) -> Response:
         await request.app.state.registry.revoke(thread)
         return Response(status_code=204)
@@ -190,11 +204,11 @@ def create_app(
     async def host(ws: WebSocket, thread: str) -> None:
         await ws.app.state.host.serve(ws, thread)
 
-    @app.post("/internal/files/{device}")
+    @app.post("/internal/files/{device}", dependencies=internal)
     async def files(device: str, body: FileIn, request: Request) -> Response:
         return await request.app.state.files.request(device, body.model_dump())  # type: ignore[no-any-return]
 
-    @app.post("/internal/browser/{device}")
+    @app.post("/internal/browser/{device}", dependencies=internal)
     async def browser(device: str, body: BrowserIn, request: Request) -> Response:
         payload = body.model_dump(exclude_none=True)
         return await request.app.state.browser.request(device, payload)  # type: ignore[no-any-return]

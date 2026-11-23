@@ -134,6 +134,21 @@ class RunRepository:
         rows = list((await self._session.execute(stmt)).scalars())
         return list(reversed(rows))
 
+    async def last_before(self, thread_id: UUID, message_id: UUID) -> datetime | None:
+        """会话里排在这条消息之前的最后一条消息的时间：自动压缩的覆盖边界（保留区从它开始）。
+
+        这条消息不在这个会话里、或者它前面没有消息，都是 None。
+        """
+        first = (
+            select(Message.created_at)
+            .where(Message.thread_uuid == thread_id, Message.message_uuid == message_id)
+            .scalar_subquery()
+        )
+        stmt = select(func.max(Message.created_at)).where(
+            Message.thread_uuid == thread_id, Message.created_at < first
+        )
+        return (await self._session.execute(stmt)).scalar_one_or_none()
+
     async def user_inputs(self, thread_id: UUID, *, limit: int = 100) -> list[Message]:
         """会话里用户说的话（不含工具结果），按时间正序，最多取最近 limit 条。
 

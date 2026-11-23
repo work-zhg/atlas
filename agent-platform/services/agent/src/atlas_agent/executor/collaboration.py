@@ -41,7 +41,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-
 @dataclass
 class CollaborationContribution:
     """挂起与人机协作为一段交出的东西。"""
