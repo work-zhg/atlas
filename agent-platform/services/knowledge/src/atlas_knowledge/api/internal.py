@@ -21,12 +21,12 @@ from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from ..auth import verified_tenant
+from ..access.auth import verified_tenant
+from ..access.permission import visible_clause
+from ..dataset.cards import dataset_cards
+from ..dataset.sets import KnowledgeSetService
 from ..db.models import Dataset
-from ..services.cards import dataset_cards
-from ..services.permission import visible_clause
-from ..services.retrieval import KnowledgeRetrieval, RetrieveOptions
-from ..services.sets import KnowledgeSetService
+from ..retrieval.service import KnowledgeRetrieval, RetrieveOptions
 from .deps import PrincipalDep, RuntimeDep, SessionDep
 
 router = APIRouter(

@@ -26,6 +26,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -50,9 +51,6 @@ INDEXING_STATUSES = (
 )
 #: 审核状态：none = 库不要求审核；pending / approved / rejected
 REVIEW_STATUSES = ("none", "pending", "approved", "rejected")
-#: 新建时的共享预设（同 Dify DatasetPermissionEnum 的取值）。★ 只在新建时用来写入用户中心的
-#: 初始授权；之后的共享以用户中心数据权限为准（perms.py），本服务不再保存可见范围
-PERMISSIONS = ("only_me", "all_team", "partial_members")
 #: 文档的分段结构（同 Dify doc_form）
 DOC_FORMS = ("text_model", "hierarchical_model", "qa_model")
 #: 知识库的可见性（知识集方案）：public = 大家都能用（任何人至少可读）；private = 按用户中心的
@@ -105,18 +103,9 @@ class Dataset(TenantOwned, _Row, Base):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
     icon: Mapped[str] = mapped_column(String(64), default="📚", nullable=False)
+    #: 建库时按谁判的人（auth-uid）；库级权限以用户中心为准
     owner_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    #: user = 已登记到用户中心，库级权限全在用户中心。service = 存量：服务账号建的、没有登记，
-    #: 只有「全部知识库」授权的人能用。去服务账号后新库都是 user；`sync-uc --service-owner`
-    #: 把存量改归一个人（内网身份传递 §14），之后这一列可以删掉
-    owner_kind: Mapped[str] = mapped_column(String(16), default="user", nullable=False)
-    #: ★ 已废弃：接入用户中心前的可见范围。只有一次性迁移命令（sync-uc）还会读它
-    permission: Mapped[str] = mapped_column(String(32), default="only_me", nullable=False)
-    #: high_quality = 向量；economy = 关键词（P2）
-    indexing_technique: Mapped[str] = mapped_column(String(32), nullable=False)
-    embedding_provider: Mapped[str] = mapped_column(String(64), default="fastembed", nullable=False)
-    embedding_model: Mapped[str] = mapped_column(String(255), nullable=False)
-    embedding_dim: Mapped[int] = mapped_column(Integer, nullable=False)
+    #: ★ 不存向量模型和 collection：active 的索引版本只记在 kb_index_version
     #: 检索配置（同 Dify retrieval_model）：search_method、top_k、score_threshold_enabled、
     #: score_threshold、reranking_enable、reranking_mode、reranking_model、weights
     retrieval_config: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False)
@@ -126,27 +115,12 @@ class Dataset(TenantOwned, _Row, Base):
     review_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     #: 入库增强开关（doc/knowledge-enterprise-design.html §5.3 / §5.5）：上下文补全 L2、大表摘要
     enhancements: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
-    collection_name: Mapped[str] = mapped_column(String(128), nullable=False)
     #: 这个库的文件在对象存储里的目录（原文件、解析结果、图片都在下面）。多租户以后是
     #: {租户}/_knowledge/{库}；之前建的库是 _knowledge/{库}（迁移 k0009 回填，对象原地不动）
     storage_prefix: Mapped[str] = mapped_column(String(255), nullable=False)
     #: 最近一次使用的处理规则（新文档沿用）
     latest_process_rule_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
-    #: internal | external（P2）
-    provider: Mapped[str] = mapped_column(String(16), default="internal", nullable=False)
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
-
-
-class DatasetPermission(TenantOwned, _Row, Base):
-    """★ 已废弃：接入用户中心前 partial_members 的成员表。只有迁移命令（sync-uc）还会读它。"""
-
-    __tablename__ = "kb_dataset_permission"
-
-    dataset_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    principal_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    level: Mapped[str] = mapped_column(String(16), default="read", nullable=False)
-
-    __table_args__ = (UniqueConstraint("dataset_uuid", "principal_id"),)
 
 
 class ProcessRule(TenantOwned, _Row, Base):
@@ -169,11 +143,10 @@ class Document(TenantOwned, _Row, Base):
     data_source_type: Mapped[str] = mapped_column(String(32), nullable=False)
     #: upload_file: {object_key, size, mime, extension}
     data_source_info: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False)
-    #: 原文件的字节数：算租户的知识库存储用量（capacity.py）
+    #: 原文件的字节数：算租户的知识库存储用量（ops/capacity.py）
     file_size: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     doc_form: Mapped[str] = mapped_column(String(32), nullable=False)
-    doc_language: Mapped[str | None] = mapped_column(String(32), nullable=True)
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     #: 解析质量报告（doc/knowledge-enterprise-design.html §4.7）：页数、扫描页、乱码比例、告警……
     parse_report: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
@@ -189,7 +162,6 @@ class Document(TenantOwned, _Row, Base):
     paused_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     word_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     indexing_latency: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
@@ -210,12 +182,26 @@ class Document(TenantOwned, _Row, Base):
     valid_to: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
 
-    __table_args__ = (Index(None, "dataset_uuid", "position"),)
+    #: 入库巡检按状态找停在中间的文档
+    __table_args__ = (Index(None, "dataset_uuid", "position"), Index(None, "indexing_status"))
 
     @property
     def available(self) -> bool:
         """文档级「可被检索」：启用、未归档、审核不卡（none / approved）。"""
         return self.enabled and not self.archived and self.review_status in ("none", "approved")
+
+    def join_version(self, old: Document) -> None:
+        """成为 old 的新版本：加入它的版本组（旧文档还没有组就以它自己的 uuid 开组）。
+
+        元数据、权限没单独给的沿用旧版本。新版本入库完成后才取代旧版本（入库编排）。
+        """
+        if old.version_group is None:
+            old.version_group = old.uuid
+        self.version_group = old.version_group
+        if self.doc_metadata is None:
+            self.doc_metadata = old.doc_metadata
+        if self.acl is None:
+            self.acl = old.acl
 
 
 class Segment(TenantOwned, _Row, Base):
@@ -234,15 +220,11 @@ class Segment(TenantOwned, _Row, Base):
     context: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: 分段级元数据覆盖（§7.2）：与文档元数据合并（同名以分段为准）后写进 payload 的 meta
     meta: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
-    #: 问答模式的答案（P2）
-    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
     word_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    tokens: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    keywords: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     #: 向量库里的 point id；父子模式下父分段不进向量库，为空
     index_node_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     index_node_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    hit_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    #: ★ 命中次数不存在这里：从检索记录汇总（KnowledgeRetrieval.hit_counts）
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     #: waiting | indexing | completed | error
     status: Mapped[str] = mapped_column(String(16), default="waiting", nullable=False)
@@ -304,7 +286,7 @@ class QueryLog(TenantOwned, _Row, Base):
 
 
 class Retrieval(TenantOwned, _Row, Base):
-    """一次检索的过程记录：各环节的候选（rag/recorder.py），排查「为什么没检索到」用。
+    """一次检索的过程记录：各环节的候选（retrieval/recorder.py），排查「为什么没检索到」用。
 
     ★ 一次检索一条（可能跨多个库），kb_query_log 按库各一条并指回这里。
     ★ 候选只存 id / 分数 / 名次，正文在看的时候从分段表取。
@@ -338,8 +320,8 @@ LIVE_INDEX_STATUSES = ("building", "ready", "active", "retired")
 class IndexVersion(TenantOwned, _Row, Base):
     """知识库的向量索引版本（doc/knowledge-enterprise-design.html §6.2）。
 
-    kb_dataset 上的 embedding_* 与 collection_name 是 active 版本的指针：切换版本 = 在一个事务里
-    改这几个字段（检索按请求读知识库，看到的要么是旧版本、要么是新版本）。
+    ★ 每个库恰好一个 active 版本（部分唯一索引），向量模型和 collection 只记在这里：切换版本 =
+      在一个事务里改状态（检索按请求读 active 版本，看到的要么是旧版本、要么是新版本）。
     """
 
     __tablename__ = "kb_index_version"
@@ -353,13 +335,21 @@ class IndexVersion(TenantOwned, _Row, Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False)
     #: 构建完成后自动切换
     auto_activate: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    #: 构建进度：{documents, done, points}
+    #: 构建进度：{documents, points, done: [已重写的文档], early: [版本建立前就在写的文档]}
     progress: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     activated_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
 
-    __table_args__ = (UniqueConstraint("dataset_uuid", "version"),)
+    __table_args__ = (
+        UniqueConstraint("dataset_uuid", "version"),
+        Index(
+            "ux_kb_index_version_active",
+            "dataset_uuid",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
+        ),
+    )
 
 
 #: 元数据字段类型
@@ -386,7 +376,7 @@ class MetadataField(TenantOwned, _Row, Base):
 
 
 class TenantCapacity(TenantOwned, _Row, Base):
-    """运营中心单独给这个租户定的知识库存储份额（capacity.py）。没有行 = 用默认份额。"""
+    """运营中心单独给这个租户定的知识库存储份额（ops/capacity.py）。没有行 = 用默认份额。"""
 
     __tablename__ = "kb_tenant_capacity"
 

@@ -32,7 +32,7 @@
   "title": "代码图：知识库服务 - 知识库接口 / 入库 worker - 文档与入库",
   "description": "目标模型，每个元素下方的「现状」是现在承担它的代码。文档的上传、状态和属性，入库编排、锁、暂停和巡检；入库编排跑在入库 worker 里",
   "component": "文档与入库",
-  "package": "atlas_knowledge.document（目标模型）",
+  "package": "atlas_knowledge.document",
   "overview": "文档与入库管一份文档从上传到能被检索的全过程：上传时存原文件、建文档行，提交后投递入库任务；worker 里的入库编排持锁按阶段跑（解析、分段与增强、写分段、分批向量化），每个阶段的状态立刻可见，可以暂停、恢复、重试，进程死了由巡检续上。文档还带着启用、归档、审核状态和业务元数据、ACL、版本与生效区间，这些变了只改向量库里的标量字段。\n\n它不解析文件、不切分段（解析、分段），不向量化（向量索引），也不判断谁能操作（访问控制，接口层带进 DatasetAccess）。",
   "elements": [
     {
@@ -44,12 +44,16 @@
         0.8,
         0.3
       ],
-      "source": "services/documents.py DocumentService；services/metadata.py update_document / link_version",
-      "responsibility": "文档的全部入口：上传、列出、暂停恢复重试、启用归档、审核、改属性、删除。上传在一个事务里存原文件、建文档行，提交之后才按文档逐个投递入库任务——否则 worker 可能比提交更早读库。文档级字段（启用、审核、元数据、ACL、时效）变了只让向量索引改标量字段，不重新向量化。",
+      "source": "document/documents.py DocumentService；dataset/metadata.py update_document",
+      "responsibility": "文档的全部入口：上传、重新分段、列出、暂停恢复重试、启用归档、审核、改属性、删除。上传先判租户的知识库存储份额（运营接口的 KnowledgeCapacity，放不下整批拒绝），再在一个事务里存原文件、建文档行，提交之后才按文档逐个投递入库任务——否则 worker 可能比提交更早读库。重新分段 = 用原文件和新规则上传一个新版本，入库完成后才取代旧版本。文档级字段（启用、审核、元数据、ACL、时效）变了只让向量索引改标量字段，不重新向量化。",
       "methods": [
         [
           "+",
           "upload(access, files, *, rule, attrs) -> (batch, list[Document])"
+        ],
+        [
+          "+",
+          "resegment(access, doc, rule) -> (batch, list[Document])"
         ],
         [
           "+",
@@ -82,8 +86,8 @@
         3.5,
         0.3
       ],
-      "source": "indexing/runner.py IndexingRunner",
-      "responsibility": "入库编排：持锁跑一个文档，解析 → 分段与增强 → 写分段 → 分批向量化 → 完成，每个阶段一个短事务，状态 API 立刻看得到。分段已写库就跳过前几步，只把没完成的分段继续向量化。每阶段、每批之前看暂停标记。完成时按文档再同步一次文档级字段（防并发改 ACL 留下旧值），新版本取代同组旧版本。不设到点结束的超时。",
+      "source": "document/runner.py IndexingRunner",
+      "responsibility": "入库编排：先进入文档所属的租户（任务消息只带文档 id，租户从文档行取；租户已停用就不开始，过一会儿再投），再持锁跑一个文档：解析 → 分段与增强 → 写分段 → 分批向量化 → 完成，每个阶段一个短事务，状态 API 立刻看得到。分段已写库就跳过前几步，只把没完成的分段继续向量化。每阶段、每批之前看暂停标记。完成时按文档再同步一次文档级字段（防并发改 ACL 留下旧值），新版本取代同组旧版本。不设到点结束的超时。",
       "methods": [
         [
           "+",
@@ -104,8 +108,8 @@
         -0.75,
         3.55
       ],
-      "source": "runtime.Dispatcher / CeleryDispatcher（现在上传一批只投一条消息）",
-      "responsibility": "异步任务投递。生产是 Celery（Redis 作 broker，队列 dataset），测试记下来或内联执行。入库一个文档一条消息：分散到各个 worker，Pod 被杀时只有正在跑的那一个停在中间状态。",
+      "source": "runtime.Dispatcher / CeleryDispatcher；tasks/indexing.indexing_task",
+      "responsibility": "异步任务投递。生产是 Celery（Redis 作 broker，队列 dataset），测试记下来或内联执行。入库一个文档一条消息：分散到各个 worker，Pod 被杀时只有正在跑的那一个停在中间状态。消息里只有 id，不带租户：租户从那一行取，不认任何自称的。",
       "methods": [
         [
           "+",
@@ -126,7 +130,7 @@
         2.3,
         1.95
       ],
-      "source": "runner 里的 RedisLock、pause_key / is_paused；documents.pause / resume 的标记",
+      "source": "document/runner.py 里的 RedisLock、pause_key / is_paused；DocumentService.pause / resume 的标记",
       "responsibility": "同一个文档同时只有一个入库任务：Redis 锁 TTL 60 秒、看门狗续租，放锁校验持有者；拿不到锁就跳过。暂停标记 kb:doc:{uuid}:paused 由接口设、入库任务在每个阶段和每批之前看；删除时也设，正在跑的任务会停下。",
       "methods": [
         [
@@ -152,8 +156,8 @@
         -0.75,
         1.65
       ],
-      "source": "runner.recover_stalled；api/app._sweep_ingest",
-      "responsibility": "入库巡检，每 60 秒一次（每个接口副本各一份）：处在 parsing / splitting / indexing、却没有任务持锁的文档重新投递，从已完成的阶段之后续跑。不看 waiting：排队中的本来就没有锁。重复投递是无害的，多出来的任务拿不到锁就跳过。",
+      "source": "document/runner.recover_stalled；jobs.IngestSweep（定时任务库的实例任务）",
+      "responsibility": "入库巡检，每 60 秒一次（定时任务库的实例任务，每个接口副本各一份；运营接口 /ops/v1/jobs 看运行情况）：在系统范围里取处在 parsing / splitting / indexing 的文档和它的租户，没有任务持锁、租户没停用的重新投递，从已完成的阶段之后续跑。不看 waiting：排队中的本来就没有锁。重复投递是无害的，多出来的任务拿不到锁就跳过。",
       "methods": [
         [
           "+",
@@ -170,7 +174,7 @@
         3.95,
         3.55
       ],
-      "source": "runner._supersede；上传时挂组现在在 metadata.link_version，目标模型里是 Document.join_version",
+      "source": "document/runner._supersede；db.models.Document.join_version",
       "responsibility": "文档的版本：上传时指定 supersedes，新文档加入旧文档的 version_group；新版本入库完成后，同组其他当前版本 is_current = false、valid_to 截止到新版本生效（没有生效时间就是现在），新版本从这一刻起生效。按时间点检索时，落在哪个版本的生效区间就返回哪个。",
       "methods": [
         [
@@ -266,8 +270,8 @@
         4.55,
         1.95
       ],
-      "source": "storage.py S3FileStorage",
-      "responsibility": "原始文件的对象存储，布局 {prefix}/{库}/{文档}/{文件名}；DocIR 和图片放同一前缀，删文档时一起清掉。同步接口（boto3），调用方放线程里跑。",
+      "source": "document/storage.py S3FileStorage",
+      "responsibility": "原始文件的对象存储，布局 {库的目录}/{文档}/{文件名}，库的目录是 {租户}/_knowledge/{库}（多租户之前建的库是 _knowledge/{库}）；DocIR 和图片放同一前缀，删文档时一起清掉。同步接口（boto3），调用方放线程里跑。",
       "methods": [
         [
           "+",
@@ -288,7 +292,7 @@
       "methods": [
         [
           "+",
-          "/documents · /pause · /resume · /retry · /status · /review"
+          "/documents · /resegment · /pause · /resume · /retry · /status · /review"
         ]
       ],
       "at": [
@@ -509,13 +513,19 @@
       "name": "上传",
       "entry": "upload(access, files, *, rule, attrs)",
       "callers": "管理接口（要读写）",
-      "description": "校验格式和大小、按库的字段校验元数据，建处理规则，存原文件、建文档行；提交后一个文档投递一条入库任务。要求审核的库，新文档先待审核。上传新版本（supersedes）一次只能一个文件"
+      "description": "先判租户的存储份额（份额满了整批拒绝，什么都不存）；校验格式和大小、按库的字段校验元数据，建处理规则，存原文件、建文档行；提交后一个文档投递一条入库任务。要求审核的库，新文档先待审核。上传新版本（supersedes）一次只能一个文件"
+    },
+    {
+      "name": "重新分段",
+      "entry": "resegment(access, doc, rule)",
+      "callers": "管理接口（要读写）",
+      "description": "只有上传的、处理完的文档能重新分段；用原文件和新规则入库一个新版本（沿用元数据、权限、生效区间），完成之前旧的分段照常能查"
     },
     {
       "name": "入库",
       "entry": "IngestionPipeline.run(document_uuid)",
       "callers": "入库 worker（indexing_task）",
-      "description": "持锁按阶段跑；分段已写库就只续跑向量化；暂停、失败都留在库里可见；完成后同步文档级字段、取代旧版本"
+      "description": "按文档行进入租户（停用的过一会儿再投）；持锁按阶段跑；分段已写库就只续跑向量化；暂停、失败都留在库里可见；完成后同步文档级字段、取代旧版本"
     },
     {
       "name": "暂停、恢复、重试",
@@ -544,14 +554,14 @@
     {
       "name": "入库巡检",
       "entry": "StallSweeper.recover()",
-      "callers": "知识库接口的后台任务（每 60 秒）",
-      "description": "进程被杀后停在中间状态的文档重新投递；不靠 Celery 重新投递（整个 Pod 被杀时消息要等 visibility_timeout 7 天）"
+      "callers": "知识库接口的定时任务（每 60 秒，实例任务）",
+      "description": "系统范围里找停在中间状态、没有锁的文档，跳过停用的租户，重新投递；不靠 Celery 重新投递（整个 Pod 被杀时消息要等 visibility_timeout 7 天）"
     }
   ],
   "decisions": [
     {
       "decision": "一个文档一个入库任务",
-      "reason": "现在上传一批只投一条消息、任务里串行跑，Pod 被杀后还没轮到的文档永远停在 waiting（巡检不看 waiting）。按文档投递后，剩下的窗口只有「已领消息、还没改成 parsing」那一瞬间，而且各文档能分散到多个 worker。"
+      "reason": "上传一批要是只投一条消息、任务里串行跑，Pod 被杀后还没轮到的文档会一直停在 waiting（巡检不看 waiting）。按文档投递后，剩下的窗口只有「已领消息、还没改成 parsing」那一瞬间，而且各文档能分散到多个 worker。"
     },
     {
       "decision": "入库任务在事务提交之后投递",
@@ -571,14 +581,14 @@
     },
     {
       "decision": "完成时按文档再同步一次文档级字段",
-      "reason": "入库中途改 ACL、元数据时，改字段和正在写的那一批会竞态，个别 entity 留着旧值（现状问题）。完成时按文档整体覆盖一次就收敛了，代价是按这份文档的主键再 partial upsert 一遍。"
+      "reason": "入库中途改 ACL、元数据时，改字段和正在写的那一批会竞态，个别 entity 会留着旧值。完成时按文档整体覆盖一次就收敛了，代价是按这份文档的主键再 partial upsert 一遍。"
     },
     {
       "decision": "解析质量差的文档先进待审核",
       "reason": "扫描页、乱码多的文档直接参与检索会召回一堆垃圾；进待审核后不参与检索，人看过解析预览再放行或换解析器重来。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的主键用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的主键用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。除向量缓存外每张表还有 tenant_uuid（uuid，所属租户；atlas_tenancy 按当前租户自动过滤，没进入租户就查不到任何租户的数据），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
   "tables": [
     {
       "name": "kb_document",

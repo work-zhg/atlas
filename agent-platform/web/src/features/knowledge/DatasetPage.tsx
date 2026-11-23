@@ -106,11 +106,9 @@ export function DatasetPage({ datasetId }: { datasetId: string }) {
             {ds.owner_id === me?.id ? "我创建的" : ds.my_level ? `我${LEVEL_LABEL[ds.my_level]}` : ""}
           </div>
         </div>
-        {ds.owner_kind !== "service" && (
-          <Button icon={<Icon name="share" size={14} />} onClick={() => setSharing(true)}>
-            共享
-          </Button>
-        )}
+        <Button icon={<Icon name="share" size={14} />} onClick={() => setSharing(true)}>
+          共享
+        </Button>
         {ds.can_write && (
           <Button type="primary" icon={<Icon name="upload" size={14} />} onClick={() => setUploading(true)}>
             上传文档
@@ -903,7 +901,7 @@ function SettingsTab({ ds }: { ds: Dataset }) {
           />
         </Form.Item>
         <Form.Item label="向量模型" extra="更换向量模型需要重建索引，当前版本不支持修改。">
-          <Input value={ds.embedding_model} disabled />
+          <Input value={ds.embedding_model ?? ""} disabled />
         </Form.Item>
       </Form>
       <Typography.Title level={5}>检索设置</Typography.Title>

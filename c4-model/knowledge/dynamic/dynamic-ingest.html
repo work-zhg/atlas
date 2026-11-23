@@ -265,7 +265,7 @@
       "description": "每个文档投递一条 indexing_task",
       "technology": "Redis 协议（Celery，队列 dataset）",
       "details": {
-        "note": "目标模型：一个文档一条消息（现在一批只投一条，Pod 被杀后还没轮到的文档会永远停在 waiting）。必须在提交之后投递，否则 worker 可能读不到文档。"
+        "note": "一个文档一条消息：Pod 被杀时，还没轮到的文档不会跟着同一条消息一起卡在 waiting。必须在提交之后投递，否则 worker 可能读不到文档。"
       }
     },
     {

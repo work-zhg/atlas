@@ -5,9 +5,9 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from atlas_knowledge.rag import index_processor as ip
-from atlas_knowledge.rag.docir import Block, DocIR
-from atlas_knowledge.rag.enhance import (
+from atlas_knowledge.parse.docir import Block, DocIR
+from atlas_knowledge.segment import index_processor as ip
+from atlas_knowledge.segment.enhance import (
     apply_llm_context,
     enhance,
     normalize_enhancements,

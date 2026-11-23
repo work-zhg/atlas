@@ -8,9 +8,9 @@ from typing import Any
 
 import pytest
 from atlas_knowledge.errors import Invalid
-from atlas_knowledge.rag import index_processor as ip
-from atlas_knowledge.rag.embedding import CacheEmbedding
-from atlas_knowledge.rag.parsers import parse
+from atlas_knowledge.index.embed_cache import CacheEmbedding
+from atlas_knowledge.parse import parse
+from atlas_knowledge.segment import index_processor as ip
 from conftest import FakeEmbedding, run_indexing
 from pdf_samples import employee_handbook, partly_scanned
 

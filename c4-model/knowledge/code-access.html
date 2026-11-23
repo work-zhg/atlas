@@ -30,10 +30,10 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：知识库服务 - 知识库接口 - 访问控制",
-  "description": "目标模型，每个元素下方的「现状」是现在承担它的代码。调用身份、操作码、库级权限、文档级主体标签和 MCP 令牌；本领域没有自己的表，授权都在用户中心",
+  "description": "目标模型，每个元素下方的「现状」是现在承担它的代码。调用身份与租户、操作码、库级权限、文档级主体标签和 MCP 令牌；本领域没有自己的表，授权都在用户中心，公有记在库上",
   "component": "访问控制",
-  "package": "atlas_knowledge.access（目标模型）",
-  "overview": "访问控制回答三个问题：这个人能做什么（操作码 kb:create、kb:review，来自用户中心的授权快照），能动哪些库（用户中心数据权限，读 < 写 < Owner），能看到库里哪些文档（文档 ACL 与调用者的主体标签求交）。身份来自网关或 Atlas 写的请求头，会话 Pod 只能带 Atlas 签发的令牌。调用户中心时透传本次的身份请求头。\n\n它不存任何授权（都在用户中心），不决定共享给谁（知识库），也不拼检索过滤（检索拿主体标签自己拼）。",
+  "package": "atlas_knowledge.access",
+  "overview": "访问控制回答四个问题：这个请求属于哪个租户（请求头里的租户经用户中心核对后进入，之后的读写按它自动过滤），这个人能做什么（操作码 kb:create、kb:review，来自用户中心的授权快照），能动哪些库（公有的库任何人至少可读；其余按用户中心数据权限，读 < 写 < Owner），能看到库里哪些文档（文档 ACL 与调用者的主体标签求交）。身份来自网关或 Atlas 写的请求头，会话 Pod 只能带 Atlas 签发的令牌（身份、租户、知识集都在里面）。调用户中心时透传本次的身份请求头。\n\n它不存任何授权（都在用户中心），不决定共享给谁（知识库），也不拼检索过滤（检索拿主体标签自己拼）。",
   "elements": [
     {
       "id": "ac",
@@ -44,9 +44,13 @@
         2.0,
         0.3
       ],
-      "source": "auth.current_principal；services/permission.py load_dataset / visibility / readable_ids；api/mcp.verify_token；runtime.principals",
-      "responsibility": "谁能做什么、能动哪些库、能看到哪些文档的唯一入口。人直接操作时按请求头里的 auth-uid；智能体运行时按这一轮的 auth-uid（以 Agent 为权限时是它的数字员工）；会话 Pod 只认签名令牌。看不到的库一律 404（不暴露存在性），看得到但不能改的才 403。用户中心不可用时一律拒绝（503）。",
+      "source": "access/auth.py verified_tenant / current_principal；access/permission.py load_dataset / visibility / readable_ids；api/mcp.verify_token；Runtime.principals",
+      "responsibility": "谁能做什么、能动哪些库、能看到哪些文档的唯一入口。每个请求先定租户：取请求头里的 X-Tenant-Id，带了用户的经用户中心核对他在这个租户里，再进入它（TenantScope），租户已停用一律 403；MCP 按令牌里的租户进入。人直接操作时按请求头里的 auth-uid；智能体运行时按这一轮的 auth-uid（以 Agent 为权限时是它的数字员工）；会话 Pod 只认签名令牌。公有的库任何人至少可读，不问用户中心。看不到的库一律 404（不暴露存在性），看得到但不能改的才 403。用户中心不可用时一律拒绝（503）。",
       "methods": [
+        [
+          "+",
+          "tenant(headers) -> UUID  # 核对后进入"
+        ],
         [
           "+",
           "principal(headers) -> Principal"
@@ -57,11 +61,11 @@
         ],
         [
           "+",
-          "visible(principal) -> Visibility · readable(subject, dataset_ids) -> set"
+          "visible(principal) -> Visibility · readable(subject, datasets) -> set"
         ],
         [
           "+",
-          "principals(subject) -> list[str]"
+          "principals(subject) -> list[str] · user_names(ids)"
         ],
         [
           "+",
@@ -82,7 +86,7 @@
         -0.35,
         0.3
       ],
-      "source": "auth.Principal",
+      "source": "access/auth.py Principal",
       "responsibility": "调用身份：X-Uid 谁在用（建库人、上传人、检索记录里的发起人），X-Auth-Uid 按谁判（缺省 = uid），以及授权快照里的操作码。缺 X-Uid 报 401。",
       "attributes": [
         [
@@ -110,8 +114,8 @@
         4.65,
         0.3
       ],
-      "source": "auth.IdentityHeadersMiddleware / use_identity / outbound_headers",
-      "responsibility": "本服务调用户中心时原样带上本次请求的身份请求头（透传，不重算），X-Caller-App 写 atlas（知识库是 Atlas 的数据，数据编码登记在它名下）。MCP 调用没有可信的请求头，按令牌里的身份设。",
+      "source": "access/auth.py IdentityHeadersMiddleware / use_identity / outbound_headers",
+      "responsibility": "本服务调用户中心时原样带上本次请求的身份请求头（透传，不重算），X-Caller-App 写 atlas（知识库是 Atlas 的数据，数据编码登记在它名下）。没透传到租户（入库任务、MCP）时写当前租户。MCP 调用没有可信的请求头，按令牌里的身份和租户设。",
       "methods": [
         [
           "+",
@@ -137,11 +141,11 @@
         1.95
       ],
       "source": "api/mcp.verify_token；签发在 Atlas 的 providers/knowledge.sign_mcp_token",
-      "responsibility": "会话 Pod 的能力凭据：base64url({d: 库 id, t: 会话, u: 按谁判, o: 发起人}) + HMAC-SHA256。查哪些库只看 d，权限按 u 判、每次检索都重新问用户中心；o 只进检索记录。不设过期：会话可能挂起很久再恢复，换绑后新会话拿新令牌。",
+      "responsibility": "会话 Pod 的能力凭据：base64url({s: [{n: 知识集名称, d: [库 id], k: 取几条}], t: 会话, u: 按谁判, o: 发起人, tenant: 租户}) + HMAC-SHA256。查哪些库只看 s 里的 d，模型只能填知识集和库的名称；权限按 u 判、每次检索都重新问用户中心；o 只进检索记录。没有租户的令牌（多租户之前签发的）一律拒绝，重新打开会话就换新令牌；只有 d 的旧令牌当作一个没有名称的知识集。不设过期。",
       "attributes": [
         [
           "+",
-          "d · t · u · o"
+          "s: [{n, d, k}] · t · u · o · tenant"
         ]
       ],
       "methods": [
@@ -160,8 +164,8 @@
         0.05,
         1.95
       ],
-      "source": "services/permission.py DatasetAccess",
-      "responsibility": "一个人对一个库的有效级别：读（看到、检索、召回测试）≥ READ；写（上传、编辑分段、改检索设置）≥ WRITE；管（删除、共享、换向量模型）= OWNER（含「全部知识库 · Owner」）；审核 = OWNER，或操作码 kb:review 且能读——角色管「能不能审」，数据权限管「审哪些库」。",
+      "source": "access/permission.py DatasetAccess",
+      "responsibility": "一个人对一个库的有效级别（公有的库至少 READ）：读（看到、检索、召回测试）≥ READ；写（上传、编辑分段、改检索设置）≥ WRITE；管（删除、共享、改可见性、移库、换向量模型）= OWNER（含「全部知识库 · Owner」）；审核 = OWNER，或操作码 kb:review 且能读——角色管「能不能审」，数据权限管「审哪些库」。",
       "attributes": [
         [
           "+",
@@ -188,8 +192,8 @@
         1.2,
         1.95
       ],
-      "source": "services/permission.py Visibility",
-      "responsibility": "列表用：一次问用户中心，得到能读的库和「全部知识库」的级别，转成查询条件，每行再标上「我的权限」。",
+      "source": "access/permission.py Visibility",
+      "responsibility": "列表用：一次问用户中心，得到能读的库和「全部知识库」的级别，转成查询条件（公有的库，或用户中心里能读的库），每行再标上「我的权限」。",
       "methods": [
         [
           "+",
@@ -210,7 +214,7 @@
         3.35,
         1.95
       ],
-      "source": "principals.py make_resolver",
+      "source": "access/principals.py PrincipalTags",
       "responsibility": "调用者 → 主体标签：u:用户、r:Atlas 应用内的角色、d:所在部门及各级上级。文档的 ACL 与它有交集（或文档公开）才检索得到。进程内短时缓存，部门树按租户缓存。展开失败只用 u:用户——只会少看到，不会多看到，也不缓存。",
       "methods": [
         [
@@ -228,7 +232,7 @@
         0.05,
         3.5
       ],
-      "source": "perms.LEVEL_RANK",
+      "source": "access/perms.py LEVEL_RANK",
       "responsibility": "数据权限级别，按顺序比较。",
       "attributes": [
         [
@@ -246,8 +250,8 @@
         2.0,
         3.5
       ],
-      "source": "perms.DataPermissions（测试里是内存实现）",
-      "responsibility": "库级权限 = 用户中心数据权限，数据编码 AtlasKnowledgeBase，一个库一条数据。新库首次写入必须含一条 OWNER；根部门含下级只读就是「全员可见」。",
+      "source": "access/perms.py DataPermissions（测试里是内存实现）",
+      "responsibility": "库级权限 = 用户中心数据权限，数据编码 AtlasKnowledgeBase，一个库一条数据。新库首次写入必须含一条 OWNER。公有不靠这里：可见性记在库上。",
       "methods": [
         [
           "+",
@@ -260,10 +264,6 @@
         [
           "+",
           "create · acl · grant · update · revoke · rename · cleanup"
-        ],
-        [
-          "+",
-          "root_dept() -> str"
         ]
       ]
     },
@@ -276,16 +276,16 @@
         3.3,
         5.0
       ],
-      "source": "perms.UCDataPermissions；auth._authz / _Cache；principals.py 里的 HTTP 调用",
-      "responsibility": "用户中心开放接口的唯一客户端：授权快照（/users/{id}/authz，成功结果缓存 30 秒；停用、不存在 → 401，没有 Atlas 访问权 → 403）、数据权限（/data-permissions*：OWNER_REQUIRED、NOT_DATA_OWNER → 403，LAST_DATA_OWNER → 409，404 → 不存在）、用户与部门树（主体展开）。不可达和其他失败一律 503，不放行。现在这三类调用分在三个模块里，各自处理错误。",
+      "source": "access/usercenter.py UserCenterGateway",
+      "responsibility": "用户中心开放接口的唯一客户端：授权快照（/users/{id}/authz，按（auth-uid, 租户）缓存成功结果 30 秒；不在这个租户、停用、不存在 → 401，没有 Atlas 访问权 → 403）、数据权限（/data-permissions*：OWNER_REQUIRED、NOT_DATA_OWNER → 403，LAST_DATA_OWNER → 409，404 → 不存在）、用户与部门树（主体展开、知识集维护人姓名）。不可达和其他失败一律 503，不放行。",
       "methods": [
         [
           "+",
-          "snapshot(auth_uid) -> Snapshot"
+          "snapshot(auth_uid, tenant) -> Snapshot"
         ],
         [
           "+",
-          "user(id) · dept_tree()"
+          "user(id) · user_names(ids) · dept_tree()"
         ],
         [
           "+",
@@ -330,13 +330,13 @@
     {
       "id": "dsvc",
       "kind": "class",
-      "name": "DatasetService",
+      "name": "DatasetService · KnowledgeSetService",
       "external": true,
       "source": "知识库领域",
       "methods": [
         [
           "+",
-          "建库授权 · 共享 · 改名 · 删库清理"
+          "建库授权 · 共享 · 改名 · 删库清理 · 维护人姓名"
         ]
       ],
       "at": [
@@ -359,6 +359,23 @@
       "at": [
         4.85,
         -1.3
+      ]
+    },
+    {
+      "id": "gate",
+      "kind": "class",
+      "name": "TenantGate",
+      "external": true,
+      "source": "运营接口库（本地的租户状态）",
+      "methods": [
+        [
+          "+",
+          "is_active(tenant) -> bool"
+        ]
+      ],
+      "at": [
+        6.3,
+        1.95
       ]
     }
   ],
@@ -443,14 +460,19 @@
       "from": "gateway",
       "to": "relay",
       "description": "带上身份请求头"
+    },
+    {
+      "from": "ac",
+      "to": "gate",
+      "description": "租户停用了没有"
     }
   ],
   "capabilities": [
     {
-      "name": "调用身份",
-      "entry": "principal(headers)",
+      "name": "调用身份与租户",
+      "entry": "tenant(headers) · principal(headers)",
       "callers": "管理接口、内部接口（每个请求）",
-      "description": "缺 X-Uid → 401；按 auth-uid 取授权快照，账号停用 → 401，没有 Atlas 访问权 → 403；内部接口不经网关，身份由 Atlas 写"
+      "description": "缺租户 → 401，请求头里的租户和用户所属的不一致 → 401，租户停用 → 403；缺 X-Uid → 401；按 auth-uid 取授权快照，账号停用 → 401，没有 Atlas 访问权 → 403；内部接口不经网关，身份和租户由 Atlas 写"
     },
     {
       "name": "单库级别",
@@ -459,16 +481,16 @@
       "description": "读不到 → 404；require_write / require_admin / require_review 不够 → 403"
     },
     {
-      "name": "列表与可绑定的库",
+      "name": "列表与能用的知识集",
       "entry": "visible(principal)",
-      "callers": "管理接口（知识库列表）、内部接口（智能体编辑时列可读的库）",
-      "description": "用户中心里能读的库；有「全部知识库」授权则全部"
+      "callers": "管理接口（知识集、知识库列表）、内部接口（智能体能用的知识集）",
+      "description": "公有的库，加上用户中心里能读的库；有「全部知识库」授权则全部"
     },
     {
       "name": "智能体检索的库",
-      "entry": "readable(subject, dataset_ids)",
-      "callers": "检索",
-      "description": "逐库并发问用户中心（一次最多 20 个），不缓存，撤权立即生效；没有主体、用户中心里没有这个人都按读不到"
+      "entry": "readable(subject, datasets)",
+      "callers": "检索、MCP 端点（knowledge_list）",
+      "description": "公有的库直接算能读；其余逐库并发问用户中心（一次最多 200 个），不缓存，撤权立即生效；没有主体、用户中心里没有这个人都按读不到"
     },
     {
       "name": "文档级权限",
@@ -480,12 +502,12 @@
       "name": "MCP 令牌",
       "entry": "verify_mcp(token)",
       "callers": "MCP 端点",
-      "description": "签名不对、内容不对都当作无效凭据，返回「无法检索」；只认令牌，不认请求头"
+      "description": "签名不对、内容不对都当作无效凭据，返回「无法检索」；没有租户的旧令牌要求重新打开会话；租户停用不检索；只认令牌，不认请求头"
     },
     {
       "name": "共享",
       "entry": "create_grants · grant · update · revoke · acl · rename · cleanup",
-      "callers": "知识库",
+      "callers": "知识库（含知识集的维护人姓名）",
       "description": "直接改用户中心；操作人用 auth-uid"
     }
   ],
@@ -516,7 +538,15 @@
     },
     {
       "decision": "调用户中心的代码收成一个防腐层",
-      "reason": "授权快照、数据权限、主体展开现在分在三个模块，各自拼地址、带请求头、映射错误码，规则不完全一致；收在一处后，透传身份、超时和 503 的口径只有一份。"
+      "reason": "授权快照、数据权限、主体展开要是分在三个模块，各自拼地址、带请求头、映射错误码，规则很难一致；收在一处后，透传身份、超时和 503 的口径只有一份。"
+    },
+    {
+      "decision": "租户以用户中心为准，请求头只是声明",
+      "reason": "网关和 Atlas 写的 X-Tenant-Id 经用户中心核对「这个人在这个租户里」才进入；之后的查询按当前租户自动过滤，没进入租户就查不到任何租户的数据。会话 Pod 的租户只信令牌。"
+    },
+    {
+      "decision": "公有的库不问用户中心",
+      "reason": "公有 = 本租户里任何人都能读，记在库上本地判；只有私有库才逐库问用户中心，智能体查一个大知识集时少很多次调用。"
     }
   ]
 }

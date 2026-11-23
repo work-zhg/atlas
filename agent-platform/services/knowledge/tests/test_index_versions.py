@@ -9,7 +9,7 @@ from typing import Any
 import httpx
 import pytest
 from atlas_knowledge.db.models import Segment
-from atlas_knowledge.rag.remote_models import OpenAICompatibleEmbedding, RemoteReranker
+from atlas_knowledge.models.remote_models import OpenAICompatibleEmbedding, RemoteReranker
 from conftest import FakeEmbedding, run_indexing, run_rebuilds
 
 ALICE = {"X-Uid": "alice"}
@@ -47,7 +47,7 @@ def test_openai_compatible_embedding_batches_retries_and_counts_tokens() -> None
         "bge-m3", base_url="http://gw/v1", transport=httpx.MockTransport(handler)
     )
     assert m.dim == 3 and m.provider == "openai_compatible"
-    import atlas_knowledge.rag.remote_models as rm
+    import atlas_knowledge.models.remote_models as rm
 
     rm.time.sleep = lambda _s: None  # type: ignore[assignment]
     assert m.embed_documents(["a", "bbb"]) == [[1.0, 1.0, 0.0], [3.0, 1.0, 0.0]]
@@ -194,7 +194,7 @@ async def test_changing_embedding_model_rebuilds_then_switches(client: Any, rt: 
 async def test_rebuild_removes_orphans(client: Any, rt: Any, monkeypatch: Any) -> None:
     """竞态：重建读到分段并写完向量之后，分段被删（删除时新 collection 里还没有这些 point）。
     重建收尾时清掉新 collection 里库中已不存在的 point。"""
-    from atlas_knowledge.indexing import loader
+    from atlas_knowledge.index import loader
     from sqlalchemy import delete
 
     rt.registry.register_embedding(FakeEmbedding2())
@@ -240,3 +240,169 @@ async def test_payload_has_doc_fields_and_follows_status(client: Any, rt: Any) -
     )
     assert r.status_code == 200, r.text
     assert await store.search_by_vector(FakeEmbedding().embed_query("请假"), top_k=1) == []
+
+
+async def test_completion_resyncs_doc_fields_changed_mid_ingest(
+    client: Any, rt: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """入库中途改了 ACL（改字段时那一批还没写进向量库）：完成时按文档再同步一次，不留旧值。"""
+    import atlas_knowledge.document.runner as runner_mod
+    from atlas_knowledge.db.models import Document
+    from atlas_knowledge.db.session import get_sessionmaker
+    from sqlalchemy import select
+
+    original = runner_mod.index_segments
+
+    async def write_then_change_acl(session: Any, rt_: Any, ds: Any, doc: Any, segs: Any) -> int:
+        n = await original(session, rt_, ds, doc, segs)  # 这一批带着旧 ACL 写进去
+        async with get_sessionmaker()() as s:  # 同时另一个请求改了 ACL
+            row = await s.scalar(select(Document).where(Document.uuid == doc.uuid))
+            assert row is not None
+            row.acl = ["u:bob"]
+            await s.commit()
+        return n
+
+    monkeypatch.setattr(runner_mod, "index_segments", write_then_change_acl)
+    ds = await _dataset(client)
+    await _upload(client, rt, ds["id"], "请假需要提前一天申请。", "a.txt")
+    store = rt.vectors.for_collection(f"kb_{ds['id'].replace('-', '')}")
+    hits = await store.search_by_vector(FakeEmbedding().embed_query("请假"), top_k=1)
+    assert hits and hits[0].payload["acl"] == ["u:bob"]
+
+
+# ───────────────────────────────────────────── 重建可续跑
+
+
+async def _set_status(doc_id: str, status: str) -> None:
+    from uuid import UUID
+
+    from atlas_knowledge.db.models import Document
+    from atlas_knowledge.db.session import get_sessionmaker
+    from sqlalchemy import select
+
+    async with get_sessionmaker()() as s:
+        doc = await s.scalar(select(Document).where(Document.uuid == UUID(doc_id)))
+        assert doc is not None
+        doc.indexing_status = status
+        await s.commit()
+
+
+async def _new_version(client: Any, ds_id: str) -> dict[str, Any]:
+    r = await client.post(
+        f"/v1/datasets/{ds_id}/index-versions",
+        json={"embedding_model": "fake-embedding-2"},
+        headers=ALICE,
+    )
+    assert r.status_code == 202, r.text
+    return r.json()
+
+
+async def _version(client: Any, ds_id: str, version_id: str) -> dict[str, Any]:
+    got = (await client.get(f"/v1/datasets/{ds_id}/index-versions", headers=ALICE)).json()
+    return next(v for v in got["data"] if v["id"] == version_id)
+
+
+async def test_rebuild_resumes_after_the_worker_dies(
+    client: Any, rt: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """重建中途进程被杀：版本停在 building、锁随进程消失；巡检重新投递，从记下的进度续跑，
+    已重写的文档不再重写。"""
+    import asyncio
+
+    from atlas_knowledge.db.session import get_sessionmaker
+    from atlas_knowledge.index import versions as versions_mod
+    from atlas_knowledge.index.versions import recover_rebuilds
+
+    rt.registry.register_embedding(FakeEmbedding2())
+    ds = await _dataset(client)
+    for i, text in enumerate(["请假需要提前一天申请。", "报销每周三处理。", "年假满一年五天。"]):
+        await _upload(client, rt, ds["id"], text, f"{i}.txt")
+    v2 = await _new_version(client, ds["id"])
+
+    real = versions_mod._rewrite
+    rewritten: list[str] = []
+
+    async def die_on_second(*args: Any, **kwargs: Any) -> int:
+        if len(rewritten) == 1:
+            raise asyncio.CancelledError  # 进程被杀：不是普通异常，不会把版本标成失败
+        rewritten.append(str(args[3]))
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(versions_mod, "_rewrite", die_on_second)
+    with pytest.raises(asyncio.CancelledError):
+        await run_rebuilds(rt)
+    got = await _version(client, ds["id"], v2["id"])
+    assert got["status"] == "building" and got["progress"]["documents"] == 1
+
+    monkeypatch.setattr(versions_mod, "_rewrite", real)
+    assert await recover_rebuilds(rt, get_sessionmaker()) == [v2["id"]]
+    await run_rebuilds(rt)
+    got = await _version(client, ds["id"], v2["id"])
+    assert got["status"] == "ready" and got["progress"]["documents"] == 3
+    v2_store = rt.vectors.for_collection(f"kb_{ds['id'].replace('-', '')}_v2")
+    assert len(await v2_store.point_ids()) == 3
+    # 没有 building 的版本，巡检什么都不投
+    assert await recover_rebuilds(rt, get_sessionmaker()) == []
+
+
+async def test_rebuild_waits_for_documents_writing_when_the_version_was_created(
+    client: Any, rt: Any
+) -> None:
+    """版本建立这一刻还在写向量的文档，前几批没进新 collection：重建等它停下再整篇补写。"""
+    from atlas_knowledge.db.session import get_sessionmaker
+    from atlas_knowledge.index.versions import recover_rebuilds
+
+    rt.registry.register_embedding(FakeEmbedding2())
+    ds = await _dataset(client)
+    await _upload(client, rt, ds["id"], "请假需要提前一天申请。", "a.txt")
+    late = await _upload(client, rt, ds["id"], "报销每周三处理。", "b.txt")
+    paused = await _upload(client, rt, ds["id"], "年假满一年五天。", "c.txt")
+    # b 还在向量化、c 写了一部分后暂停（它们的分段都已写进旧版本）
+    await _set_status(late["id"], "indexing")
+    await _set_status(paused["id"], "paused")
+    v2 = await _new_version(client, ds["id"])
+    assert sorted(v2["progress"]["early"]) == sorted([late["id"], paused["id"]])
+
+    await run_rebuilds(rt)
+    got = await _version(client, ds["id"], v2["id"])
+    # 暂停的补写了已写过的分段；还在写的要等
+    assert got["status"] == "building" and got["progress"]["early"] == [late["id"]]
+    v2_store = rt.vectors.for_collection(f"kb_{ds['id'].replace('-', '')}_v2")
+    assert len(await v2_store.point_ids()) == 2
+
+    await _set_status(late["id"], "completed")
+    assert await recover_rebuilds(rt, get_sessionmaker()) == [v2["id"]]
+    await run_rebuilds(rt)
+    got = await _version(client, ds["id"], v2["id"])
+    assert got["status"] == "ready" and got["progress"]["early"] == []
+    assert len(await v2_store.point_ids()) == 3
+
+
+async def test_new_collections_get_every_metadata_field_index(
+    client: Any, rt: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """字段在第一次入库之前定义、或重建出新版本：collection 建的时候就带上全部字段的索引。"""
+    from atlas_knowledge.index.vdb.qdrant import QdrantVector
+
+    made: list[tuple[str, str]] = []
+    real = QdrantVector.ensure_index
+
+    async def spy(self: QdrantVector, key: str, kind: str) -> None:
+        made.append((self.collection, key))
+        await real(self, key, kind)
+
+    monkeypatch.setattr(QdrantVector, "ensure_index", spy)
+    rt.registry.register_embedding(FakeEmbedding2())
+    ds = await _dataset(client)
+    r = await client.post(
+        f"/v1/datasets/{ds['id']}/metadata-fields",
+        json={"name": "region", "type": "string"},
+        headers=ALICE,
+    )
+    assert r.status_code == 201, r.text
+    await _upload(client, rt, ds["id"], "请假需要提前一天申请。", "a.txt")
+    v1 = f"kb_{ds['id'].replace('-', '')}"
+    assert (v1, "meta.region") in made
+    await _new_version(client, ds["id"])
+    await run_rebuilds(rt)
+    assert (f"{v1}_v2", "meta.region") in made

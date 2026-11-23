@@ -15,7 +15,7 @@ from ..db.models import (
     QueryLog,
     Segment,
 )
-from ..rag.enhance import normalize_enhancements
+from ..segment.enhance import normalize_enhancements
 
 __all__ = ["child_out", "dataset_out", "document_out", "query_out", "rule_out", "segment_out"]
 
@@ -26,13 +26,15 @@ def _ts(v: datetime | None) -> str | None:
 
 def dataset_out(
     ds: Dataset,
+    index: IndexVersion | None = None,
     *,
     stats: dict[str, int] | None = None,
     level: str | None = None,
     can_write: bool | None = None,
     can_admin: bool | None = None,
 ) -> dict[str, Any]:
-    """level：当前用户的有效级别（READ / WRITE / OWNER，来自用户中心数据权限）。"""
+    """index：库在用的（active）索引版本，给出向量模型。
+    level：当前用户的有效级别（READ / WRITE / OWNER，来自用户中心数据权限）。"""
     out: dict[str, Any] = {
         "id": str(ds.uuid),
         "name": ds.name,
@@ -42,16 +44,12 @@ def dataset_out(
         # public 任何人可读；private 按用户中心数据权限
         "visibility": ds.visibility,
         "owner_id": ds.owner_id,
-        # service = 服务账号建的库：只有它自己能用，不能共享
-        "owner_kind": ds.owner_kind,
-        "indexing_technique": ds.indexing_technique,
-        "embedding_provider": ds.embedding_provider,
-        "embedding_model": ds.embedding_model,
+        "embedding_provider": index.embedding_provider if index else None,
+        "embedding_model": index.embedding_model if index else None,
         "retrieval_config": ds.retrieval_config,
         "enhancements": normalize_enhancements(ds.enhancements),
         "doc_form": ds.doc_form,
         "review_required": ds.review_required,
-        "provider": ds.provider,
         "latest_process_rule_id": str(ds.latest_process_rule_uuid)
         if ds.latest_process_rule_uuid
         else None,
@@ -133,7 +131,10 @@ def child_out(c: ChildChunk) -> dict[str, Any]:
     }
 
 
-def segment_out(seg: Segment, children: list[ChildChunk] | None = None) -> dict[str, Any]:
+def segment_out(
+    seg: Segment, children: list[ChildChunk] | None = None, *, hit_count: int = 0
+) -> dict[str, Any]:
+    """hit_count：被检索命中的次数（从检索记录汇总，KnowledgeRetrieval.hit_counts）。"""
     out: dict[str, Any] = {
         "id": str(seg.uuid),
         "document_id": str(seg.document_uuid),
@@ -143,10 +144,8 @@ def segment_out(seg: Segment, children: list[ChildChunk] | None = None) -> dict[
         "source_locator": seg.source_locator,
         "context": seg.context,
         "metadata": seg.meta or {},
-        "answer": seg.answer,
         "word_count": seg.word_count,
-        "keywords": seg.keywords or [],
-        "hit_count": seg.hit_count,
+        "hit_count": hit_count,
         "enabled": seg.enabled,
         "status": seg.status,
         "error": seg.error,

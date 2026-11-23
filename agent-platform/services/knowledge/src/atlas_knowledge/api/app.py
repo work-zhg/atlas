@@ -10,12 +10,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from ..auth import IdentityHeadersMiddleware
+from ..access.auth import IdentityHeadersMiddleware
+from ..document.storage import StorageNotConfigured
 from ..errors import KnowledgeError
 from ..jobs import IngestSweep
 from ..runtime import Runtime, build_runtime
 from ..settings import get_settings
-from ..storage import StorageNotConfigured
 from ..telemetry import setup_telemetry, shutdown_telemetry, trace_requests
 from . import datasets, internal, sets
 from .mcp import build_mcp, mcp_app
@@ -77,7 +77,7 @@ def create_app(*, runtime: Runtime | None = None, cors_origins: list[str] | None
 
     # 取请求头里的 traceparent：检索 span 挂在 atlas-server 那次调用之下
     trace_requests(app)
-    # 身份请求头透传：本请求里调用户中心 / atlas-server 都带上（auth.py）
+    # 身份请求头透传：本请求里调用户中心 / atlas-server 都带上（access/auth.py）
     app.add_middleware(IdentityHeadersMiddleware)
 
     @app.exception_handler(KnowledgeError)

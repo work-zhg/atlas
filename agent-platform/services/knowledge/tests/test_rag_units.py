@@ -6,17 +6,17 @@ import io
 
 import pytest
 from atlas_knowledge.errors import Invalid
-from atlas_knowledge.rag.cleaner import clean
-from atlas_knowledge.rag.extractor import extract
-from atlas_knowledge.rag.index_processor import (
+from atlas_knowledge.index.keyword import bm25_document, bm25_query, tokenize
+from atlas_knowledge.parse.extractor import extract
+from atlas_knowledge.ragdoc import Document
+from atlas_knowledge.retrieval.rerank import reorder
+from atlas_knowledge.segment.cleaner import clean
+from atlas_knowledge.segment.index_processor import (
     AUTOMATIC_RULES,
     normalize_process_rule,
     transform,
 )
-from atlas_knowledge.rag.keyword import bm25_document, bm25_query, tokenize
-from atlas_knowledge.rag.models import Document
-from atlas_knowledge.rag.rerank import reorder
-from atlas_knowledge.rag.splitter import FixedRecursiveCharacterTextSplitter
+from atlas_knowledge.segment.splitter import FixedRecursiveCharacterTextSplitter
 
 
 def test_splitter_respects_size_and_overlap() -> None:

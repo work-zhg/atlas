@@ -77,7 +77,7 @@
       "kind": "component",
       "name": "入库任务",
       "technology": "Celery 任务",
-      "description": "indexing_task（一个文档一个任务）、rebuild_index_task；prefork，每个子进程一个事件循环。",
+      "description": "indexing_task（一个文档一个任务）、rebuild_index_task；消息只带 id，租户从那一行取、进入它再干活，租户停用就过一会儿再投；prefork，每个子进程一个事件循环。",
       "at": [
         0.9,
         0.6
@@ -99,7 +99,7 @@
       "kind": "component",
       "name": "知识库",
       "technology": "SQLAlchemy 异步",
-      "description": "入库要用的库设置：分段结构、增强开关、元数据字段。",
+      "description": "入库要用的库设置：分段结构、增强开关、元数据字段、库的文件目录（{租户}/_knowledge/{库}）。",
       "at": [
         -0.6,
         2.8

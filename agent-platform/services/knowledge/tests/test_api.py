@@ -97,7 +97,8 @@ async def test_full_flow(client: Any, rt: Any) -> None:
     r = await client.get(f"/v1/datasets/{ds['id']}/documents/{doc['id']}/segments", headers=ALICE)
     segs = r.json()["data"]
     refund = next(s for s in segs if s["content"].startswith("退款政策"))
-    assert refund["hit_count"] >= 1
+    # 命中次数从检索记录汇总：上面 4 次召回测试都命中了它
+    assert refund["hit_count"] == 4
     base = f"/v1/datasets/{ds['id']}/documents/{doc['id']}/segments/{refund['id']}"
     assert (await client.patch(base, json={"enabled": False}, headers=ALICE)).status_code == 200
     records = await _hit(client, ds["id"], "怎么申请退款", search_method="full_text_search")
@@ -318,17 +319,12 @@ async def test_permissions(client: Any, rt: Any) -> None:
 
 
 async def test_auth_uid_governs_dataset_permissions(client: Any, rt: Any) -> None:
-    """库级权限一律按 X-Auth-Uid（内网身份传递 §6、§8）：建库人记 X-Uid，OWNER 是 auth-uid。
-
-    存量服务账号的库（owner_kind = service，没登记到用户中心）只有「全部知识库」授权的人看得到、
-    不能共享；sync-uc --service-owner 把它改归一个人。
-    """
-    from atlas_knowledge.auth import Principal
+    """库级权限一律按 X-Auth-Uid（内网身份传递 §6、§8）：建库人记 X-Uid，OWNER 是 auth-uid。"""
+    from atlas_knowledge.access.auth import Principal
+    from atlas_knowledge.dataset.datasets import DatasetService
     from atlas_knowledge.db.models import Dataset
     from atlas_knowledge.db.session import get_sessionmaker
     from atlas_knowledge.errors import Forbidden
-    from atlas_knowledge.services.datasets import DatasetService
-    from atlas_knowledge.sync_uc import sync_uc
     from sqlalchemy import select
 
     on_behalf = {"X-Uid": "alice", "X-Auth-Uid": "de-1"}
@@ -350,37 +346,6 @@ async def test_auth_uid_governs_dataset_permissions(client: Any, rt: Any) -> Non
     }
     listed = (await client.get("/v1/datasets", headers=on_behalf)).json()["data"]
     assert ds["id"] in {d["id"] for d in listed}
-
-    # 存量服务账号的库
-    legacy = Dataset(
-        set_uuid=uuid4(),
-        name="评测库",
-        owner_id="sa-bench",
-        owner_kind="service",
-        indexing_technique="high_quality",
-        embedding_model="fake-embedding",
-        embedding_dim=8,
-        retrieval_config={},
-        collection_name="kb_legacy",
-        storage_prefix="_knowledge/legacy",
-        created_by="sa-bench",
-    )
-    async with get_sessionmaker()() as s:
-        s.add(legacy)
-        await s.commit()
-    r = await client.get("/v1/datasets", headers=ALICE)
-    assert str(legacy.uuid) not in {d["id"] for d in r.json()["data"]}
-    rt.perms.type_levels["alice"] = "READ"
-    r = await client.get(f"/v1/datasets/{legacy.uuid}", headers=ALICE)
-    assert r.status_code == 200 and r.json()["my_level"] == "READ"
-    rt.perms.type_levels.pop("alice")
-    async with get_sessionmaker()() as s:
-        out = await sync_uc(s, rt.perms, service_owner="bench-user")
-        assert out["adopted"] == 1
-        await s.refresh(await s.merge(legacy))
-    bench = {"X-Uid": "bench-user"}
-    r = await client.get(f"/v1/datasets/{legacy.uuid}", headers=bench)
-    assert r.status_code == 200 and r.json()["can_admin"] and r.json()["owner_kind"] == "user"
 
     # 创建需要 kb:create
     bob = Principal(uid="bob", operations=frozenset())
@@ -441,11 +406,51 @@ async def test_internal_and_multi_retrieve(client: Any, rt: Any) -> None:
 
 
 async def test_delete_dataset(client: Any, rt: Any) -> None:
+    """删库发 DatasetDeleted：各领域删自己的数据（行、collection、原文件）；
+    只查了这个库的检索记录一起删，跨库的留着。"""
+    from atlas_knowledge.db import models as m
+    from atlas_knowledge.db.session import get_sessionmaker
+    from sqlalchemy import func, select
+
     ds = await _dataset(client)
+    other = await _dataset(client, name="另一个库")
     await _upload(client, rt, ds["id"], process_rule=CUSTOM)
+    await _upload(client, rt, other["id"], process_rule=CUSTOM)
+    r = await client.post(
+        f"/v1/datasets/{ds['id']}/metadata-fields", json={"name": "region"}, headers=ALICE
+    )
+    assert r.status_code == 201, r.text
+    await _hit(client, ds["id"], "怎么申请退款")
+    r = await client.post(
+        "/v1/retrieve",
+        json={"dataset_ids": [ds["id"], other["id"]], "query": "怎么申请退款"},
+        headers=ALICE,
+    )
+    assert r.status_code == 200, r.text
+    collection = rt.vectors.for_collection(f"kb_{ds['id'].replace('-', '')}")
+    assert await collection.point_ids()
+
     assert (await client.delete(f"/v1/datasets/{ds['id']}", headers=ALICE)).status_code == 204
     assert (await client.get(f"/v1/datasets/{ds['id']}", headers=ALICE)).status_code == 404
-    assert rt.storage.objects == {}
+    assert not any(k.startswith(f"{ds['id']}") or f"/{ds['id']}/" in k for k in rt.storage.objects)
+    assert await collection.point_ids() == []
+    gone = UUID(ds["id"])
+    async with get_sessionmaker()() as s:
+        for model in (
+            m.Document,
+            m.Segment,
+            m.ChildChunk,
+            m.ProcessRule,
+            m.IndexVersion,
+            m.QueryLog,
+            m.MetadataField,
+        ):
+            n = await s.scalar(
+                select(func.count()).select_from(model).where(model.dataset_uuid == gone)  # type: ignore[attr-defined]
+            )
+            assert n == 0, model.__tablename__
+        records = [r.dataset_uuids for r in await s.scalars(select(m.Retrieval))]
+    assert records == [[ds["id"], other["id"]]], "跨库的检索记录留着"
 
 
 async def test_multi_retrieve_threshold_and_mixed_models(client: Any, rt: Any) -> None:
@@ -704,59 +709,3 @@ async def test_structure_chunking_end_to_end(client: Any, rt: Any) -> None:
     assert all(k["context"] == "张三 > 项目经验 > 二、资信平台｜技术经理" for k in kids)
     records = await _hit(client, ds["id"], "反欺诈特征服务", search_method="full_text_search")
     assert records[0]["title_path"][-1] == "二、资信平台｜技术经理"
-
-
-async def test_sync_uc_moves_legacy_visibility_into_the_user_center(rt: Any) -> None:
-    """一次性迁移：旧的可见范围 / 成员 → 用户中心；所有者不在用户中心的认定为服务账号的库。"""
-    from uuid import uuid4
-
-    from atlas_knowledge.db.models import Dataset, DatasetPermission
-    from atlas_knowledge.db.session import get_sessionmaker
-    from atlas_knowledge.errors import Invalid
-    from atlas_knowledge.sync_uc import sync_uc
-    from conftest import FakeDataPermissions
-
-    class Perms(FakeDataPermissions):
-        async def create(self, dataset_id: str, name: str, grants: list[Any]) -> None:
-            if grants[0].subject_id == "sa-old":
-                raise Invalid("用户不存在")
-            await super().create(dataset_id, name, grants)
-
-    def row(owner: str, permission: str) -> Dataset:
-        u = uuid4()
-        return Dataset(
-            uuid=u,
-            set_uuid=u,
-            name=f"{owner}-{permission}",
-            owner_id=owner,
-            permission=permission,
-            indexing_technique="high_quality",
-            embedding_model="fake-embedding",
-            embedding_dim=8,
-            retrieval_config={},
-            collection_name=f"kb_{u.hex}",
-            storage_prefix=f"_knowledge/{u}",
-            created_by=owner,
-        )
-
-    perms = Perms()
-    team, partial, mine, sa = (
-        row("alice", "all_team"),
-        row("alice", "partial_members"),
-        row("alice", "only_me"),
-        row("sa-old", "only_me"),
-    )
-    async with get_sessionmaker()() as s:
-        s.add_all([team, partial, mine, sa])
-        await s.flush()
-        s.add(DatasetPermission(dataset_uuid=partial.uuid, principal_id="bob", level="write"))
-        await s.commit()
-        out = await sync_uc(s, perms)
-        assert out == {"synced": 3, "skipped": 0, "service": 1, "member_failed": 0, "adopted": 0}
-        assert await perms.level("bob", str(team.uuid)) == "READ"  # 全员只读
-        assert await perms.level("bob", str(partial.uuid)) == "WRITE"
-        assert await perms.level("bob", str(mine.uuid)) == "NONE"
-        await s.refresh(sa)
-        assert sa.owner_kind == "service"
-        # 可以重复执行
-        assert (await sync_uc(s, perms))["skipped"] == 3

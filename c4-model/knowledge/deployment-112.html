@@ -21,7 +21,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "部署图：知识库服务 - 192.168.0.112",
-  "description": "按 11-04 的实际部署画（deploy/local/35-knowledge.yaml、deploy/server/deploy.sh 和 kubectl 核对）：接口和 worker 各 1 个副本，镜像 atlas-app:20261031-003410，迁移到 k0007，库里 2 个知识库、201 份文档。和容器图的差别：没接模型平台（ATLAS_KB_MODEL_PLATFORM_URL 为空），对话模型直连 DeepSeek、用的是 atlas-server 的 Key；向量和重排用镜像里的本地 fastembed 模型，不调远程。Service 只有 ClusterIP；入库巡检跑在接口进程里；遥测发往 atlas-infra 的 OTel Collector，图中未画。集群内全是明文 HTTP",
+  "description": "按 11-04 的实际部署画（deploy/local/35-knowledge.yaml、deploy/server/deploy.sh 和 kubectl 核对）：接口和 worker 各 1 个副本，镜像 atlas-app:20261031-003410，迁移到 k0007，库里 2 个知识库、201 份文档。和容器图的差别：向量库还是 Qdrant；对话模型经模型平台取服务级 Key（Service:knowledge-chat），knowledge-embedding、-rerank 两把 Key 还没分配，向量和重排用镜像里的本地 fastembed 模型，不调远程；还没有多租户（迁移 k0009 之前）。Service 只有 ClusterIP；入库巡检跑在接口进程里；遥测发往 atlas-infra 的 OTel Collector，图中未画。集群内全是明文 HTTP",
   "environment": "192.168.0.112",
   "nodes": [
     {
@@ -174,8 +174,8 @@
     {
       "id": "deepseek",
       "kind": "system",
-      "name": "DeepSeek API",
-      "description": "大模型供应商的公网接口。112 上知识库没接模型平台，入库增强和查询理解直连这里。",
+      "name": "模型平台",
+      "description": "112 上的模型平台（当时是 LiteLLM 方案）：知识库按用途取服务级客户端 Key，带着 Key 调它的 OpenAI 兼容入口，再由它转发给 DeepSeek。",
       "in": "internet",
       "at": [
         4.55,
@@ -269,13 +269,13 @@
       "from": "api",
       "to": "deepseek",
       "description": "查询理解",
-      "technology": "HTTPS（api.deepseek.com，OpenAI 兼容）"
+      "technology": "JSON/HTTP（集群内，OpenAI 兼容）"
     },
     {
       "from": "worker",
       "to": "deepseek",
       "description": "入库增强",
-      "technology": "HTTPS（api.deepseek.com）"
+      "technology": "JSON/HTTP（集群内，OpenAI 兼容）"
     },
     {
       "from": "api",

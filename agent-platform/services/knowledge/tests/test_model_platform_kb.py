@@ -8,15 +8,14 @@ from typing import Any
 
 import httpx
 import pytest
-from atlas_knowledge.rag.model_platform import (
+from atlas_knowledge.models.model_platform import (
     PlatformChat,
     PlatformKeyAuth,
     PlatformUnavailable,
     ServiceKeys,
     parse_client,
 )
-from atlas_knowledge.rag.remote_models import OpenAICompatibleEmbedding
-
+from atlas_knowledge.models.remote_models import OpenAICompatibleEmbedding
 from conftest import TEST_TENANT
 
 CHAT = ("Service", "knowledge-chat")

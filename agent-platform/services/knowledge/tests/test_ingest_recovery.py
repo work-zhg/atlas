@@ -9,8 +9,8 @@ from uuid import UUID
 import pytest
 from atlas_knowledge.db.models import Document
 from atlas_knowledge.db.session import get_sessionmaker
-from atlas_knowledge.indexing import runner as runner_mod
-from atlas_knowledge.indexing.runner import IndexingRunner, lock_key, recover_stalled
+from atlas_knowledge.document import runner as runner_mod
+from atlas_knowledge.document.runner import IndexingRunner, lock_key, recover_stalled
 from conftest import run_indexing
 from sqlalchemy import select
 
@@ -114,3 +114,21 @@ async def test_lost_lock_interrupts_without_marking_error(
     # 不标失败（接手的任务还在跑），也不删别人的锁
     assert await _status(doc) == "indexing"
     assert await rt.redis.get(lock_key(doc)) == b"someone-else"
+
+
+async def test_upload_queues_one_task_per_document(client: Any, rt: Any) -> None:
+    """一批上传多份文档：一个文档一条消息，Pod 被杀时不会有整批没轮到的文档停在 waiting。"""
+    r = await client.post(
+        "/v1/datasets", json={"name": "批量", "embedding_model": "fake-embedding"}, headers=ALICE
+    )
+    assert r.status_code == 201, r.text
+    r = await client.post(
+        f"/v1/datasets/{r.json()['id']}/documents",
+        files=[("files", (f"faq{i}.txt", FAQ.encode(), "text/plain")) for i in range(3)],
+        headers=ALICE,
+    )
+    assert r.status_code == 201, r.text
+    docs = [str(d["id"]) for d in r.json()["documents"]]
+    assert sorted(rt.dispatcher.queued) == sorted(docs)
+    await run_indexing(rt)
+    assert [await _status(d) for d in docs] == ["completed"] * 3

@@ -73,15 +73,15 @@ class KnowledgeSettings(BaseSettings):
     #: 桶内前缀
     oss_prefix: str = "_knowledge"
 
-    # ── 认证（内网身份传递 §3、§8；见 auth.py）────────────────────────────
+    # ── 认证（内网身份传递 §3、§8；见 access/auth.py）────────────────────────────
     #: 缺 X-Uid 一律 401，操作码按 X-Auth-Uid 取用户中心授权快照（没有免鉴权的模式）
     #: 知识库 MCP 令牌的签名密钥（与 atlas-server 的 KNOWLEDGE_MCP_SECRET 一致）。
     #: ★ 给会话 Pod（不可信代码）的能力凭据，不是服务间令牌 —— 内网去令牌后仍保留（§5.3）
     mcp_secret: SecretStr | None = None
     #: 授权快照（操作码）的进程内缓存
     authz_ttl_s: float = 30.0
-    #: 用户中心（库级权限 = 数据编码 AtlasKnowledgeBase，见 perms.py；文档级权限的主体展开，
-    #: 见 principals.py）。内网免令牌：
+    #: 用户中心（库级权限 = 数据编码 AtlasKnowledgeBase，见 access/perms.py；文档级权限的主体展开，
+    #: 见 access/principals.py）。内网免令牌：
     #: 请求头 X-Caller-App: atlas 即应用身份
     uc_base_url: str = "http://127.0.0.1:8030"
     #: Atlas 在用户中心的应用编码（知识库属于 Atlas 应用），出站请求头 X-Caller-App 写它
@@ -97,24 +97,15 @@ class KnowledgeSettings(BaseSettings):
     rerank_model: str = "BAAI/bge-reranker-base"
     #: fastembed 模型目录。None = fastembed 默认（<tmp>/fastembed_cache，镜像预装的位置）
     model_cache_dir: str | None = None
-    #: 远程向量模型（provider = openai_compatible，§6.1）：OpenAI 兼容的 /embeddings 地址
-    embedding_base_url: str | None = None
-    embedding_api_key: SecretStr | None = None
-    #: 远程重排（provider = cohere_compatible / tei）：/rerank 所在地址
-    rerank_base_url: str | None = None
-    rerank_api_key: SecretStr | None = None
-    #: 界面上可选的远程模型（环境变量写 JSON 列表，如 ["bge-m3"]）
-    #: 远程重排协议：cohere_compatible | tei
-    embedding_remote_models: list[str] = []
-    rerank_remote_models: list[str] = []
-    rerank_remote_provider: str = "cohere_compatible"
+    #: 远程向量、重排模型的调用超时（秒）。远程模型一律经模型平台，见下一节
     remote_model_timeout_s: float = 60.0
     #: 查询向量缓存秒数（同 Dify）
     query_embedding_ttl_s: int = 600
 
     # ── 模型平台（agent-platform/doc/design/model-gateway-design.html）───────
     #: 配了就经平台：各用途用平台上事先建好的服务级客户端 Key（客户端类型:编码），
-    #: 带着它调模型网关。不持有供应商 Key。空 = 照旧按下面的 llm_* / embedding_* / rerank_* 直连
+    #: 带着它调模型网关。不持有供应商 Key。空 = 只有镜像里的本地向量、重排模型，没有对话模型
+    #: （入库增强、查询理解降级为不做）
     model_platform_url: str | None = None
     #: 模型网关地址（经平台时模型调用连它的 OpenAI 格式入口：{地址}/v1/chat/completions 等）
     model_gateway_url: str | None = None
@@ -130,11 +121,7 @@ class KnowledgeSettings(BaseSettings):
     model_key_ttl_s: float = 60.0
 
     # ── LLM（上下文补全、表格摘要、查询理解；doc/knowledge-enterprise-design.html）──
-    #: OpenAI 兼容的 chat/completions 地址（如 https://api.deepseek.com/v1）。空 = 不用 LLM，
-    #: 依赖它的增强全部降级为不做
-    llm_base_url: str | None = None
-    llm_api_key: SecretStr | None = None
-    llm_model: str = "deepseek-chat"
+    #: 经模型平台调对话模型的超时（秒）
     llm_timeout_s: float = 60.0
     #: 入库时 LLM 增强的并发调用数
     llm_concurrency: int = 4
@@ -155,7 +142,7 @@ class KnowledgeSettings(BaseSettings):
     embedding_parallel: int = 4
     embedding_batch: int = 32
     #: 入库巡检间隔（秒）：API 进程定期把「停在入库中间状态、却没有任务持锁」的文档重新投递
-    #: （worker 被杀后的恢复，indexing/runner.py recover_stalled）。0 = 关
+    #: （worker 被杀后的恢复，document/runner.py recover_stalled）。0 = 关
     ingest_sweep_interval_s: float = 60.0
 
     # ── 遥测（与 atlas-server 同一套约定）───────────────────────────────

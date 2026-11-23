@@ -32,7 +32,7 @@
   "title": "代码图：知识库服务 - 入库 worker - 解析",
   "description": "目标模型，每个元素下方的「现状」是现在承担它的代码。各种格式 → DocIR；知识库接口的分段预览也用同一份代码",
   "component": "解析",
-  "package": "atlas_knowledge.parse（目标模型）",
+  "package": "atlas_knowledge.parse",
   "overview": "解析把上传的文件变成 DocIR：带类型（标题、段落、列表项、表格、代码、图片、图注）、层级、页码和坐标的块序列，附一份解析质量报告。PDF 做版面感知（双栏、页眉页脚、书签标题、框线表格、图片与图注），DOCX、PPTX 按样式和位置还原结构，表格类文件一张表一个块，纯文本类整段交给分段识别。\n\n它不读写对象存储、不改文档状态（文档与入库），不切分段（分段），也不做 OCR。",
   "elements": [
     {
@@ -44,7 +44,7 @@
         1.3,
         0.3
       ],
-      "source": "rag/parsers/__init__.py parse / SUPPORTED_EXTENSIONS",
+      "source": "parse/__init__.py parse / SUPPORTED_EXTENSIONS",
       "responsibility": "解析的唯一入口：按扩展名选解析器，文件 → DocIR。处理规则可以指定 parser=text，只抽纯文本、按页分块，作为版面分析在个别文档上出错时的退路。新格式在这里登记一个解析器即可，以后的高级解析器（Docling 等）也作为一个选项接进来。",
       "methods": [
         [
@@ -66,7 +66,7 @@
         1.3,
         1.85
       ],
-      "source": "rag/parsers 里的 Parser = Callable[[bytes, str], DocIR]",
+      "source": "parse/__init__.py 里的 Parser = Callable[[bytes, str], DocIR]",
       "responsibility": "一种格式的解析器：输入原文件字节，输出带类型、层级、页码、坐标的块序列和质量报告。都是同步 CPU 活，不碰 IO。",
       "methods": [
         [
@@ -88,7 +88,7 @@
         -0.95,
         3.4
       ],
-      "source": "rag/parsers/pdf_layout.py",
+      "source": "parse/pdf_layout.py",
       "responsibility": "PDF 版面感知解析（pdfplumber 的字符坐标和字体，CPU 即可）：词 → 行（双栏时同一高度拆开）；跨页重复的页眉页脚和单独页码剔除；双栏页按通栏内容分段、先左后右；行按行距、缩进、字号合并成段落；标题优先用书签，没有书签按字号、加粗、编号打分；有框线的表格、跨页续表合并；图片按坐标裁剪，关联「图 X」图注；扫描页只标记，不做 OCR。",
       "methods": [
         [
@@ -106,7 +106,7 @@
         0.2,
         3.4
       ],
-      "source": "rag/parsers/office.py",
+      "source": "parse/office.py",
       "responsibility": "DOCX 按文档顺序遍历段落与表格，标题按样式定层级，列表按样式或编号属性，内嵌图片紧跟所在段落；PPTX 一页一个小节，标题占位符是一级标题，文本框按位置排，表格、图片、备注各成一块，page = 页码。",
       "methods": [
         [
@@ -124,7 +124,7 @@
         1.3,
         3.4
       ],
-      "source": "rag/parsers/tabular.py",
+      "source": "parse/tabular.py",
       "responsibility": "XLSX / CSV：每个工作表一张表，第一行是表头。",
       "methods": [
         [
@@ -142,7 +142,7 @@
         2.4,
         3.4
       ],
-      "source": "rag/parsers/text.py",
+      "source": "parse/text.py",
       "responsibility": "txt / md / json / yaml / html：整段原文一个 text 块（html 先取正文）。它们没有页码和坐标；标题、表格、代码块交给分段的文本结构识别。",
       "methods": [
         [
@@ -160,7 +160,7 @@
         3.5,
         3.4
       ],
-      "source": "rag/parsers._plain；rag/extractor/（pypdfium2 等原解析器）",
+      "source": "parse._plain；parse/extractor/（pypdfium2 等原解析器）",
       "responsibility": "parser=text 时用：每页一个 text 块，保留页码；分段走文本结构识别。",
       "methods": [
         [
@@ -178,7 +178,7 @@
         3.55,
         1.85
       ],
-      "source": "rag/docir.py DocIR",
+      "source": "parse/docir.py DocIR",
       "responsibility": "文档的统一中间表示：解析和分段之间的契约。分段直接消费结构，不再从纯文本里猜标题和表格；页码和坐标一路带到分段上，用于引用定位。图片二进制不进 JSON（images 只在内存里，入库时写对象存储、块上填 asset）。入库时整个存进对象存储，预览、换分段规则时不必重新解析。",
       "attributes": [
         [
@@ -218,7 +218,7 @@
         5.05,
         1.0
       ],
-      "source": "rag/docir.py Block",
+      "source": "parse/docir.py Block",
       "responsibility": "一个内容块。text 是纯文本类格式的整段原文（没有页码和坐标可保留）。",
       "attributes": [
         [
@@ -248,7 +248,7 @@
         5.05,
         2.75
       ],
-      "source": "pdf_layout._report 等（现在是 dict）",
+      "source": "parse/pdf_layout._report 等（现在是 dict）",
       "responsibility": "解析质量：页数、双栏页、扫描页、空页、乱码比例、标题 / 表格 / 图片数、剔除的页眉页脚、警告。缺文字（扫描件、没提到文本）或乱码多时 needs_review，入库后先进待审核。",
       "attributes": [
         [

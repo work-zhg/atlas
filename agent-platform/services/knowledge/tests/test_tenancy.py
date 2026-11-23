@@ -10,9 +10,9 @@ from typing import Any
 from uuid import UUID
 
 import httpx
-from atlas_knowledge.db.models import Dataset, Document
+from atlas_knowledge.db.models import Dataset, Document, IndexVersion
 from atlas_knowledge.db.session import get_sessionmaker
-from atlas_knowledge.indexing.runner import IndexingRunner, recover_stalled, run_queued
+from atlas_knowledge.document.runner import IndexingRunner, recover_stalled, run_queued
 from atlas_tenancy import TenantScope
 from conftest import OTHER_TENANT, TEST_TENANT, ops_request, run_indexing
 from sqlalchemy import select
@@ -84,8 +84,8 @@ async def test_all_datasets_owner_sees_only_his_tenant(client: Any, rt: Any) -> 
     assert [d["id"] for d in same["data"]] == [ds["id"]]
 
 
-async def test_tenant_header_is_required_and_checked(client: Any, monkeypatch: Any) -> None:
-    from atlas_knowledge import auth
+async def test_tenant_header_is_required_and_checked(client: Any, rt: Any) -> None:
+    from conftest import fake_user_center
 
     bare = httpx.AsyncClient(transport=client._transport, base_url="http://kb")
     async with bare:
@@ -99,8 +99,7 @@ async def test_tenant_header_is_required_and_checked(client: Any, monkeypatch: A
         user = {"status": "active", "tenant_id": OTHER_TENANT}
         return httpx.Response(200, json={"can_access": True, "permissions": [], "user": user})
 
-    monkeypatch.setattr(auth, "_transport", httpx.MockTransport(elsewhere))
-    monkeypatch.setattr(auth, "_cache", auth._Cache())
+    rt.user_center_gateway = fake_user_center(elsewhere)
     r = await client.get("/v1/datasets", headers=ALICE)
     assert r.status_code == 401 and "不一致" in r.json()["detail"]
 
@@ -121,8 +120,9 @@ async def test_worker_enters_the_documents_tenant(client: Any, rt: Any) -> None:
     ds = await _dataset(client)
     doc = await _upload(client, ds["id"])
     queued, rt.dispatcher.queued = list(rt.dispatcher.queued), []
+    assert queued == [doc["id"]]
     with TenantScope.isolated():
-        assert await run_queued(rt, get_sessionmaker(), queued) == []
+        assert await run_queued(rt, get_sessionmaker(), doc["id"]) is False
     assert await _status(doc["id"]) == "completed"
 
 
@@ -144,7 +144,7 @@ async def test_suspended_tenant_is_shut_out_and_its_ingest_waits(client: Any, rt
     # 入库不开始：文档留在排队中，交回给任务过一会儿再投
     rt.tenant_gate = client._transport.app.state.tenant_gate
     with TenantScope.isolated():
-        assert await run_queued(rt, get_sessionmaker(), queued) == queued
+        assert await run_queued(rt, get_sessionmaker(), queued[0]) is True
     assert await _status(doc["id"]) == "waiting"
 
     # 巡检也跳过它（停在中间状态、没人持锁的文档）
@@ -183,10 +183,10 @@ async def test_purge_deletes_only_this_tenants_rows_vectors_and_files(client: An
     # 同一个桶里别的服务的文件（Atlas 的工作空间）
     rt.storage.put(f"{TEST_TENANT}/workspace/a.txt", b"atlas")
     async with get_sessionmaker()() as s:
-        names = {d.collection_name for d in await s.scalars(select(Dataset))}
+        names = set(await s.scalars(select(IndexVersion.collection_name)))
     with TenantScope.enter(UUID(OTHER_TENANT)):
         async with get_sessionmaker()() as s:
-            other_names = {d.collection_name for d in await s.scalars(select(Dataset))}
+            other_names = set(await s.scalars(select(IndexVersion.collection_name)))
 
     assert (await _ops(client, "suspend")).status_code == 200
     r = await _ops(client, "purge")

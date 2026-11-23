@@ -32,7 +32,7 @@
   "title": "代码图：知识库服务 - 入库 worker / 知识库接口 - 分段",
   "description": "目标模型，每个元素下方的「现状」是现在承担它的代码。分段规则、切分、增强和分段编辑；切分与增强跑在 worker，预览和编辑在接口进程",
   "component": "分段",
-  "package": "atlas_knowledge.segment（目标模型）",
+  "package": "atlas_knowledge.segment",
   "overview": "分段把 DocIR 切成能检索的单元：父块是返回给模型的上下文，子块是检索入口（通用分段里父块自己就是入口）。默认按标题切小节，也可以按分隔符和长度切或整篇一个父块；切完按库开关做上下文补全和大表摘要。分段写库后，人可以在控制台增删改分段和子块，改完同步重写向量。\n\n它不解析文件（解析），不向量化、不碰向量库（向量索引），也不管文档的状态（文档与入库）。",
   "elements": [
     {
@@ -44,7 +44,7 @@
         0.5,
         0.3
       ],
-      "source": "rag/index_processor.py transform_ir / transform / normalize_process_rule；DocumentService.estimate",
+      "source": "segment/index_processor.py transform_ir / transform / normalize_process_rule；DocumentService.estimate",
       "responsibility": "DocIR → 父块（带子块）的入口：按分段结构和处理规则选切法——按结构（标题小节）、按规则（分隔符 + 长度）或整篇；预览只返回前 10 段。纯计算：入库编排在 worker 里调，接口进程做分段预览。增强在切分之后、写库之前，失败只是那一段少了增强。",
       "methods": [
         [
@@ -74,7 +74,7 @@
         3.35,
         0.3
       ],
-      "source": "services/segments.py SegmentService；runner._save",
+      "source": "segment/segments.py SegmentService；document/runner.IndexingRunner._save",
       "responsibility": "分段的读写入口。入库时整篇替换一个文档的分段（先让向量索引删旧 entity）；人工编辑单个分段、子块是同步的（向量化一段只要几十毫秒，改完立刻能在召回测试里看到）；父子模式改父分段内容时按文档的子块规则重切子块。文档还没入库完不能编辑。",
       "methods": [
         [
@@ -108,7 +108,7 @@
         -0.8,
         1.95
       ],
-      "source": "rag/structure.py sections_from_blocks / parse_sections / build_parents / child_texts",
+      "source": "segment/structure.py sections_from_blocks / parse_sections / build_parents / child_texts",
       "responsibility": "按标题切小节（借鉴 Docling 的 HierarchicalChunker，中文编号标题借鉴 RAGFlow 的规则组）：维护标题栈，一个小节一个父块，超长的按单元边界拆，同一上级下相邻的短小节合并；子块是父块里的结构单元，太短并入下一个、太长按句切；向量化前缀 = 标题路径（表格行再加表头），正文保持原文。表格是原子块，放得下就不拆。可选语义分段：相邻句向量相似度骤降处断开。",
       "methods": [
         [
@@ -134,7 +134,7 @@
         0.5,
         1.95
       ],
-      "source": "db.models.ProcessRule；index_processor.normalize_process_rule",
+      "source": "db.models.ProcessRule；segment/index_processor.normalize_process_rule",
       "responsibility": "一次上传用的处理规则，文档引用它；知识库记着最近一次用的，新文档沿用。长度按字符计（字段名 max_tokens 沿用 Dify）。",
       "attributes": [
         [
@@ -172,7 +172,7 @@
         1.65,
         1.95
       ],
-      "source": "rag/splitter.py FixedRecursiveCharacterTextSplitter；rag/cleaner.py",
+      "source": "segment/splitter.py FixedRecursiveCharacterTextSplitter；segment/cleaner.py",
       "responsibility": "按规则切：先按用户分隔符切，超长的按 \\n\\n、\\n、。、空格依次递归细分，相邻小块合并到上限内并按重叠拼接。分隔符按字面量匹配（Dify 把 \". \" 当正则，会匹配任意字符加空格）。切之前先清洗：去控制字符，按规则压空白、去 URL 和邮箱。",
       "methods": [
         [
@@ -190,8 +190,8 @@
         2.6,
         1.95
       ],
-      "source": "rag/enhance.py enhance / apply_llm_context",
-      "responsibility": "入库增强，按库开关、都可以失败：上下文补全给每个父块生成一句「这一段在全文中讲什么」拼进向量化前缀（文档正文作固定前缀，命中网关的前缀缓存）；行数达到阈值的大表生成摘要，作为 summary 子块挂到包含它单元格最多的分段上。结果按（模型、提示词版本、文档哈希、分段哈希）缓存在 Redis——现在的键不含提示词版本，改提示词后会读到旧结果。",
+      "source": "segment/enhance.py enhance / apply_llm_context",
+      "responsibility": "入库增强，按库开关、都可以失败：上下文补全给每个父块生成一句「这一段在全文中讲什么」拼进向量化前缀（文档正文作固定前缀，命中网关的前缀缓存）；行数达到阈值的大表生成摘要，作为 summary 子块挂到包含它单元格最多的分段上。结果按（模型、提示词版本、文档哈希、分段哈希）缓存在 Redis，改了提示词就换键，不会读到旧结果。",
       "methods": [
         [
           "+",
@@ -234,7 +234,7 @@
         2.55,
         5.0
       ],
-      "source": "db.models.Segment（去掉 hit_count、answer、keywords、tokens）",
+      "source": "db.models.Segment",
       "responsibility": "一个分段（父子模式下是父块，只有子块进向量库）。正文是原文；标题路径、引用定位（页、框、图片）、向量化前缀单独存，返回给模型时拼在前面。分段级元数据覆盖文档的同名字段。",
       "attributes": [
         [
@@ -524,14 +524,14 @@
     },
     {
       "decision": "增强缓存的键带提示词版本",
-      "reason": "现在键是（模型、文档哈希、分段哈希），改了提示词重新入库仍读到旧结果，看不出改动有没有效果。"
+      "reason": "键要是只有（模型、文档哈希、分段哈希），改了提示词重新入库仍读到旧结果，看不出改动有没有效果。提示词版本取提示词文本的哈希，改提示词自动换键。"
     },
     {
       "decision": "命中次数不存在分段上",
-      "reason": "现在每次检索都 UPDATE kb_segment.hit_count，和入库、编辑抢同一批行；重新入库时分段整篇重建，计数清零。命中次数从检索记录汇总（检索领域）。"
+      "reason": "要是每次检索都 UPDATE kb_segment.hit_count，就会和入库、编辑抢同一批行；重新入库时分段整篇重建，计数还会清零。命中次数从检索记录汇总（检索领域）。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的主键用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的主键用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。除向量缓存外每张表还有 tenant_uuid（uuid，所属租户；atlas_tenancy 按当前租户自动过滤，没进入租户就查不到任何租户的数据），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
   "tables": [
     {
       "name": "kb_process_rule",

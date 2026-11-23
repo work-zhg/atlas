@@ -12,17 +12,19 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from atlas_opsapi import TenantGate
 
-from .perms import DataPermissions, make_data_permissions
-from .principals import PrincipalResolver, make_resolver
-from .rag.embedding import ModelRegistry
-from .rag.llm import ChatModel, OpenAICompatibleChat
-from .rag.model_platform import PlatformChat, PlatformKeyAuth, ServiceKeys, parse_client
-from .rag.vdb import VectorFactory
+from .access.perms import DataPermissions
+from .access.principals import PrincipalResolver, PrincipalTags
+from .access.usercenter import UserCenterGateway
+from .document.storage import FileStorage, make_storage
+from .index.vdb import VectorFactory
+from .models.embedding import ModelRegistry
+from .models.llm import ChatModel
+from .models.model_platform import PlatformChat, PlatformKeyAuth, ServiceKeys, parse_client
 from .settings import KnowledgeSettings
-from .storage import FileStorage, make_storage
 
 if TYPE_CHECKING:
-    from .capacity import KnowledgeCapacity
+    from .dataset.events import DatasetEvents
+    from .ops.capacity import KnowledgeCapacity
 
 __all__ = ["Dispatcher", "Runtime", "build_runtime"]
 
@@ -30,18 +32,22 @@ logger = logging.getLogger(__name__)
 
 
 class Dispatcher(Protocol):
-    """异步任务投递。生产是 Celery；测试记下来或内联执行。"""
+    """异步任务投递。生产是 Celery；测试记下来或内联执行。
 
-    def indexing(self, document_uuids: list[str]) -> None: ...
+    ★ 入库一个文档一条消息：分散到各个 worker，Pod 被杀时只有正在跑的那一个停在中间状态
+      （由巡检续上），不会有整批还没轮到的文档永远停在 waiting。
+    """
+
+    def indexing(self, document_uuid: str) -> None: ...
 
     def rebuild_index(self, version_uuid: str) -> None: ...
 
 
 class CeleryDispatcher:
-    def indexing(self, document_uuids: list[str]) -> None:
+    def indexing(self, document_uuid: str) -> None:
         from .tasks.indexing import indexing_task
 
-        indexing_task.delay(document_uuids)
+        indexing_task.delay(document_uuid)
 
     def rebuild_index(self, version_uuid: str) -> None:
         from .tasks.indexing import rebuild_index_task
@@ -65,21 +71,33 @@ class Runtime:
     #: 经模型管理平台时取服务级客户端 Key（建库时可选的远程嵌入、重排模型 = Key 的可用模型）。
     #: None = 没接平台
     service_keys: ServiceKeys | None = None
-    #: 用户 → 主体标签（文档级权限）。None = 按 settings 建（dev：只有 u:用户）
+    #: 调用户中心的唯一客户端（授权快照、数据权限、用户与部门）。None = 按 settings 建
+    user_center_gateway: UserCenterGateway | None = None
+    #: 用户 → 主体标签（文档级权限）。None = 经用户中心展开（principals.PrincipalTags）
     principal_resolver: PrincipalResolver | None = None
-    #: 库级权限（用户中心数据权限）。None = 按 settings 建（perms.make_data_permissions）
+    #: 库级权限。None = 用户中心数据权限（就是 user_center）；测试里换成内存实现
     data_permissions: DataPermissions | None = None
     #: 租户能不能用（运营接口停用的不能用）：入库任务、巡检开始前问它。API 进程里和运营接口
     #: 用同一个（停用后本进程立刻生效）；None = 按库建（worker 进程）
     tenant_gate: TenantGate | None = None
-    #: 知识库文件的存储份额（capacity.py）。None = 按库建
+    #: 知识库文件的存储份额（ops/capacity.py）。None = 按库建
     capacity: KnowledgeCapacity | None = None
+    #: 知识库的生命周期事件与订阅方。None = 按 wiring.py 建
+    dataset_events: DatasetEvents | None = None
+
+    @property
+    def events(self) -> DatasetEvents:
+        if self.dataset_events is None:
+            from .wiring import dataset_events
+
+            self.dataset_events = dataset_events()
+        return self.dataset_events
 
     @property
     def storage_capacity(self) -> KnowledgeCapacity:
         if self.capacity is None:
-            from .capacity import KnowledgeCapacity
             from .db.session import get_sessionmaker
+            from .ops.capacity import KnowledgeCapacity
 
             self.capacity = KnowledgeCapacity(get_sessionmaker())
         return self.capacity
@@ -93,14 +111,23 @@ class Runtime:
         return self.tenant_gate
 
     @property
+    def user_center(self) -> UserCenterGateway:
+        if self.user_center_gateway is None:
+            self.user_center_gateway = UserCenterGateway(
+                self.settings.uc_base_url, snapshot_ttl_s=self.settings.authz_ttl_s
+            )
+        return self.user_center_gateway
+
+    @property
     def perms(self) -> DataPermissions:
         if self.data_permissions is None:
-            self.data_permissions = make_data_permissions(self.settings)
+            self.data_permissions = self.user_center
         return self.data_permissions
 
     async def principals(self, user_id: str) -> list[str]:
         if self.principal_resolver is None:
-            self.principal_resolver = make_resolver(self.settings)
+            tags = PrincipalTags(self.user_center, ttl_s=self.settings.principals_ttl_s)
+            self.principal_resolver = tags.resolve
         return await self.principal_resolver(user_id)
 
     @property
@@ -121,16 +148,8 @@ class Runtime:
                 await llm.aclose()
         if self.service_keys is not None:
             self.service_keys.close()
-
-
-def _remote(base_url: str | None, key: Any, timeout_s: float) -> dict[str, Any]:
-    if not base_url:
-        return {}
-    return {
-        "base_url": base_url,
-        "api_key": key.get_secret_value() if key else None,
-        "timeout_s": timeout_s,
-    }
+        if self.user_center_gateway is not None:
+            await self.user_center_gateway.aclose()
 
 
 def build_runtime(settings: KnowledgeSettings, *, dispatcher: Dispatcher | None = None) -> Runtime:
@@ -144,36 +163,14 @@ def build_runtime(settings: KnowledgeSettings, *, dispatcher: Dispatcher | None 
     )
     if settings.model_platform_url:
         return _platform_runtime(settings, qdrant, dispatcher)
+    # 没接模型平台（本机开发）：只有镜像里的本地模型；没有对话模型，增强和查询理解降级为不做。
+    # ★ 远程模型一律经模型平台，本服务不持有供应商 Key
     return Runtime(
         settings=settings,
-        registry=ModelRegistry(
-            cache_dir=settings.model_cache_dir,
-            remote={
-                "embedding": _remote(
-                    settings.embedding_base_url,
-                    settings.embedding_api_key,
-                    settings.remote_model_timeout_s,
-                ),
-                "rerank": _remote(
-                    settings.rerank_base_url,
-                    settings.rerank_api_key,
-                    settings.remote_model_timeout_s,
-                ),
-            },
-        ),
+        registry=ModelRegistry(cache_dir=settings.model_cache_dir),
         vectors=VectorFactory(qdrant),
         redis=aioredis.from_url(settings.redis_url),
         dispatcher=dispatcher or CeleryDispatcher(),
-        llm=(
-            OpenAICompatibleChat(
-                settings.llm_base_url,
-                settings.llm_api_key.get_secret_value() if settings.llm_api_key else "",
-                settings.llm_model,
-                timeout_s=settings.llm_timeout_s,
-            )
-            if settings.llm_base_url
-            else None
-        ),
     )
 
 

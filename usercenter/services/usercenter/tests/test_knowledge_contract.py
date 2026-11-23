@@ -1,4 +1,4 @@
-"""契约：知识库服务的用户中心适配器（atlas_knowledge.perms.UCDataPermissions）对着真的用户中心。
+"""契约：知识库服务调用户中心的唯一客户端（atlas_knowledge.access.usercenter.UserCenterGateway）对着真的用户中心。
 
 知识库自己的测试用内存替身；这里钉住替身背后的真实接口行为（参数、错误码、Owner 兜底、
 「全部知识库」授权对未登记的库也生效）。
@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from atlas_knowledge.access.perms import DATA_CODE, Grant
+from atlas_knowledge.access.usercenter import UserCenterGateway
 from atlas_knowledge.errors import Conflict, Forbidden
-from atlas_knowledge.perms import DATA_CODE, Grant, UCDataPermissions
 from atlas_usercenter.api.app import create_app
 from uc_testkit import OpsClient, admin_client, make_app, make_user, root_id
 
@@ -28,9 +29,11 @@ async def test_uc_data_permissions_adapter() -> None:
     ).json()
     await ops.close()
 
-    perms = UCDataPermissions("http://uc", transport=httpx.ASGITransport(app=create_app()))
+    perms = UserCenterGateway("http://uc", transport=httpx.ASGITransport(app=create_app()))
     try:
-        assert await perms.root_dept() == root
+        # 主体展开按部门树找上级：根部门没有 parent_id
+        tree = await perms.dept_tree()
+        assert any(str(d["id"]) == root and not d.get("parent_id") for d in tree)
         # 新建：建库人 OWNER + 全员（根部门含下级）只读
         await perms.create(
             "kb1", "制度库", [Grant("OWNER", "user", li), Grant("READ", "dept", root, True)]

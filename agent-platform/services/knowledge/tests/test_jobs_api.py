@@ -28,6 +28,6 @@ async def test_jobs_are_listed_for_the_ops_center_only(rt: Any) -> None:
     [job] = ok.json()["jobs"]
     assert (job["type"], job["description"], job["every"]) == (
         "knowledge.ingest_sweep",
-        "入库巡检",
+        "入库巡检（含索引版本重建）",
         30,
     )

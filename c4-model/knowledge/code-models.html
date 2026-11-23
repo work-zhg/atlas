@@ -30,10 +30,10 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：知识库服务 - 知识库接口 / 入库 worker - 模型接入",
-  "description": "目标模型，每个元素下方的「现状」是现在承担它的代码。本地 / 远程向量与重排模型、对话模型，经模型平台取服务级 Key",
+  "description": "目标模型，每个元素下方的「现状」是现在承担它的代码。本地 / 远程向量与重排模型、对话模型；经模型平台取服务级 Key，带着它调模型网关",
   "component": "模型接入",
-  "package": "atlas_knowledge.models（目标模型）",
-  "overview": "模型接入给其他领域提供三类模型：向量（入库、检索、语义分段）、重排（检索）、对话（入库增强、查询理解）。本地的 fastembed 模型打在镜像里；远程模型一律经模型平台——按用途取服务级客户端 Key，带着它调 LiteLLM，Key 失效就重取。远程调用统一退避重试。\n\n它不缓存向量（向量索引的 CachedEmbedder），不决定什么时候调模型、失败怎么降级（各调用方），也不管模型和 Key 的发放（模型平台）。",
+  "package": "atlas_knowledge.models",
+  "overview": "模型接入给其他领域提供三类模型：向量（入库、检索、语义分段）、重排（检索）、对话（入库增强、查询理解）。本地的 fastembed 模型打在镜像里；远程模型一律经模型平台——按用途向管理平台取这个租户的服务级客户端 Key，带着它调模型网关的 OpenAI 格式入口，Key 失效就重取。远程调用统一退避重试。\n\n它不缓存向量（向量索引的 CachedEmbedder），不决定什么时候调模型、失败怎么降级（各调用方），也不管模型和 Key 的发放（模型平台）。",
   "elements": [
     {
       "id": "hub",
@@ -44,7 +44,7 @@
         2.1,
         0.3
       ],
-      "source": "rag/embedding.ModelRegistry；runtime.build_runtime / _platform_runtime；api/datasets._key_models / _remote_options",
+      "source": "models/embedding.ModelRegistry；runtime.build_runtime / _platform_runtime；api/datasets._key_models / _remote_options",
       "responsibility": "按用途取模型的唯一入口：向量、重排按（提供方, 模型）取，对话按用途（enrich 入库增强、query 查询理解）取。模型对象进程级缓存——加载一次要几百毫秒到几秒，且占内存。远程模型只经模型平台：每个用途用平台上事先建好的服务级客户端 Key，知识库不持有供应商 Key。哪个用途没配 Key 哪个就不可用：对话模型为空时增强和查询理解降级为不做，远程向量、重排不出现在可选列表里。",
       "methods": [
         [
@@ -74,7 +74,7 @@
         0.3,
         1.9
       ],
-      "source": "rag/embedding.EmbeddingModel",
+      "source": "models/embedding.EmbeddingModel",
       "responsibility": "同步接口（CPU 推理或 HTTP），调用方放线程里跑；维度第一次加载时探测，和索引版本记录的不一致直接报错。",
       "attributes": [
         [
@@ -98,7 +98,7 @@
         2.1,
         1.9
       ],
-      "source": "rag/embedding.Reranker",
+      "source": "models/embedding.Reranker",
       "responsibility": "交叉编码打分，同步接口。",
       "methods": [
         [
@@ -116,7 +116,7 @@
         3.4,
         1.9
       ],
-      "source": "rag/llm.ChatModel",
+      "source": "models/llm.ChatModel",
       "responsibility": "一次「消息进、文本出」的调用（上下文补全、表格摘要、查询理解都只要这个）。失败自己按退避重试，仍失败就抛，由调用方决定降级。",
       "attributes": [
         [
@@ -140,7 +140,7 @@
         -0.65,
         3.5
       ],
-      "source": "rag/embedding.FastEmbedModel / FastEmbedReranker",
+      "source": "models/embedding.FastEmbedModel / FastEmbedReranker",
       "responsibility": "fastembed 本地 ONNX 向量和重排模型（默认 bge-small-zh），模型文件打进镜像，不依赖外网和 Key；开发和小规模用，也是平台不可用时检索仍能工作的底线。",
       "methods": [
         [
@@ -158,8 +158,8 @@
         0.95,
         3.5
       ],
-      "source": "rag/remote_models.OpenAICompatibleEmbedding",
-      "responsibility": "POST {LiteLLM}/v1/embeddings（OpenAI 兼容）；批量由调用方控制；用量（total_tokens）写进当前 span。",
+      "source": "models/remote_models.OpenAICompatibleEmbedding",
+      "responsibility": "POST {模型网关}/v1/embeddings（OpenAI 兼容）；批量由调用方控制；用量（total_tokens）写进当前 span。",
       "methods": [
         [
           "+",
@@ -176,7 +176,7 @@
         2.45,
         3.5
       ],
-      "source": "rag/remote_models.RemoteReranker",
+      "source": "models/remote_models.RemoteReranker",
       "responsibility": "cohere_compatible：POST /rerank {model, query, documents} → [{index, relevance_score}]（Cohere、Jina、SiliconFlow、Xinference）；tei：POST /rerank {query, texts} → [{index, score}]。",
       "methods": [
         [
@@ -194,8 +194,8 @@
         4.35,
         3.5
       ],
-      "source": "rag/model_platform.PlatformChat（直连供应商的 OpenAICompatibleChat 去掉）",
-      "responsibility": "带着服务级客户端 Key 调 LiteLLM 的 chat/completions。Key 请求时才取（短缓存），回 401 就重新取一次再试。现在 112 上没接平台，走的是直连 DeepSeek、用 atlas-server Key 的 OpenAICompatibleChat。",
+      "source": "models/model_platform.PlatformChat",
+      "responsibility": "带着服务级客户端 Key 调模型网关的 chat/completions。Key 请求时才取（短缓存），回 401 就重新取一次再试。",
       "methods": [
         [
           "+",
@@ -212,7 +212,7 @@
         0.55,
         5.1
       ],
-      "source": "rag/remote_models._post；rag/llm.py 里的重试",
+      "source": "models/remote_models._post；models/llm.py 里的重试",
       "responsibility": "429、5xx、超时按指数退避重试，次数用完就抛给调用方，由调用方决定降级。",
       "methods": [
         [
@@ -230,8 +230,8 @@
         2.45,
         5.1
       ],
-      "source": "rag/model_platform.PlatformKeyAuth",
-      "responsibility": "httpx 的认证流程：每个请求带上最新的 Key，LiteLLM 回 401 就重新取一次 Key 再发一次。",
+      "source": "models/model_platform.PlatformKeyAuth",
+      "responsibility": "httpx 的认证流程：每个请求带上最新的 Key，模型网关回 401 就重新取一次 Key 再发一次。",
       "methods": [
         [
           "+",
@@ -248,12 +248,12 @@
         6.3,
         3.5
       ],
-      "source": "rag/model_platform.ServiceKeys",
-      "responsibility": "按「类型:编码」从模型平台取服务级客户端 Key 和它的可用模型：60 秒缓存；平台不可用时沿用上次取到的，从没取到过的这项能力暂时不可用；平台上没有这把 Key（404）当作不可用而不是故障。取 Key 是同步的，对话在事件循环里经 to_thread 取，平台卡住也不冻住事件循环。",
+      "source": "models/model_platform.ServiceKeys",
+      "responsibility": "按「类型:编码」从模型平台的管理平台取服务级客户端 Key 和它的可用模型：带当前租户（X-Tenant-Id），按（租户, 客户端）缓存 60 秒；平台不可用时沿用上次取到的，从没取到过的这项能力暂时不可用；平台上没有这把 Key（404）当作不可用而不是故障。取 Key 是同步的，对话在事件循环里经 to_thread 取，平台卡住也不冻住事件循环。",
       "methods": [
         [
           "+",
-          "get(client, *, fresh=False) -> ServiceKey"
+          "get(client, *, fresh=False) -> ServiceKey  # 当前租户的"
         ],
         [
           "+",
@@ -463,7 +463,7 @@
   "decisions": [
     {
       "decision": "远程模型只经模型平台，不持有供应商 Key",
-      "reason": "Key 由平台统一发放、重置、计量，知识库只拿服务级客户端 Key 直连 LiteLLM。现在还保留了直连 OpenAI 兼容地址、自己配 Key 的模式（112 上 LLM 直连 DeepSeek，用的是 atlas-server 的 Key），两套配置并存，目标模型里去掉。"
+      "reason": "Key 由平台统一发放、重置、计量，知识库只拿服务级客户端 Key 调模型网关。不留直连 OpenAI 兼容地址、自己配 Key 的模式，配置只有一套。"
     },
     {
       "decision": "Key 请求时才取，401 就重取一次",
@@ -484,6 +484,10 @@
     {
       "decision": "对话模型可以不配",
       "reason": "增强和查询理解都是锦上添花：没配就降级为不做，入库和检索照常；部署时不必先接好 LLM。"
+    },
+    {
+      "decision": "Key 按租户取",
+      "reason": "多租户以后模型、Key 都归租户自己管；同一个用途在不同租户是不同的 Key 和可用模型，缓存也按租户分开，不能串。"
     }
   ]
 }

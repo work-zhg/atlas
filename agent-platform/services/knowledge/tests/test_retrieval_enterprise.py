@@ -10,8 +10,13 @@ from typing import Any
 import httpx
 import pytest
 from atlas_knowledge.errors import Invalid
-from atlas_knowledge.rag.filters import BUILTIN_FIELDS, FieldDef, compile_filter, validate_filter
-from atlas_knowledge.rag.retrieval import rrf
+from atlas_knowledge.retrieval.filters import (
+    BUILTIN_FIELDS,
+    FieldDef,
+    compile_filter,
+    validate_filter,
+)
+from atlas_knowledge.retrieval.pipeline import rrf
 from conftest import run_indexing
 
 ALICE = {"X-Uid": "alice"}
@@ -159,9 +164,9 @@ async def test_document_acl_enforced_for_agent_calls(client: Any, rt: Any) -> No
 
 async def test_principals_expanded_from_user_center() -> None:
     """主体展开直接问用户中心：角色、所在部门及各级上级；带出站身份；失败只剩 u: 且不缓存。"""
-    from atlas_knowledge.auth import use_identity
-    from atlas_knowledge.principals import make_resolver
-    from atlas_knowledge.settings import get_settings
+    from atlas_knowledge.access.auth import use_identity
+    from atlas_knowledge.access.principals import PrincipalTags
+    from atlas_knowledge.access.usercenter import UserCenterGateway
 
     seen: list[httpx.Request] = []
     down = True
@@ -184,7 +189,8 @@ async def test_principals_expanded_from_user_center() -> None:
             )
         return httpx.Response(404)
 
-    resolve = make_resolver(get_settings(), transport=httpx.MockTransport(handler))
+    gateway = UserCenterGateway("http://uc", transport=httpx.MockTransport(handler))
+    resolve = PrincipalTags(gateway).resolve
     use_identity("zhang", "bob", "t-1")
     # 用户中心不可用：只按用户本人
     assert await resolve("bob") == ["u:bob"]

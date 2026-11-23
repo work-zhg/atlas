@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 
 from ..db.session import get_sessionmaker
-from ..indexing.runner import run_queued
+from ..document.runner import run_queued
 from .celery_app import celery_app, get_runtime, run_async
 
 __all__ = ["indexing_task", "rebuild_index_task"]
@@ -22,16 +22,20 @@ SUSPENDED_RETRY_S = 300
 
 
 @celery_app.task(name="kb.indexing", queue="dataset")
-def indexing_task(document_uuids: list[str]) -> None:
-    suspended = run_async(run_queued(get_runtime(), get_sessionmaker(), document_uuids))
-    if suspended:
-        indexing_task.apply_async(args=[suspended], countdown=SUSPENDED_RETRY_S)
+def indexing_task(document_uuid: str | list[str]) -> None:
+    """一个文档一个任务。list：升级前按批投递、还在队列里的消息，拆成一个文档一个任务再投。"""
+    if isinstance(document_uuid, list):
+        for one in document_uuid:
+            indexing_task.delay(one)
+        return
+    if run_async(run_queued(get_runtime(), get_sessionmaker(), document_uuid)):
+        indexing_task.apply_async(args=[document_uuid], countdown=SUSPENDED_RETRY_S)
 
 
 @celery_app.task(name="kb.rebuild_index", queue="dataset")
 def rebuild_index_task(version_uuid: str) -> None:
-    """索引版本重建（换向量模型，§6.2）。中途 worker 被杀会重新投递，从头重建（point 覆盖写）。"""
-    from ..indexing.versions import rebuild_queued
+    """索引版本重建（换向量模型，§6.2）。中途 worker 被杀由巡检重新投递，从记下的进度续跑。"""
+    from ..index.versions import rebuild_queued
 
     if run_async(rebuild_queued(get_runtime(), get_sessionmaker(), version_uuid)):
         rebuild_index_task.apply_async(args=[version_uuid], countdown=SUSPENDED_RETRY_S)

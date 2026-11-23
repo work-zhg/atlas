@@ -21,7 +21,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "组件图：知识库服务 - 知识库接口",
-  "description": "目标模型。各组件读写自己的表（PostgreSQL），图中不画数据库；查询向量、查询理解的 Redis 缓存未画。分段预览也会调解析（同 worker 里的解析组件），图中未画。现在的代码按技术分层（api/、services/、rag/、indexing/），组件按领域重新归拢，各组件的代码图见 code-*.html",
+  "description": "目标模型。各组件读写自己的表（PostgreSQL，除向量缓存外都带租户，按当前租户自动过滤），图中不画数据库；查询向量、查询理解的 Redis 缓存未画。分段预览也会调解析（同 worker 里的解析组件），图中未画。运营接口删租户时还会分批删各领域的表（运营接口库），图中未画。代码按组件分包（access/、dataset/、document/、index/、models/、ops/、parse/、retrieval/、segment/），api/ 是 HTTP 接入层；各组件的代码图见 code-*.html",
   "system": "知识库服务",
   "container": "知识库接口",
   "elements": [
@@ -30,7 +30,7 @@
       "kind": "person",
       "tag": "员工",
       "name": "员工",
-      "description": "在控制台的知识库页面建库、上传文档、调检索设置、做召回测试，把库共享给同事或数字员工。",
+      "description": "在控制台的知识库页面建知识集和知识库、上传文档、调检索设置、做召回测试，把私有库共享给同事或数字员工。",
       "at": [
         0.3,
         -0.1
@@ -63,7 +63,7 @@
       "description": "管理模型和调用 Key，把模型调用转发给 DeepSeek 等供应商。",
       "at": [
         5.4,
-        4.1
+        4.5
       ]
     },
     {
@@ -74,7 +74,7 @@
       "name": "Redis",
       "description": "入库任务队列、入库锁、暂停标记，查询向量和查询理解的缓存。",
       "at": [
-        -1.7,
+        -1.9,
         2.5
       ]
     },
@@ -87,7 +87,7 @@
       "description": "每个知识库的每个索引版本一个 collection：稠密向量、BM25 稀疏向量（Milvus 内置的 BM25 生成）和文档级标量字段。",
       "at": [
         0.2,
-        5.3
+        5.6
       ]
     },
     {
@@ -99,7 +99,7 @@
       "description": "上传的原文件，以及解析出的 DocIR 和图片。",
       "at": [
         -1.1,
-        4.8
+        5.35
       ]
     },
     {
@@ -107,7 +107,7 @@
       "kind": "component",
       "name": "管理接口",
       "technology": "FastAPI Router",
-      "description": "/v1：知识库、文档、分段、共享、索引版本、元数据、召回测试和检索记录，给控制台用。",
+      "description": "/v1：知识集、知识库、文档、分段、共享、索引版本、元数据、召回测试、检索记录和存储用量，给控制台用。",
       "at": [
         0.9,
         1.3
@@ -118,7 +118,7 @@
       "kind": "component",
       "name": "内部接口",
       "technology": "FastAPI Router",
-      "description": "/internal/v1：智能体运行时检索、绑定知识库时列可读的库；网关不转发。",
+      "description": "/internal/v1：智能体运行时检索、列能用的知识集（每个带上能读的库）；网关不转发。",
       "at": [
         2.7,
         1.3
@@ -129,7 +129,7 @@
       "kind": "component",
       "name": "MCP 端点",
       "technology": "MCP（streamable HTTP）",
-      "description": "/mcp：会话 Pod 里 CLI 智能体的 knowledge_search 工具；只认签名令牌，不认身份请求头。",
+      "description": "/mcp：会话 Pod 里 CLI 智能体的 knowledge_list、knowledge_search；只认签名令牌（知识集、身份和租户都在里面），不认身份请求头。",
       "at": [
         3.8,
         1.1
@@ -140,10 +140,10 @@
       "kind": "component",
       "name": "知识库",
       "technology": "SQLAlchemy 异步",
-      "description": "建库、改设置（检索、增强、审核）、删库、共享，元数据字段定义。",
+      "description": "知识集（名称、介绍、维护人、取几条）与知识库：建库、改设置（可见性、检索、增强、审核）、移库、删库、共享，元数据字段定义。",
       "at": [
         1.6,
-        3.7
+        3.95
       ]
     },
     {
@@ -186,8 +186,8 @@
       "technology": "Python 模块",
       "description": "查询理解、检索范围（权限、版本、元数据）、混合召回、融合与重排、多样性、组装，记录漏斗。",
       "at": [
-        2.6,
-        2.6
+        3.05,
+        2.8
       ]
     },
     {
@@ -195,9 +195,9 @@
       "kind": "component",
       "name": "访问控制",
       "technology": "FastAPI 依赖 + httpx",
-      "description": "调用身份、操作码、库级权限（用户中心数据权限）、文档级主体标签、MCP 令牌。",
+      "description": "调用身份与租户核对、操作码、库级权限（公有库本地判，私有按用户中心数据权限）、文档级主体标签、MCP 令牌。",
       "at": [
-        3.9,
+        4.25,
         2.7
       ]
     },
@@ -209,7 +209,29 @@
       "description": "按用途取模型：本地 / 远程向量与重排、对话模型；经模型平台取服务级 Key。",
       "at": [
         2.9,
-        4.1
+        4.5
+      ]
+    },
+    {
+      "id": "opscenter",
+      "kind": "system",
+      "name": "运营中心",
+      "color": "#8a6d00",
+      "description": "管平台本身的独立系统：开通、停用、关闭租户，分份额，维护系统参数；看不到租户的业务内容。",
+      "at": [
+        -2.75,
+        3.5
+      ]
+    },
+    {
+      "id": "ops",
+      "kind": "component",
+      "name": "运营接口",
+      "technology": "FastAPI Router + 运营接口库",
+      "description": "/ops/v1：租户的停用、恢复、删除，知识库文件的存储份额与用量，系统参数和系统任务；只给运营中心，先验签名。",
+      "at": [
+        -1.15,
+        3.5
       ]
     }
   ],
@@ -231,6 +253,12 @@
       "to": "mcp",
       "description": "会话 Pod 里的 CLI 检索",
       "technology": "MCP/HTTP"
+    },
+    {
+      "from": "opscenter",
+      "to": "ops",
+      "description": "停用、恢复、删除租户，存储份额",
+      "technology": "JSON/HTTP（运营接口，签名）"
     },
     {
       "from": "mgmt",
@@ -265,7 +293,8 @@
     {
       "from": "internal",
       "to": "access",
-      "description": "列可读的库"
+      "description": "列可读的库",
+      "labelAt": 0.35
     },
     {
       "from": "internal",
@@ -305,7 +334,8 @@
     {
       "from": "document",
       "to": "dataset",
-      "description": "库设置、元数据字段"
+      "description": "库设置、元数据字段",
+      "labelAt": 0.7
     },
     {
       "from": "document",
@@ -359,13 +389,41 @@
       "from": "document",
       "to": "oss",
       "description": "存原文件、读 DocIR",
-      "technology": "S3 API/HTTP"
+      "technology": "S3 API/HTTP",
+      "labelAt": 0.25
     },
     {
       "from": "index",
       "to": "vdb",
       "description": "检索、写、删、改字段",
       "technology": "gRPC（pymilvus）"
+    },
+    {
+      "from": "internal",
+      "to": "dataset",
+      "description": "列能用的知识集"
+    },
+    {
+      "from": "mcp",
+      "to": "dataset",
+      "description": "列知识集里的库",
+      "labelAt": 0.3
+    },
+    {
+      "from": "document",
+      "to": "ops",
+      "description": "上传前判存储份额"
+    },
+    {
+      "from": "ops",
+      "to": "index",
+      "description": "删租户的 collection"
+    },
+    {
+      "from": "ops",
+      "to": "oss",
+      "description": "删租户的目录",
+      "technology": "S3 API/HTTP"
     }
   ]
 }

@@ -32,7 +32,7 @@
   "title": "代码图：知识库服务 - 入库 worker / 知识库接口 - 向量索引",
   "description": "目标模型，每个元素下方的「现状」是现在承担它的代码。向量化、向量库（Milvus）读写和文档级字段同步，索引版本的重建与切换",
   "component": "向量索引",
-  "package": "atlas_knowledge.index（目标模型）",
+  "package": "atlas_knowledge.index",
   "overview": "向量索引管向量库（Milvus）里的一切：把分段和子块写成 entity（稠密向量带缓存；BM25 稀疏向量由 Milvus 从检索文本生成），文档级字段变了只改标量字段，检索时按库的 active 版本查询。换向量模型通过索引版本完成：新版本在后台重建，构建期间入库双写，构建完成后原子切换，旧版本保留用于回滚。\n\n它不决定写哪些分段（文档与入库、分段），不判断检索范围（检索给过滤条件），也不持有模型的 Key（模型接入）。",
   "elements": [
     {
@@ -44,7 +44,7 @@
         1.2,
         0.3
       ],
-      "source": "indexing/loader.py index_segments / remove_segments / sync_doc_payload / sync_segment_meta；rag/retrieval 里的 store.search_* 与 _embedder",
+      "source": "index/loader.py index_segments / remove_segments / sync_doc_payload / sync_segment_meta；retrieval/pipeline 里的 store.search_* 与 _embedder",
       "responsibility": "向量库的读写入口。写：分段（通用模式）或子块（父子模式）各一个 entity，主键用库里的 uuid——upsert 是覆盖不是追加，入库可以安全重试；写进所有 collection 还在的索引版本（双写）。文档级字段变了只改标量字段：按 document_uuid 查出主键，再分批 partial upsert，不重新向量化。读：检索按库的 active 版本向量化查询、查 collection，永远带 enabled = doc_ok = true。",
       "methods": [
         [
@@ -78,8 +78,8 @@
         4.6,
         0.3
       ],
-      "source": "services/index_versions.py IndexVersionService；indexing/versions.py activate",
-      "responsibility": "换向量模型不停服：新建版本（building）→ 后台重建 → 构建完成（ready）后切换；切换是在一个事务里改 active，检索看到的要么是旧版本、要么是新版本。旧版本退役后 collection 保留并继续双写，回滚后数据是全的，直到手动删除。同时只能有一个构建中的版本。订阅知识库的事件：建库登记第 1 版，删库删所有 collection，加字段给每个 collection 的 meta 建路径索引。",
+      "source": "index/index_versions.py IndexVersionService，事件订阅 on_dataset_created / on_dataset_deleted / on_field_defined；index/versions.py activate / active_version",
+      "responsibility": "换向量模型不停服：新建版本（building）→ 后台重建 → 构建完成（ready）后切换；切换是在一个事务里改 active，检索看到的要么是旧版本、要么是新版本。旧版本退役后 collection 保留并继续双写，回滚后数据是全的，直到手动删除。同时只能有一个构建中的版本。重建任务只带版本 id：按版本行进入它的租户，租户停用就过一会儿再投。订阅知识库的事件：建库登记第 1 版，删库删所有 collection，加字段给每个 collection 的 meta 建路径索引。",
       "methods": [
         [
           "+",
@@ -112,7 +112,7 @@
         0.2,
         1.95
       ],
-      "source": "loader.doc_payload / segment_meta；rag/vdb/base 的 payload 约定",
+      "source": "index/loader.py doc_payload / segment_meta；index/vdb/base 的 payload 约定",
       "responsibility": "entity 的检索文本和标量字段：检索文本是标题路径 + 正文，交给 Milvus 生成 BM25 稀疏向量；标量字段是检索入口类型、命中后回到哪个分段、所属文档和库、分段开关，加文档级字段（可用、元数据、ACL、版本与时效）。没有 ACL 写 [\"public\"]；时间存 epoch 秒，没有就留空，检索按不限。meta 是一个 JSON 字段 = 文档元数据 + 分段覆盖。",
       "attributes": [
         [
@@ -156,7 +156,7 @@
         1.95,
         1.95
       ],
-      "source": "versions.write_targets / stores / live_versions",
+      "source": "index/versions.py write_targets / stores / live_versions",
       "responsibility": "写到哪些 collection：active 版本加上其余 collection 还在的版本（构建中、待切换、已退役）。分段内容只有一份，各版本只是向量不同。删除、开关、改字段也同步到这些版本。每一批都重新读一次，构建中途新建的版本从下一批起就写得到。",
       "methods": [
         [
@@ -174,7 +174,7 @@
         3.5,
         1.95
       ],
-      "source": "rag/embedding.py CacheEmbedding；loader._embedder",
+      "source": "index/embed_cache.py CacheEmbedding；index/loader._embedder",
       "responsibility": "带缓存的向量化：文档向量按（提供方、模型、文本哈希）查 kb_embedding_cache，没有的按批算再写回；查询向量缓存在 Redis。模型的维度和索引版本记录的不一致直接报错。",
       "methods": [
         [
@@ -192,7 +192,7 @@
         1.2,
         3.65
       ],
-      "source": "rag/vdb/base.BaseVector",
+      "source": "index/vdb/base.BaseVector",
       "responsibility": "向量库抽象，一个实例对应一个 collection；上层只认它，换向量库不动上层。",
       "methods": [
         [
@@ -222,7 +222,7 @@
         4.4,
         3.95
       ],
-      "source": "versions.rebuild",
+      "source": "index/versions.py rebuild / recover_rebuilds / early_documents",
       "responsibility": "后台重建一个版本：建 collection（基础标量索引加库里全部元数据字段的路径索引）并加载 → 逐文档用新模型重写已完成文档的向量 → 补扫到没有新完成的文档 → 等版本建立前就在写向量的文档都完成后再整篇重写一次 → 删掉库里已不存在的 entity。持锁、按文档记进度：进程死了由巡检续跑，不会永远卡在 building。",
       "methods": [
         [
@@ -272,7 +272,7 @@
         1.2,
         5.25
       ],
-      "source": "无：现在是 rag/vdb/qdrant.QdrantVector",
+      "source": "无：现在是 index/vdb/qdrant.QdrantVector",
       "responsibility": "Milvus 实现：collection kb_{库}_v{版本}（库 uuid 去掉连字符，Milvus 的名字只能有字母、数字、下划线）。schema：主键 id（分段或子块 uuid）；dense 向量（COSINE）；text 用 chinese 分析器，经 BM25 Function 生成 sparse 向量（BM25）；标量字段 document_uuid、segment_uuid、kind、enabled、doc_ok、acl、is_current、valid_from、valid_to 和 meta。标量字段建倒排索引，meta 按元数据字段建路径索引。过滤用表达式模板传参；按条件改字段先查主键再 partial upsert。默认有界一致性，召回测试用 Strong；退役的版本开 mmap。",
       "methods": [
         [
@@ -290,7 +290,7 @@
         3.65,
         5.25
       ],
-      "source": "versions.py 与 CacheEmbedding 里的查询",
+      "source": "index/versions.py 与 index/embed_cache.py 里的查询",
       "responsibility": "读写 kb_index_version、kb_embedding_cache。",
       "methods": [
         [
@@ -546,18 +546,18 @@
     },
     {
       "decision": "active 版本只记在索引版本上",
-      "reason": "现在 kb_dataset 上的 embedding_* 和 collection_name 是 active 版本的副本，切换时要在一个事务里两处一起改；只记一处就不会不一致。"
+      "reason": "kb_dataset 上要是再存一份 embedding_* 和 collection_name，切换时就得在一个事务里两处一起改；只记一处就不会不一致。"
     },
     {
       "decision": "重建可续跑，版本建立前就在写的文档最后再重写",
-      "reason": "现在重建卡在 building 没有出口，只能删版本重来；而且版本建立前就开始写向量的文档，若在重建循环结束后才完成，前几批不会进新 collection（现状问题）。持锁、记进度、等这些文档完成后整篇重写一次，两个问题都收住。"
+      "reason": "重建要是没有锁和进度，进程一死就卡在 building，只能删版本重来；版本建立前就开始写向量的文档，若在重建循环结束后才完成，前几批也不会进新 collection。持锁、记进度、等这些文档完成后整篇重写一次，两个问题都收住。"
     },
     {
       "decision": "新 collection 建全部标量索引和路径索引",
-      "reason": "现在重建出来的 collection 只有基础索引，元数据字段的索引只在定义字段时补到当时已有的 collection 上；按元数据过滤在新版本上会退化成全量扫描。"
+      "reason": "元数据字段的索引要是只在定义字段时补到当时已有的 collection 上，重建出来的新 collection 就只有基础索引，按元数据过滤在新版本上会退化成全量扫描。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的主键用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的主键用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。除向量缓存外每张表还有 tenant_uuid（uuid，所属租户；atlas_tenancy 按当前租户自动过滤，没进入租户就查不到任何租户的数据），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
   "tables": [
     {
       "name": "kb_index_version",

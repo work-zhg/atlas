@@ -30,10 +30,10 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：知识库服务 - 知识库接口 - 知识库",
-  "description": "目标模型，每个元素下方的「现状」是现在承担它的代码。知识库的配置、共享和元数据字段",
+  "description": "目标模型，每个元素下方的「现状」是现在承担它的代码。知识集与知识库：分组、可见性、配置、共享和元数据字段",
   "component": "知识库",
-  "package": "atlas_knowledge.dataset（目标模型）",
-  "overview": "知识库管「一个库是什么样的」：名称、所有者、分段结构、默认检索设置、入库增强和审核开关，以及库里文档可以带哪些元数据字段。建库时按预设在用户中心写初始授权，之后的共享也直接改用户中心；删库、加字段只发事件，由各领域处理自己的数据。\n\n它不判断谁能访问（访问控制，权限在用户中心），不管文档和分段（文档与入库、分段），也不管向量模型和 collection（向量索引的索引版本）。",
+  "package": "atlas_knowledge.dataset",
+  "overview": "知识库管「一个库是什么样的」和「库编在哪一组」。知识集把同一主题的库编成一组，智能体按知识集使用知识：名称和介绍由维护人写，进智能体提示词里的「可查的知识」，每次最多带回几段也由维护人定。知识库记着所属知识集、可见性（公有大家都能读；私有按用户中心数据权限）、所有者、分段结构、默认检索设置、入库增强和审核开关、文件目录，以及库里文档可以带哪些元数据字段。建私有库时按预设在用户中心写初始授权，之后的共享也直接改用户中心；删库、加字段只发事件，由各领域处理自己的数据。\n\n知识集只是分组，不改变权限：集里的库谁能用仍按库的可见性和数据权限。表都带租户，名字、公有都只在本租户内。\n\n它不判断谁能访问（访问控制），不管文档和分段（文档与入库、分段），也不管向量模型和 collection（向量索引的索引版本）。",
   "elements": [
     {
       "id": "svc",
@@ -44,12 +44,12 @@
         1.3,
         0.3
       ],
-      "source": "services/datasets.py DatasetService；services/metadata.py 的 list_fields / create_field / delete_field",
-      "responsibility": "知识库的全部入口：列可见的库、建库、改设置、删库、共享、定义元数据字段。权限级别由调用方带进来（DatasetAccess），看不到的库在访问控制那里就是 404。建库时先在用户中心写初始授权；删库、加字段只发事件，各领域自己处理。",
+      "source": "dataset/datasets.py DatasetService；dataset/metadata.py 的 list_fields / create_field / delete_field",
+      "responsibility": "知识库的全部入口：列可见的库（可按知识集筛）、建库、改设置、移到别的知识集、删库、共享、定义元数据字段。权限级别由调用方带进来（DatasetAccess），看不到的库在访问控制那里就是 404。建库要操作码 kb:create，且是目标知识集的维护人（不指定知识集的旧调用方：配一个同 id 的知识集）；移库要库的 Owner 且是目标知识集的维护人。建私有库时先在用户中心写初始授权；删库、加字段只发事件，各领域自己处理。",
       "methods": [
         [
           "+",
-          "list(principal, *, page, keyword) -> Page[Dataset]"
+          "list(principal, *, set, page, keyword) -> Page[Dataset]"
         ],
         [
           "+",
@@ -57,7 +57,7 @@
         ],
         [
           "+",
-          "update(access, changes) -> Dataset"
+          "update(access, changes) -> Dataset  # 含可见性、移库"
         ],
         [
           "+",
@@ -73,7 +73,7 @@
         ],
         [
           "+",
-          "settings_of(dataset_uuid) -> Dataset"
+          "settings_of(dataset_uuid) -> Dataset · cards(datasets)"
         ]
       ]
     },
@@ -83,15 +83,15 @@
       "name": "SharingPreset",
       "stereotype": "策略",
       "at": [
-        -0.45,
-        1.95
+        -0.8,
+        3.5
       ],
-      "source": "DatasetService._preset / _members",
-      "responsibility": "建库时的共享预设 → 用户中心的初始授权：OWNER 给按谁判的那个人（auth-uid）；全员可见 = 根部门含下级只读；指定成员 = 只读或读写。只在新建时用，之后的共享以用户中心为准。",
+      "source": "dataset/datasets.py DatasetService._preset / _members",
+      "responsibility": "建私有库时的共享预设 → 用户中心的初始授权：OWNER 给按谁判的那个人（auth-uid）；指定成员 = 只读或读写。只在新建时用，之后的共享以用户中心为准。公有不靠授权：可见性记在库上（旧调用方的「全员可见」就是公有）。",
       "attributes": [
         [
           "+",
-          "only_me | all_team | partial_members"
+          "only_me | partial_members"
         ]
       ],
       "methods": [
@@ -107,15 +107,23 @@
       "name": "Dataset",
       "stereotype": "聚合根",
       "at": [
-        1.05,
+        1.4,
         1.95
       ],
-      "source": "db.models.Dataset（去掉 permission、owner_kind、embedding_*、collection_name）",
-      "responsibility": "一个知识库：名称、所有者、分段结构、检索设置、入库增强开关、是否要求审核。不存可见范围（在用户中心），也不存向量模型和 collection（active 索引版本在向量索引里）。已有文档后分段结构不能改。",
+      "source": "db.models.Dataset",
+      "responsibility": "一个知识库：所属知识集、可见性、名称、所有者、分段结构、检索设置、入库增强开关、是否要求审核、文件目录。公有任何人至少可读，写和管理照旧按数据权限。不存向量模型和 collection（active 索引版本在向量索引里）。已有文档后分段结构不能改。文件目录第一层是租户：{租户}/_knowledge/{库}（多租户之前建的库是 _knowledge/{库}）。",
       "attributes": [
         [
           "+",
           "uuid · name · description · icon"
+        ],
+        [
+          "+",
+          "set_uuid  # 所属知识集"
+        ],
+        [
+          "+",
+          "visibility: public | private"
         ],
         [
           "+",
@@ -131,7 +139,11 @@
         ],
         [
           "+",
-          "enhancements: Enhancements · review_required"
+          "enhancements: {contextual, table_summary} · review_required"
+        ],
+        [
+          "+",
+          "storage_prefix  # 文件目录"
         ]
       ],
       "methods": [
@@ -142,6 +154,10 @@
         [
           "+",
           "change_doc_form(form, *, has_documents)"
+        ],
+        [
+          "+",
+          "move_to(set) · set_visibility(v)"
         ]
       ]
     },
@@ -154,7 +170,7 @@
         2.75,
         1.95
       ],
-      "source": "services/metadata.py fields_of / normalize_metadata；rag/filters.normalize_value",
+      "source": "dataset/metadata.py fields_of / normalize_metadata；retrieval/filters.normalize_value",
       "responsibility": "库的元数据字段表：按库取字段定义（多库检索取并集），按字段类型校验、规范化文档或分段的元数据值（日期转 ISO、枚举查可选值、多值转列表）。文档、检索、向量索引都从这里取字段。",
       "methods": [
         [
@@ -176,7 +192,7 @@
         4.3,
         0.3
       ],
-      "source": "无：现在 DatasetService.delete 直接删各表、collection 和原文件；create_field 直接给每个 collection 建索引",
+      "source": "dataset/events.py DatasetEvents；订阅关系登记在 wiring.py",
       "responsibility": "知识库的生命周期事件，在同一个事务里同步分发给订阅方：建库后向量索引登记第 1 个索引版本；删库后文档与入库、分段、向量索引、检索各自删掉自己的数据；加字段后向量索引给每个 collection 的 meta 建这个字段的路径索引。",
       "attributes": [
         [
@@ -199,10 +215,10 @@
       "name": "RetrievalConfig",
       "stereotype": "值对象",
       "at": [
-        0.4,
+        0.3,
         3.5
       ],
-      "source": "rag/retrieval.normalize_retrieval_config",
+      "source": "retrieval/pipeline.normalize_retrieval_config",
       "responsibility": "库的默认检索设置；召回测试和智能体可以按次覆盖。规范化时补默认值、钳住取值范围。",
       "attributes": [
         [
@@ -211,7 +227,7 @@
         ],
         [
           "+",
-          "top_k · score_threshold"
+          "top_k · score_threshold  # 智能体查知识集时 top_k 取知识集的"
         ],
         [
           "+",
@@ -234,28 +250,6 @@
       ]
     },
     {
-      "id": "enh",
-      "kind": "class",
-      "name": "Enhancements",
-      "stereotype": "值对象",
-      "at": [
-        -0.8,
-        3.5
-      ],
-      "source": "rag/enhance.normalize_enhancements",
-      "responsibility": "入库增强开关：上下文补全、大表摘要。只影响之后入库（或重新入库）的文档。",
-      "attributes": [
-        [
-          "+",
-          "contextual: bool"
-        ],
-        [
-          "+",
-          "table_summary: bool · table_summary_min_rows"
-        ]
-      ]
-    },
-    {
       "id": "field",
       "kind": "class",
       "name": "MetadataField",
@@ -264,7 +258,7 @@
         3.4,
         3.5
       ],
-      "source": "db.models.MetadataField；services/metadata.field_def",
+      "source": "db.models.MetadataField；dataset/metadata.field_def",
       "responsibility": "一个元数据字段：名称在库内唯一，类型、可选值、是否多值、是否允许查询理解从问题里抽取过滤条件。字段归知识库，值归文档。",
       "attributes": [
         [
@@ -293,19 +287,23 @@
       "name": "DatasetRepository",
       "stereotype": "仓储",
       "at": [
-        1.55,
+        1.95,
         4.85
       ],
-      "source": "DatasetService 和 MetadataService 里的查询",
-      "responsibility": "读写 kb_dataset、kb_metadata_field。列表按访问控制给的可见条件过滤。",
+      "source": "DatasetService、KnowledgeSetService 和 MetadataService 里的查询",
+      "responsibility": "读写 kb_knowledge_set、kb_dataset、kb_metadata_field。列表按访问控制给的可见条件过滤；都按当前租户自动过滤。",
       "methods": [
         [
           "+",
-          "get(uuid) · list(visible, *, keyword, page)"
+          "get(uuid) · list(visible, *, set, keyword, page)"
         ],
         [
           "+",
           "add(dataset) · delete(dataset)"
+        ],
+        [
+          "+",
+          "set(uuid) · sets(keyword) · add_set · delete_set"
         ],
         [
           "+",
@@ -316,13 +314,13 @@
     {
       "id": "routes",
       "kind": "class",
-      "name": "DatasetRoutes",
+      "name": "DatasetRoutes · InternalRoutes",
       "external": true,
-      "source": "管理接口组件",
+      "source": "管理接口、内部接口组件",
       "methods": [
         [
           "+",
-          "/v1/datasets · /grants · /metadata-fields"
+          "/v1/knowledge-sets · /v1/datasets · /grants · /metadata-fields"
         ]
       ],
       "at": [
@@ -339,7 +337,7 @@
       "methods": [
         [
           "+",
-          "visible(principal)"
+          "visible(principal) · user_names(ids)"
         ],
         [
           "+",
@@ -401,6 +399,76 @@
         4.3,
         -1.3
       ]
+    },
+    {
+      "id": "sets",
+      "kind": "class",
+      "name": "KnowledgeSetService",
+      "stereotype": "应用服务",
+      "at": [
+        -0.75,
+        0.3
+      ],
+      "source": "dataset/sets.py KnowledgeSetService",
+      "responsibility": "知识集的全部入口。谁能看到：维护人、其中至少有一个库能读的人、有「全部知识库」授权的人；谁能改：维护人或「全部知识库 · Owner」；任何人都能建，建的人是维护人；只能删空的。readable 给智能体用：按 auth-uid 列能用的知识集，每个带上其中能读的库（名称、介绍、文档数、最近入库时间），一个能读的库都没有的知识集不返回。",
+      "methods": [
+        [
+          "+",
+          "list(principal, *, keyword) · get(set, principal)"
+        ],
+        [
+          "+",
+          "create(principal, spec) · update(set, principal, changes)"
+        ],
+        [
+          "+",
+          "delete(set, principal)  # 只能删空的"
+        ],
+        [
+          "+",
+          "manageable(set, principal) -> KnowledgeSet"
+        ],
+        [
+          "+",
+          "readable(principal, set_ids | None) -> list[SetCard]"
+        ]
+      ]
+    },
+    {
+      "id": "kset",
+      "kind": "class",
+      "name": "KnowledgeSet",
+      "stereotype": "聚合根",
+      "at": [
+        -0.75,
+        1.95
+      ],
+      "source": "db.models.KnowledgeSet",
+      "responsibility": "一个知识集：名称和介绍（给智能体看：里面有什么、能回答哪类问题）、维护人、智能体在这里查一次最多带回几段。一个知识库只属于一个知识集；知识集对一个人可见 = 其中至少有一个库他能读，或者他是维护人。",
+      "attributes": [
+        [
+          "+",
+          "uuid · name · description · icon"
+        ],
+        [
+          "+",
+          "maintainers: list[uid]  # 1..20"
+        ],
+        [
+          "+",
+          "top_k: 1..20"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "manages(principal, type_level) -> bool"
+        ],
+        [
+          "+",
+          "rename · describe · set_top_k · set_maintainers"
+        ]
+      ]
     }
   ],
   "relationships": [
@@ -417,7 +485,8 @@
     {
       "from": "svc",
       "to": "preset",
-      "description": "初始授权"
+      "description": "初始授权",
+      "labelAt": 0.75
     },
     {
       "from": "svc",
@@ -439,12 +508,6 @@
       "to": "cfg",
       "type": "composition",
       "description": "检索设置"
-    },
-    {
-      "from": "ds",
-      "to": "enh",
-      "type": "composition",
-      "description": "入库增强"
     },
     {
       "from": "schema",
@@ -501,26 +564,65 @@
       "to": "svc",
       "description": "检索设置",
       "labelAt": 0.7
+    },
+    {
+      "from": "routes",
+      "to": "sets",
+      "description": "知识集、能用的知识集"
+    },
+    {
+      "from": "svc",
+      "to": "sets",
+      "description": "建库、移库要是维护人"
+    },
+    {
+      "from": "sets",
+      "to": "kset",
+      "description": "creates、改"
+    },
+    {
+      "from": "sets",
+      "to": "repo",
+      "description": "存取知识集、集里的库",
+      "labelAt": 0.35
+    },
+    {
+      "from": "sets",
+      "to": "access",
+      "description": "可见的库、维护人姓名",
+      "labelAt": 0.3
     }
   ],
   "capabilities": [
     {
+      "name": "知识集",
+      "entry": "KnowledgeSetService.list · get · create · update · delete",
+      "callers": "管理接口（控制台的知识集页）",
+      "description": "任何人能建（建的人是维护人）；维护人或「全部知识库 · Owner」能改名称、介绍、维护人、取几条；只能删空的。看不到的知识集一律 404"
+    },
+    {
+      "name": "能用的知识集",
+      "entry": "KnowledgeSetService.readable(principal, set_ids | None)",
+      "callers": "内部接口（智能体编辑时列可选的知识集、运行时展开智能体选的知识集）",
+      "description": "set_ids 为空 = 使用者能读的全部；每个知识集带上其中 auth-uid 能读的库的名片（名称、介绍、文档数、最近入库时间）；一个能读的库都没有的不返回"
+    },
+    {
       "name": "列出可见的库",
-      "entry": "list(principal, *, page, keyword)",
-      "callers": "管理接口（控制台列表）",
-      "description": "可见条件来自访问控制（用户中心里 auth-uid 能读的库；有「全部知识库」授权就是全部），每行带上「我的权限」"
+      "entry": "list(principal, *, set, page, keyword)",
+      "callers": "管理接口（控制台列表、知识集详情）",
+      "description": "可见 = 公有的库，加上用户中心里 auth-uid 能读的库（有「全部知识库」授权就是全部），每行带上「我的权限」"
     },
     {
       "name": "建库",
       "entry": "create(principal, spec)",
-      "callers": "管理接口（要操作码 kb:create）",
-      "description": "校验设置、按预设在用户中心写初始授权，再发 DatasetCreated（向量索引登记第 1 版）；用户中心失败整个新建回滚"
+      "callers": "管理接口（要操作码 kb:create，且是目标知识集的维护人）",
+      "description": "校验设置、按预设在用户中心写初始授权，再发 DatasetCreated（向量索引登记第 1 版）；用户中心失败整个新建回滚。不指定知识集（旧调用方）就配一个同名、同 id 的"
     },
     {
       "name": "改设置",
       "entry": "update(access, changes)",
-      "callers": "管理接口（要读写）",
-      "description": "名称（同步改用户中心里的数据名）、描述、检索设置、增强开关、审核开关；分段结构只在没有文档时能改；换向量模型不在这里，走索引版本"
+      "callers": "管理接口（要读写；可见性、移库要 Owner）",
+      "description": "名称（同步改用户中心里的数据名）、描述、可见性、检索设置、增强开关、审核开关；移到别的知识集还要是目标知识集的维护人；分段结构只在没有文档时能改；换向量模型不在这里，走索引版本"
     },
     {
       "name": "删库",
@@ -532,7 +634,7 @@
       "name": "共享",
       "entry": "grants · share · update_grant · revoke_grant",
       "callers": "管理接口（要 Owner）",
-      "description": "授权行必须属于这个库（用户中心只校验它属于本应用的数据编码）"
+      "description": "私有库给人或部门授权；授权行必须属于这个库（用户中心只校验它属于本应用的数据编码）"
     },
     {
       "name": "元数据字段",
@@ -543,8 +645,8 @@
   ],
   "decisions": [
     {
-      "decision": "库级权限全在用户中心，本服务不存可见范围",
-      "reason": "复用用户中心的分享、部门授权和「全部知识库」授权，数字员工也是用户中心里的主体。存量迁移（sync-uc）跑完后，permission、owner_kind 两列和 kb_dataset_permission 表都可以删。"
+      "decision": "可见性记在库上：公有本地判，私有按用户中心数据权限",
+      "reason": "知识集方案要「公有 = 大家都能用」。原来靠给根部门授只读，部门调整、新租户都要补授权，每次判定还要问用户中心；公有记在库上本地判，任何人至少可读，写和管理仍按数据权限。原来的可见范围（permission）、存量服务账号的库（owner_kind）和 kb_dataset_permission 早已迁进用户中心，都删掉。"
     },
     {
       "decision": "建库时先写用户中心的初始授权，再提交本地事务",
@@ -552,11 +654,11 @@
     },
     {
       "decision": "知识库不存向量模型和 collection",
-      "reason": "现在 kb_dataset 和 kb_index_version 各存一份，靠同一个事务保持一致，换模型时两处都要改。只在向量索引里记 active 版本，检索按库问向量索引要目标，切换只改一处。"
+      "reason": "kb_dataset 和 kb_index_version 要是各存一份，就得靠同一个事务保持一致，换模型时两处都要改。只在向量索引里记 active 版本，检索按库问向量索引要目标，切换只改一处。"
     },
     {
       "decision": "删库、加字段发事件，各领域处理自己的数据",
-      "reason": "现在删库要直接删 8 张表、所有 collection 和原文件，知识库领域得认识别人的表，还漏了 kb_retrieval。发 DatasetDeleted 后，各领域只删自己拥有的数据；事件在同一个事务里同步分发，不引入消息队列。"
+      "reason": "删库要是由知识库直接删 8 张表、所有 collection 和原文件，知识库领域就得认识别人的表，别的领域加了表也容易漏删。发 DatasetDeleted 后，各领域只删自己拥有的数据；事件在同一个事务里同步分发，不引入消息队列。"
     },
     {
       "decision": "已有文档后不能改分段结构",
@@ -565,10 +667,79 @@
     {
       "decision": "元数据字段归知识库，值归文档",
       "reason": "字段是库的 schema（类型、可选值、能不能被查询理解抽取），多份文档共用；值随文档变，改值只改向量库里的标量字段、不重新向量化。"
+    },
+    {
+      "decision": "知识集只是分组，不改变权限",
+      "reason": "谁能用一个库只看库自己（可见性和数据权限）；知识集对一个人可见 = 其中至少有一个库他能读，或者他是维护人。知识集如果也带权限，同一个库就有两套判定，谁说了算讲不清。"
+    },
+    {
+      "decision": "一个库只属于一个知识集",
+      "reason": "像文件夹：维护人对集里的内容负责，介绍才写得准；一个库进几个知识集，介绍和取几条该听谁的就说不清。"
+    },
+    {
+      "decision": "检索设置分两层：取几条归知识集，方式和门槛归库",
+      "reason": "取几条看智能体怎么用（上下文预算），由写介绍的维护人定；检索方式和相关度门槛和库的内容、向量模型有关，由库的 Owner 定。"
+    },
+    {
+      "decision": "数据按租户隔离：表都带租户，文件目录第一层是租户",
+      "reason": "名字、公有都只在本租户内；查询按当前租户自动过滤（atlas_tenancy），漏了条件也查不到别的租户。删租户时整个 {租户}/_knowledge/ 目录和这些行一起删。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的主键用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的主键用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。除向量缓存外每张表还有 tenant_uuid（uuid，所属租户；atlas_tenancy 按当前租户自动过滤，没进入租户就查不到任何租户的数据），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
   "tables": [
+    {
+      "name": "kb_knowledge_set",
+      "description": "对应聚合根 KnowledgeSet",
+      "at": [
+        -1.15,
+        0
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键"
+        },
+        {
+          "name": "uuid",
+          "type": "uuid",
+          "key": "UK",
+          "description": "逻辑主键；升级时按原来的库 1:1 建的知识集与库同一个 uuid"
+        },
+        {
+          "name": "name",
+          "type": "varchar(255)"
+        },
+        {
+          "name": "description",
+          "type": "text",
+          "default": "''",
+          "description": "给智能体看的介绍"
+        },
+        {
+          "name": "icon",
+          "type": "varchar(64)",
+          "default": "'📁'"
+        },
+        {
+          "name": "maintainers",
+          "type": "jsonb",
+          "description": "维护人 uid 列表（1..20）"
+        },
+        {
+          "name": "top_k",
+          "type": "integer",
+          "default": "4",
+          "description": "智能体查一次最多带回几段"
+        },
+        {
+          "name": "created_by",
+          "type": "varchar(64)"
+        }
+      ]
+    },
     {
       "name": "kb_dataset",
       "description": "对应聚合根 Dataset",
@@ -589,6 +760,18 @@
           "type": "uuid",
           "key": "UK",
           "description": "逻辑主键"
+        },
+        {
+          "name": "set_uuid",
+          "type": "uuid",
+          "references": "kb_knowledge_set.uuid",
+          "description": "所属知识集"
+        },
+        {
+          "name": "visibility",
+          "type": "varchar(16)",
+          "default": "'private'",
+          "description": "public 任何人可读 / private 按数据权限"
         },
         {
           "name": "name",
@@ -633,6 +816,11 @@
           "description": "新文档要审核后才参与检索"
         },
         {
+          "name": "storage_prefix",
+          "type": "varchar(255)",
+          "description": "文件目录：{租户}/_knowledge/{库}；多租户之前建的是 _knowledge/{库}"
+        },
+        {
           "name": "latest_process_rule_uuid",
           "type": "uuid",
           "nullable": true,
@@ -642,6 +830,14 @@
           "name": "created_by",
           "type": "varchar(64)",
           "description": "谁在用（X-Uid）"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "ix_kb_dataset_set_uuid",
+          "columns": [
+            "set_uuid"
+          ]
         }
       ]
     },

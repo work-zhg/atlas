@@ -1,10 +1,10 @@
-"""结构感知分段（rag/structure.py）：按标题切小节、父块打包、子块与前缀。"""
+"""结构感知分段（segment/structure.py）：按标题切小节、父块打包、子块与前缀。"""
 
 from __future__ import annotations
 
-from atlas_knowledge.rag.index_processor import normalize_process_rule, transform
-from atlas_knowledge.rag.models import Document
-from atlas_knowledge.rag.structure import (
+from atlas_knowledge.ragdoc import Document
+from atlas_knowledge.segment.index_processor import normalize_process_rule, transform
+from atlas_knowledge.segment.structure import (
     StructureOptions,
     build_parents,
     child_texts,

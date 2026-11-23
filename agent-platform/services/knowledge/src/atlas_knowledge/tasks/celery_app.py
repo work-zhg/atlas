@@ -9,7 +9,7 @@
 ★ acks_late + reject_on_worker_lost：worker 子进程被杀时任务回到队列，由下一个 worker 续跑
   （runner 会从已完成的阶段之后继续）。visibility_timeout 设得很长：它到期会导致重复投递，
   不能当超时用。整个 Pod 被杀时消息要等它到期才回来 —— 入库的恢复靠 API 的入库巡检
-  （indexing/runner.py recover_stalled），不靠这里。
+  （document/runner.py recover_stalled），不靠这里。
 """
 
 from __future__ import annotations

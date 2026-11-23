@@ -73,10 +73,6 @@ export function SharingTab({ ds }: { ds: Dataset }) {
     setPickedDepts([]);
   }
 
-  if (g && !g.shareable) {
-    return <Alert type="info" showIcon message="这个库由服务账号创建，只有该服务账号（及拥有「全部知识库」权限的人）能用，不能共享。" />;
-  }
-
   return (
     <Space direction="vertical" size={16} style={{ width: "100%", maxWidth: 820 }}>
       <Typography.Text type="secondary">

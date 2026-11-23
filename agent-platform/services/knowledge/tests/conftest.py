@@ -37,7 +37,6 @@ OPS_KEY = "test-ops-key"
 _TABLES = (
     "kb_knowledge_set",
     "kb_dataset",
-    "kb_dataset_permission",
     "kb_process_rule",
     "kb_document",
     "kb_segment",
@@ -148,8 +147,8 @@ class RecordingDispatcher:
         self.queued: list[str] = []
         self.rebuilds: list[str] = []
 
-    def indexing(self, document_uuids: list[str]) -> None:
-        self.queued.extend(document_uuids)
+    def indexing(self, document_uuid: str) -> None:
+        self.queued.append(document_uuid)
 
     def rebuild_index(self, version_uuid: str) -> None:
         self.rebuilds.append(version_uuid)
@@ -285,12 +284,6 @@ class FakeDataPermissions:
     async def cleanup(self, dataset_id: str) -> None:
         self.rows.pop(dataset_id, None)
 
-    async def root_dept(self) -> str:
-        return "root"
-
-    async def user_names(self, user_ids: list[str]) -> dict[str, str]:
-        return {u: f"用户{u}" for u in user_ids}
-
 
 @pytest.fixture(autouse=True)
 def _in_test_tenant() -> Iterator[None]:
@@ -309,22 +302,24 @@ _ANYONE = {
 }
 
 
-@pytest.fixture(autouse=True)
-def _fake_user_center(monkeypatch: pytest.MonkeyPatch) -> None:
-    """授权快照（auth._authz）走替身：人都在请求头写的租户里。
+def fake_user_center(handler: Any = None) -> Any:
+    """用户中心的替身（UserCenterGateway + MockTransport）：授权快照里人都在请求头写的租户里、
+    操作码全有；用户名 = 「用户」+ id。数据权限另用 FakeDataPermissions。
 
-    测权限的用例自己再换 auth._transport。
+    测权限的用例传自己的 handler，再赋给 rt.user_center_gateway。
     """
     import httpx
-    from atlas_knowledge import auth
+    from atlas_knowledge.access.usercenter import UserCenterGateway
 
-    def handler(req: httpx.Request) -> httpx.Response:
-        assert req.url.path.endswith("/authz"), req.url.path
-        user = {"status": "active", "tenant_id": req.headers.get("x-tenant-id")}
-        return httpx.Response(200, json={**_ANYONE, "user": user})
+    def anyone(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/authz"):
+            user = {"status": "active", "tenant_id": req.headers.get("x-tenant-id")}
+            return httpx.Response(200, json={**_ANYONE, "user": user})
+        uid = req.url.path.rsplit("/", 1)[-1]
+        assert req.url.path == f"/open/v1/users/{uid}", req.url.path
+        return httpx.Response(200, json={"id": uid, "name": f"用户{uid}"})
 
-    monkeypatch.setattr(auth, "_transport", httpx.MockTransport(handler))
-    monkeypatch.setattr(auth, "_cache", auth._Cache())
+    return UserCenterGateway("http://uc", transport=httpx.MockTransport(handler or anyone))
 
 
 async def own_tags(user_id: str) -> list[str]:
@@ -335,8 +330,8 @@ async def own_tags(user_id: str) -> list[str]:
 @pytest.fixture
 async def rt() -> AsyncIterator[Any]:
     import redis.asyncio as aioredis
-    from atlas_knowledge.rag.embedding import ModelRegistry
-    from atlas_knowledge.rag.vdb import VectorFactory
+    from atlas_knowledge.index.vdb import VectorFactory
+    from atlas_knowledge.models.embedding import ModelRegistry
     from atlas_knowledge.runtime import Runtime
     from qdrant_client import AsyncQdrantClient
 
@@ -359,6 +354,7 @@ async def rt() -> AsyncIterator[Any]:
         redis=redis,
         dispatcher=RecordingDispatcher(),
         storage_factory=lambda: storage,
+        user_center_gateway=fake_user_center(),
         data_permissions=FakeDataPermissions(),
         principal_resolver=own_tags,
     )
@@ -388,7 +384,7 @@ async def client(rt: Any) -> AsyncIterator[Any]:
 
 async def run_rebuilds(rt: Any) -> None:
     """把投递器记下的索引版本重建跑一遍。"""
-    from atlas_knowledge.indexing.versions import rebuild_queued
+    from atlas_knowledge.index.versions import rebuild_queued
 
     queued, rt.dispatcher.rebuilds = list(rt.dispatcher.rebuilds), []
     for version_uuid in queued:
@@ -397,11 +393,11 @@ async def run_rebuilds(rt: Any) -> None:
 
 async def run_indexing(rt: Any) -> None:
     """把投递器记下的文档跑一遍（worker 跑的就是这段：按文档行进入它的租户）。"""
-    from atlas_knowledge.indexing.runner import run_queued
+    from atlas_knowledge.document.runner import run_queued
 
     queued, rt.dispatcher.queued = list(rt.dispatcher.queued), []
     for doc_uuid in queued:
-        await run_queued(rt, get_sessionmaker(), [doc_uuid])
+        await run_queued(rt, get_sessionmaker(), doc_uuid)
 
 
 def ops_request(method: str, path: str, body: object = None) -> dict[str, Any]:

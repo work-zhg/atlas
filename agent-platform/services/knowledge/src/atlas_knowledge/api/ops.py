@@ -13,17 +13,11 @@
 ★ 容量只有存储（知识库文件）一项，接口形状和 Atlas 的一样（运营中心按同一套契约调）；
   份额 null = 不限。
 
-★ 停用：管理接口、内部接口、MCP 一律 403；入库、重建开始前查租户状态，停用的不开始，过一会儿再
-  看（tasks/indexing.py），恢复后接着入。正在入的那一份做完为止。
-★ 删除：先删外部资源 —— 向量库里这个租户的 collection、对象存储里这个租户的文件 —— 再分批删
-  数据库里的行。对象只删知识库自己的子目录（{租户}/_knowledge/），不删整个 {租户}/：桶和 Atlas
-  的工作空间、技能共用。多租户之前建的库在桶根 _knowledge/{库} 下，按库记着的目录逐个删。
-  用户中心里这些库的授权随租户在用户中心一起删。
+★ 停用、删除租户时知识库做什么：见 ops/lifecycle.py。
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime
 from typing import Annotated
@@ -31,96 +25,20 @@ from uuid import UUID
 
 from atlas_jobs import JobScheduler
 from atlas_opsapi import OperatorStamp, OpsGuard, OpsRoutes, TenantGate, TenantLifecycleService
-from atlas_tenancy import PurgeReport, SystemReason, TenantDataPurge, TenantNaming, TenantScope
+from atlas_tenancy import SystemReason, TenantDataPurge, TenantScope
 from fastapi import APIRouter, Depends, FastAPI, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
-from ..capacity import MB, KnowledgeCapacity, TenantStorage
-from ..db.models import (
-    LIVE_INDEX_STATUSES,
-    Base,
-    ChildChunk,
-    Dataset,
-    DatasetPermission,
-    Document,
-    IndexVersion,
-    KnowledgeSet,
-    MetadataField,
-    ProcessRule,
-    QueryLog,
-    Retrieval,
-    Segment,
-    TenantCapacity,
-)
+from ..db.models import Base, Document, TenantCapacity
 from ..db.session import get_sessionmaker
-from ..runtime import Runtime
+from ..ops.capacity import MB, KnowledgeCapacity, TenantStorage
+from ..ops.lifecycle import PURGE_ORDER, KnowledgeTenantLifecycle
 from ..settings import get_settings
-from ..storage import StorageNotConfigured
 
 __all__ = ["mount_ops"]
 
 logger = logging.getLogger(__name__)
-
-#: 删除租户时按这个顺序分批删（子表在前）
-PURGE_ORDER = (
-    ChildChunk,
-    Segment,
-    QueryLog,
-    Retrieval,
-    MetadataField,
-    IndexVersion,
-    Document,
-    ProcessRule,
-    DatasetPermission,
-    Dataset,
-    KnowledgeSet,
-    TenantCapacity,
-)
-
-
-class KnowledgeTenantLifecycle:
-    """知识库的租户生命周期。钩子都在这个租户的上下文里调（TenantLifecycleService）。"""
-
-    def __init__(self, app: FastAPI) -> None:
-        self._app = app
-
-    async def on_suspend(self, tenant_uuid: UUID) -> None:
-        return None
-
-    async def on_resume(self, tenant_uuid: UUID) -> None:
-        return None
-
-    async def purge_external(self, tenant_uuid: UUID, limit: int) -> PurgeReport:
-        rt: Runtime = self._app.state.runtime
-        report = PurgeReport()
-        async with get_sessionmaker()() as session:
-            datasets = list(await session.scalars(select(Dataset)))
-            versions = await session.scalars(
-                select(IndexVersion.collection_name).where(
-                    IndexVersion.status.in_(LIVE_INDEX_STATUSES)
-                )
-            )
-            collections = {d.collection_name for d in datasets} | set(versions)
-        for name in sorted(collections):
-            await rt.vectors.for_collection(name).delete()
-        if collections:
-            report.deleted["collection"] = len(collections)
-
-        own = TenantNaming.object_prefix(rt.settings.oss_prefix) + "/"
-        legacy = [f"{d.storage_prefix}/" for d in datasets if not d.storage_prefix.startswith(own)]
-        try:
-            storage = rt.storage
-        except StorageNotConfigured:
-            return report  # 没配对象存储：没有文件要删
-
-        def _delete() -> int:
-            return sum(storage.delete_prefix(prefix) for prefix in [own, *legacy])
-
-        deleted = await asyncio.to_thread(_delete)
-        if deleted:
-            report.deleted["object"] = deleted
-        return report
 
 
 def mount_ops(app: FastAPI, jobs: JobScheduler) -> None:
@@ -237,7 +155,7 @@ async def quotas(_: Operator, cap: Capacity) -> QuotasOut:
 @_capacity_router.put("/quotas/default", response_model=QuotaOut)
 async def set_default(body: QuotaIn, op: Operator, cap: Capacity) -> QuotaOut:
     """默认份额是系统参数 capacity.default_storage_mb：经应用配置库改（有版本和修订历史）。"""
-    from ..capacity import DEFAULT_STORAGE_MB
+    from ..ops.capacity import DEFAULT_STORAGE_MB
 
     entry = await cap.config.entry(DEFAULT_STORAGE_MB.name)
     mb = None if body.storage_bytes is None else body.storage_bytes // MB

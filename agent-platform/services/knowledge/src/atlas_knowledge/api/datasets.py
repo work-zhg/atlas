@@ -14,24 +14,25 @@ from fastapi import APIRouter, Depends, File, Form, Query, Response
 from fastapi import UploadFile as FastUploadFile
 from pydantic import BaseModel, Field
 
-from ..auth import verified_tenant
+from ..access.auth import verified_tenant
+from ..access.perms import Grant
+from ..dataset.datasets import DatasetService
+from ..dataset.metadata import MetadataService
+from ..document.documents import DocumentService, UploadFile
 from ..errors import Invalid, NotFound
-from ..perms import Grant
-from ..rag.filters import BUILTIN_FIELDS
-from ..rag.index_processor import (
+from ..index import versions
+from ..index.index_versions import IndexVersionService
+from ..models.model_platform import parse_client
+from ..parse import SUPPORTED_EXTENSIONS
+from ..retrieval.filters import BUILTIN_FIELDS
+from ..retrieval.pipeline import DEFAULT_RETRIEVAL_CONFIG
+from ..retrieval.service import KnowledgeRetrieval, RetrieveOptions
+from ..segment.index_processor import (
     AUTOMATIC_RULES,
     HIERARCHICAL_DEFAULT_RULES,
     STRUCTURE_TEXT_DEFAULTS,
 )
-from ..rag.model_platform import parse_client
-from ..rag.parsers import SUPPORTED_EXTENSIONS
-from ..rag.retrieval import DEFAULT_RETRIEVAL_CONFIG
-from ..services.datasets import DatasetService
-from ..services.documents import DocumentService, UploadFile
-from ..services.index_versions import IndexVersionService
-from ..services.metadata import MetadataService
-from ..services.retrieval import KnowledgeRetrieval, RetrieveOptions
-from ..services.segments import SegmentService
+from ..segment.segments import SegmentService
 from .deps import PrincipalDep, RuntimeDep, SessionDep
 from .serializers import (
     child_out,
@@ -69,14 +70,10 @@ async def _key_models(rt: Any, spec: str | None) -> list[str]:
 
 
 async def _remote_options(rt: Any) -> tuple[list[str], list[str]]:
-    """可选的远程嵌入、重排模型。经模型管理平台时是 embedding_client / rerank_client
-    这两把客户端 Key 的可用模型（agent-platform/doc/design/model-design.html 第 9 章）。
-    没接时照旧按部署配置。"""
+    """可选的远程嵌入、重排模型：embedding_client / rerank_client 这两把服务级客户端 Key 的
+    可用模型。没接模型平台就没有远程模型。"""
     if rt.service_keys is None:
-        return (
-            list(rt.settings.embedding_remote_models) if rt.settings.embedding_base_url else [],
-            list(rt.settings.rerank_remote_models) if rt.settings.rerank_base_url else [],
-        )
+        return [], []
     return (
         await _key_models(rt, rt.settings.embedding_client),
         await _key_models(rt, rt.settings.rerank_client),
@@ -86,10 +83,8 @@ async def _remote_options(rt: Any) -> tuple[list[str], list[str]]:
 @router.get("/meta")
 async def meta(rt: RuntimeDep, p: PrincipalDep) -> dict[str, Any]:
     embeddings, rerankers = await _remote_options(rt)
-    # LiteLLM 的 /v1/rerank 是 Cohere 形状
-    rerank_provider = (
-        "cohere_compatible" if rt.service_keys is not None else rt.settings.rerank_remote_provider
-    )
+    # 模型网关的 /v1/rerank 是 Cohere 形状
+    rerank_provider = "cohere_compatible"
     return {
         "supported_extensions": sorted(SUPPORTED_EXTENSIONS),
         "upload_max_bytes": rt.settings.upload_max_bytes,
@@ -123,7 +118,6 @@ class DatasetBody(BaseModel):
     visibility: Literal["public", "private"] | None = None
     permission: str | None = None
     members: list[Any] | None = None
-    indexing_technique: str | None = None
     embedding_provider: str | None = None
     embedding_model: str | None = None
     retrieval_config: dict[str, Any] | None = None
@@ -170,10 +164,16 @@ async def list_datasets(
     svc = DatasetService(session, rt)
     rows, total = await svc.list(p, page=page, limit=limit, keyword=keyword, set_uuid=set_id)
     stats = await svc.stats([d.uuid for d in rows])
+    actives = await versions.active_versions(session, [d.uuid for d in rows])
     vis = svc.last_visibility
     return {
         "data": [
-            dataset_out(d, stats=stats.get(d.uuid), level=vis.level(d) if vis else None)
+            dataset_out(
+                d,
+                actives.get(d.uuid),
+                stats=stats.get(d.uuid),
+                level=vis.level(d) if vis else None,
+            )
             for d in rows
         ],
         "total": total,
@@ -188,7 +188,8 @@ async def create_dataset(
 ) -> dict[str, Any]:
     svc = DatasetService(session, rt)
     ds = await svc.create(p, body.model_dump(exclude_unset=True))
-    return dataset_out(ds, level="OWNER", can_write=True, can_admin=True)
+    active = await versions.active_version(session, ds.uuid)
+    return dataset_out(ds, active, level="OWNER", can_write=True, can_admin=True)
 
 
 @router.get("/datasets/{dataset_id}")
@@ -200,6 +201,7 @@ async def get_dataset(
     stats = await svc.stats([dataset_id])
     return dataset_out(
         access.ds,
+        await versions.active_version(session, dataset_id),
         stats=stats.get(dataset_id),
         level=access.level,
         can_write=access.can_write,
@@ -215,7 +217,11 @@ async def update_dataset(
     access = await svc.access(dataset_id, p)
     ds = await svc.update(access, body.model_dump(exclude_unset=True))
     return dataset_out(
-        ds, level=access.level, can_write=access.can_write, can_admin=access.is_admin
+        ds,
+        await versions.active_version(session, ds.uuid),
+        level=access.level,
+        can_write=access.can_write,
+        can_admin=access.is_admin,
     )
 
 
@@ -240,8 +246,7 @@ async def list_grants(
     return {
         "data": await svc.grants(access),
         "my_level": access.level,
-        "can_manage": access.is_admin and access.shareable,
-        "shareable": access.shareable,
+        "can_manage": access.is_admin,
     }
 
 
@@ -731,10 +736,18 @@ async def list_segments(
     segs, total, children = await SegmentService(session, rt).list(
         doc, page=page, limit=limit, keyword=keyword, enabled=enabled
     )
+    hits = await KnowledgeRetrieval(session, rt).hit_counts(
+        doc.dataset_uuid, [s.uuid for s in segs]
+    )
     hierarchical = doc.doc_form == "hierarchical_model"
     return {
         "data": [
-            segment_out(s, children.get(str(s.uuid), []) if hierarchical else None) for s in segs
+            segment_out(
+                s,
+                children.get(str(s.uuid), []) if hierarchical else None,
+                hit_count=hits.get(str(s.uuid), 0),
+            )
+            for s in segs
         ],
         "total": total,
         "page": page,
@@ -790,8 +803,11 @@ async def update_segment(
         enabled=body.enabled,
         **extra,
     )
+    hits = await KnowledgeRetrieval(session, rt).hit_counts(doc.dataset_uuid, [seg.uuid])
     return segment_out(
-        seg, await svc.children(seg) if doc.doc_form == "hierarchical_model" else None
+        seg,
+        await svc.children(seg) if doc.doc_form == "hierarchical_model" else None,
+        hit_count=hits.get(str(seg.uuid), 0),
     )
 
 

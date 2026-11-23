@@ -34,12 +34,10 @@ export interface Dataset {
   set_id: string;
   visibility: Visibility;
   owner_id: string;
-  /** service = 服务账号建的库：只有它自己能用，不能共享 */
-  owner_kind: "user" | "service";
   /** 我对这个库的级别（用户中心数据权限，含「全部知识库」授权） */
   my_level?: KbLevel;
-  indexing_technique: string;
-  embedding_model: string;
+  /** active 索引版本的向量模型（还没有索引版本时为空） */
+  embedding_model: string | null;
   retrieval_config: RetrievalConfig;
   doc_form: DocForm;
   review_required: boolean;
@@ -343,7 +341,6 @@ export interface KbGrants {
   data: KbGrant[];
   my_level: KbLevel;
   can_manage: boolean;
-  shareable: boolean;
 }
 
 export interface DirUser {

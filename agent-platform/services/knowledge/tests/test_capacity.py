@@ -11,8 +11,8 @@ import json
 from typing import Any
 
 from atlas_appconfig.db import config_table, revision_table
-from atlas_knowledge.capacity import DEFAULT_STORAGE_MB
 from atlas_knowledge.db.session import get_sessionmaker
+from atlas_knowledge.ops.capacity import DEFAULT_STORAGE_MB
 from conftest import OTHER_TENANT, TEST_TENANT, ops_request
 from sqlalchemy import delete, select
 

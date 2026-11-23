@@ -43,14 +43,14 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from sqlalchemy import select
 
-from ..auth import use_identity
+from ..access.auth import use_identity
+from ..access.permission import readable_ids
+from ..dataset.cards import dataset_cards
 from ..db.models import Dataset
 from ..db.session import get_sessionmaker
 from ..errors import KnowledgeError
+from ..retrieval.service import KnowledgeRetrieval
 from ..runtime import Runtime
-from ..services.cards import dataset_cards
-from ..services.permission import readable_ids
-from ..services.retrieval import KnowledgeRetrieval
 
 __all__ = ["build_mcp", "mcp_app", "verify_token"]
 

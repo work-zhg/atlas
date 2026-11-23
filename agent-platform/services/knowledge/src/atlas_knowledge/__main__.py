@@ -3,10 +3,6 @@
 python -m atlas_knowledge serve      起 HTTP 服务（默认 :8050）
 python -m atlas_knowledge worker     起 Celery worker（队列 dataset）
 python -m atlas_knowledge migrate    升级知识库库到最新
-python -m atlas_knowledge sync-uc --tenant <租户 uuid>
-                                     一次性：把旧的可见范围 / 成员写进用户中心（库级权限接入）
-
-★ 库归租户（多租户）：sync-uc 要写明是哪个租户的库，在它里面处理。
 """
 
 from __future__ import annotations
@@ -16,7 +12,6 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from uuid import UUID
 
 from .settings import get_settings
 
@@ -90,48 +85,12 @@ async def _upgrade_opsapi() -> None:
         await engine.dispose()
 
 
-def sync_uc(tenant: str, service_owner: str | None = None) -> None:
-    from atlas_tenancy import TenantScope
-
-    from .auth import use_identity
-    from .db.session import get_engine, get_sessionmaker
-    from .perms import make_data_permissions
-    from .sync_uc import sync_uc as run
-
-    async def _go() -> dict[str, int]:
-        # 调用户中心的身份：给了接收人就以他的名义，租户是命令行写明的那个
-        use_identity(service_owner, tenant=tenant)
-        perms = make_data_permissions(get_settings())
-        try:
-            async with get_sessionmaker()() as session:
-                return await run(session, perms, service_owner=service_owner)
-        finally:
-            if hasattr(perms, "aclose"):
-                await perms.aclose()
-            await get_engine().dispose()
-
-    with TenantScope.enter(UUID(tenant)):
-        out = asyncio.run(_go())
-    print(
-        f"已写入 {out['synced']} 个库，跳过（已在用户中心）{out['skipped']} 个，"
-        f"认定为服务账号的库 {out['service']} 个，成员写入失败 {out['member_failed']} 条，"
-        f"服务账号的库改归 --service-owner {out['adopted']} 个"
-    )
-
-
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     parser = argparse.ArgumentParser(prog="python -m atlas_knowledge")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("serve")
     sub.add_parser("migrate")
-    su = sub.add_parser("sync-uc")
-    su.add_argument("--tenant", required=True, help="库所属租户的 uuid")
-    su.add_argument(
-        "--service-owner",
-        default=None,
-        help="服务账号建的库改归这个用户中心用户（OWNER），如评测用户 atlas-bench",
-    )
     w = sub.add_parser("worker")
     w.add_argument("--concurrency", type=int, default=None)
     w.add_argument("--queues", default="dataset")
@@ -140,8 +99,6 @@ def main() -> None:
         serve()
     elif args.command == "migrate":
         migrate()
-    elif args.command == "sync-uc":
-        sync_uc(args.tenant, args.service_owner)
     elif args.command == "worker":
         worker(args.concurrency, args.queues)
 

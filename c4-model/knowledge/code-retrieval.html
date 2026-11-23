@@ -32,8 +32,8 @@
   "title": "代码图：知识库服务 - 知识库接口 - 检索",
   "description": "目标模型，每个元素下方的「现状」是现在承担它的代码。查询理解、检索范围、混合召回、融合与重排、组装，检索记录与漏斗",
   "component": "检索",
-  "package": "atlas_knowledge.retrieval（目标模型）",
-  "overview": "检索回答「这个问题在这些库里能找到什么」：先确认调用者能读哪些库、展开它的主体标签，再做查询理解（改写、多表述、HyDE、拆子问题、抽取过滤、路由），按检索范围（文档级权限、版本时效、元数据）在每个库里混合召回，融合、重排、截断后组装成带标题路径和引用定位的分段。每次检索记一条过程记录，前端画漏斗。\n\n它不管向量怎么存（向量索引），不持有模型 Key（模型接入），不判断权限本身（访问控制），也不渲染给模型的文字（Agent 平台和 MCP 端点各自渲染）。",
+  "package": "atlas_knowledge.retrieval",
+  "overview": "检索回答「这个问题在这些库里能找到什么」：先确认调用者能读哪些库、展开它的主体标签，再做查询理解（改写、多表述、HyDE、拆子问题、抽取过滤、路由），按检索范围（文档级权限、版本时效、元数据）在每个库里混合召回，融合、重排、截断后组装成带标题路径和引用定位的分段。智能体按知识集查：取几条用知识集的 top_k，门槛用各库自己的；一个知识集里的库各自召回后合并——同一个向量模型按原始分数，向量模型不同或用了多个表述按名次（RRF），开了重排才统一重排。每次检索记一条过程记录，前端画漏斗。\n\n它不管向量怎么存（向量索引），不持有模型 Key（模型接入），不判断权限本身（访问控制），也不渲染给模型的文字（Agent 平台和 MCP 端点各自渲染）。",
   "elements": [
     {
       "id": "svc",
@@ -44,8 +44,8 @@
         1.65,
         0.3
       ],
-      "source": "services/retrieval.py KnowledgeRetrieval；rag/retrieval.py RetrievalService.retrieve / multiple_retrieve / _decomposed",
-      "responsibility": "检索的入口，一次检索一个根 span（挂在调用方的链路下）、一条检索记录。内部调用先逐库问访问控制，读不到的库进 skipped（只给 id，不暴露库是否存在）；召回测试的库管理员不受文档级权限限制。流程：查询理解 → 每个表述召回 → 融合与重排 → 阈值 → 多样性与组装；复合问题拆成子问题各走一遍再按 RRF 合并；首轮最高分低于阈值时生成多个表述再检索一次（自适应多查询）。",
+      "source": "retrieval/service.py KnowledgeRetrieval；retrieval/pipeline.py RetrievalService.retrieve / multiple_retrieve / _decomposed",
+      "responsibility": "检索的入口，一次检索一个根 span（挂在调用方的链路下）、一条检索记录。内部调用先问访问控制哪些库能读（公有的直接算，私有的逐库问），读不到的库进 skipped（只给 id，不暴露库是否存在）；召回测试的库管理员不受文档级权限限制。流程：查询理解 → 每个表述召回 → 融合与重排 → 阈值 → 多样性与组装；复合问题拆成子问题各走一遍再按 RRF 合并；首轮最高分低于阈值时生成多个表述再检索一次（自适应多查询）。多库时各库按自己的检索方式和门槛（在合并之前判）召回，top_k 和重排按调用方给的收口。",
       "methods": [
         [
           "+",
@@ -74,7 +74,7 @@
         -1.0,
         1.95
       ],
-      "source": "rag/query.py understand / QueryPlan",
+      "source": "retrieval/query.py understand / QueryPlan",
       "responsibility": "检索前的阶段 ⓪：一次结构化输出的 LLM 调用，只问需要的任务——有历史且问题含指代时改写、按库开关出多个表述和 HyDE、拆复合问题、从问题里抽取元数据过滤、绑定的库多时路由。结果按问题、历史、任务、字段、库哈希缓存在 Redis。调用失败、超时、输出不合法都退回原问题检索，不让检索失败。",
       "attributes": [
         [
@@ -102,7 +102,7 @@
         0.5,
         1.95
       ],
-      "source": "rag/filters.py scope_filter / compile_filter / validate_filter",
+      "source": "retrieval/filters.py scope_filter / compile_filter / validate_filter",
       "responsibility": "检索范围 → 向量库过滤：文档级权限（acl 与调用者的主体标签有交集，或 public）、版本（默认只要当前版本；as_of 按时间点，include_superseded 连历史版本）、生效区间、业务元数据表达式（and / or / 叶子）。权限和版本由服务端强制附加，和调用方的过滤、抽取的条件无关；抽取的条件只能收窄。多库时叶子引用了某库没定义的字段，在该库视为不限。",
       "methods": [
         [
@@ -120,7 +120,7 @@
         1.65,
         3.55
       ],
-      "source": "RetrievalService._recall / _candidates",
+      "source": "retrieval/pipeline.py RetrievalService._recall / _candidates",
       "responsibility": "一个库、一个表述的召回：语义（查询向量 → 稠密检索）、全文（问题文本 → BM25 检索，由 Milvus 分词）或混合（两路分别检索、并发，按主键去重后必须重排）。多个表述各自召回再交给融合。",
       "methods": [
         [
@@ -135,11 +135,11 @@
       "name": "Ranking",
       "stereotype": "策略",
       "at": [
-        2.6,
+        2.45,
         1.95
       ],
-      "source": "rag/retrieval.rrf / _rerank / _threshold；rag/rerank.py",
-      "responsibility": "多个表述、多个子问题的结果按倒数排名融合（RRF）；重排可选交叉编码模型（sigmoid 归一到 0~1）或加权（向量相似度 × 权重 + 候选集合内的 TF-IDF 关键词相似度 × 权重）；最后按分数阈值、top_k 截断。多库时各库召回后统一重排。",
+      "source": "retrieval/pipeline.rrf / _rerank / _threshold；retrieval/rerank.py",
+      "responsibility": "多个表述、多个子问题的结果按倒数排名融合（RRF）；重排可选交叉编码模型（sigmoid 归一到 0~1）或加权（向量相似度 × 权重 + 候选集合内的 TF-IDF 关键词相似度 × 权重）；最后按分数阈值、top_k 截断。多库合并：同一个向量模型、单个表述、不重排时按原始分数排；向量模型不同（分数尺度不同）或多个表述时按名次（RRF）；开了重排就统一重排（加权重排要求各库同一个向量模型）。",
       "methods": [
         [
           "+",
@@ -160,8 +160,8 @@
         3.95,
         1.95
       ],
-      "source": "RetrievalService._assemble / _mmr / _per_document / _merge_adjacent / _point_contents；rerank.reorder",
-      "responsibility": "把命中的 entity 变成给模型的分段：重排后先按 MMR 去掉高度相似的；子块命中回到父分段（分段分数取命中子块的最高分），附上命中的子块；每份文档最多几段；相邻分段合并；最后高分放到首尾（缓解长上下文中间被忽略）。正文、标题路径、引用定位从分段领域取。",
+      "source": "retrieval/pipeline.py RetrievalService._assemble / _mmr / _per_document / _merge_adjacent / _point_contents",
+      "responsibility": "把命中的 entity 变成给模型的分段：重排后先按 MMR 调整顺序（相关性减去与已选结果的最大相似度，近似重复的往后排，不删候选）；子块命中回到父分段（分段分数取命中子块的最高分），附上命中的子块；每份文档最多几段；相邻分段合并；最后按 top_k 截断。正文、标题路径、引用定位从分段领域取。",
       "methods": [
         [
           "+",
@@ -178,7 +178,7 @@
         -0.75,
         0.3
       ],
-      "source": "rag/recorder.py",
+      "source": "retrieval/recorder.py",
       "responsibility": "记下每个环节的候选（谁进来、排第几、多少分）并开 span：query_understanding → semantic / full_text → merged → rerank → threshold → diversity → assemble → final。前端据此画漏斗，看某个分段在哪一环掉的。只存 id、分数和名次，不存正文；环节在进入时登记，两路并发时顺序也稳定。",
       "methods": [
         [
@@ -200,8 +200,8 @@
         4.75,
         3.55
       ],
-      "source": "KnowledgeRetrieval._traced 的落库部分 / queries / get；分段的 hit_count",
-      "responsibility": "读写 kb_retrieval（一次检索一条，可能跨多个库）、kb_query_log（每库一条，指回它）。分段的命中次数从这里汇总，不再每次检索去改分段表。",
+      "source": "retrieval/service.py KnowledgeRetrieval._traced 的落库部分 / queries / get / hit_counts",
+      "responsibility": "读写 kb_retrieval（一次检索一条，可能跨多个库）、kb_query_log（每库一条，指回它）。分段的命中次数从这里汇总（kb_retrieval.results 里出现过几次），不再每次检索去改分段表。",
       "methods": [
         [
           "+",
@@ -226,7 +226,7 @@
       "methods": [
         [
           "+",
-          "POST /internal/v1/retrieve"
+          "POST /internal/v1/retrieve  # 一次最多 200 个库"
         ]
       ],
       "at": [
@@ -237,13 +237,13 @@
     {
       "id": "mcp",
       "kind": "function",
-      "name": "knowledge_search",
+      "name": "knowledge_list · knowledge_search",
       "external": true,
       "source": "MCP 端点组件",
       "methods": [
         [
           "+",
-          "knowledge_search(query)  # 令牌里的库和身份"
+          "knowledge_search(query, set, bases?)  # 令牌里的知识集和身份"
         ]
       ],
       "at": [
@@ -277,7 +277,7 @@
       "methods": [
         [
           "+",
-          "readable(subject, ids) · principals(subject)"
+          "readable(subject, datasets) · principals(subject)"
         ]
       ],
       "at": [
@@ -422,8 +422,8 @@
     {
       "name": "智能体检索",
       "entry": "retrieve(subject, dataset_uuids, query, cfg, *, source=agent | mcp, …)",
-      "callers": "内部接口（原生智能体的 auto / tool 模式）、MCP 端点（会话 Pod）",
-      "description": "库级、文档级权限都按 subject（这一轮的 auth-uid）；读不到的库进 skipped，调用方提示「另有 N 个库没有访问权限」；没有主体一个库都读不到"
+      "callers": "内部接口（原生智能体的 knowledge_search）、MCP 端点（会话 Pod）",
+      "description": "调用方给知识集里的库（一次最多 200 个）和知识集的 top_k；库级、文档级权限都按 subject（这一轮的 auth-uid）；读不到的库进 skipped，调用方提示「另有 N 个库没有访问权限」；没有主体一个库都读不到"
     },
     {
       "name": "召回测试",
@@ -441,7 +441,7 @@
       "name": "命中次数",
       "entry": "hit_counts(segment_uuids)",
       "callers": "管理接口（分段列表）",
-      "description": "从检索记录汇总"
+      "description": "从检索记录汇总（kb_retrieval.results），重新入库、编辑分段都不清零"
     },
     {
       "name": "删库时清记录",
@@ -452,12 +452,12 @@
   ],
   "decisions": [
     {
-      "decision": "库 id 不进工具参数，检索范围钉在绑定的库上",
-      "reason": "一旦库 id 可以由模型指定，提示词注入就能读到没绑定的库。内部接口的库来自智能体配置，MCP 的库来自令牌。"
+      "decision": "库 id 不进工具参数，检索范围钉在知识集里",
+      "reason": "一旦库 id 可以由模型指定，提示词注入就能读到范围外的库。模型只能填知识集和库的名称（来自目录和 knowledge_list），服务端核对后换成库；内部接口的库来自智能体配置，MCP 的库来自令牌。"
     },
     {
-      "decision": "绑定不是授权，每次检索逐库问用户中心",
-      "reason": "以 Agent 为权限时 subject 是它的数字员工，以人为权限时是使用者本人；撤权要立即生效，所以不缓存。一次最多绑 20 个库，并发问。"
+      "decision": "选了知识集不是授权，每次检索都问访问控制",
+      "reason": "以 Agent 为权限时 subject 是它的数字员工，以人为权限时是使用者本人；撤权要立即生效，所以不缓存。公有的库直接算能读，私有的逐库并发问用户中心；「使用者能读的全部」可能有上百个库，一次最多 200 个。"
     },
     {
       "decision": "权限和版本过滤由服务端强制附加",
@@ -481,10 +481,14 @@
     },
     {
       "decision": "命中次数从检索记录汇总",
-      "reason": "现在检索时 UPDATE kb_segment.hit_count：读路径上多一次写、和入库编辑抢行锁，重新入库后还会清零。检索记录本来就有每次的结果。"
+      "reason": "要是检索时 UPDATE kb_segment.hit_count，读路径上就多一次写、和入库编辑抢行锁，重新入库后还会清零。检索记录本来就有每次的结果。"
+    },
+    {
+      "decision": "多库合并：分数可比才按分数，否则按名次",
+      "reason": "各库向量模型可能不同，甲模型相关结果常在 0.7 以上、乙模型可能只有 0.5，直接比分数会让打分偏低的库总排在后面；门槛也按各库自己的分数、在合并之前判。开了重排就统一重排，分数才重新可比。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的主键用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），API 和向量库的主键用它，表间引用的列叫 xxx_uuid。表间不建外键约束，引用由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。除向量缓存外每张表还有 tenant_uuid（uuid，所属租户；atlas_tenancy 按当前租户自动过滤，没进入租户就查不到任何租户的数据），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
   "tables": [
     {
       "name": "kb_retrieval",

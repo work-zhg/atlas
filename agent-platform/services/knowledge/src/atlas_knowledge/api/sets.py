@@ -11,8 +11,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from ..auth import verified_tenant
-from ..services.sets import MAX_MAINTAINERS, KnowledgeSetService
+from ..access.auth import verified_tenant
+from ..dataset.sets import MAX_MAINTAINERS, KnowledgeSetService
 from .deps import PrincipalDep, RuntimeDep, SessionDep
 
 router = APIRouter(

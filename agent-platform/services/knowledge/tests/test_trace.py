@@ -17,9 +17,9 @@ PARENT_SPAN = "00f067aa0ba902b7"
 @pytest.fixture
 def spans(monkeypatch: pytest.MonkeyPatch) -> InMemorySpanExporter:
     """本地 TracerProvider（不动全局的）：把各模块取 tracer 的入口换掉。"""
-    import atlas_knowledge.indexing.runner as runner
-    import atlas_knowledge.rag.recorder as recorder
-    import atlas_knowledge.services.retrieval as service
+    import atlas_knowledge.document.runner as runner
+    import atlas_knowledge.retrieval.recorder as recorder
+    import atlas_knowledge.retrieval.service as service
     import atlas_knowledge.telemetry as telemetry
 
     exporter = InMemorySpanExporter()
@@ -87,10 +87,10 @@ async def test_funnel_truncated_and_threshold(client: Any, rt: Any) -> None:
     # dev 模式下人人有 kb:manage_all —— 直接用没有操作码的主体验证
     from uuid import UUID
 
-    from atlas_knowledge.auth import Principal
+    from atlas_knowledge.access.auth import Principal
     from atlas_knowledge.db.session import get_sessionmaker
     from atlas_knowledge.errors import NotFound
-    from atlas_knowledge.services.retrieval import KnowledgeRetrieval
+    from atlas_knowledge.retrieval.service import KnowledgeRetrieval
 
     bob = Principal(uid="bob", operations=frozenset())
     async with get_sessionmaker()() as s:
