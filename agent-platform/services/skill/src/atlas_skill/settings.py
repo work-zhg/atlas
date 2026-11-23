@@ -68,7 +68,7 @@ class SkillSettings(BaseSettings):
         default="us-east-1", validation_alias=_alias("ATLAS_SKILL_OSS_REGION", "OSS_REGION")
     )
 
-    # ── 认证（内网身份传递 §3；见 auth.py）────────────────────────────────
+    # ── 认证（内网身份传递 §3；见 access/）──────────────────────────────────
     #: 缺 X-Uid 一律 401；操作码按 X-Auth-Uid 取用户中心授权快照（没有免鉴权的模式）
     #: 用户中心开放接口。内网免令牌：X-Caller-App 写 uc_app_code 即应用身份
     uc_base_url: str = "http://127.0.0.1:8030"

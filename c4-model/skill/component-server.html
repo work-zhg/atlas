@@ -21,7 +21,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "组件图：技能应用 - 技能服务",
-  "description": "目标模型。组件按领域拆：技能版本、包检查、技能仓库、访问控制四个领域，前面是两个入口（领域之间的类级依赖见 code-domains.html）。技能版本读写技能库，图中不画；审计是共享内核，技能版本的写操作都记进去，管理接口按 audit:view 查看，图中未画。运维命令行调的是同一套领域代码",
+  "description": "目标模型。组件按领域拆：技能版本、包检查、技能仓库、访问控制、技能市场五个领域，前面是三个入口（领域之间的类级依赖见 code-domains.html）。技能版本、技能市场读写技能库（技能和审计都带租户，按当前租户自动过滤），图中不画；运营接口删租户时分批删表，图中未画；审计是共享内核，技能版本的写操作都记进去，管理接口按 audit:view 查看，图中未画。运维命令行调的是同一套领域代码。代码按领域分包：access/、check/、store/、versions/、market/，api/ 是入口",
   "system": "技能应用",
   "container": "技能服务",
   "elements": [
@@ -31,7 +31,7 @@
       "tag": "技能作者",
       "name": "技能作者",
       "color": "#297e06",
-      "description": "上传技能包（SKILL.md 加脚本、参考资料）；含脚本或不是内置来源的要经审查才发布。",
+      "description": "上传技能包（SKILL.md 加脚本、参考资料）；上传的技能要经本组织的审核人审查才发布。",
       "at": [
         0.0,
         0
@@ -43,7 +43,7 @@
       "tag": "技能管理员",
       "name": "技能管理员",
       "color": "#1a849c",
-      "description": "审查别人上传的技能，停用、启用、紧急下架、重新检查，查看审计。",
+      "description": "审查别人上传的技能，停用、启用、紧急下架、重新检查，从技能市场安装，查看审计。",
       "at": [
         1.2,
         0
@@ -77,9 +77,9 @@
       "shape": "bucket",
       "technology": "S3 兼容对象存储（MinIO）",
       "name": "技能包存储",
-      "description": "_skills/{slug}/{版本}/ 是已发布的包，只增不改；_skills_drafts/{上传 id}/ 是待审查的草稿。",
+      "description": "{租户}/_skills/{slug}/{版本}/ 是已发布的包，只增不改；{租户}/_skills_drafts/ 是待审查的草稿；_market/skills/ 是技能市场。",
       "at": [
-        4.2,
+        5.75,
         3.9
       ]
     },
@@ -88,7 +88,7 @@
       "kind": "component",
       "name": "管理接口",
       "technology": "FastAPI Router",
-      "description": "/api/v1：技能列表与详情、看包内文件、上传、审查、停用 / 启用 / 下架 / 重新检查、审计；给控制台的技能页面。",
+      "description": "/api/v1：技能列表与详情、看包内文件、上传、审查、停用 / 启用 / 下架 / 重新检查、技能市场、审计；给控制台的技能页面。写操作在响应前提交。",
       "at": [
         0.6,
         1.3
@@ -99,7 +99,7 @@
       "kind": "component",
       "name": "内部接口",
       "technology": "FastAPI Router",
-      "description": "/internal：技能目录、某个技能的版本、某个版本、下架清单；只返回已发布、停用、下架的，nginx 不转发。",
+      "description": "/internal：本租户的技能目录、某个技能的版本、某个版本、下架清单；只返回已发布、停用、下架的，nginx 不转发。",
       "at": [
         2.9,
         1.3
@@ -110,7 +110,7 @@
       "kind": "component",
       "name": "访问控制",
       "technology": "FastAPI 依赖 + httpx",
-      "description": "调用身份、操作码 skill:upload / skill:review / audit:view，可访问范围；授权快照缓存 30 秒。",
+      "description": "调用身份、租户、操作码 skill:upload / skill:review / audit:view，可访问范围；授权快照按人和租户缓存 30 秒。",
       "at": [
         -0.6,
         2.6
@@ -121,7 +121,7 @@
       "kind": "component",
       "name": "技能版本",
       "technology": "SQLAlchemy 异步",
-      "description": "技能和版本的状态机：上传、审查（四眼原则）、发布时分配版本号、停用 / 启用 / 下架、重新检查、登记已有技能；运行时目录。",
+      "description": "技能和版本的状态机：上传、审查（四眼原则）、发布时分配版本号、停用 / 启用 / 下架、重新检查、登记已有技能、接收市场装进来的版本；提交之后删草稿；运行时目录。",
       "at": [
         1.75,
         2.6
@@ -143,10 +143,43 @@
       "kind": "component",
       "name": "技能仓库",
       "technology": "boto3",
-      "description": "草稿区和发布区的布局：写草稿、拷到发布区并核对对象数、清残留、读包内文件。",
+      "description": "草稿区、发布区和技能市场的布局（第一层目录是租户）：写草稿、拷到发布区并核对对象数、清残留、读包内文件。",
       "at": [
         2.6,
         3.9
+      ]
+    },
+    {
+      "id": "opscenter",
+      "kind": "system",
+      "name": "运营中心",
+      "color": "#8a6d00",
+      "description": "管平台本身的独立系统：开通、停用、关闭租户，分份额，维护系统参数；看不到租户的业务内容。",
+      "at": [
+        4.4,
+        0.0
+      ]
+    },
+    {
+      "id": "ops",
+      "kind": "component",
+      "name": "运营接口",
+      "technology": "FastAPI Router + 运营接口库",
+      "description": "/ops/v1：技能市场的发布、默认安装、下架，给租户装；租户的停用、恢复、删除（先删对象再分批删行）；只给运营中心，先验签名。",
+      "at": [
+        4.3,
+        1.3
+      ]
+    },
+    {
+      "id": "market",
+      "kind": "component",
+      "name": "技能市场",
+      "technology": "SQLAlchemy 异步",
+      "description": "产品自带的技能，不属于任何租户：发布即生效、默认安装、下架；租户拷一个版本进来，交给技能版本装成本租户的技能。",
+      "at": [
+        3.45,
+        2.6
       ]
     }
   ],
@@ -205,6 +238,38 @@
       "to": "oss",
       "description": "PUT / COPY / LIST / GET / DELETE",
       "technology": "S3 API/HTTP"
+    },
+    {
+      "from": "opscenter",
+      "to": "ops",
+      "description": "市场发布、给租户装默认；停用、删除租户",
+      "technology": "JSON/HTTP（运营接口，签名）"
+    },
+    {
+      "from": "ops",
+      "to": "market",
+      "description": "发布、下架、给租户装"
+    },
+    {
+      "from": "mgmt",
+      "to": "market",
+      "description": "看市场、安装"
+    },
+    {
+      "from": "market",
+      "to": "versions",
+      "description": "装进租户"
+    },
+    {
+      "from": "market",
+      "to": "check",
+      "description": "读包、检查",
+      "labelAt": 0.25
+    },
+    {
+      "from": "market",
+      "to": "store",
+      "description": "写市场"
     }
   ]
 }

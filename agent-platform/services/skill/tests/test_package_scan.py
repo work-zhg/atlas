@@ -8,8 +8,8 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from atlas_skill.skill.package import Limits, RawPackage, ScanBlocked, load_dir, load_zip
-from atlas_skill.skill.scanner import content_scan, parse, similarity, similarity_scan
+from atlas_skill.check.package import Limits, RawPackage, ScanBlocked, load_dir, load_zip
+from atlas_skill.check.scanner import content_scan, parse, similarity, similarity_scan
 from skill_testkit import make_zip, skill_files, write_dir
 
 LIMITS = Limits(max_bytes=1024 * 1024, max_files=50, max_file_bytes=256 * 1024)

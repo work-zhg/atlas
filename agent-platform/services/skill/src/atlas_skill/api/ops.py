@@ -9,7 +9,8 @@
                                                              空 = 装全部默认安装的（开通租户时调）
     POST  /ops/v1/tenants/{tenant}/suspend|resume|purge      运营接口库给的
 
-★ 市场是产品自带的技能，不属于任何租户；装进租户以后才是租户的（skill/market.py）。
+★ 市场是产品自带的技能，不属于任何租户；装进租户以后才是租户的（market/service.py）。
+★ 写操作在返回前提交。
 ★ 删除租户：先删对象存储里这个租户的包（{租户}/_skills/、{租户}/_skills_drafts/），再分批删
   数据库里的行。多租户之前发布的在桶根 _skills/ 下、按 storage_key 逐个版本删。
   ★ 只删自己的子目录，不删整个 {租户}/：桶和 Atlas 的工作空间、知识库共用。
@@ -35,15 +36,16 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
+from ..check.package import ScanBlocked, load_zip
 from ..db.models import Base, Skill, SkillAudit, SkillVersion
 from ..db.session import get_sessionmaker
 from ..errors import Invalid
+from ..market.service import MarketService
 from ..schemas import MarketInstalled, MarketInstallIn, MarketSkillOut, MarketVersionOut
 from ..settings import SkillSettings, get_settings
-from ..skill.market import MarketService
-from ..skill.package import ScanBlocked, load_zip
-from ..skill.service import limits_of
-from ..storage import DRAFTS_PREFIX, PUBLISHED_PREFIX, StorageNotConfigured, make_storage
+from ..store.layout import DRAFTS_PREFIX, PUBLISHED_PREFIX
+from ..store.objects import StorageNotConfigured, make_storage
+from ..versions.service import limits_of
 from .deps import MarketServiceDep
 
 __all__ = ["mount_ops"]
@@ -91,6 +93,7 @@ async def publish(op: Operator, request: Request, service: MarketServiceDep) -> 
     row = await service.publish(
         load_zip(data, limits), actor=op.who, install_by_default=install_by_default
     )
+    await service.session.commit()
     return MarketVersionOut.model_validate(row, from_attributes=True)
 
 
@@ -99,6 +102,7 @@ async def set_default(
     slug: str, body: DefaultIn, _: Operator, service: MarketServiceDep
 ) -> dict[str, Any]:
     skill = await service.set_default(slug, body.install_by_default)
+    await service.session.commit()
     return {"slug": skill.slug, "install_by_default": skill.install_by_default}
 
 
@@ -107,6 +111,7 @@ async def revoke(
     slug: str, version: int, body: RevokeIn, _: Operator, service: MarketServiceDep
 ) -> MarketVersionOut:
     row = await service.revoke(slug, version, reason=body.reason)
+    await service.session.commit()
     return MarketVersionOut.model_validate(row, from_attributes=True)
 
 

@@ -10,9 +10,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from ..auth import verified_tenant
 from ..schemas import RevokedSkill, SkillCatalogItem, SkillVersionOut
-from .deps import SkillServiceDep
+from .deps import SkillServiceDep, verified_tenant
 
 router = APIRouter(prefix="/internal", tags=["internal"], dependencies=[Depends(verified_tenant)])
 

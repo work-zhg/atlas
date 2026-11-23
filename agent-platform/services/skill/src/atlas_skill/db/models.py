@@ -1,18 +1,24 @@
-"""技能库的表（设计 §5.1、§8）。
+"""技能库的表（c4-model/skill/code-*.html 的「表」一节）。
 
-★ 不建外键（与运行时 0013 起的约定一致）：引用完整性由 service 层保证。
-★ 技能版本行发布后，`description` / `content_hash` / `files` / `storage_key`
-  **永不修改**，只有 status 一族字段可变 —— 运行时按版本永久缓存的依据就是它。
+    skill / skill_version    技能版本领域：技能和它的版本（状态机、审查、发布）
+    market_skill / market_skill_version   技能市场：产品自带的技能，不属于任何租户
+    skill_audit              共享内核：写操作的审计
+
+★ 主键约定：自增 id 只在库内用；uuid 是逻辑主键（Python 侧生成 uuid7），表间引用的列叫 xxx_uuid。
+  对外（接口、智能体配置、对象存储路径）仍用 slug + 版本号；版本的 uuid 就是上传 id。
+★ 不建外键（与运行时的约定一致）：引用完整性由领域代码保证。
+★ 技能版本行发布后，`description` / `content_hash` / `files` / `storage_key` **永不修改**，只有
+  status 一族字段可变 —— 运行时按版本永久缓存的依据就是它。
 ★ 多租户（迁移 c0005）：技能归租户（TenantOwned），slug、版本号在租户内；查询按当前租户自动
-  过滤。技能市场（market_*）是产品自带的技能，不属于任何租户，只能经运营接口发布；租户从市场
-  拷贝后才是自己的技能（来源 market，版本号与市场一致）。
+  过滤。技能市场（market_*）不属于任何租户，只能经运营接口发布；租户从市场拷贝后才是自己的技能
+  （来源 market，版本号与市场一致）。
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from atlas_tenancy import TenantOwned
 from sqlalchemy import (
@@ -25,10 +31,12 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-from .types import JSONType, UTCDateTime, UUIDType, utcnow
+from ..errors import Conflict, Invalid
+from .types import JSONType, UTCDateTime, UUIDType, utcnow, uuid7
 
 NAMING_CONVENTION = {
     "ix": "ix_%(table_name)s_%(column_0_N_name)s",
@@ -37,9 +45,9 @@ NAMING_CONVENTION = {
     "pk": "pk_%(table_name)s",
 }
 
-#: 技能版本的状态。
+#: 技能版本的状态（值对象 VersionStatus）。
 #:
-#: pending_review —— 已上传、机械扫描通过，等人工审查（含脚本 / 非 builtin 必经）
+#: pending_review —— 已上传、机械扫描通过，等本租户的审核人审查
 #: rejected       —— 审查不通过；草稿对象已删，行保留作记录
 #: published      —— 已发布，可被新引用
 #: disabled       —— 停用：不可被**新**引用，已引用的照常（可重新启用）
@@ -50,38 +58,57 @@ NAMING_CONVENTION = {
 SKILL_STATUSES = ("pending_review", "rejected", "published", "disabled", "revoked")
 #: 运行时看得见的状态。草稿态（pending_review / rejected）结构性地拿不到。
 RUNTIME_VISIBLE = ("published", "disabled", "revoked")
+#: 技能的来源（值对象 SkillSource）。builtin 只剩多租户之前登记的（adopt）；market = 从技能
+#: 市场拷来的（版本号与市场一致，不能在租户里上传新版本）
+SKILL_SOURCES = ("builtin", "tenant", "imported", "market")
 
 
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=NAMING_CONVENTION)
 
 
-#: 技能的来源。market = 从技能市场拷来的（版本号与市场一致，不能在租户里上传新版本）
-SKILL_SOURCES = ("builtin", "tenant", "imported", "market")
+class _Row:
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    uuid: Mapped[UUID] = mapped_column(UUIDType, unique=True, default=uuid7, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime, default=utcnow, onupdate=utcnow, nullable=False
+    )
 
 
-class Skill(TenantOwned, Base):
+# ───────────────────────────────────────────── 技能版本领域
+
+
+class Skill(TenantOwned, _Row, Base):
+    """聚合根：一个技能。slug 来自 SKILL.md 的 name，是智能体配置和对象存储路径里的引用，不能改；
+    来源建时定，之后的版本必须同一来源。"""
+
     __tablename__ = "skill"
 
-    #: 主键是 (tenant_uuid, slug)：slug 在租户内唯一
-    tenant_uuid: Mapped[UUID] = mapped_column(UUIDType, primary_key=True, index=True)
-    slug: Mapped[str] = mapped_column(String(63), primary_key=True)
+    slug: Mapped[str] = mapped_column(String(63), nullable=False)
     source: Mapped[str] = mapped_column(String(16), nullable=False)
     #: imported 必填：第三方出处
     origin_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
 
     __table_args__ = (
+        UniqueConstraint("tenant_uuid", "slug"),
         CheckConstraint("source IN ('builtin','tenant','imported','market')", name="source_enum"),
     )
 
 
-class SkillVersion(TenantOwned, Base):
+class SkillVersion(TenantOwned, _Row, Base):
+    """实体：一次上传和它发布后的版本（uuid 就是上传 id）。状态转换只在这里。"""
+
     __tablename__ = "skill_version"
 
-    id: Mapped[UUID] = mapped_column(UUIDType, primary_key=True, default=uuid4)
-    slug: Mapped[str] = mapped_column(String(63), nullable=False)
+    skill_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    skill: Mapped[Skill] = relationship(
+        Skill,
+        primaryjoin="foreign(SkillVersion.skill_uuid) == Skill.uuid",
+        lazy="joined",
+        innerjoin=True,
+    )
     #: ★ 发布时才分配。审查不通过的上传不占版本号 —— 否则版本清单里会出现
     #:   「v4 不存在」的空洞，而使用者无从知道那是被拒了还是丢了。
     version: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -89,7 +116,7 @@ class SkillVersion(TenantOwned, Base):
 
     description: Mapped[str] = mapped_column(Text, nullable=False)
     frontmatter: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False)
-    #: 草稿：_skills_drafts/{id}/；发布后：_skills/{slug}/{version}/
+    #: 草稿：{租户}/_skills_drafts/{uuid}/；发布后：{租户}/_skills/{slug}/{version}/
     storage_key: Mapped[str] = mapped_column(Text, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(80), nullable=False)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
@@ -97,6 +124,7 @@ class SkillVersion(TenantOwned, Base):
     has_scripts: Mapped[bool] = mapped_column(Boolean, nullable=False)
     #: [{path, size, sha256, executable}]
     files: Mapped[list[dict[str, Any]]] = mapped_column(JSONType, nullable=False)
+    #: 值对象 ScanReport：各层检查结果、审查结论、重新检查的历史
     scan_result: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False)
 
     uploaded_by: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -106,16 +134,17 @@ class SkillVersion(TenantOwned, Base):
     status_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     published_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        UTCDateTime, default=utcnow, onupdate=utcnow, nullable=False
-    )
 
     __table_args__ = (
-        UniqueConstraint(
-            "tenant_uuid", "slug", "version", name="uq_skill_version_tenant_uuid_slug_version"
+        UniqueConstraint("skill_uuid", "version"),
+        #: 一个技能同时只能有一个待审查的上传（第一次上传时还没有技能行可锁，靠它兜底）
+        Index(
+            "uq_skill_version_pending",
+            "skill_uuid",
+            unique=True,
+            postgresql_where=text("status = 'pending_review'"),
         ),
-        Index("ix_skill_version_slug_status", "slug", "status"),
+        Index(None, "skill_uuid", "status"),
         CheckConstraint(
             "status IN ('pending_review','rejected','published','disabled','revoked')",
             name="status_enum",
@@ -126,46 +155,77 @@ class SkillVersion(TenantOwned, Base):
         ),
     )
 
+    @property
+    def slug(self) -> str:
+        return self.skill.slug
 
-class SkillAudit(TenantOwned, Base):
-    """写操作的审计。与业务写入同一事务 —— 不会出现「改了但没记」。"""
+    @property
+    def runtime_visible(self) -> bool:
+        return self.status in RUNTIME_VISIBLE
 
-    __tablename__ = "skill_audit"
+    def review(self, reviewer: str, note: str, *, approve: bool) -> None:
+        """记下审查结论（通过的还要经发布流水线才变成 published）。"""
+        now = utcnow()
+        self.reviewed_by, self.reviewed_at, self.review_note = reviewer, now, note
+        self.scan_result = {
+            **self.scan_result,
+            "review": {
+                "result": "pass" if approve else "reject",
+                "by": reviewer,
+                "at": now.isoformat(),
+                "note": note,
+            },
+        }
+        if not approve:
+            self.status = "rejected"
 
-    id: Mapped[UUID] = mapped_column(UUIDType, primary_key=True, default=uuid4)
-    at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
-    actor: Mapped[str] = mapped_column(String(255), nullable=False)
-    action: Mapped[str] = mapped_column(String(64), nullable=False)
-    target_kind: Mapped[str] = mapped_column(String(32), nullable=False)
-    target_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    detail: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=dict)
+    def publish_as(self, version: int, storage_key: str, *, actor: str) -> None:
+        self.version, self.status, self.storage_key = version, "published", storage_key
+        self.published_by, self.published_at = actor, utcnow()
 
-    __table_args__ = (Index("ix_skill_audit_target", "target_kind", "target_id", "at"),)
-
+    def change_status(self, action: str, reason: str | None) -> None:
+        """停用 / 启用 / 紧急下架。★ revoked 不可撤销：要恢复只能发新版本。"""
+        transitions = {
+            "disable": (("published",), "disabled"),
+            "enable": (("disabled",), "published"),
+            "revoke": (("published", "disabled"), "revoked"),
+        }
+        if action not in transitions:
+            raise Invalid(f"未知操作 {action!r}")
+        allowed, target = transitions[action]
+        if action == "revoke" and not reason:
+            raise Invalid("紧急下架必须写明原因")
+        if self.status not in allowed:
+            raise Conflict(f"{self.slug} v{self.version} 当前是 {self.status}，不能 {action}")
+        self.status, self.status_reason = target, reason
 
 
 # ───────────────────────────────────────────── 技能市场（不分租户）
 
 
-class MarketSkill(Base):
+class MarketSkill(_Row, Base):
     """技能市场里的一个技能：产品自带（浏览器、computer use……），运营中心发布。"""
 
     __tablename__ = "market_skill"
 
-    slug: Mapped[str] = mapped_column(String(63), primary_key=True)
+    slug: Mapped[str] = mapped_column(String(63), unique=True, nullable=False)
     #: 创建租户时默认拷进去（拷最新的已发布版本）
     install_by_default: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_by: Mapped[str] = mapped_column(String(255), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
 
 
-class MarketSkillVersion(Base):
+class MarketSkillVersion(_Row, Base):
     """技能市场里的一个版本。发布即生效（运营中心就是审核人），之后除状态外不改。"""
 
     __tablename__ = "market_skill_version"
 
-    id: Mapped[UUID] = mapped_column(UUIDType, primary_key=True, default=uuid4)
-    slug: Mapped[str] = mapped_column(String(63), nullable=False)
+    market_skill_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    skill: Mapped[MarketSkill] = relationship(
+        MarketSkill,
+        primaryjoin="foreign(MarketSkillVersion.market_skill_uuid) == MarketSkill.uuid",
+        lazy="joined",
+        innerjoin=True,
+    )
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     #: published | revoked（下架：租户不能再拷，已拷走的不动 —— 那是租户自己的了）
     status: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -182,11 +242,29 @@ class MarketSkillVersion(Base):
     status_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     published_by: Mapped[str] = mapped_column(String(255), nullable=False)
     published_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        UTCDateTime, default=utcnow, onupdate=utcnow, nullable=False
-    )
 
     __table_args__ = (
-        UniqueConstraint("slug", "version", name="uq_market_skill_version_slug_version"),
+        UniqueConstraint("market_skill_uuid", "version"),
         CheckConstraint("status IN ('published','revoked')", name="status_enum"),
     )
+
+    @property
+    def slug(self) -> str:
+        return self.skill.slug
+
+
+# ───────────────────────────────────────────── 共享内核
+
+
+class SkillAudit(TenantOwned, _Row, Base):
+    """写操作的审计。与业务写入同一事务 —— 不会出现「改了但没记」。"""
+
+    __tablename__ = "skill_audit"
+
+    actor: Mapped[str] = mapped_column(String(255), nullable=False)
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    detail: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False, default=dict)
+
+    __table_args__ = (Index("ix_skill_audit_target", "target_kind", "target_id", "created_at"),)

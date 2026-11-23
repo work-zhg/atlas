@@ -2,6 +2,9 @@
 
 动作用 `/…/approve` 这种子路径而不是 `…:approve`：Starlette 的路径参数会把
 冒号后的部分一起吞进去，写成冒号只会多一层手工解析。
+
+★ 写操作在返回前提交（service.commit()）：调用方拿到 2xx 立刻去查就能查到；发布、被拒的草稿在
+  提交之后才删。
 """
 
 from __future__ import annotations
@@ -13,15 +16,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from sqlalchemy import select
 
-from ..auth import (
-    AUDIT_VIEW,
-    SKILL_REVIEW,
-    SKILL_UPLOAD,
-    Principal,
-    current_principal,
-    require_any,
-    verified_tenant,
-)
+from ..access.control import AUDIT_VIEW, SKILL_REVIEW, SKILL_UPLOAD, Principal
+from ..check.package import ScanBlocked, load_zip
 from ..db.models import SkillAudit
 from ..schemas import (
     AuditOut,
@@ -32,15 +28,21 @@ from ..schemas import (
     SkillVersionAdminOut,
     StatusChangeIn,
 )
-from ..skill.package import ScanBlocked, load_zip
-from ..skill.service import limits_of
-from .deps import MarketServiceDep, SessionDep, SkillServiceDep
+from ..versions.service import limits_of
+from .deps import (
+    MarketServiceDep,
+    SessionDep,
+    SkillServiceDep,
+    current_principal,
+    require_any,
+    verified_tenant,
+)
 
-# ★ 先核对租户、进入它（auth.verified_tenant），之后的读写都按它自动过滤
+# ★ 先核对租户、进入它（deps.verified_tenant），之后的读写都按它自动过滤
 router = APIRouter(prefix="/api/v1", tags=["admin"], dependencies=[Depends(verified_tenant)])
 
 #: 按操作码鉴权（权限设计 §6.1）。查看目录不要操作码：在本应用可访问范围内就能看
-#: （范围在用户中心设置，auth.py 对范围外的人一律 403）。
+#: （范围在用户中心设置，访问控制对范围外的人一律 403）。
 #: ★ 编辑智能体时选技能走的是 Atlas 自己的目录（/v1/catalog/skills），不经这里
 SkillReader = Annotated[Principal, Depends(current_principal)]
 SkillUploader = Annotated[Principal, Depends(require_any(SKILL_UPLOAD, SKILL_REVIEW))]
@@ -118,6 +120,7 @@ async def upload_skill(
         raise ScanBlocked("archive", [f"上传的 zip 超过 {limits.max_bytes} 字节"])
     pkg = load_zip(data, limits)
     row = await service.ingest(pkg, source=source, actor=principal.user, origin_url=origin_url)
+    await service.commit()
     return _admin_out(row)
 
 
@@ -125,18 +128,18 @@ async def upload_skill(
 async def approve(
     upload_id: UUID, body: ReviewDecisionIn, service: SkillServiceDep, principal: SkillReviewer
 ) -> SkillVersionAdminOut:
-    return _admin_out(
-        await service.review(upload_id, reviewer=principal.user, approve=True, note=body.note)
-    )
+    row = await service.review(upload_id, reviewer=principal.user, approve=True, note=body.note)
+    await service.commit()
+    return _admin_out(row)
 
 
 @router.post("/skill-uploads/{upload_id}/reject", response_model=SkillVersionAdminOut)
 async def reject(
     upload_id: UUID, body: ReviewDecisionIn, service: SkillServiceDep, principal: SkillReviewer
 ) -> SkillVersionAdminOut:
-    return _admin_out(
-        await service.review(upload_id, reviewer=principal.user, approve=False, note=body.note)
-    )
+    row = await service.review(upload_id, reviewer=principal.user, approve=False, note=body.note)
+    await service.commit()
+    return _admin_out(row)
 
 
 @router.post("/skills/{slug}/versions/{version}/{action}", response_model=SkillVersionAdminOut)
@@ -154,6 +157,7 @@ async def change_status(
         row = await service.change_status(
             slug, version, action=action, actor=principal.user, reason=body.reason if body else None
         )
+    await service.commit()
     return _admin_out(row)
 
 
@@ -174,7 +178,9 @@ async def install(
     version: Annotated[int | None, Query(ge=1)] = None,
 ) -> MarketInstalled:
     """把市场里的一个版本（缺省 = 最新的已发布版本）拷进本租户：之后就是本租户的技能。"""
-    return await service.install(slug, version, actor=principal.user)
+    installed = await service.install(slug, version, actor=principal.user)
+    await service.session.commit()
+    return installed
 
 
 # ───────────────────────────────────────────── 审计
@@ -188,7 +194,7 @@ async def list_audit(
     target_id: str | None = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
 ) -> list[AuditOut]:
-    query = select(SkillAudit).order_by(SkillAudit.at.desc()).limit(limit)
+    query = select(SkillAudit).order_by(SkillAudit.created_at.desc()).limit(limit)
     if target_kind:
         query = query.where(SkillAudit.target_kind == target_kind)
     if target_id:

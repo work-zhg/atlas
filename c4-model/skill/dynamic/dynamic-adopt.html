@@ -36,7 +36,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "动态图：技能应用 - 登记已有技能",
-  "description": "目标模型。技能管理员用运维命令行把发布区里已有、但库里没有记录的包登记成已发布版本；命令行容器里跑的是和技能服务同一套领域代码",
+  "description": "目标模型。技能管理员用运维命令行把桶根发布区里多租户之前放的、库里没有记录的包登记成已发布版本；命令行容器里跑的是和技能服务同一套领域代码",
   "boundaries": [
     {
       "id": "sksys",
@@ -99,10 +99,10 @@
     {
       "from": "admin",
       "to": "cversions",
-      "description": "python -m atlas_skill skill adopt pdf-tools 1",
+      "description": "python -m atlas_skill skill --tenant <租户> adopt pdf-tools 1",
       "technology": "命令行（kubectl exec 进技能服务的 Pod）",
       "details": {
-        "note": "P1 上线前手工放进 _skills/ 的包，没有经过上传，库里没有记录。"
+        "note": "多租户之前手工放进桶根 _skills/ 的包，没有经过上传、库里没有记录；登记进写明的那个租户。"
       }
     },
     {
@@ -114,7 +114,7 @@
     {
       "from": "cversions",
       "to": "cstore",
-      "description": "read_tree(_skills/pdf-tools/1/)"
+      "description": "read_legacy(pdf-tools, 1)：桶根 _skills/pdf-tools/1/"
     },
     {
       "from": "cstore",

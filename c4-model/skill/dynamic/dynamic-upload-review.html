@@ -36,7 +36,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "动态图：技能应用 - 上传并审查发布",
-  "description": "目标模型（参与者按组件图拆）。技能作者上传一个本组织的技能（来源 tenant），检查后进草稿区待审查；技能管理员审查通过后，分配版本号、拷到发布区、删草稿",
+  "description": "目标模型（参与者按组件图拆）。技能作者上传一个本组织的技能（来源 tenant），检查后进草稿区待审查；技能管理员审查通过后，分配版本号、拷到发布区，提交之后删草稿",
   "boundaries": [
     {
       "id": "sksys",
@@ -137,7 +137,7 @@
       "to": "access",
       "description": "principal：要有 skill:upload 或 skill:review",
       "details": {
-        "note": "来源选 builtin 要 skill:review（目标模型；现在谁都能选）。"
+        "note": "来源只能是 tenant、imported：没有内置上传（产品自带的走技能市场）。带上 X-Tenant-Id：之后都在这个租户里。"
       }
     },
     {
@@ -157,7 +157,7 @@
     {
       "from": "versions",
       "to": "check",
-      "description": "read_zip · parse：第 1、2 层",
+      "description": "load_zip · parse：第 1、2 层",
       "details": {
         "note": "zip 炸弹、符号链接、路径穿越、二进制可执行文件、超限；SKILL.md 和 frontmatter 不合规。不过就抛 ScanBlocked → 400，不留任何记录。"
       }
@@ -168,7 +168,7 @@
       "description": "锁技能行；查待审查的上传、内容相同的已发布版本",
       "technology": "SQL/TCP",
       "details": {
-        "note": "同一技能已有待审查的、内容和已发布的某版完全相同 → 409。"
+        "note": "同一技能已有待审查的、内容和已发布的某版完全相同 → 409。第一次上传还没有技能行可锁，并发时由部分唯一索引兜底。"
       }
     },
     {
@@ -187,7 +187,7 @@
     {
       "from": "store",
       "to": "oss",
-      "description": "PUT _skills_drafts/{上传 id}/…",
+      "description": "PUT {租户}/_skills_drafts/{上传 id}/…",
       "technology": "S3 API/HTTP",
       "details": {
         "note": "先写对象再插行：插行失败只留下孤儿对象，不会有「有行无对象」。"
@@ -199,7 +199,7 @@
       "description": "插 skill_version（待审查、没有版本号），记审计 skill.upload，提交",
       "technology": "SQL/TCP",
       "details": {
-        "note": "tenant 来源，必须人工审查。内置且不含脚本的会接着直接走发布（下面 15–18）。响应前提交。"
+        "note": "一律人工审查。响应前提交。"
       }
     },
     {
@@ -229,7 +229,7 @@
       "description": "锁版本行；四眼：审查人 ≠ 上传人；锁技能行，版本号 = 最大 + 1",
       "technology": "SQL/TCP",
       "details": {
-        "note": "被拒的上传不占版本号。不通过：状态改成 rejected、删草稿，行留作记录。"
+        "note": "被拒的上传不占版本号。不通过：状态改成 rejected，行留作记录，提交之后删草稿。"
       }
     },
     {
@@ -240,7 +240,7 @@
     {
       "from": "store",
       "to": "oss",
-      "description": "清残留 → COPY 到 _skills/{slug}/{版本}/ → LIST 核对对象数",
+      "description": "清残留 → COPY 到 {租户}/_skills/{slug}/{版本}/ → LIST 核对对象数",
       "technology": "S3 API/HTTP",
       "details": {
         "note": "目标前缀非空、库里没有这个版本 = 上次失败的残留，先清；数目不对就删掉目标、整个发布失败。"
@@ -258,9 +258,9 @@
     {
       "from": "versions",
       "to": "store",
-      "description": "delete_draft（提交之后）",
+      "description": "delete(草稿)（提交之后）",
       "details": {
-        "note": "删失败只留下孤儿对象。现在是提交之前就删：提交失败时行回滚成待审查，草稿却没了。"
+        "note": "删失败只留下孤儿对象，不影响已发布的版本。"
       }
     },
     {

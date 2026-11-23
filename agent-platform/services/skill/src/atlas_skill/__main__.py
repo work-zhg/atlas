@@ -33,13 +33,13 @@ from uuid import UUID
 
 from atlas_tenancy import TenantScope
 
+from .check.package import ScanBlocked, load_dir, load_zip
 from .db.session import get_engine, get_sessionmaker
 from .errors import SkillError
+from .market.service import MarketService
 from .settings import get_settings
-from .skill.market import MarketService
-from .skill.package import ScanBlocked, load_dir, load_zip
-from .skill.service import SkillService, limits_of
-from .storage import make_storage
+from .store.objects import make_storage
+from .versions.service import SkillService, limits_of
 
 logger = logging.getLogger("atlas_skill")
 
@@ -106,8 +106,9 @@ async def _with_service(fn: Callable[[SkillService], Awaitable[Any]]) -> Any:
     storage = make_storage(settings)
     try:
         async with get_sessionmaker()() as session:
-            result = await fn(SkillService(session=session, storage=storage, settings=settings))
-            await session.commit()
+            service = SkillService(session=session, storage=storage, settings=settings)
+            result = await fn(service)
+            await service.commit()  # 提交之后再删发布、被拒的草稿
             return result
     finally:
         await get_engine().dispose()
@@ -116,7 +117,7 @@ async def _with_service(fn: Callable[[SkillService], Awaitable[Any]]) -> Any:
 def _print_version(row: Any) -> None:
     content = row.scan_result.get("content", {})
     similar = row.scan_result.get("similarity", {})
-    print(f"{row.slug}  状态={row.status}  版本={row.version or '-'}  上传 id={row.id}")
+    print(f"{row.slug}  状态={row.status}  版本={row.version or '-'}  上传 id={row.uuid}")
     print(f"  {row.file_count} 个文件 · {row.size_bytes} 字节 · 含脚本={row.has_scripts}")
     print(f"  {row.content_hash}")
     for hit in content.get("hits", [])[:20]:
@@ -188,7 +189,7 @@ def _skill_command(args: argparse.Namespace) -> int:
             if row.status == "pending_review" and args.reviewed_by:
                 # 命令行的审查 = 代码评审里的那位 reviewer 签字（设计 §6.1）
                 row = await svc.review(
-                    row.id,
+                    row.uuid,
                     reviewer=args.reviewed_by,
                     approve=True,
                     note=args.note or "命令行发布时审查通过",
@@ -200,7 +201,7 @@ def _skill_command(args: argparse.Namespace) -> int:
         if row.status == "pending_review":
             print(
                 "\n待本租户的审核人审查。审查后执行：\n"
-                f"  python -m atlas_skill skill --tenant {args.tenant} approve {row.id}"
+                f"  python -m atlas_skill skill --tenant {args.tenant} approve {row.uuid}"
                 " --reviewer <审查人> --note <意见>"
             )
         return 0

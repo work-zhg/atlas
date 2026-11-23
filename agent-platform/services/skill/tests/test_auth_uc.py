@@ -11,9 +11,8 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from atlas_skill import auth
+from atlas_skill.access.usercenter import UserCenterGateway
 from atlas_skill.api.app import create_app
-from atlas_skill.settings import get_settings
 from skill_testkit import OTHER_TENANT, TEST_TENANT
 
 _IN_TENANT = {"status": "active", "tenant_id": TEST_TENANT}
@@ -25,7 +24,7 @@ SNAPSHOTS = {
 
 
 @pytest.fixture
-def uc_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[dict[str, str | None]]]:
+def uc_mode() -> Iterator[list[dict[str, str | None]]]:
     calls: list[dict[str, str | None]] = []
 
     def handler(req: httpx.Request) -> httpx.Response:
@@ -37,16 +36,18 @@ def uc_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[dict[str, str | No
         body = SNAPSHOTS.get(uid)
         return httpx.Response(200, json=body) if body else httpx.Response(404, json={})
 
-    monkeypatch.setattr(auth, "_transport", httpx.MockTransport(handler))
-    monkeypatch.setattr(auth, "_cache", auth._Cache())
-    get_settings.cache_clear()
+    _handlers.append(handler)
     yield calls
-    get_settings.cache_clear()
+    _handlers.clear()
+
+
+_handlers: list[object] = []
 
 
 @pytest.fixture
 async def client(storage, uc_mode) -> AsyncIterator[httpx.AsyncClient]:  # type: ignore[no-untyped-def]
-    app = create_app(storage=storage)
+    uc = UserCenterGateway("http://uc", transport=httpx.MockTransport(_handlers[-1]))  # type: ignore[arg-type]
+    app = create_app(storage=storage, uc=uc)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://skill",

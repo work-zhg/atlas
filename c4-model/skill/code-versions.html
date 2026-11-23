@@ -32,7 +32,7 @@
   "title": "代码图：技能应用 - 技能服务 - 技能版本",
   "description": "目标领域模型，只画期望的样子。技能和版本的状态机、审查、发布流水线和运行时目录；领域总览见 code-domains.html",
   "component": "技能版本",
-  "package": "atlas_skill.versions（目标模型）",
+  "package": "atlas_skill.versions",
   "overview": "技能版本管一个技能从上传到下架的全过程。上传先过包检查，合格的写进草稿区、记一条「待审查」；另一个人审查通过后，分配版本号、拷到发布区，成为不可变的已发布版本。之后只能停用、启用或紧急下架，内容永不再改，要改就发新版本。运行时（Atlas）只看得见已发布、停用、下架的版本。\n\n它不自己检查包（包检查），不直接碰对象存储（技能仓库），也不判断调用人有没有操作码（访问控制，入口里判）；四眼原则这类审查规则在这里。",
   "elements": [
     {
@@ -44,11 +44,11 @@
         1.6,
         0.35
       ],
-      "responsibility": "技能版本的唯一入口，接口和命令行都调它。写：上传、审查、停用 / 启用 / 下架、重新检查、登记已有技能；读：给运行时的目录（只有已发布、停用、下架的）和给管理页的列表、详情、包内文件。写操作和审计在同一个事务里，响应前提交。",
+      "responsibility": "技能版本的唯一入口，接口和命令行都调它。写：上传、审查、停用 / 启用 / 下架、重新检查、登记已有技能、接收技能市场装进来的版本；读：给运行时的目录（只有已发布、停用、下架的）和给管理页的列表、详情、包内文件。写操作和审计在同一个事务里，调用方用 commit() 在响应前提交，提交之后才删草稿。",
       "methods": [
         [
           "+",
-          "ingest(archive, *, source, actor, origin_url) -> SkillVersion"
+          "ingest(pkg, *, source, actor, origin_url) -> SkillVersion"
         ],
         [
           "+",
@@ -56,7 +56,7 @@
         ],
         [
           "+",
-          "change_status(slug, version, action, *, actor, reason)"
+          "change_status(slug, version, *, action, actor, reason)"
         ],
         [
           "+",
@@ -64,11 +64,19 @@
         ],
         [
           "+",
-          "catalog() · versions(slug) · version(slug, v) · revoked()"
+          "install_from_market(MarketPackage, *, actor) · installed_from_market()"
         ],
         [
           "+",
-          "list() · detail(slug) · read_file(ref, path)"
+          "catalog() · runtime_versions(slug) · runtime_version(slug, v) · revoked()"
+        ],
+        [
+          "+",
+          "admin_list() · admin_detail(slug) · read_file(row, path)"
+        ],
+        [
+          "+",
+          "commit()  # 提交，然后删这次发布、被拒的草稿"
         ]
       ]
     },
@@ -81,21 +89,15 @@
         0.45,
         2.45
       ],
-      "responsibility": "一个技能和它的全部版本。slug 来自 SKILL.md 的 name，是智能体配置和对象存储路径里的引用，不能改；来源建时定，之后的版本必须同一来源。版本号在发布时才分配（当前最大 + 1），被拒的上传不占号，版本清单里就不会有说不清的空洞。同一时间只能有一个待审查的上传。",
+      "responsibility": "一个技能和它的全部版本。slug 来自 SKILL.md 的 name，在租户内唯一，是智能体配置和对象存储路径里的引用，不能改；来源建时定，之后的版本必须同一来源。版本号在发布时才分配（当前最大 + 1），被拒的上传不占号，版本清单里就不会有说不清的空洞。同一时间只能有一个待审查的上传。",
       "attributes": [
         [
           "+",
-          "slug（不能改）· origin_url · created_by"
+          "slug（租户内唯一，不能改）· origin_url · created_by"
         ],
         [
           "+",
           "source: SkillSource"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "next_version() -> int"
         ]
       ]
     },
@@ -112,7 +114,7 @@
       "attributes": [
         [
           "+",
-          "upload_id · version: int | None · status"
+          "uuid（上传 id）· version: int | None · status"
         ],
         [
           "+",
@@ -130,15 +132,15 @@
       "methods": [
         [
           "+",
-          "approve(reviewer, note) · reject(reviewer, note)"
+          "review(reviewer, note, *, approve) · publish_as(version, storage_key, *, actor)"
         ],
         [
           "+",
-          "disable() · enable() · revoke(reason)"
+          "change_status(action, reason)  # disable · enable · revoke"
         ],
         [
           "+",
-          "runtime_visible -> bool"
+          "runtime_visible -> bool · slug"
         ]
       ]
     },
@@ -184,12 +186,8 @@
         -0.85,
         4.15
       ],
-      "responsibility": "来源决定要不要人工审查：只有内置且不含脚本的免审；第三方导入的必须给出处。",
+      "responsibility": "上传只能选 tenant、imported，一律人工审查；第三方导入的必须给出处。market 是从技能市场装进来的（版本号与市场一致，不能在租户里上传新版本），builtin 只剩多租户之前登记的（adopt）。",
       "attributes": [
-        [
-          "",
-          "builtin：内置"
-        ],
         [
           "",
           "tenant：本组织写的"
@@ -197,6 +195,14 @@
         [
           "",
           "imported：第三方，必须给出处"
+        ],
+        [
+          "",
+          "market：从技能市场装的"
+        ],
+        [
+          "",
+          "builtin：多租户之前登记的，不能再上传"
         ]
       ]
     },
@@ -230,7 +236,7 @@
         -0.55,
         1.15
       ],
-      "responsibility": "含脚本或不是内置来源的，必须人工审查，没有例外；内置来源只有审查人（skill:review）或运维命令行能选，否则「选内置」就成了绕过审查的口子。审查人不能是上传人（四眼原则），本机单人开发可以打开 allow_self_review。",
+      "responsibility": "租户上传的一律人工审查，没有例外：多租户以后没有内置上传，产品自带的技能走技能市场。从市场装的技能不能在租户里上传新版本，其余之后的版本必须同一来源。审查人不能是上传人（四眼原则），本机单人开发可以打开 allow_self_review。",
       "attributes": [
         [
           "-",
@@ -240,11 +246,11 @@
       "methods": [
         [
           "+",
-          "needs_review(source, has_scripts) -> bool"
+          "check_source(source, origin_url)"
         ],
         [
           "+",
-          "check_source(source, uploader_can_review)"
+          "check_new_version(skill, source)"
         ],
         [
           "+",
@@ -261,11 +267,11 @@
         3.3,
         2.45
       ],
-      "responsibility": "发布：锁住技能行 → 分配版本号 → 交给技能仓库拷到发布区（先清残留、拷完核对对象数）→ 改行（版本号、状态、存储位置）→ 提交之后再删草稿。审查通过、内置免审的上传都走这里。",
+      "responsibility": "发布：锁住技能行 → 分配版本号 → 交给技能仓库拷到发布区（先清残留、拷完核对对象数）→ 改行（版本号、状态、存储位置）。草稿不在这里删：返回草稿前缀，SkillService 提交之后再删。",
       "methods": [
         [
           "+",
-          "publish(version, *, actor)"
+          "publish(version, *, actor) -> 草稿前缀"
         ]
       ]
     },
@@ -278,19 +284,23 @@
         -0.55,
         -0.05
       ],
-      "responsibility": "读写 skill、skill_version。发布、上传时锁技能行（FOR UPDATE），审查、改状态时锁版本行；运行时的查询结构性地只取已发布、停用、下架的版本。",
+      "responsibility": "读写 skill、skill_version（版本按 skill_uuid 引用技能）。发布、上传时锁技能行（FOR UPDATE），审查、改状态时锁版本行；运行时的查询结构性地只取已发布、停用、下架的版本。",
       "methods": [
         [
           "+",
-          "lock_skill(slug) · lock_version(upload_id)"
+          "skill(slug) · lock_skill(slug) · skills()"
         ],
         [
           "+",
-          "pending_of(slug) · same_content(slug, hash)"
+          "by_upload(upload_id, *, lock) · version(slug, v, *, lock) · released(slug, v)"
         ],
         [
           "+",
-          "published_descriptions(except_slug) · runtime(slug)"
+          "pending_of(skill) · same_content(skill, hash) · max_version(skill)"
+        ],
+        [
+          "+",
+          "versions(skill, *, runtime) · revoked() · published_descriptions(except_skill)"
         ]
       ]
     },
@@ -320,7 +330,7 @@
       "methods": [
         [
           "+",
-          "read_zip · read_dir"
+          "load_zip · load_dir"
         ],
         [
           "+",
@@ -358,16 +368,33 @@
       "methods": [
         [
           "+",
-          "put_draft · publish · delete_draft"
+          "put_draft · publish · delete"
         ],
         [
           "+",
-          "read · read_tree"
+          "read · read_tree · read_legacy"
         ]
       ],
       "at": [
         5.0,
         2.45
+      ]
+    },
+    {
+      "id": "market",
+      "kind": "class",
+      "name": "MarketService",
+      "external": true,
+      "source": "技能市场领域",
+      "at": [
+        3.4,
+        -1.15
+      ],
+      "methods": [
+        [
+          "+",
+          "install：装成本租户的已发布版本"
+        ]
       ]
     }
   ],
@@ -454,24 +481,29 @@
       "to": "report",
       "type": "association",
       "description": "scan"
+    },
+    {
+      "from": "market",
+      "to": "svc",
+      "description": "install_from_market"
     }
   ],
   "capabilities": [
     {
       "name": "上传",
-      "entry": "ingest(archive, *, source, actor, origin_url)",
+      "entry": "ingest(pkg, *, source, actor, origin_url)",
       "callers": "管理接口（skill:upload 或 skill:review）、运维命令行（skill publish）",
-      "description": "包检查第 1、2 层不过直接拒、不留记录；内置来源要 skill:review；同一技能已有待审查的、内容和已发布的某版完全相同，都拒；写草稿、插行（待审查）。内置且不含脚本的接着直接发布"
+      "description": "包检查第 1、2 层不过直接拒、不留记录；来源只能是 tenant、imported；同一技能已有待审查的、内容和已发布的某版完全相同，都拒；写草稿、插行（待审查）"
     },
     {
       "name": "审查",
       "entry": "review(upload_id, *, reviewer, approve, note)",
       "callers": "管理接口（skill:review）、运维命令行",
-      "description": "四眼原则；通过就发布，不通过删草稿、行留作记录"
+      "description": "四眼原则；通过就发布，不通过行留作记录；两种都在提交之后删草稿"
     },
     {
       "name": "停用、启用、紧急下架",
-      "entry": "change_status(slug, version, action, *, actor, reason)",
+      "entry": "change_status(slug, version, *, action, actor, reason)",
       "callers": "管理接口（skill:review）、运维命令行",
       "description": "停用只挡新引用；下架必须写原因、不可撤销，Atlas 一分钟内在装配时跳过"
     },
@@ -479,17 +511,23 @@
       "name": "重新检查、登记已有技能",
       "entry": "rescan · adopt",
       "callers": "管理接口（rescan）、运维命令行（adopt）",
-      "description": "rescan 结果只追加；adopt 把发布区里手工放的包登记进表，只读对象、算哈希、不移动"
+      "description": "rescan 结果只追加；adopt 把桶根 _skills/ 里多租户之前手工放的包登记进当前租户（来源 builtin），只读对象、算哈希、不移动"
+    },
+    {
+      "name": "从技能市场装",
+      "entry": "install_from_market(MarketPackage, *, actor)",
+      "callers": "技能市场（管理接口的安装、运营中心开通租户时装默认）",
+      "description": "装成本租户来源 market 的已发布版本，版本号与市场一致；拷到本租户的发布区并核对；装过就什么都不做；租户已有同名、来源不是 market 的技能报冲突"
     },
     {
       "name": "运行时目录",
-      "entry": "catalog · versions · version · revoked",
+      "entry": "catalog · runtime_versions · runtime_version · revoked",
       "callers": "内部接口（Atlas）",
       "description": "只有已发布、停用、下架的；待审查、被拒的在这里不存在，不是靠运行时自觉过滤"
     },
     {
       "name": "管理页查看",
-      "entry": "list · detail · read_file",
+      "entry": "admin_list · admin_detail · read_file",
       "callers": "管理接口（能访问「技能」应用的人）",
       "description": "包内文件只认文件清单里的路径，不让请求拼出任意对象键；超过 1 MB 不在线看"
     }
@@ -504,12 +542,12 @@
       "reason": "被拒的上传不占号；否则版本清单里会出现「v4 不存在」，使用者分不清是被拒了还是丢了。"
     },
     {
-      "decision": "含脚本或非内置的必须人工审查，审查人不能是上传人",
+      "decision": "租户上传的一律人工审查，审查人不能是上传人",
       "reason": "技能里的脚本会在沙箱里执行，描述会进模型的上下文；机械检查必然漏报（逻辑正确、意图不良的代码），只能把可疑处指给另一个人看。"
     },
     {
-      "decision": "内置来源只能由审查人或命令行上传",
-      "reason": "现在上传表单的来源默认就是 builtin、谁都能选，不含脚本的内置技能免审直接发布：有 skill:upload 的人就能绕过审查发布任何纯文本技能。来源是审查规则的输入，就不能由被审查的人自己填。"
+      "decision": "没有内置上传，产品自带的技能走技能市场",
+      "reason": "来源是审查规则的输入，不能由被审查的人自己填：作者要是能选「内置」免审，有 skill:upload 的人就能绕过审查发布任何纯文本技能。产品自带的技能由运营中心发布到技能市场，租户从市场拷贝。"
     },
     {
       "decision": "停用和下架分开",
@@ -517,7 +555,7 @@
     },
     {
       "decision": "先写对象再插行，提交之后再删草稿",
-      "reason": "反过来就会出现「有行无对象」，审查人打开就是 404；插行失败只会留下孤儿对象，可以清理。现在发布时在提交之前就删了草稿，提交失败时行回滚成待审查、草稿却没了。"
+      "reason": "反过来就会出现「有行无对象」，审查人打开就是 404；插行失败只会留下孤儿对象，可以清理。草稿要是在提交前删，提交失败时行回滚成待审查、草稿却没了；被拒的上传同理。"
     },
     {
       "decision": "运行时目录结构性地看不到草稿",
@@ -525,14 +563,18 @@
     },
     {
       "decision": "表按约定加自增 id 和 uuid，对外仍用 slug + 版本号",
-      "reason": "现在 skill 以 slug 为主键、skill_version 以 uuid 为主键，表间按 slug 关联；按项目约定统一成自增 id + uuid、表间用 xxx_uuid。slug + 版本号是智能体配置和对象存储路径里的引用，接口上不换。"
+      "reason": "按项目约定统一成自增 id + uuid、表间用 xxx_uuid：版本用 skill_uuid 引用技能，版本的 uuid 就是上传 id。slug + 版本号是智能体配置和对象存储路径里的引用，接口上不换。"
     },
     {
       "decision": "同一技能只能有一个待审查的上传，用部分唯一索引兜底",
-      "reason": "现在靠锁技能行后查询；技能第一次上传时还没有行可锁，两个并发上传只能靠主键冲突挡掉一个。部分唯一索引让这条规则在数据库里成立。"
+      "reason": "只靠锁技能行后再查不够：技能第一次上传时还没有行可锁，两个并发上传都会查到「没有待审查的」。部分唯一索引让这条规则在数据库里成立，后到的那个返回 409。"
+    },
+    {
+      "decision": "slug 和版本号在租户内",
+      "reason": "技能归租户，各租户各自上传、审查、编排版本号；运行时只看得到本租户的技能（包括它从技能市场装的）。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），表间引用的列叫 xxx_uuid。对外（接口、智能体配置、对象存储路径）仍用 slug + 版本号：它们不能改，是现成的业务标识。表间不建外键约束，连线是逻辑引用，由代码维护。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），表间引用的列叫 xxx_uuid。对外（接口、智能体配置、对象存储路径）仍用 slug + 版本号：它们不能改，是现成的业务标识。表间不建外键约束，连线是逻辑引用，由代码维护。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。除技能市场的两张表外，每张表还有 tenant_uuid（uuid，所属租户；atlas_tenancy 按当前租户自动过滤，没进入租户就查不到任何租户的数据），下面不重复列出。",
   "tables": [
     {
       "name": "skill",
@@ -558,13 +600,12 @@
         {
           "name": "slug",
           "type": "varchar(63)",
-          "key": "UK",
-          "description": "SKILL.md 里的 name：小写字母开头的 a-z0-9-；不能改"
+          "description": "SKILL.md 里的 name：小写字母开头的 a-z0-9-；租户内唯一，不能改"
         },
         {
           "name": "source",
           "type": "varchar(16)",
-          "description": "builtin / tenant / imported"
+          "description": "tenant / imported / market / builtin（多租户之前登记的）"
         },
         {
           "name": "origin_url",
@@ -575,6 +616,16 @@
         {
           "name": "created_by",
           "type": "varchar(255)"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uq_skill_tenant_uuid_slug",
+          "columns": [
+            "tenant_uuid",
+            "slug"
+          ],
+          "unique": true
         }
       ]
     },
@@ -627,7 +678,7 @@
         {
           "name": "storage_key",
           "type": "text",
-          "description": "草稿：_skills_drafts/{uuid}/；发布后：_skills/{slug}/{version}/"
+          "description": "草稿：{租户}/_skills_drafts/{uuid}/；发布后：{租户}/_skills/{slug}/{version}/（多租户之前的在桶根 _skills/）"
         },
         {
           "name": "content_hash",

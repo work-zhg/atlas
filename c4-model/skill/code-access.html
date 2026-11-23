@@ -30,9 +30,9 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：技能应用 - 技能服务 - 访问控制",
-  "description": "目标领域模型，只画期望的样子。调用身份、操作码、可访问范围和登记到用户中心；授权在用户中心，本领域没有自己的表，领域总览见 code-domains.html",
+  "description": "目标领域模型，只画期望的样子。调用身份、租户、操作码和可访问范围；授权在用户中心，本领域没有自己的表，领域总览见 code-domains.html",
   "component": "访问控制",
-  "package": "atlas_skill.access（目标模型）",
+  "package": "atlas_skill.access",
   "overview": "访问控制回答「这个人能不能用技能应用、能做哪类事」：身份来自 nginx 写的请求头，操作码来自用户中心的授权快照。三个操作码 skill:upload、skill:review、audit:view 登记在「技能」应用名下，预置成技能作者、技能管理员两个角色。\n\n它只给入口用，领域不依赖它；四眼原则这类和具体某个上传有关的规则在技能版本。",
   "elements": [
     {
@@ -44,15 +44,11 @@
         1.6,
         0.35
       ],
-      "responsibility": "管理接口的调用身份和操作码。缺 X-Uid 一律 401；按 X-Auth-Uid（缺省 = X-Uid）取用户中心的授权快照：账号停用 401，不在「技能」应用的可访问范围 403，用户中心不可用 503。查看技能目录不要操作码，在可访问范围内就能看。内部接口不经这里：内网免令牌，nginx 对 /internal 一律 404。",
+      "responsibility": "管理接口的调用身份和操作码。缺租户（X-Tenant-Id）401；带了 X-Uid 的按 X-Auth-Uid（缺省 = X-Uid）在这个租户里取用户中心的授权快照：不在这个租户、账号停用 401，不在「技能」应用的可访问范围 403，用户中心不可用 503。查看技能目录不要操作码，在可访问范围内就能看。没带 X-Uid 的是运行时替自己的租户调内部接口。",
       "methods": [
         [
           "+",
-          "principal(headers) -> Principal"
-        ],
-        [
-          "+",
-          "require_any(*operations)"
+          "principal(headers, tenant) -> Principal | None"
         ]
       ]
     },
@@ -88,7 +84,7 @@
         -0.35,
         3.45
       ],
-      "responsibility": "登记在「技能」应用名下的操作码。来源选「内置」且不含脚本就免审，所以上传内置技能要 skill:review；运维命令行（部署时）不受限。",
+      "responsibility": "登记在「技能」应用名下的操作码，由运营人员在运营中心的应用目录里录入、组合成技能作者、技能管理员两个角色。",
       "attributes": [
         [
           "",
@@ -96,7 +92,7 @@
         ],
         [
           "",
-          "skill:review：审查、停用、启用、下架、重新检查"
+          "skill:review：审查、停用、启用、下架、重新检查、从技能市场安装"
         ],
         [
           "",
@@ -113,11 +109,11 @@
         1.6,
         1.95
       ],
-      "responsibility": "按 auth-uid 缓存授权快照 30 秒，只缓存成功的结果；收回权限最多滞后这么久。",
+      "responsibility": "按（auth-uid, 租户）缓存授权快照 30 秒，只缓存成功的结果；收回权限最多滞后这么久。",
       "methods": [
         [
           "+",
-          "operations(auth_uid, identity) -> set[str]"
+          "get · put((auth_uid, 租户), Snapshot)"
         ]
       ]
     },
@@ -134,45 +130,7 @@
       "methods": [
         [
           "+",
-          "authz(auth_uid, identity) -> Snapshot"
-        ]
-      ]
-    },
-    {
-      "id": "reg",
-      "kind": "class",
-      "name": "AppRegistration",
-      "stereotype": "领域服务",
-      "at": [
-        3.6,
-        1.95
-      ],
-      "responsibility": "部署时把应用「技能」、操作码和两个角色登记到用户中心（幂等，走管理 API，要管理员账号登录）。Atlas 退役它名下的旧操作码时，把持有人搬到这两个角色上。",
-      "methods": [
-        [
-          "+",
-          "register(uc_url, account, password)"
-        ]
-      ]
-    },
-    {
-      "id": "role",
-      "kind": "enum",
-      "name": "Role",
-      "stereotype": "值对象",
-      "at": [
-        3.6,
-        3.45
-      ],
-      "responsibility": "预置的两个角色。",
-      "attributes": [
-        [
-          "",
-          "SKILL_AUTHOR：skill:upload"
-        ],
-        [
-          "",
-          "SKILL_ADMIN：skill:upload · skill:review · audit:view"
+          "authz(auth_uid, tenant, identity) -> Snapshot"
         ]
       ]
     },
@@ -192,23 +150,6 @@
         0.6,
         -1.1
       ]
-    },
-    {
-      "id": "cli",
-      "kind": "class",
-      "name": "运维命令行",
-      "external": true,
-      "source": "运维命令行容器",
-      "methods": [
-        [
-          "+",
-          "register-uc"
-        ]
-      ],
-      "at": [
-        3.6,
-        -1.1
-      ]
     }
   ],
   "relationships": [
@@ -216,11 +157,6 @@
       "from": "routes",
       "to": "ac",
       "description": "身份、操作码"
-    },
-    {
-      "from": "cli",
-      "to": "reg",
-      "description": "register-uc"
     },
     {
       "from": "ac",
@@ -243,45 +179,30 @@
       "to": "op",
       "type": "association",
       "description": "operations"
-    },
-    {
-      "from": "reg",
-      "to": "role",
-      "description": "登记"
     }
   ],
   "capabilities": [
     {
       "name": "调用身份",
-      "entry": "principal(headers)",
+      "entry": "principal(headers, tenant)",
       "callers": "管理接口（每个请求）",
-      "description": "缺 X-Uid → 401；账号停用 → 401；不在可访问范围 → 403；用户中心不可用 → 503"
+      "description": "缺租户、缺 X-Uid → 401；不在这个租户、账号停用 → 401；不在可访问范围 → 403；用户中心不可用 → 503"
     },
     {
       "name": "操作码",
       "entry": "require_any(*operations)",
       "callers": "管理接口（上传、审查、改状态、看审计）",
-      "description": "上传要 skill:upload 或 skill:review，来源是内置的只认 skill:review；审查、停用、启用、下架、重新检查要 skill:review；看审计要 audit:view"
-    },
-    {
-      "name": "登记到用户中心",
-      "entry": "AppRegistration.register",
-      "callers": "运维命令行（部署时）",
-      "description": "应用、操作码、角色；幂等，重复跑没有副作用"
+      "description": "上传要 skill:upload 或 skill:review；审查、停用、启用、下架、重新检查、从技能市场安装要 skill:review；看审计要 audit:view"
     }
   ],
   "decisions": [
     {
       "decision": "技能应用在用户中心是独立应用",
-      "reason": "操作码登记在它自己名下，可访问范围单独设；和 MCP 网关、模型平台同一种做法。原来挂在 Atlas 名下的 skill:* 由 Atlas 的 register-uc 退役并搬过来。"
+      "reason": "操作码登记在它自己名下，可访问范围单独设；和 MCP 网关、模型平台同一种做法。应用、操作码、角色由运营人员在运营中心的应用目录里录入，部署不再往用户中心登记。"
     },
     {
       "decision": "查看不要操作码，写要",
       "reason": "能访问「技能」应用的人都可以看有哪些技能、看包里的内容，选技能时心里有数；上传、审查、下架才需要相应的角色。"
-    },
-    {
-      "decision": "上传内置技能要 skill:review",
-      "reason": "现在上传表单里来源默认就是 builtin、谁都能选，而内置且不含脚本的免审直接发布：只有 skill:upload 的作者能绕过审查发布任何纯文本技能，技能描述和 SKILL.md 正文都会进模型的上下文。"
     },
     {
       "decision": "四眼原则不在这里",

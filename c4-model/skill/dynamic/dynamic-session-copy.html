@@ -102,7 +102,7 @@
       "description": "GET /internal/skills/revoked",
       "technology": "JSON/HTTP",
       "details": {
-        "note": "下架清单在 Atlas 里缓存 60 秒；拉不到就不过滤（打警告）：下架晚生效一会儿，好过所有带技能的会话一起失败。"
+        "note": "下架清单在 Atlas 里缓存 60 秒；拉不到就不过滤（打警告）：下架晚生效一会儿，好过所有带技能的会话一起失败。带 X-Tenant-Id：只看得到本租户的技能（包括从技能市场装的）。"
       }
     },
     {
@@ -148,16 +148,16 @@
     {
       "from": "internal",
       "to": "agent",
-      "description": "描述、内容哈希、文件清单",
+      "description": "描述、内容哈希、文件清单、storage_key",
       "technology": "JSON/HTTP",
       "details": {
-        "note": "描述以技能应用为准：会话副本进了会话就能被 execute 改，而描述是模型决定要不要展开这个技能的依据。"
+        "note": "描述以技能应用为准：会话副本进了会话就能被 execute 改，而描述是模型决定要不要展开这个技能的依据。版本里记着存储位置 storage_key，Atlas 按它拷，不自己拼路径。"
       }
     },
     {
       "from": "agent",
       "to": "oss",
-      "description": "COPY _skills/{slug}/{版本}/… → {user}/{会话}/skills/{slug}/",
+      "description": "COPY storage_key（{租户}/_skills/{slug}/{版本}/）→ 会话的 skills/{slug}/",
       "technology": "S3 API/HTTP",
       "details": {
         "note": "Atlas 用自己的凭据直接在对象存储里拷，不经技能服务；下架的版本跳过。每个会话一份副本，改动只对本会话生效；会话 Pod 里挂成 /skills。"

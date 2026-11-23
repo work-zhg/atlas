@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 __all__ = [
     "SKILL_SLUG_PATTERN",
@@ -107,7 +107,8 @@ class RevokedSkill(BaseModel):
 class SkillVersionAdminOut(BaseModel):
     """管理页看到的版本：含审查中 / 被拒的上传（运行时拿不到这些）。"""
 
-    id: UUID
+    #: 上传 id（库里版本的 uuid 逻辑主键）
+    id: UUID = Field(validation_alias=AliasChoices("uuid", "id"))
     slug: str
     version: int | None
     status: SkillStatus
@@ -148,8 +149,8 @@ class StatusChangeIn(BaseModel):
 
 
 class AuditOut(BaseModel):
-    id: UUID
-    at: datetime
+    id: UUID = Field(validation_alias=AliasChoices("uuid", "id"))
+    at: datetime = Field(validation_alias=AliasChoices("created_at", "at"))
     actor: str
     action: str
     target_kind: str

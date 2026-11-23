@@ -6,12 +6,12 @@ import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
+from atlas_skill.check.package import RawPackage
 from atlas_skill.db.models import SkillVersion
 from atlas_skill.db.session import get_sessionmaker
 from atlas_skill.errors import Conflict, Forbidden, Invalid, NotFound
-from atlas_skill.skill.package import RawPackage
-from atlas_skill.skill.service import SkillService
-from atlas_skill.storage import legacy_prefix, published_prefix
+from atlas_skill.store.layout import legacy_prefix, published_prefix
+from atlas_skill.versions.service import SkillService
 from skill_testkit import TEST_TENANT, skill_files
 
 
@@ -29,7 +29,9 @@ def _pkg(**kw) -> RawPackage:  # type: ignore[no-untyped-def]
 async def _release(svc: SkillService, pkg: RawPackage) -> SkillVersion:
     """上传 + 另一个人审核通过（多租户以后没有免审的 builtin 上传）。"""
     row = await svc.ingest(pkg, source="tenant", actor="a")
-    return await svc.review(row.id, reviewer="reviewer", approve=True, note="ok")
+    published = await svc.review(row.uuid, reviewer="reviewer", approve=True, note="ok")
+    await svc.commit()
+    return published
 
 
 async def test_builtin_upload_is_refused(svc: SkillService) -> None:
@@ -55,8 +57,8 @@ async def test_scripts_require_review_by_someone_else(svc: SkillService) -> None
     )
     assert (row.status, row.version) == ("pending_review", None)
     with pytest.raises(Forbidden):
-        await svc.review(row.id, reviewer="alice", approve=True, note="自己批自己")
-    approved = await svc.review(row.id, reviewer="bob", approve=True, note="看过脚本")
+        await svc.review(row.uuid, reviewer="alice", approve=True, note="自己批自己")
+    approved = await svc.review(row.uuid, reviewer="bob", approve=True, note="看过脚本")
     assert (approved.status, approved.version, approved.reviewed_by) == ("published", 1, "bob")
 
 
@@ -72,11 +74,14 @@ async def test_imported_needs_origin(svc: SkillService) -> None:
 
 async def test_rejected_upload_consumes_no_version(svc: SkillService, storage) -> None:  # type: ignore[no-untyped-def]
     first = await svc.ingest(_pkg(), source="tenant", actor="alice")
-    rejected = await svc.review(first.id, reviewer="bob", approve=False, note="描述不清")
+    rejected = await svc.review(first.uuid, reviewer="bob", approve=False, note="描述不清")
     assert (rejected.status, rejected.version) == ("rejected", None)
+    # 草稿在提交之后才删：提交失败时行回滚成待审查，草稿还在
+    assert storage.list_keys(f"{TEST_TENANT}/_skills_drafts/") != []
+    await svc.commit()
     assert storage.list_keys(f"{TEST_TENANT}/_skills_drafts/") == []
     second = await svc.ingest(_pkg(body="改好了\n"), source="tenant", actor="alice")
-    published = await svc.review(second.id, reviewer="bob", approve=True, note="ok")
+    published = await svc.review(second.uuid, reviewer="bob", approve=True, note="ok")
     assert published.version == 1
 
 

@@ -11,8 +11,8 @@ from skill_testkit import TEST_TENANT, make_zip, skill_files
 
 
 @pytest.fixture
-async def client(storage) -> AsyncIterator[httpx.AsyncClient]:  # type: ignore[no-untyped-def]
-    app = create_app(storage=storage)
+async def client(storage, uc) -> AsyncIterator[httpx.AsyncClient]:  # type: ignore[no-untyped-def]
+    app = create_app(storage=storage, uc=uc)
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(
         transport=transport,

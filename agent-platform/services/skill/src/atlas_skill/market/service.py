@@ -1,4 +1,6 @@
-"""技能市场（用户 2026-11-19 定）：产品自带的技能（浏览器、computer use……）不属于任何租户。
+"""MarketService：技能市场（用户 2026-11-19 定）。
+
+产品自带的技能（浏览器、computer use……）不属于任何租户。
 
     发布   运营中心经运营接口上传，发布即生效（运营中心就是审核人），版本号在市场里递增
     安装   租户从市场拷一个版本进来：对象拷到 {租户}/_skills/{slug}/{version}/，在租户里登记成
@@ -10,27 +12,28 @@
 ★ 拷贝而不是引用：装进来以后就是租户的技能（审计、停用都在租户里），市场后来改了不会悄悄改变
   租户正在用的内容；运行时也只认租户里的技能，不跨租户读。
 ★ 市场的 slug 装进租户后就被它占用：租户自己有同名技能（来源不是 market）时安装报冲突；
-  来源是 market 的技能不能在租户里上传新版本（service.ingest），新版本从市场装。
+  来源是 market 的技能不能在租户里上传新版本（versions/policy.py），新版本从市场装。
+★ 装进租户的那一步交给技能版本（install_from_market）：技能、版本的表只有技能版本领域写。
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from dataclasses import dataclass
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .. import audit
-from ..db.models import MarketSkill, MarketSkillVersion, Skill, SkillVersion
-from ..db.types import utcnow
+from ..check.package import RawPackage
+from ..check.scanner import content_scan, parse
+from ..db.models import MarketSkill, MarketSkillVersion
+from ..db.types import utcnow, uuid7
 from ..errors import Conflict, Invalid, NotFound
 from ..schemas import MarketInstalled, MarketSkillOut, MarketVersionOut
 from ..settings import SkillSettings
-from ..storage import SkillStorage, market_prefix, published_prefix
-from .package import RawPackage
-from .scanner import content_scan, parse
+from ..store.objects import SkillStorage
+from ..store.store import SkillStore
+from ..versions.service import MarketPackage, SkillService
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +59,9 @@ class MarketService:
     storage: SkillStorage
     settings: SkillSettings
 
+    def __post_init__(self) -> None:
+        self.store = SkillStore(self.storage)
+
     # ================================================================ 市场（运营接口）
 
     async def publish(
@@ -68,7 +74,10 @@ class MarketService:
         )
         if skill is None:
             skill = MarketSkill(
-                slug=parsed.slug, install_by_default=bool(install_by_default), created_by=actor
+                uuid=uuid7(),
+                slug=parsed.slug,
+                install_by_default=bool(install_by_default),
+                created_by=actor,
             )
             self.session.add(skill)
             await self.session.flush()
@@ -76,7 +85,7 @@ class MarketService:
             skill.install_by_default = install_by_default
         same = await self.session.scalar(
             select(MarketSkillVersion.version).where(
-                MarketSkillVersion.slug == parsed.slug,
+                MarketSkillVersion.market_skill_uuid == skill.uuid,
                 MarketSkillVersion.content_hash == parsed.content_hash,
             )
         )
@@ -84,21 +93,15 @@ class MarketService:
             raise Conflict(f"内容与市场里的 {parsed.slug} v{same} 完全相同，不需要发新版本")
         current = await self.session.scalar(
             select(func.max(MarketSkillVersion.version)).where(
-                MarketSkillVersion.slug == parsed.slug
+                MarketSkillVersion.market_skill_uuid == skill.uuid
             )
         )
         version = (current or 0) + 1
-        prefix = market_prefix(parsed.slug, version)
-
-        def _put() -> None:
-            if self.storage.list_keys(prefix):  # 上次发布失败的残留
-                self.storage.delete_tree(prefix)
-            self.storage.put_tree(prefix, pkg.files)
-
-        await asyncio.to_thread(_put)
+        prefix = await self.store.put_market(parsed.slug, version, pkg.files)
         now = utcnow()
         row = MarketSkillVersion(
-            slug=parsed.slug,
+            skill=skill,
+            market_skill_uuid=skill.uuid,
             version=version,
             status="published",
             description=parsed.description,
@@ -141,19 +144,13 @@ class MarketService:
     async def listing(self) -> list[MarketSkillOut]:
         """市场里的全部技能和版本（不分租户；租户视角的「已安装」由 for_tenant 补上）。"""
         skills = (await self.session.scalars(select(MarketSkill).order_by(MarketSkill.slug))).all()
-        rows = (
-            await self.session.scalars(
-                select(MarketSkillVersion).order_by(
-                    MarketSkillVersion.slug, MarketSkillVersion.version
-                )
-            )
-        ).all()
-        by_slug: dict[str, list[MarketSkillVersion]] = {}
+        rows = (await self.session.scalars(select(MarketSkillVersion))).all()
+        by_skill: dict[object, list[MarketSkillVersion]] = {}
         for row in rows:
-            by_slug.setdefault(row.slug, []).append(row)
+            by_skill.setdefault(row.market_skill_uuid, []).append(row)
         out = []
         for skill in skills:
-            versions = by_slug.get(skill.slug, [])
+            versions = sorted(by_skill.get(skill.uuid, []), key=lambda v: v.version)
             latest = next((v for v in reversed(versions) if v.status == "published"), None)
             out.append(
                 MarketSkillOut(
@@ -170,14 +167,7 @@ class MarketService:
 
     async def for_tenant(self) -> list[MarketSkillOut]:
         """市场里还能装的（已发布）技能，带上本租户已经装了哪些版本。"""
-        installed: dict[str, list[int]] = {}
-        rows = await self.session.execute(
-            select(SkillVersion.slug, SkillVersion.version)
-            .join(Skill, Skill.slug == SkillVersion.slug)
-            .where(Skill.source == "market", SkillVersion.version.is_not(None))
-        )
-        for slug, version in rows:
-            installed.setdefault(slug, []).append(version)
+        installed = await self._tenant_skills().installed_from_market()
         out = []
         for item in await self.listing():
             published = [v for v in item.versions if v.status == "published"]
@@ -188,72 +178,32 @@ class MarketService:
         return out
 
     async def install(self, slug: str, version: int | None, *, actor: str) -> MarketInstalled:
-        """把市场里的一个版本拷进当前租户。幂等：装过就直接返回。"""
+        """把市场里的一个版本拷进当前租户（技能版本领域登记成本租户的技能）。幂等。"""
         market = await self._version(slug, version) if version else await self._latest(slug)
         if market.status != "published":
             raise Conflict(f"技能市场里的 {slug} v{market.version} 已下架，不能安装")
-        skill = await self.session.scalar(
-            select(Skill).where(Skill.slug == slug).with_for_update()
-        )
-        if skill is not None and skill.source != "market":
-            raise Conflict(f"本租户已有同名技能 {slug}（来源 {skill.source}），不能从技能市场安装")
-        existing = await self.session.scalar(
-            select(SkillVersion).where(
-                SkillVersion.slug == slug, SkillVersion.version == market.version
-            )
-        )
-        if existing is not None:
-            return MarketInstalled(slug=slug, version=market.version, copied=False)
-        if skill is None:
-            self.session.add(Skill(slug=slug, source="market", created_by=actor))
-            await self.session.flush()
-        dst = published_prefix(slug, market.version)
-
-        def _copy() -> int:
-            if self.storage.list_keys(dst):  # 上次安装失败的残留
-                self.storage.delete_tree(dst)
-            copied = self.storage.copy_tree(market.storage_key, dst)
-            if copied != market.file_count:
-                self.storage.delete_tree(dst)
-                msg = f"拷贝到 {dst} 的对象数 {copied} ≠ 包内文件数 {market.file_count}"
-                raise RuntimeError(msg)
-            return copied
-
-        await asyncio.to_thread(_copy)
-        now = utcnow()
-        self.session.add(
-            SkillVersion(
+        copied = await self._tenant_skills().install_from_market(
+            MarketPackage(
                 slug=slug,
                 version=market.version,
-                status="published",
+                storage_key=market.storage_key,
                 description=market.description,
                 frontmatter=market.frontmatter,
-                storage_key=dst,
                 content_hash=market.content_hash,
                 size_bytes=market.size_bytes,
                 file_count=market.file_count,
                 has_scripts=market.has_scripts,
                 files=market.files,
-                scan_result={**market.scan_result, "history": []},
-                uploaded_by=actor,
-                reviewed_by=market.published_by,
-                reviewed_at=market.published_at,
-                review_note="从技能市场安装",
-                published_by=actor,
-                published_at=now,
-            )
-        )
-        audit.record(
-            self.session,
+                scan_result=market.scan_result,
+                published_by=market.published_by,
+                published_at=market.published_at,
+            ),
             actor=actor,
-            action="skill.install",
-            target_kind="skill",
-            target_id=slug,
-            version=market.version,
-            content_hash=market.content_hash,
         )
-        await self.session.flush()
-        return MarketInstalled(slug=slug, version=market.version, copied=True)
+        return MarketInstalled(slug=slug, version=market.version, copied=copied)
+
+    def _tenant_skills(self) -> SkillService:
+        return SkillService(session=self.session, storage=self.storage, settings=self.settings)
 
     async def install_many(self, refs: list[str], *, actor: str) -> list[MarketInstalled]:
         """refs 为空 = 装全部「默认安装」的（各自最新的已发布版本）。"""
@@ -276,9 +226,9 @@ class MarketService:
 
     async def _version(self, slug: str, version: int) -> MarketSkillVersion:
         row = await self.session.scalar(
-            select(MarketSkillVersion).where(
-                MarketSkillVersion.slug == slug, MarketSkillVersion.version == version
-            )
+            select(MarketSkillVersion)
+            .join(MarketSkill, MarketSkill.uuid == MarketSkillVersion.market_skill_uuid)
+            .where(MarketSkill.slug == slug, MarketSkillVersion.version == version)
         )
         if row is None:
             raise NotFound(f"技能市场里没有 {slug} v{version}")
@@ -287,7 +237,8 @@ class MarketService:
     async def _latest(self, slug: str) -> MarketSkillVersion:
         row = await self.session.scalar(
             select(MarketSkillVersion)
-            .where(MarketSkillVersion.slug == slug, MarketSkillVersion.status == "published")
+            .join(MarketSkill, MarketSkill.uuid == MarketSkillVersion.market_skill_uuid)
+            .where(MarketSkill.slug == slug, MarketSkillVersion.status == "published")
             .order_by(MarketSkillVersion.version.desc())
             .limit(1)
         )
@@ -298,9 +249,9 @@ class MarketService:
     async def _has_published(self, slug: str) -> bool:
         return (
             await self.session.scalar(
-                select(MarketSkillVersion.id).where(
-                    MarketSkillVersion.slug == slug, MarketSkillVersion.status == "published"
-                )
+                select(MarketSkillVersion.id)
+                .join(MarketSkill, MarketSkill.uuid == MarketSkillVersion.market_skill_uuid)
+                .where(MarketSkill.slug == slug, MarketSkillVersion.status == "published")
             )
         ) is not None
 

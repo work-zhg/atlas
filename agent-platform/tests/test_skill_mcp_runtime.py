@@ -253,12 +253,12 @@ async def real_skill_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
 
     import boto3
     from atlas_skill import __main__ as skill_main
-    from atlas_skill import auth as skill_auth
+    from atlas_skill.access.usercenter import UserCenterGateway
     from atlas_skill.api.app import create_app
     from atlas_skill.db.session import get_engine as skill_engine
     from atlas_skill.db.session import get_sessionmaker as skill_sessions
     from atlas_skill.settings import get_settings as skill_settings
-    from atlas_skill.storage import S3SkillStorage
+    from atlas_skill.store.objects import S3SkillStorage
     from moto import mock_aws
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
@@ -269,8 +269,7 @@ async def real_skill_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
         ops = ["skill:upload", "skill:review"]
         return httpx.Response(200, json={"can_access": True, "permissions": ops, "user": user})
 
-    monkeypatch.setattr(skill_auth, "_transport", httpx.MockTransport(snapshot))
-    monkeypatch.setattr(skill_auth, "_cache", skill_auth._Cache())
+    uc = UserCenterGateway("http://uc.invalid", transport=httpx.MockTransport(snapshot))
     test_db = "atlas_skill_test"
     saved = os.environ.get("ATLAS_SKILL_DATABASE_URL")
     os.environ["ATLAS_SKILL_DATABASE_URL"] = (
@@ -299,7 +298,7 @@ async def real_skill_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
             client = boto3.client("s3", region_name="us-east-1")
             client.create_bucket(Bucket="contract-bucket")
             storage = S3SkillStorage(client, "contract-bucket")
-            yield create_app(storage=storage), storage
+            yield create_app(storage=storage, uc=uc), storage
     finally:
         await skill_engine().dispose()
         skill_engine.cache_clear()

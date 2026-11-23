@@ -21,7 +21,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "容器图：技能应用",
-  "description": "范围是 agent-platform/services/skill。技能服务和运维命令行是同一个包、同一个镜像（atlas-app），分别以 serve 和 migrate / register-uc / skill 子命令运行。技能包存储是对象存储桶里的两个前缀（和 Atlas 的会话工作区同一个桶）；Atlas 建会话时直接从发布区拷包，不经技能服务。不用 Redis",
+  "description": "范围是 agent-platform/services/skill。技能服务和运维命令行是同一个包、同一个镜像（atlas-app），分别以 serve 和 migrate / skill / market 子命令运行。技能、版本和审计都归租户，技能市场不属于任何租户。技能包存储是对象存储桶里的几个前缀（和 Atlas 的会话工作区同一个桶）；Atlas 建会话时直接从发布区拷包，不经技能服务。不用 Redis",
   "system": "技能应用",
   "elements": [
     {
@@ -30,7 +30,7 @@
       "tag": "技能作者",
       "name": "技能作者",
       "color": "#297e06",
-      "description": "上传技能包（SKILL.md 加脚本、参考资料）；含脚本或不是内置来源的要经审查才发布。",
+      "description": "上传技能包（SKILL.md 加脚本、参考资料）；上传的技能要经本组织的审核人审查才发布。",
       "at": [
         0.35,
         0.0
@@ -42,7 +42,7 @@
       "tag": "技能管理员",
       "name": "技能管理员",
       "color": "#1a849c",
-      "description": "审查别人上传的技能，停用、启用、紧急下架、重新检查，查看审计。",
+      "description": "审查别人上传的技能，停用、启用、紧急下架、重新检查，从技能市场安装，查看审计。",
       "at": [
         1.55,
         0.0
@@ -76,7 +76,7 @@
       "shape": "server",
       "technology": "Python / FastAPI",
       "name": "技能服务",
-      "description": "管理接口：上传、审查、停用、下架、看包内文件和审计；给运行时的只读接口：技能目录、版本、下架清单。",
+      "description": "管理接口：上传、审查、停用、下架、技能市场、看包内文件和审计；给运行时的只读接口：本租户的技能目录、版本、下架清单；给运营中心的运营接口：技能市场发布、租户的停用和删除。",
       "at": [
         0.35,
         1.4
@@ -88,7 +88,7 @@
       "shape": "server",
       "technology": "Python / argparse",
       "name": "运维命令行",
-      "description": "迁移技能库、登记到用户中心；发布、审查、改状态、登记已有技能，和接口调同一套领域代码。",
+      "description": "迁移技能库；给租户发布、审查、改状态、登记已有技能；发布到技能市场、给租户装。和接口调同一套领域代码。",
       "at": [
         1.95,
         1.1
@@ -100,7 +100,7 @@
       "shape": "database",
       "technology": "PostgreSQL 16",
       "name": "技能库",
-      "description": "技能、技能版本（状态、文件清单、检查结果）和审计（skill_* 表）。",
+      "description": "技能、技能版本（状态、文件清单、检查结果）、审计（都带租户），以及技能市场的两张表（skill_*、market_* 表）。",
       "at": [
         1.15,
         2.75
@@ -112,10 +112,21 @@
       "shape": "bucket",
       "technology": "S3 兼容对象存储（MinIO）",
       "name": "技能包存储",
-      "description": "_skills/{slug}/{版本}/ 是已发布的包，只增不改；_skills_drafts/{上传 id}/ 是待审查的草稿。",
+      "description": "{租户}/_skills/{slug}/{版本}/ 是已发布的包，只增不改；{租户}/_skills_drafts/{上传 id}/ 是待审查的草稿；_market/skills/ 是技能市场。",
       "at": [
         -0.45,
         2.65
+      ]
+    },
+    {
+      "id": "ops",
+      "kind": "system",
+      "name": "运营中心",
+      "color": "#8a6d00",
+      "description": "管平台本身的独立系统：开通、停用、关闭租户，分份额，维护系统参数；看不到租户的业务内容。",
+      "at": [
+        -1.2,
+        0.0
       ]
     }
   ],
@@ -135,7 +146,7 @@
     {
       "from": "admin",
       "to": "cli",
-      "description": "部署时登记到用户中心、发布内置技能"
+      "description": "部署时迁移、把产品自带的技能发布到技能市场"
     },
     {
       "from": "agent",
@@ -146,7 +157,7 @@
     {
       "from": "agent",
       "to": "oss",
-      "description": "建会话时把发布区的包拷进会话",
+      "description": "建会话时按 storage_key 把发布区的包拷进会话",
       "technology": "S3 API/HTTP"
     },
     {
@@ -176,14 +187,14 @@
     {
       "from": "cli",
       "to": "oss",
-      "description": "写草稿、拷到发布区",
+      "description": "写草稿、拷到发布区、写技能市场",
       "technology": "S3 API/HTTP"
     },
     {
-      "from": "cli",
-      "to": "usercenter",
-      "description": "登记应用、操作码和角色",
-      "technology": "JSON/HTTP（管理 API，管理员账号登录）"
+      "from": "ops",
+      "to": "server",
+      "description": "技能市场发布、给租户装默认；停用、恢复、删除租户",
+      "technology": "JSON/HTTP（运营接口，签名）"
     }
   ]
 }

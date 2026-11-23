@@ -11,12 +11,12 @@ from uuid import UUID
 import httpx
 import pytest
 from atlas_skill.api.app import create_app
+from atlas_skill.check.package import RawPackage
 from atlas_skill.db.session import get_sessionmaker
 from atlas_skill.errors import Conflict
-from atlas_skill.skill.market import MarketService
-from atlas_skill.skill.package import RawPackage
-from atlas_skill.skill.service import SkillService
-from atlas_skill.storage import legacy_prefix
+from atlas_skill.market.service import MarketService
+from atlas_skill.store.layout import legacy_prefix
+from atlas_skill.versions.service import SkillService
 from atlas_tenancy import TenantScope
 from skill_testkit import OTHER_TENANT, TEST_TENANT, make_zip, ops_signed, skill_files
 
@@ -30,8 +30,8 @@ async def _release(tenant: str, pkg: RawPackage, storage, settings) -> None:  # 
         async with get_sessionmaker()() as s:
             svc = SkillService(s, storage, settings)
             row = await svc.ingest(pkg, source="tenant", actor="a")
-            await svc.review(row.id, reviewer="reviewer", approve=True, note="ok")
-            await s.commit()
+            await svc.review(row.uuid, reviewer="reviewer", approve=True, note="ok")
+            await svc.commit()
 
 
 async def _publish_market(storage, settings, *, default: bool = False, **kw) -> int:  # type: ignore[no-untyped-def]
@@ -44,8 +44,8 @@ async def _publish_market(storage, settings, *, default: bool = False, **kw) -> 
 
 
 @pytest.fixture
-async def client(storage) -> AsyncIterator[httpx.AsyncClient]:  # type: ignore[no-untyped-def]
-    app = create_app(storage=storage)
+async def client(storage, uc) -> AsyncIterator[httpx.AsyncClient]:  # type: ignore[no-untyped-def]
+    app = create_app(storage=storage, uc=uc)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app),
         base_url="http://skill",

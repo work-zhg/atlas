@@ -32,7 +32,7 @@
   "title": "代码图：技能应用 - 技能服务 - 技能仓库",
   "description": "目标领域模型，只画期望的样子。技能包在对象存储里的布局、写草稿、发布拷贝和核对；本领域没有自己的表，领域总览见 code-domains.html",
   "component": "技能仓库",
-  "package": "atlas_skill.store（目标模型）",
+  "package": "atlas_skill.store",
   "overview": "技能仓库管技能包放在哪、怎么搬。上传的包先进草稿区，审查通过后拷到发布区成为不可变的版本，草稿随后删掉。发布区的布局同时是给运行时的契约：Atlas 建会话时直接从这里把包拷进会话。\n\n它不决定什么时候发布、版本号是几（技能版本），也不检查包的内容（包检查）。",
   "elements": [
     {
@@ -44,7 +44,7 @@
         1.65,
         0.35
       ],
-      "responsibility": "技能包在对象存储里的全部操作：写草稿、发布到发布区、删草稿、读文件。上层只给上传 id、slug 和版本号，不拼对象键。",
+      "responsibility": "技能包在对象存储里的全部操作：写草稿、拷到发布区（从草稿区或技能市场）、写技能市场、删、读文件。上层只给上传 id、slug 和版本号，不拼对象键。",
       "methods": [
         [
           "+",
@@ -52,22 +52,26 @@
         ],
         [
           "+",
-          "publish(draft, slug, version, file_count) -> prefix"
+          "publish(src, slug, version, file_count) -> prefix"
         ],
         [
           "+",
-          "delete_draft(prefix)"
+          "put_market(slug, version, files) -> prefix"
         ],
         [
           "+",
-          "read(prefix, path) -> bytes · read_tree(prefix) -> files"
+          "delete(prefix)"
+        ],
+        [
+          "+",
+          "read(prefix, path) · read_tree(prefix) · read_legacy(slug, version)"
         ]
       ]
     },
     {
       "id": "impl",
       "kind": "class",
-      "name": "ObjectStoreSkillStore",
+      "name": "S3SkillStorage",
       "stereotype": "防腐层",
       "at": [
         1.65,
@@ -82,8 +86,8 @@
       ],
       "methods": [
         [
-          "-",
-          "list(prefix) · copy_tree(src, dst) · delete_tree(prefix)"
+          "+",
+          "put_tree · get · get_tree · list_keys · copy_tree · delete_tree"
         ]
       ]
     },
@@ -96,15 +100,23 @@
         0.05,
         1.9
       ],
-      "responsibility": "两个前缀：发布区按 slug 和版本号放，只增不改，运行时从这里拷包；草稿区按上传 id 放，发布时拷走、被拒时删掉。这套布局也是和运行时的契约。",
+      "responsibility": "第一层目录是租户。发布区按 slug 和版本号放，只增不改，运行时按版本记着的 storage_key 拷包；草稿区按上传 id 放；技能市场不分租户；多租户之前发布的在桶根原地不动。这套布局也是和运行时的契约。",
       "methods": [
         [
           "+",
-          "published(slug, version) -> _skills/{slug}/{version}/"
+          "published(slug, version) -> {租户}/_skills/{slug}/{version}/"
         ],
         [
           "+",
-          "draft(upload_id) -> _skills_drafts/{upload_id}/"
+          "draft(upload_id) -> {租户}/_skills_drafts/{upload_id}/"
+        ],
+        [
+          "+",
+          "market(slug, version) -> _market/skills/{slug}/{version}/"
+        ],
+        [
+          "+",
+          "legacy(slug, version) -> _skills/{slug}/{version}/"
         ]
       ]
     },
@@ -149,13 +161,13 @@
     {
       "id": "svc",
       "kind": "class",
-      "name": "SkillService · PublishPipeline",
+      "name": "SkillService · PublishPipeline · MarketService",
       "external": true,
       "source": "技能版本领域",
       "methods": [
         [
           "+",
-          "写草稿、发布、删草稿、读文件"
+          "写草稿、发布、写市场、删草稿、读文件"
         ]
       ],
       "at": [
@@ -172,7 +184,7 @@
       "methods": [
         [
           "+",
-          "_skills/{slug}/{version}/ → {user}/{会话}/skills/{slug}/"
+          "storage_key（{租户}/_skills/{slug}/{version}/）→ 会话的 skills/{slug}/"
         ]
       ],
       "at": [
@@ -223,19 +235,25 @@
     },
     {
       "name": "发布",
-      "entry": "publish(draft, slug, version, file_count)",
-      "callers": "发布流水线",
+      "entry": "publish(src, slug, version, file_count)",
+      "callers": "发布流水线、技能版本（从技能市场装）",
       "description": "清残留 → 拷到发布区 → 核对对象数；不符就删掉目标并报错"
     },
     {
-      "name": "删草稿",
-      "entry": "delete_draft(prefix)",
-      "callers": "技能版本（被拒时、发布提交之后）",
+      "name": "写技能市场",
+      "entry": "put_market(slug, version, files)",
+      "callers": "技能市场（运营中心发布）",
+      "description": "先清上次失败的残留，再写对象"
+    },
+    {
+      "name": "删",
+      "entry": "delete(prefix)",
+      "callers": "技能版本（提交之后：被拒、发布的草稿）",
       "description": "删失败只留下孤儿对象，不影响已发布的版本"
     },
     {
       "name": "读",
-      "entry": "read · read_tree",
+      "entry": "read · read_tree · read_legacy",
       "callers": "技能版本（管理页看文件、登记已有技能、重新检查）",
       "description": "对象不在了（存储被清过、换了桶）给 404，不给 500"
     },
@@ -243,7 +261,7 @@
       "name": "发布区布局",
       "entry": "StorageLayout.published(slug, version)",
       "callers": "Agent 平台（建会话时拷技能包）",
-      "description": "运行时用自己的只读凭据直接拷，不经技能服务"
+      "description": "运行时用自己的只读凭据，按版本记着的 storage_key 直接拷，不经技能服务"
     }
   ],
   "decisions": [
@@ -253,11 +271,11 @@
     },
     {
       "decision": "布局是和运行时的契约",
-      "reason": "Atlas 建会话时直接把 _skills/{slug}/{version}/ 拷到会话的 skills 前缀，拷贝在对象存储内部完成、不经技能服务；布局改了就是改协议，两边要一起改。"
+      "reason": "Atlas 建会话时按版本记着的 storage_key 把包拷到会话的 skills 前缀，拷贝在对象存储内部完成、不经技能服务；布局改了就是改协议，两边要一起改。"
     },
     {
       "decision": "只有技能应用能写，运行时只读",
-      "reason": "发布区的内容都是审查过的；运行时能写，就能绕过审查改技能。112 上两边共用 atlas-oss-creds 一组凭据，这条还没落实。"
+      "reason": "发布区的内容都是审查过的；运行时能写，就能绕过审查改技能。部署时两边各给一组凭据。"
     },
     {
       "decision": "拷完核对对象数，失败时先清残留",
@@ -270,6 +288,10 @@
     {
       "decision": "草稿、发布区可以和会话工作区共用一个桶",
       "reason": "按前缀隔开就够；112 上就是 atlas-dev 一个桶。分桶的话，权限可以按桶给，更干净。"
+    },
+    {
+      "decision": "第一层目录是租户，删租户只删自己的子目录",
+      "reason": "桶和 Atlas 的工作空间、知识库共用；删除租户时只删 {租户}/_skills/ 和 {租户}/_skills_drafts/，多租户之前发布的按版本记着的 storage_key 逐个删，不删整个 {租户}/。"
     }
   ]
 }

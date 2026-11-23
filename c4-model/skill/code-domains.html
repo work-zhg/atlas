@@ -30,10 +30,10 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：技能应用 - 技能服务 - 领域总览",
-  "description": "目标模型，只画期望的样子。四个领域只画对外入口、契约和共享内核，看依赖方向；入口组件怎么调各领域见 component-server.html，领域内部见各自的 code-*.html",
+  "description": "目标模型，只画期望的样子。五个领域只画对外入口、契约和共享内核，看依赖方向；入口组件怎么调各领域见 component-server.html，领域内部见各自的 code-*.html",
   "component": "技能服务",
-  "package": "atlas_skill（目标模型 · 领域总览）",
-  "overview": "技能服务分四个领域。技能版本是核心：技能和版本的状态机、审查、发布；它依赖包检查（这个包合不合法、有什么可疑处）和技能仓库（包放在对象存储的哪里、怎么搬）。访问控制给入口判身份和操作码，领域不依赖它。\n\n和运行时的契约有两条：内部接口给的元数据只有已发布、停用、下架的版本；发布区的布局 _skills/{slug}/{版本}/ 只增不改，Atlas 直接从这里拷包。图上每个元素第一行写着它属于哪个领域。",
+  "package": "atlas_skill（领域总览）",
+  "overview": "技能服务分五个领域。技能版本是核心：技能和版本的状态机、审查、发布；它依赖包检查（这个包合不合法、有什么可疑处）和技能仓库（包放在对象存储的哪里、怎么搬）。访问控制给入口判身份和操作码，领域不依赖它。技能市场放产品自带的技能，不属于任何租户：运营中心发布，租户拷贝安装，装进租户的那一步交给技能版本。\n\n和运行时的契约有两条：内部接口给的元数据只有已发布、停用、下架的版本；发布区的布局 {租户}/_skills/{slug}/{版本}/ 只增不改，Atlas 按版本记着的 storage_key 直接从这里拷包。图上每个元素第一行写着它属于哪个领域。\n\n技能、版本和审计都归租户：slug、版本号在租户内，接口先核对请求头写的租户再进入它，对象存储的第一层目录是租户。租户的停用、恢复、删除和技能市场的发布走运营接口（运营接口库）。",
   "elements": [
     {
       "id": "svc",
@@ -58,7 +58,11 @@
         ],
         [
           "+",
-          "catalog · versions · version · revoked"
+          "install_from_market · commit"
+        ],
+        [
+          "+",
+          "catalog · runtime_versions · runtime_version · revoked"
         ]
       ]
     },
@@ -71,7 +75,7 @@
         2.75,
         1.95
       ],
-      "responsibility": "【技能版本】锁技能行、分配版本号、拷到发布区并核对、改行，提交之后删草稿。",
+      "responsibility": "【技能版本】锁技能行、分配版本号、拷到发布区并核对、改行；草稿交回 SkillService，提交之后再删。",
       "attributes": [
         [
           "",
@@ -81,7 +85,7 @@
       "methods": [
         [
           "+",
-          "publish(version, *, actor)"
+          "publish(version, *, actor) -> 草稿前缀"
         ]
       ]
     },
@@ -104,7 +108,7 @@
       "methods": [
         [
           "+",
-          "read_zip · read_dir · parse"
+          "load_zip · load_dir · parse"
         ],
         [
           "+",
@@ -121,7 +125,7 @@
         2.75,
         3.5
       ],
-      "responsibility": "【技能仓库】草稿区和发布区：写草稿、发布拷贝和核对、删草稿、读文件。详见 code-store.html。",
+      "responsibility": "【技能仓库】草稿区、发布区和技能市场：写草稿、发布拷贝和核对、写市场、删、读文件。详见 code-store.html。",
       "attributes": [
         [
           "",
@@ -131,7 +135,7 @@
       "methods": [
         [
           "+",
-          "put_draft · publish · delete_draft · read"
+          "put_draft · publish · put_market · delete · read"
         ]
       ]
     },
@@ -144,7 +148,7 @@
         1.0,
         3.5
       ],
-      "responsibility": "【技能仓库】_skills/{slug}/{版本}/ 和 _skills_drafts/{上传 id}/。发布区的布局是和运行时的契约：Atlas 建会话时直接从这里拷包。",
+      "responsibility": "【技能仓库】{租户}/_skills/{slug}/{版本}/、{租户}/_skills_drafts/{上传 id}/ 和 _market/skills/{slug}/{版本}/。发布区的布局是和运行时的契约：Atlas 建会话时按版本记着的 storage_key 拷包。",
       "attributes": [
         [
           "",
@@ -154,7 +158,7 @@
       "methods": [
         [
           "+",
-          "published · draft"
+          "published · draft · market · legacy"
         ]
       ]
     },
@@ -177,7 +181,7 @@
       "methods": [
         [
           "+",
-          "principal · require_any"
+          "principal(headers, tenant)"
         ]
       ]
     },
@@ -200,7 +204,7 @@
       "methods": [
         [
           "+",
-          "authz(auth_uid, identity)"
+          "authz(auth_uid, tenant, identity)"
         ]
       ]
     },
@@ -224,6 +228,33 @@
         [
           "+",
           "record(actor, action, target_kind, target_id, **detail)"
+        ]
+      ]
+    },
+    {
+      "id": "market",
+      "kind": "class",
+      "name": "MarketService",
+      "stereotype": "应用服务",
+      "at": [
+        4.4,
+        0.3
+      ],
+      "responsibility": "【技能市场】产品自带的技能，不属于任何租户：运营中心发布（发布即生效）、标默认安装、下架；租户从市场拷一个版本进来，交给技能版本装成本租户来源 market 的已发布版本。详见 code-market.html。",
+      "methods": [
+        [
+          "+",
+          "publish · set_default · revoke · listing"
+        ],
+        [
+          "+",
+          "for_tenant · install · install_many"
+        ]
+      ],
+      "attributes": [
+        [
+          "",
+          "领域：技能市场"
         ]
       ]
     }
@@ -265,6 +296,22 @@
       "to": "uc",
       "type": "association",
       "description": "授权快照"
+    },
+    {
+      "from": "market",
+      "to": "svc",
+      "description": "装进租户"
+    },
+    {
+      "from": "market",
+      "to": "check",
+      "description": "读包、检查",
+      "labelAt": 0.3
+    },
+    {
+      "from": "market",
+      "to": "store",
+      "description": "写市场"
     }
   ],
   "capabilities": [
@@ -272,11 +319,11 @@
       "name": "上传并审查发布",
       "entry": "SkillService.ingest · review",
       "callers": "管理接口、运维命令行",
-      "description": "包检查 → 技能仓库写草稿 → 待审查；另一个人审查通过 → 发布流水线拷到发布区、分配版本号"
+      "description": "包检查 → 技能仓库写草稿 → 待审查；另一个人审查通过 → 发布流水线拷到发布区、分配版本号；提交之后删草稿"
     },
     {
       "name": "运行时目录",
-      "entry": "SkillService.catalog · versions · version · revoked",
+      "entry": "SkillService.catalog · runtime_versions · runtime_version · revoked",
       "callers": "内部接口（Atlas）",
       "description": "只有已发布、停用、下架的；Atlas 按版本永久缓存内容，状态和下架清单 60 秒刷新"
     },
@@ -291,12 +338,18 @@
       "entry": "SkillService.change_status",
       "callers": "管理接口、运维命令行",
       "description": "停用挡新引用；下架让已有引用在装配时跳过，不可撤销"
+    },
+    {
+      "name": "技能市场",
+      "entry": "MarketService.publish · install · install_many",
+      "callers": "运营接口（发布、下架、给租户装默认）、管理接口（租户看市场、安装）",
+      "description": "市场发布即生效；装进租户的是本租户来源 market 的已发布版本，装过就不重复装"
     }
   ],
   "decisions": [
     {
-      "decision": "四个领域，依赖只往下",
-      "reason": "技能版本 → 包检查、技能仓库；访问控制只给入口用。检查规则、存储布局、状态机各在一处，改其中一个不用动另外两个。"
+      "decision": "五个领域，依赖只往下",
+      "reason": "技能市场 → 技能版本 → 包检查、技能仓库；访问控制只给入口用。技能、版本的表只有技能版本写：市场装进租户也交给它。检查规则、存储布局、状态机各在一处，改其中一个不用动另外两个。"
     },
     {
       "decision": "已发布版本不可变是和运行时的核心契约",
@@ -312,14 +365,18 @@
     },
     {
       "decision": "一个请求一个事务，响应前提交",
-      "reason": "现在会话依赖是请求作用域，提交在响应发出之后：调用方拿到 201 立刻去查可能查不到；提交失败时调用方已经拿到成功。MCP 网关、模型平台已经改成响应前提交，这里还没改。"
+      "reason": "会话依赖要是请求作用域、提交在响应发出之后，调用方拿到 201 立刻去查可能查不到，提交失败时调用方却已经拿到成功。所以写操作在返回前显式提交；发布、被拒的草稿在提交之后才删。"
     },
     {
       "decision": "不用 Redis",
       "reason": "并发只发生在同一个技能上（两个人同时上传、同时审查），用数据库行锁就够；运行时那边的缓存在 Atlas 里。"
+    },
+    {
+      "decision": "技能市场不分租户，装进租户就是租户的",
+      "reason": "拷贝而不是引用：装进来以后审计、停用都在租户里，市场后来改了不会悄悄改变租户正在用的内容；运行时也只认租户里的技能，不跨租户读。版本号与市场一致，系统参数里写的 browser@3 在每个装了 v3 的租户里都指同一份内容。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），表间引用的列叫 xxx_uuid。对外（接口、智能体配置、对象存储路径）仍用 slug + 版本号：它们不能改，是现成的业务标识。表间不建外键约束，连线是逻辑引用，由代码维护。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成），表间引用的列叫 xxx_uuid。对外（接口、智能体配置、对象存储路径）仍用 slug + 版本号：它们不能改，是现成的业务标识。表间不建外键约束，连线是逻辑引用，由代码维护。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。每张表还有 tenant_uuid（uuid，所属租户；atlas_tenancy 按当前租户自动过滤），下面不重复列出。",
   "tables": [
     {
       "name": "skill_audit",

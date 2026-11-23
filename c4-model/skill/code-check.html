@@ -32,7 +32,7 @@
   "title": "代码图：技能应用 - 技能服务 - 包检查",
   "description": "目标领域模型，只画期望的样子。技能包的读取和三层检查；本领域没有自己的表，领域总览见 code-domains.html",
   "component": "包检查",
-  "package": "atlas_skill.check（目标模型）",
+  "package": "atlas_skill.check",
   "overview": "包检查回答「这个包是不是一个合法、可以交给人审查的技能」。第 1 层归档安全和第 2 层结构是硬门槛，不过就拒；第 3 层内容模式和描述冲突只记警告，连同文件清单一起交给审查人。检查结果写进版本的检查报告里，规则升级后可以对存量版本重新检查。\n\n它不决定要不要人工审查、能不能发布（技能版本），不存任何东西（技能仓库），也不认识上传人。",
   "elements": [
     {
@@ -48,11 +48,11 @@
       "methods": [
         [
           "+",
-          "read_zip(data, limits) -> RawPackage"
+          "load_zip(data, limits) -> RawPackage"
         ],
         [
           "+",
-          "read_dir(path, limits) -> RawPackage"
+          "load_dir(path, limits) -> RawPackage"
         ],
         [
           "+",
@@ -250,13 +250,13 @@
     {
       "id": "svc",
       "kind": "class",
-      "name": "SkillService",
+      "name": "SkillService · MarketService",
       "external": true,
-      "source": "技能版本领域",
+      "source": "技能版本、技能市场领域",
       "methods": [
         [
           "+",
-          "上传、登记已有技能、重新检查时"
+          "上传、登记已有技能、重新检查、发布到技能市场时"
         ]
       ],
       "at": [
@@ -340,8 +340,8 @@
   "capabilities": [
     {
       "name": "读包",
-      "entry": "read_zip(data, limits) · read_dir(path, limits)",
-      "callers": "技能版本（上传：接口给 zip，命令行给目录）",
+      "entry": "load_zip(data, limits) · load_dir(path, limits)",
+      "callers": "技能版本、技能市场（上传：接口给 zip，命令行给目录）",
       "description": "第 1 层在读的时候做完；不过就抛 ScanBlocked。请求体超过上限的，入口按上限读、不整个读进内存"
     },
     {

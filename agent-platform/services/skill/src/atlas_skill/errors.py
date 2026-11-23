@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-__all__ = ["Conflict", "Forbidden", "Invalid", "NotFound", "SkillError"]
+__all__ = [
+    "Conflict",
+    "Forbidden",
+    "Invalid",
+    "NotFound",
+    "SkillError",
+    "Unauthorized",
+    "Unavailable",
+]
 
 
 class SkillError(Exception):
@@ -30,3 +38,15 @@ class Conflict(SkillError):
     """状态不允许这个操作（如审查一个已发布的版本）、或与现有数据冲突。"""
 
     status_code = 409
+
+
+class Unauthorized(SkillError):
+    """没登录、账号停用、不在这个租户里。"""
+
+    status_code = 401
+
+
+class Unavailable(SkillError):
+    """依赖的服务（用户中心）暂时不可用：一律不放行。"""
+
+    status_code = 503

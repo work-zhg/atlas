@@ -1,11 +1,14 @@
 """跨方言的列类型。
 
 ★ 与 atlas_agent/db/types.py 同一套规则，但**不 import 它**：两个服务不共享
-  代码包（import-linter 契约）。这里只留本服务用得到的三样。
+  代码包（import-linter 契约）。这里只留本服务用得到的几样。
 """
 
 from __future__ import annotations
 
+import os
+import time
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
@@ -14,7 +17,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.engine import Dialect
 from sqlalchemy.types import TypeDecorator
 
-__all__ = ["JSONType", "UTCDateTime", "UUIDType", "utcnow"]
+__all__ = ["JSONType", "UTCDateTime", "UUIDType", "utcnow", "uuid7"]
 
 UUIDType = sa.Uuid(as_uuid=True)
 JSONType = sa.JSON().with_variant(postgresql.JSONB(), "postgresql")
@@ -41,3 +44,15 @@ class UTCDateTime(TypeDecorator):
 
 def utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def uuid7() -> uuid.UUID:
+    """时间有序的 UUID（RFC 9562 v7）：逻辑主键在 Python 侧生成，按创建时间大致有序。"""
+    ms = time.time_ns() // 1_000_000
+    rand = int.from_bytes(os.urandom(10), "big")
+    value = (ms & ((1 << 48) - 1)) << 80
+    value |= 0x7 << 76
+    value |= ((rand >> 62) & 0xFFF) << 64
+    value |= 0b10 << 62
+    value |= rand & ((1 << 62) - 1)
+    return uuid.UUID(int=value)

@@ -86,21 +86,20 @@ ANYONE = {
 }
 
 
-@pytest.fixture(autouse=True)
-def _fake_user_center(monkeypatch: pytest.MonkeyPatch) -> None:
-    """授权快照走替身：人都在请求头写的租户里。
+@pytest.fixture
+def uc() -> object:
+    """用户中心网关接替身（create_app(uc=…)）：人都在请求头写的租户里。
 
-    测权限的用例（test_auth_uc.py）自己再换 auth._transport。
+    测权限的用例（test_auth_uc.py）自己建一个回不同快照的。
     """
     import httpx
-    from atlas_skill import auth
+    from atlas_skill.access.usercenter import UserCenterGateway
 
     def handler(request: httpx.Request) -> httpx.Response:
         user = {"status": "active", "tenant_id": request.headers.get("x-tenant-id")}
         return httpx.Response(200, json={**ANYONE, "user": user})
 
-    monkeypatch.setattr(auth, "_transport", httpx.MockTransport(handler))
-    monkeypatch.setattr(auth, "_cache", auth._Cache())
+    return UserCenterGateway("http://uc.invalid", transport=httpx.MockTransport(handler))
 
 
 @pytest.fixture(autouse=True)
@@ -118,7 +117,7 @@ async def _clean_tables() -> AsyncIterator[None]:
 @pytest.fixture
 def storage() -> Iterator[object]:
     import boto3
-    from atlas_skill.storage import S3SkillStorage
+    from atlas_skill.store.objects import S3SkillStorage
     from moto import mock_aws
 
     with mock_aws():
