@@ -4,7 +4,7 @@ MCP 网关：MCP 服务的唯一入口——连 MCP Server、把 REST / gRPC 转
 
 ## 用户中心登记
 
-代码里只有判断用到的编码（`atlas_mcpgateway/auth.py`、`perms.py`），不往用户中心登记。下面这些由
+代码里只有判断用到的编码（`atlas_mcpgateway/access/authorization.py`、`access/usercenter.py`），不往用户中心登记。下面这些由
 运营人员在运营中心「应用目录」里录入；编码必须和这里一致，名称、角色怎么组合可以按需调整。
 
 **应用**

@@ -120,7 +120,7 @@
     {
       "from": "mgmt",
       "to": "access",
-      "description": "operator(uid, auth_uid)：有没有 mcp:manage"
+      "description": "operator(uid, auth_uid, 租户)：有没有 mcp:manage"
     },
     {
       "from": "access",
@@ -128,13 +128,13 @@
       "description": "授权快照",
       "technology": "JSON/HTTP（GET /open/v1/users/{auth_uid}/authz）",
       "details": {
-        "note": "成功结果缓存 30 秒；账号停用 → 401，没有 mcp:manage → 403。"
+        "note": "按（人, 租户）缓存 30 秒；人不在请求头写的租户里、账号停用 → 401，没有 mcp:manage → 403。"
       }
     },
     {
       "from": "mgmt",
       "to": "catalog",
-      "description": "discover(draft)"
+      "description": "discover(类型, 连接, 凭据)"
     },
     {
       "from": "catalog",
@@ -186,7 +186,7 @@
       "to": "catalog",
       "description": "register(draft, selected, actor = X-Uid)",
       "details": {
-        "note": "服务名不能和已有的重复，停用的也算：服务名是工具名前缀和用户中心里的数据标识。"
+        "note": "服务名在租户内不能和已有的重复，停用的也算：服务名是工具名前缀和用户中心里的数据标识。"
       }
     },
     {

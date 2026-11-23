@@ -28,8 +28,8 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
 async def get_session() -> AsyncIterator[AsyncSession]:
     """FastAPI 依赖（管理 / 内部接口）：一个请求一个事务，异常回滚。
 
-    ★ 数据面不用它：转发可能持续很久（工具调用、推送流），事务不能跨着转发开着 ——
-      proxy.py 在转发前后各开一个短会话。
+    ★ 数据面不用它：转发可能持续很久（工具调用），事务不能跨着转发开着 ——
+      工具调用（invocation/service.py）读目录、认 Key 各开一个短会话，转发上游时不占连接。
     """
     async with get_sessionmaker()() as session:
         try:

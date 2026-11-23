@@ -1,7 +1,7 @@
 """MCP 网关的设置（环境变量前缀 ATLAS_MCPGW_）。
 
 ★ Trace 用 OpenTelemetry 的标准环境变量（OTEL_EXPORTER_OTLP_ENDPOINT、OTEL_SERVICE_NAME、
-  OTEL_TRACES_SAMPLER …），不在这里另起名字（tracing.py）。
+  OTEL_TRACES_SAMPLER …），不在这里另起名字（invocation/trace.py）。
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ class GatewaySettings(BaseSettings):
     #: 调上游时建连接的超时。★ 不设读超时：工具调用可能要很久（超时属于流量治理，单独设计）
     connect_timeout_s: float = 10.0
     #: 允许连的内部网段（CIDR）。上游地址由租户填写，默认不许指向回环、私有网段、链路本地等
-    #: 内部地址（upstreams/guard.py）；私有化部署里上游确实在内网的，把网段加在这里
+    #: 内部地址（upstream/guard.py）；私有化部署里上游确实在内网的，把网段加在这里
     upstream_allow_cidrs: list[str] = Field(default_factory=list)
 
     # ── MCP 代理：定期重新拉取工具定义 ───────────────────────────────

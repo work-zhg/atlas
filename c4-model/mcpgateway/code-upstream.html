@@ -32,7 +32,7 @@
   "title": "代码图：MCP 网关 - 网关服务 - 上游接入",
   "description": "目标领域模型，只画期望的样子。三种上游的发现与调用、上游凭据；本领域没有自己的表，领域总览见 code-domains.html",
   "component": "上游接入",
-  "package": "atlas_mcpgateway.upstream（目标模型）",
+  "package": "atlas_mcpgateway.upstream",
   "overview": "上游接入把三种上游统一成「发现工具」和「调用工具」两个动作：MCP 代理（已有的远程 MCP Server，网关作为客户端）、REST 转换（OpenAPI 的一个操作是一个工具）、gRPC 转换（一个方法是一个工具）。调用时按工具的映射构造请求，注入上游凭据，带上调用者身份和追踪上下文，结果统一成 MCP 的 CallToolResult。\n\n它不知道服务和工具存在哪（服务目录把连接、凭据、映射作为值对象传进来），不判权（工具调用在调它之前判完），除了 OAuth2 Token 和连接不保存任何状态。",
   "elements": [
     {
@@ -44,7 +44,7 @@
         1.6,
         0.3
       ],
-      "responsibility": "上游接入的唯一入口，进程内一份：按服务类型选上游，先把上游凭据变成请求头、查询参数或 gRPC metadata，再交给对应的上游去发现或调用。HTTP 连接、gRPC 连接、描述池、OAuth2 Token 都在这里复用。",
+      "responsibility": "上游接入的唯一入口，进程内一份：按服务类型选上游，先查地址（AddressGuard），把上游凭据变成请求头、查询参数或 gRPC metadata（UpstreamAuth），再交给对应的上游去发现或调用。HTTP 连接、gRPC 连接、描述池、OAuth2 Token 都在这里复用。",
       "attributes": [
         [
           "-",
@@ -58,11 +58,15 @@
       "methods": [
         [
           "+",
-          "discover(spec, *, service) -> Discovered"
+          "discover(spec) -> Discovered"
         ],
         [
           "+",
           "call(spec, binding, arguments, identity) -> CallToolResult"
+        ],
+        [
+          "+",
+          "check_addresses(spec) · probe(url)"
         ]
       ]
     },
@@ -83,7 +87,7 @@
         ],
         [
           "+",
-          "call(spec, binding, arguments, headers) -> dict"
+          "call(spec, binding, arguments, auth, identity) -> dict"
         ]
       ]
     },
@@ -93,7 +97,7 @@
       "name": "McpProxy",
       "stereotype": "策略",
       "at": [
-        -0.1,
+        0.5,
         3.95
       ],
       "responsibility": "已有的远程 MCP Server（Streamable HTTP 或旧版 SSE），网关作为客户端。用 legacy 握手，几乎所有 MCP Server 都支持。每次调用开一个上游会话：initialize → tools/call → 关闭，直接发 tools/call、不按输出定义校验（那会多拉一次 tools/list）。上游回 JSON-RPC 错误和连不上分开报。",
@@ -224,6 +228,23 @@
       ]
     },
     {
+      "id": "guard",
+      "kind": "class",
+      "name": "AddressGuard",
+      "stereotype": "策略",
+      "at": [
+        -0.6,
+        4.05
+      ],
+      "responsibility": "租户填的上游地址（MCP 地址、REST 基地址和 OpenAPI 地址、gRPC 地址、OAuth2 的 Token 地址）不能指向平台内部：回环、链路本地（含云厂商的元数据地址）、私有网段、运营商级 NAT、组播、保留地址都不连。按解析出来的 IP 判，解析不了按连不上处理；私有化部署按网段放开。",
+      "methods": [
+        [
+          "+",
+          "check(target) · check_all(targets)"
+        ]
+      ]
+    },
+    {
       "id": "binding",
       "kind": "class",
       "name": "ToolBinding",
@@ -257,11 +278,11 @@
         3.85,
         1.65
       ],
-      "responsibility": "发现的结果：MCP 代理是上游的全部工具定义（全部登记）；REST 是 OpenAPI 的操作、gRPC 是描述里的方法（管理员挑，不支持的标出来）；gRPC 还带要存库的描述。",
+      "responsibility": "发现的结果：MCP 代理是上游 tools/list 的全部工具，原样（全部登记，由服务目录规范化成 ToolDefinition）；REST 是 OpenAPI 的操作、gRPC 是描述里的方法（管理员挑，不支持的标出来）；gRPC 还带要存库的描述。",
       "attributes": [
         [
           "+",
-          "definitions | operations | methods"
+          "tools | operations | methods"
         ],
         [
           "+",
@@ -407,12 +428,17 @@
       "from": "grpc",
       "to": "up",
       "type": "implements"
+    },
+    {
+      "from": "gw",
+      "to": "guard",
+      "description": "连接前查地址"
     }
   ],
   "capabilities": [
     {
       "name": "发现工具",
-      "entry": "discover(spec, *, service)",
+      "entry": "discover(spec)",
       "callers": "服务目录（预览、登记、重新导入、刷新）",
       "description": "MCP 拉 tools/list；REST 取 OpenAPI 解析成操作，没给地址就是空的（手工添加）；gRPC 服务端反射或解析上传的描述文件。失败抛 DiscoveryFailed，原因给管理员看"
     },
@@ -432,11 +458,11 @@
   "decisions": [
     {
       "decision": "三种上游实现同一个扩展点",
-      "reason": "现在 Upstreams.call、_discover 里按 kind 写 if / else，加一种上游要改三处。抽成 Upstream 后，加一种只加一个实现。"
+      "reason": "要是在发现和调用里按服务类型写 if / else，加一种上游要改好几处。抽成 Upstream 后，加一种只加一个实现、在 UpstreamGateway 里登记。"
     },
     {
       "decision": "只收值对象，不收目录的 ORM 行",
-      "reason": "现在 Upstreams.call 直接收 McpService、McpTool 行，上游接入因此依赖目录的表结构。改收 UpstreamSpec、ToolBinding（由目录转出），上游接入不认识任何领域，可以单独测；身份也只收算好的请求头，不依赖工具调用。"
+      "reason": "上游接入要是直接收服务、工具的库表行，就依赖目录的表结构。只收 UpstreamSpec、ToolBinding（由目录转出），上游接入不认识任何领域，可以单独测；身份也只收算好的请求头，不依赖工具调用。"
     },
     {
       "decision": "不设读超时",
@@ -461,6 +487,10 @@
     {
       "decision": "REST 非 2xx 当作工具错误返回",
       "reason": "4xx 多半是参数不对，交给模型看状态码和响应摘要自己改；协议错误只留给连不上、上游 JSON-RPC 错误这类网关层面的失败。"
+    },
+    {
+      "decision": "上游地址不能指向平台内部",
+      "reason": "上游地址是租户填的。回环、链路本地（含云厂商的元数据地址）、私有网段、运营商级 NAT 一律不连；登记、改连接时查一次，每次连接前按解析出来的 IP 再查一次。私有化部署里上游确实在内网的，按网段放开（upstream_allow_cidrs）。"
     }
   ]
 }

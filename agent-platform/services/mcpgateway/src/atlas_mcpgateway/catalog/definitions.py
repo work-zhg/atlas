@@ -1,4 +1,4 @@
-"""工具定义：规范化、检查、定义指纹、副作用与注解。
+"""工具定义（值对象 ToolDefinition）：规范化、检查、定义指纹、副作用与注解。
 
     MCP 代理      定义从上游拉来（tools/list），副作用取上游注解
     REST / gRPC  定义由管理员在网关里写（映射 + 参数），副作用由管理员定，注解由副作用算出
@@ -21,10 +21,8 @@ from dataclasses import dataclass
 from typing import Any
 
 __all__ = [
-    "PARAM_TYPES",
     "SERVICE_NAME_PATTERN",
-    "TOOL_NAME_PATTERN",
-    "Definition",
+    "ToolDefinition",
     "annotations_for",
     "check",
     "content_hash",
@@ -40,12 +38,8 @@ __all__ = [
 #: 服务名：小写字母开头、不含下划线（模型看到的名字是「服务名__工具名」，第一个 __ 就是分隔点），
 #: 不超过 24 个字符
 SERVICE_NAME_PATTERN = r"^[a-z][a-z0-9-]{1,23}$"
-#: 网关里定义的工具（REST / gRPC）的名字
-TOOL_NAME_PATTERN = r"^[a-z][a-z0-9_]{0,63}$"
 #: 各模型厂商工具名规则的共同子集
 _MODEL_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
-#: REST 参数的类型（JSON Schema）
-PARAM_TYPES = ("string", "integer", "number", "boolean", "array", "object")
 
 
 def model_name(service: str, tool: str) -> str | None:
@@ -97,7 +91,7 @@ def annotations_for(effect: str) -> dict[str, Any]:
 
 
 @dataclass(frozen=True)
-class Definition:
+class ToolDefinition:
     """一个工具的定义，已规范化（MCP 线上格式的注解）。"""
 
     name: str
@@ -127,9 +121,9 @@ def define(
     description: str,
     schema: Mapping[str, Any],
     annotations: Mapping[str, Any] | None,
-) -> Definition:
+) -> ToolDefinition:
     annotations = {k: v for k, v in (annotations or {}).items() if v is not None} or None
-    return Definition(
+    return ToolDefinition(
         name=name,
         description=description,
         input_schema=dict(schema),
@@ -139,8 +133,8 @@ def define(
     )
 
 
-def normalize(service: str, raw: Mapping[str, Any]) -> Definition:
-    """MCP 线上格式的工具（上游 tools/list 返回里的一项）→ Definition。"""
+def normalize(service: str, raw: Mapping[str, Any]) -> ToolDefinition:
+    """MCP 线上格式的工具（上游 tools/list 返回里的一项）→ ToolDefinition。"""
     schema = raw.get("inputSchema")
     annotations = raw.get("annotations")
     return define(

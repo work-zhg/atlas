@@ -43,33 +43,38 @@ API Key
 
 ★ 写操作在返回前提交：前端改完立刻重新拉列表，不能读到旧数据。
 ★ 授权写的是用户中心的数据权限，网关先判谁能授权，用户中心再按操作人校验一遍。
+★ 授权只认主体：授权列表里的主体由这里换成 Key（ApiKeys.by_subjects）。
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 from typing import Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from opentelemetry import trace
 
-from ..auth import ManagerDep, Operator, OperatorDep, verified_tenant
+from ..access.authorization import Authorization, Operator
+from ..access.key_access import KeyAccess
+from ..catalog.service import ServiceCatalog
 from ..db.models import McpApiKey, McpService
 from ..errors import Conflict, Forbidden, Invalid, NotFound, Unavailable
-from ..keys import KeyService
-from ..perms import AccessCache, KeyAccess, Permissions
-from ..upstreams import DiscoveryFailed
-from ..upstreams.hub import decode_descriptor
+from ..invocation.rejection import Rejection
+from ..keys.service import ApiKeys
+from ..upstream import UpstreamUnavailable
 from .deps import (
-    AccessDep,
-    DataPlaneDep,
-    GrantsDep,
+    AuthzDep,
+    CatalogDep,
+    InvocationDep,
     KeysDep,
-    PermsDep,
-    RegistryDep,
+    ManagerDep,
+    OperatorDep,
+    PolicyDep,
     SessionDep,
     SettingsDep,
+    verified_tenant,
 )
 from .schemas import (
     ClientKeyIn,
@@ -112,7 +117,7 @@ from .views import (
     tool_out,
 )
 
-# ★ 先核对租户、进入它（auth.verified_tenant），之后的读写都按它自动过滤
+# ★ 先核对租户、进入它（deps.verified_tenant），之后的读写都按它自动过滤
 router = APIRouter(prefix="/api/v1", tags=["admin"], dependencies=[Depends(verified_tenant)])
 _tracer = trace.get_tracer("atlas_mcpgateway")
 
@@ -129,40 +134,40 @@ def _credential(body: CredentialIn) -> tuple[dict[str, Any], str | None]:
     return raw, (body.secret or "").strip() or None
 
 
-async def _safe_access(access: AccessCache, key: McpApiKey | None) -> KeyAccess | None:
+def _descriptor(raw: str | None) -> bytes | None:
+    """上传的描述文件（base64）→ bytes。"""
+    if not raw:
+        return None
+    try:
+        return base64.b64decode(raw, validate=True)
+    except ValueError as exc:
+        raise Invalid("描述文件不是 base64 编码的 FileDescriptorSet") from exc
+
+
+async def _safe_access(authz: Authorization, key: McpApiKey | None) -> KeyAccess | None:
     if key is None:
         return None
     try:
-        return await access.get(str(key.subject_uid))
+        return await authz.access_of(str(key.subject_uid))
     except Unavailable:
         return None
 
 
 class _Viewer:
-    """当前用户：是不是管理员、是哪些服务的所有者、他的用户 Key 被授了什么。一个请求算一次。"""
+    """当前用户：是哪些服务的所有者、他的用户 Key 被授了什么。一个请求算一次。"""
 
-    def __init__(
-        self,
-        operator: Operator,
-        owned: frozenset[str],
-        owns_all: bool,
-        key: McpApiKey | None,
-        access: KeyAccess | None,
-    ) -> None:
-        self.operator, self.owned, self.owns_all = operator, owned, owns_all
-        self.key, self.access = key, access
+    def __init__(self, operator: Operator, key: McpApiKey | None, access: KeyAccess | None) -> None:
+        self.operator, self.key, self.access = operator, key, access
 
     @classmethod
-    async def load(
-        cls, operator: Operator, perms: Permissions, keys: KeyService, access: AccessCache
-    ) -> _Viewer:
-        owned, owns_all = await perms.owned(operator.auth_uid)
+    async def load(cls, operator: Operator, authz: Authorization, keys: ApiKeys) -> _Viewer:
+        operator = await authz.with_ownership(operator)
         uid = _uid(operator)
         key = await keys.user_key(uid) if uid is not None else None
-        return cls(operator, owned, owns_all, key, await _safe_access(access, key))
+        return cls(operator, key, await _safe_access(authz, key))
 
     def owner(self, svc: McpService) -> bool:
-        return self.operator.can_manage or self.owns_all or svc.name in self.owned
+        return self.operator.can_assign(svc.name)
 
     def my(self, svc: McpService) -> Any:
         return my_access(
@@ -177,24 +182,20 @@ class _Viewer:
         return svc.visibility == "public" or self.my(svc).scope in ("all", "tools")
 
 
-async def _require_assign(grants: Any, operator: Operator, name: str) -> None:
-    await grants.require_assign(operator.auth_uid, name, manager=operator.can_manage)
-
-
 # ───────────────────────────── 我
 
 
 @router.get("/me")
 async def me(
-    operator: OperatorDep, perms: PermsDep, keys: KeysDep, settings: SettingsDep
+    operator: OperatorDep, authz: AuthzDep, keys: KeysDep, settings: SettingsDep
 ) -> dict[str, Any]:
-    owned, owns_all = await perms.owned(operator.auth_uid)
-    uid = _uid(operator)
+    op = await authz.with_ownership(operator)
+    uid = _uid(op)
     return {
-        "uid": operator.uid,
-        "can_manage": operator.can_manage,
-        "owned_services": sorted(owned),
-        "owns_all": owns_all,
+        "uid": op.uid,
+        "can_manage": op.can_manage,
+        "owned_services": sorted(op.owned or ()),
+        "owns_all": op.owns_all,
         "has_key": uid is not None and await keys.user_key(uid) is not None,
         "public_url": settings.public_url.rstrip("/") or None,
     }
@@ -205,43 +206,35 @@ async def me(
 
 @router.get("/services", response_model=list[ServiceOut])
 async def list_services(
-    operator: OperatorDep, registry: RegistryDep, perms: PermsDep, keys: KeysDep, access: AccessDep
+    operator: OperatorDep, catalog: CatalogDep, authz: AuthzDep, keys: KeysDep
 ) -> list[ServiceOut]:
-    viewer = await _Viewer.load(operator, perms, keys, access)
+    viewer = await _Viewer.load(operator, authz, keys)
     return [
-        service_out(svc, await registry.tools(svc), viewer.my(svc))
-        for svc in await registry.list()
+        service_out(svc, await catalog.tools(svc), viewer.my(svc))
+        for svc in await catalog.list()
         if viewer.sees(svc)
     ]
 
 
 @router.post("/discover", response_model=DiscoveredOut)
-async def discover(body: DiscoverIn, operator: ManagerDep, registry: RegistryDep) -> DiscoveredOut:
+async def discover(body: DiscoverIn, operator: ManagerDep, catalog: CatalogDep) -> DiscoveredOut:
     raw, secret = _credential(body.credential)
-    try:
-        descriptor = decode_descriptor(body.descriptor)
-    except DiscoveryFailed as exc:
-        raise Invalid(str(exc)) from exc
-    found = await registry.discover(
+    preview = await catalog.discover(
         kind=body.kind,
         connection=body.connection,
         credential=raw,
         secret=secret,
-        descriptor=descriptor,
+        descriptor=_descriptor(body.descriptor),
     )
-    return discovered_out(found)
+    return discovered_out(preview)
 
 
 @router.post("/services", response_model=ServiceDetailOut, status_code=201)
 async def create_service(
-    body: ServiceIn, operator: ManagerDep, registry: RegistryDep, session: SessionDep
+    body: ServiceIn, operator: ManagerDep, catalog: CatalogDep, session: SessionDep
 ) -> ServiceDetailOut:
     raw, secret = _credential(body.credential)
-    try:
-        descriptor = decode_descriptor(body.descriptor)
-    except DiscoveryFailed as exc:
-        raise Invalid(str(exc)) from exc
-    row = await registry.create(
+    row = await catalog.register(
         kind=body.kind,
         name=body.name,
         display_name=body.display_name or body.name,
@@ -252,13 +245,13 @@ async def create_service(
         secret=secret,
         pass_identity=body.pass_identity,
         selected=body.selected,
-        descriptor=descriptor,
+        descriptor=_descriptor(body.descriptor),
         actor=operator.uid,
     )
     await session.commit()
     return service_detail(
         row,
-        await registry.tools(row, include_removed=True),
+        await catalog.tools(row, include_removed=True),
         my=my_access(row, owner=True, access=None, has_key=True),
         can_manage=True,
         can_assign=True,
@@ -266,20 +259,15 @@ async def create_service(
 
 
 async def _detail(
-    name: str,
-    operator: Operator,
-    registry: Any,
-    perms: Permissions,
-    keys: KeyService,
-    access: AccessCache,
+    name: str, operator: Operator, catalog: ServiceCatalog, authz: Authorization, keys: ApiKeys
 ) -> ServiceDetailOut:
-    row = await registry.get(name)
-    viewer = await _Viewer.load(operator, perms, keys, access)
+    row = await catalog.get(name)
+    viewer = await _Viewer.load(operator, authz, keys)
     if not viewer.sees(row):
         raise NotFound(f"MCP 服务 {name} 不存在", service=name)
     return service_detail(
         row,
-        await registry.tools(row, include_removed=True),
+        await catalog.tools(row, include_removed=True),
         my=viewer.my(row),
         can_manage=operator.can_manage,
         can_assign=viewer.owner(row),
@@ -288,14 +276,9 @@ async def _detail(
 
 @router.get("/services/{name}", response_model=ServiceDetailOut)
 async def get_service(
-    name: str,
-    operator: OperatorDep,
-    registry: RegistryDep,
-    perms: PermsDep,
-    keys: KeysDep,
-    access: AccessDep,
+    name: str, operator: OperatorDep, catalog: CatalogDep, authz: AuthzDep, keys: KeysDep
 ) -> ServiceDetailOut:
-    return await _detail(name, operator, registry, perms, keys, access)
+    return await _detail(name, operator, catalog, authz, keys)
 
 
 @router.patch("/services/{name}", response_model=ServiceDetailOut)
@@ -303,18 +286,17 @@ async def update_service(
     name: str,
     body: ServicePatch,
     operator: ManagerDep,
-    registry: RegistryDep,
-    perms: PermsDep,
+    catalog: CatalogDep,
+    authz: AuthzDep,
     keys: KeysDep,
-    access: AccessDep,
     session: SessionDep,
 ) -> ServiceDetailOut:
     changes = body.model_dump(exclude_unset=True)
     if "display_name" in changes and not (changes["display_name"] or "").strip():
         raise Invalid("显示名称不能为空")
-    await registry.update(name, changes, actor=operator.uid)
+    await catalog.update(name, changes, actor=operator.uid)
     await session.commit()
-    return await _detail(name, operator, registry, perms, keys, access)
+    return await _detail(name, operator, catalog, authz, keys)
 
 
 @router.put("/services/{name}/connection", response_model=ServiceDetailOut)
@@ -322,17 +304,16 @@ async def update_connection(
     name: str,
     body: ConnectionIn,
     operator: ManagerDep,
-    registry: RegistryDep,
-    perms: PermsDep,
+    catalog: CatalogDep,
+    authz: AuthzDep,
     keys: KeysDep,
-    access: AccessDep,
     session: SessionDep,
 ) -> ServiceDetailOut:
-    await registry.update_connection(
+    await catalog.change_connection(
         name, body.connection, pass_identity=body.pass_identity, actor=operator.uid
     )
     await session.commit()
-    return await _detail(name, operator, registry, perms, keys, access)
+    return await _detail(name, operator, catalog, authz, keys)
 
 
 @router.put("/services/{name}/credential", response_model=ServiceDetailOut)
@@ -340,135 +321,107 @@ async def update_credential(
     name: str,
     body: CredentialIn,
     operator: ManagerDep,
-    registry: RegistryDep,
-    perms: PermsDep,
+    catalog: CatalogDep,
+    authz: AuthzDep,
     keys: KeysDep,
-    access: AccessDep,
     session: SessionDep,
 ) -> ServiceDetailOut:
     raw, secret = _credential(body)
-    await registry.update_credential(name, raw, secret, actor=operator.uid)
+    await catalog.change_credential(name, raw, secret, actor=operator.uid)
     await session.commit()
-    return await _detail(name, operator, registry, perms, keys, access)
+    return await _detail(name, operator, catalog, authz, keys)
 
 
 async def _service_action(
     name: str,
     action: str,
     operator: Operator,
-    registry: Any,
-    perms: Permissions,
-    keys: KeyService,
-    access: AccessCache,
+    catalog: ServiceCatalog,
+    authz: Authorization,
+    keys: ApiKeys,
     session: Any,
 ) -> ServiceDetailOut:
     if action == "refresh":
-        await registry.refresh(await registry.get(name), manual=True)
+        await catalog.refresh(await catalog.get(name), manual=True)
     else:
-        await registry.set_enabled(name, action == "enable", actor=operator.uid)
+        await catalog.set_enabled(name, action == "enable", actor=operator.uid)
     await session.commit()
-    return await _detail(name, operator, registry, perms, keys, access)
+    return await _detail(name, operator, catalog, authz, keys)
 
 
 @router.post("/services/{name}/enable", response_model=ServiceDetailOut)
 async def enable_service(
     name: str,
     operator: ManagerDep,
-    registry: RegistryDep,
-    perms: PermsDep,
+    catalog: CatalogDep,
+    authz: AuthzDep,
     keys: KeysDep,
-    access: AccessDep,
     session: SessionDep,
 ) -> ServiceDetailOut:
-    return await _service_action(name, "enable", operator, registry, perms, keys, access, session)
+    return await _service_action(name, "enable", operator, catalog, authz, keys, session)
 
 
 @router.post("/services/{name}/disable", response_model=ServiceDetailOut)
 async def disable_service(
     name: str,
     operator: ManagerDep,
-    registry: RegistryDep,
-    perms: PermsDep,
+    catalog: CatalogDep,
+    authz: AuthzDep,
     keys: KeysDep,
-    access: AccessDep,
     session: SessionDep,
 ) -> ServiceDetailOut:
-    return await _service_action(name, "disable", operator, registry, perms, keys, access, session)
+    return await _service_action(name, "disable", operator, catalog, authz, keys, session)
 
 
 @router.post("/services/{name}/refresh", response_model=ServiceDetailOut)
 async def refresh_service(
     name: str,
     operator: ManagerDep,
-    registry: RegistryDep,
-    perms: PermsDep,
+    catalog: CatalogDep,
+    authz: AuthzDep,
     keys: KeysDep,
-    access: AccessDep,
     session: SessionDep,
 ) -> ServiceDetailOut:
-    return await _service_action(name, "refresh", operator, registry, perms, keys, access, session)
+    return await _service_action(name, "refresh", operator, catalog, authz, keys, session)
 
 
 @router.post("/services/{name}/test", response_model=TestOut)
-async def test_service(name: str, operator: ManagerDep, registry: RegistryDep) -> TestOut:
+async def test_service(name: str, operator: ManagerDep, catalog: CatalogDep) -> TestOut:
     """测试连接：按保存的连接和凭据发现一次工具（不写库）。"""
-    row = await registry.get(name)
+    row = await catalog.get(name)
     if row.kind == "rest" and not row.connection.get("spec_url"):
         try:
-            r = await registry.upstreams.http.get(row.connection["base_url"], timeout=10.0)
-        except Exception as exc:
-            return TestOut(ok=False, detail=f"连不上：{type(exc).__name__}: {exc}")
-        return TestOut(ok=True, detail=f"能连上（HTTP {r.status_code}）")
+            status = await catalog.upstream.probe(row.connection["base_url"])
+        except UpstreamUnavailable as exc:
+            return TestOut(ok=False, detail=f"连不上：{exc}")
+        return TestOut(ok=True, detail=f"能连上（HTTP {status}）")
     try:
-        found = await registry.discover(
-            kind=row.kind,
-            connection=row.connection,
-            credential=row.credential,
-            secret=None,
-            descriptor=None,
-            service=row.name,
-            previous=row,
-        )
+        preview = await catalog.preview_of(row)
     except Invalid as exc:
         return TestOut(ok=False, detail=exc.message)
-    count = len(found.definitions or found.operations or found.methods)
+    found = preview.found
+    count = len(preview.definitions or found.operations or found.methods)
     return TestOut(ok=True, detail=f"连接正常，发现 {count} 个工具")
 
 
 @router.post("/services/{name}/rediscover", response_model=DiscoveredOut)
 async def rediscover(
-    name: str, body: RediscoverIn, operator: ManagerDep, registry: RegistryDep
+    name: str, body: RediscoverIn, operator: ManagerDep, catalog: CatalogDep
 ) -> DiscoveredOut:
-    row = await registry.get(name)
+    row = await catalog.get(name)
     if row.kind == "mcp":
         raise Invalid("MCP 代理的工具从上游拉取，用「立即刷新」")
-    try:
-        descriptor = decode_descriptor(body.descriptor)
-    except DiscoveryFailed as exc:
-        raise Invalid(str(exc)) from exc
-    found = await registry.discover(
-        kind=row.kind,
-        connection=row.connection,
-        credential=row.credential,
-        secret=None,
-        descriptor=descriptor,
-        service=row.name,
-        previous=row,
-    )
-    existing = {t.name for t in await registry.tools(row, include_removed=True)}
-    return discovered_out(found, existing=existing)
+    preview = await catalog.preview_of(row, descriptor=_descriptor(body.descriptor))
+    existing = {t.name for t in await catalog.tools(row, include_removed=True)}
+    return discovered_out(preview, existing=existing)
 
 
 @router.post("/services/{name}/import", response_model=list[str])
 async def import_tools(
-    name: str, body: ImportIn, operator: ManagerDep, registry: RegistryDep, session: SessionDep
+    name: str, body: ImportIn, operator: ManagerDep, catalog: CatalogDep, session: SessionDep
 ) -> list[str]:
-    try:
-        descriptor = decode_descriptor(body.descriptor)
-    except DiscoveryFailed as exc:
-        raise Invalid(str(exc)) from exc
-    added = await registry.add_discovered(
-        name, body.selected, descriptor=descriptor, actor=operator.uid
+    added = await catalog.reimport(
+        name, body.selected, descriptor=_descriptor(body.descriptor), actor=operator.uid
     )
     await session.commit()
     return added
@@ -479,9 +432,9 @@ async def import_tools(
 
 @router.post("/services/{name}/tools", response_model=ToolOut, status_code=201)
 async def add_tool(
-    name: str, body: ToolIn, operator: ManagerDep, registry: RegistryDep, session: SessionDep
+    name: str, body: ToolIn, operator: ManagerDep, catalog: CatalogDep, session: SessionDep
 ) -> ToolOut:
-    tool = await registry.add_tool(
+    tool = await catalog.add_tool(
         name,
         tool_name=body.name,
         description=body.description,
@@ -499,10 +452,10 @@ async def update_tool(
     tool: str,
     body: ToolPatch,
     operator: ManagerDep,
-    registry: RegistryDep,
+    catalog: CatalogDep,
     session: SessionDep,
 ) -> ToolOut:
-    row = await registry.update_tool(
+    row = await catalog.edit_tool(
         name,
         tool,
         description=body.description,
@@ -516,27 +469,27 @@ async def update_tool(
 
 @router.delete("/services/{name}/tools/{tool}")
 async def delete_tool(
-    name: str, tool: str, operator: ManagerDep, registry: RegistryDep, session: SessionDep
+    name: str, tool: str, operator: ManagerDep, catalog: CatalogDep, session: SessionDep
 ) -> dict[str, bool]:
-    await registry.delete_tool(name, tool, actor=operator.uid)
+    await catalog.delete_tool(name, tool, actor=operator.uid)
     await session.commit()
     return {"deleted": True}
 
 
 @router.post("/services/{name}/tools/{tool}/enable", response_model=ToolOut)
 async def enable_tool(
-    name: str, tool: str, operator: ManagerDep, registry: RegistryDep, session: SessionDep
+    name: str, tool: str, operator: ManagerDep, catalog: CatalogDep, session: SessionDep
 ) -> ToolOut:
-    row = await registry.set_tool_status(name, tool, active=True, actor=operator.uid)
+    row = await catalog.set_tool_status(name, tool, active=True, actor=operator.uid)
     await session.commit()
     return tool_out(name, row)
 
 
 @router.post("/services/{name}/tools/{tool}/disable", response_model=ToolOut)
 async def disable_tool(
-    name: str, tool: str, operator: ManagerDep, registry: RegistryDep, session: SessionDep
+    name: str, tool: str, operator: ManagerDep, catalog: CatalogDep, session: SessionDep
 ) -> ToolOut:
-    row = await registry.set_tool_status(name, tool, active=False, actor=operator.uid)
+    row = await catalog.set_tool_status(name, tool, active=False, actor=operator.uid)
     await session.commit()
     return tool_out(name, row)
 
@@ -548,11 +501,9 @@ async def try_call(
     body: TryIn,
     operator: OperatorDep,
     keys: KeysDep,
-    plane: DataPlaneDep,
+    invocation: InvocationDep,
 ) -> TryOut:
     """试调：和真实调用一样认 Key、判权、校验参数、调上游。会真的执行有副作用的工具。"""
-    from ..dataplane import Rejection
-
     key = await keys.get(body.key_id)
     if not operator.can_manage and not (
         key.key_type == "user" and str(key.user_uuid) == operator.uid
@@ -561,10 +512,10 @@ async def try_call(
     with _tracer.start_as_current_span(f"try {name}/{tool}") as span:
         trace_id = format(span.get_span_context().trace_id, "032x")
         try:
-            caller = await plane.admit(
+            caller = await invocation.admit(
                 name, key.secret if key.status == "active" else "", user_uid=operator.uid
             )
-            result = await plane.execute(caller, tool, body.arguments)
+            result = await invocation.execute(caller, tool, body.arguments)
         except Rejection as r:
             return TryOut(error=r.error(name), trace_id=trace_id)
     return TryOut(result=result, trace_id=trace_id)
@@ -575,14 +526,17 @@ async def try_call(
 
 @router.get("/services/{name}/grants", response_model=ServerGrantsOut)
 async def list_grants(
-    name: str, operator: OperatorDep, registry: RegistryDep, grants: GrantsDep
+    name: str, operator: OperatorDep, catalog: CatalogDep, authz: AuthzDep, keys: KeysDep
 ) -> ServerGrantsOut:
-    svc = await registry.get(name)
-    await _require_assign(grants, operator, name)
-    found = await grants.of_server(svc)
+    svc = await catalog.get(name)
+    await authz.require_assign(operator, name)
+    found = await authz.grants_of(svc)
+    by_subject = await keys.by_subjects(s.subject for s in found.subjects)
+    granted = [(by_subject[s.subject], s) for s in found.subjects if s.subject in by_subject]
+    granted.sort(key=lambda g: (g[0].key_type, g[0].name))
     return ServerGrantsOut(
         owners=[OwnerOut(user_id=e.subject_id, name=e.subject_name) for e in found.owners],
-        keys=[key_grant_out(g) for g in found.keys],
+        keys=[key_grant_out(k, s.scope, list(s.tools)) for k, s in granted],
     )
 
 
@@ -592,17 +546,19 @@ async def set_grant(
     key_id: UUID,
     body: GrantIn,
     operator: OperatorDep,
-    registry: RegistryDep,
+    catalog: CatalogDep,
+    authz: AuthzDep,
     keys: KeysDep,
-    grants: GrantsDep,
     session: SessionDep,
 ) -> ServerGrantsOut:
-    svc = await registry.get(name)
-    await _require_assign(grants, operator, name)
+    svc = await catalog.get(name)
+    operator = await authz.require_assign(operator, name)
     key = await keys.get(key_id)
-    await grants.set_key(svc, key, scope=body.scope, tools=body.tools, operator=operator.uid)
+    await authz.set_scope(
+        svc, str(key.subject_uid), scope=body.scope, tools=body.tools, operator=operator.uid
+    )
     await session.commit()
-    return await list_grants(name, operator, registry, grants)
+    return await list_grants(name, operator, catalog, authz, keys)
 
 
 @router.delete("/services/{name}/grants/{key_id}", response_model=ServerGrantsOut)
@@ -610,17 +566,17 @@ async def revoke_grant(
     name: str,
     key_id: UUID,
     operator: OperatorDep,
-    registry: RegistryDep,
+    catalog: CatalogDep,
+    authz: AuthzDep,
     keys: KeysDep,
-    grants: GrantsDep,
     session: SessionDep,
 ) -> ServerGrantsOut:
-    svc = await registry.get(name)
-    await _require_assign(grants, operator, name)
+    svc = await catalog.get(name)
+    operator = await authz.require_assign(operator, name)
     key = await keys.get(key_id)
-    await grants.set_key(svc, key, scope="none", tools=[], operator=operator.uid)
+    await authz.set_scope(svc, str(key.subject_uid), scope="none", tools=[], operator=operator.uid)
     await session.commit()
-    return await list_grants(name, operator, registry, grants)
+    return await list_grants(name, operator, catalog, authz, keys)
 
 
 @router.post("/services/{name}/owners", response_model=ServerGrantsOut)
@@ -628,15 +584,16 @@ async def add_owner(
     name: str,
     body: OwnerIn,
     operator: OperatorDep,
-    registry: RegistryDep,
-    grants: GrantsDep,
+    catalog: CatalogDep,
+    authz: AuthzDep,
+    keys: KeysDep,
     session: SessionDep,
 ) -> ServerGrantsOut:
-    svc = await registry.get(name)
-    await _require_assign(grants, operator, name)
-    await grants.add_owner(svc, str(body.user_id), operator=operator.uid)
+    svc = await catalog.get(name)
+    operator = await authz.require_assign(operator, name)
+    await authz.add_owner(svc, str(body.user_id), operator=operator.uid)
     await session.commit()
-    return await list_grants(name, operator, registry, grants)
+    return await list_grants(name, operator, catalog, authz, keys)
 
 
 @router.delete("/services/{name}/owners/{user_id}", response_model=ServerGrantsOut)
@@ -644,53 +601,47 @@ async def remove_owner(
     name: str,
     user_id: UUID,
     operator: OperatorDep,
-    registry: RegistryDep,
-    grants: GrantsDep,
+    catalog: CatalogDep,
+    authz: AuthzDep,
+    keys: KeysDep,
     session: SessionDep,
 ) -> ServerGrantsOut:
-    svc = await registry.get(name)
-    await _require_assign(grants, operator, name)
-    await grants.remove_owner(svc, str(user_id), operator=operator.uid)
+    svc = await catalog.get(name)
+    operator = await authz.require_assign(operator, name)
+    await authz.remove_owner(svc, str(user_id), operator=operator.uid)
     await session.commit()
-    return await list_grants(name, operator, registry, grants)
-
-
-async def _require_grantor(operator: Operator, perms: Permissions) -> None:
-    """MCP 管理员，或至少是一个服务的所有者。"""
-    if operator.can_manage:
-        return
-    owned, owns_all = await perms.owned(operator.auth_uid)
-    if not (owns_all or owned):
-        raise Forbidden("只有服务所有者或 MCP 管理员可以授权")
+    return await list_grants(name, operator, catalog, authz, keys)
 
 
 @router.get("/users")
 async def search_users(
-    operator: OperatorDep, perms: PermsDep, q: str = Query(min_length=1, max_length=50)
+    operator: OperatorDep, authz: AuthzDep, q: str = Query(min_length=1, max_length=50)
 ) -> list[dict[str, Any]]:
-    await _require_grantor(operator, perms)
+    await authz.require_grantor(operator)
     return [
         {"id": u.get("id"), "name": u.get("name"), "account": u.get("account")}
-        for u in await perms.search_users(q)
+        for u in await authz.search_people(q)
     ]
 
 
 @router.get("/key-options", response_model=list[KeyRefOut])
-async def key_options(operator: OperatorDep, perms: PermsDep, keys: KeysDep) -> list[KeyRefOut]:
-    await _require_grantor(operator, perms)
+async def key_options(operator: OperatorDep, authz: AuthzDep, keys: KeysDep) -> list[KeyRefOut]:
+    await authz.require_grantor(operator)
     return [key_ref(k) for k in await keys.list()]
 
 
 # ───────────────────────────── API Key
 
 
-async def _with_grants(rows: list[McpApiKey], registry: Any, access: AccessCache) -> list[KeyOut]:
-    services = {s.name: s for s in await registry.list()}
-    found = await asyncio.gather(*(_safe_access(access, k) for k in rows))
+async def _with_grants(
+    rows: list[McpApiKey], catalog: ServiceCatalog, authz: Authorization
+) -> list[KeyOut]:
+    services = {s.name: s for s in await catalog.list()}
+    found = await asyncio.gather(*(_safe_access(authz, k) for k in rows))
     return [key_out(k, scopes_of(a, services)) for k, a in zip(rows, found, strict=True)]
 
 
-async def _my_key(keys: KeyService, operator: Operator) -> McpApiKey:
+async def _my_key(keys: ApiKeys, operator: Operator) -> McpApiKey:
     uid = _uid(operator)
     key = await keys.user_key(uid) if uid is not None else None
     if key is None:
@@ -700,13 +651,13 @@ async def _my_key(keys: KeyService, operator: Operator) -> McpApiKey:
 
 @router.get("/keys/me", response_model=KeyOut | None)
 async def my_key(
-    operator: OperatorDep, keys: KeysDep, registry: RegistryDep, access: AccessDep
+    operator: OperatorDep, keys: KeysDep, catalog: CatalogDep, authz: AuthzDep
 ) -> KeyOut | None:
     uid = _uid(operator)
     key = await keys.user_key(uid) if uid is not None else None
     if key is None:
         return None
-    return (await _with_grants([key], registry, access))[0]
+    return (await _with_grants([key], catalog, authz))[0]
 
 
 @router.post("/keys/me", response_model=KeySecretOut, status_code=201)
@@ -756,19 +707,19 @@ async def delete_my_key(
 async def list_keys(
     operator: ManagerDep,
     keys: KeysDep,
-    registry: RegistryDep,
-    access: AccessDep,
+    catalog: CatalogDep,
+    authz: AuthzDep,
     key_type: str | None = Query(default=None, pattern="^(user|client)$"),
     status: str | None = Query(default=None, pattern="^(active|blocked)$"),
     q: str | None = None,
 ) -> list[KeyOut]:
     rows = await keys.list(key_type=key_type, status=status, q=q)
-    return await _with_grants(rows, registry, access)
+    return await _with_grants(rows, catalog, authz)
 
 
 @router.get("/client-types", response_model=list[ClientTypeOut])
-async def client_types(_: ManagerDep, settings: SettingsDep) -> list[ClientTypeOut]:
-    return [ClientTypeOut(code=c, apps=list(apps)) for c, apps in settings.client_types.items()]
+async def client_types(_: ManagerDep, policy: PolicyDep) -> list[ClientTypeOut]:
+    return [ClientTypeOut(code=c, apps=list(apps)) for c, apps in policy.items()]
 
 
 @router.post("/client-keys", response_model=KeyOut, status_code=201)
@@ -776,10 +727,10 @@ async def create_client_key(
     body: ClientKeyIn,
     operator: ManagerDep,
     keys: KeysDep,
-    settings: SettingsDep,
+    policy: PolicyDep,
     session: SessionDep,
 ) -> KeyOut:
-    if body.client_type not in settings.client_types:
+    if not policy.known(body.client_type):
         raise Invalid(f"没有登记的客户端类型：{body.client_type}")
     key, created = await keys.ensure_client(
         client_type=body.client_type,
@@ -795,7 +746,7 @@ async def create_client_key(
 
 
 async def _key_action(
-    key_id: UUID, action: str, operator: Operator, keys: KeyService, session: Any
+    key_id: UUID, action: str, operator: Operator, keys: ApiKeys, session: Any
 ) -> KeyOut:
     key = await keys.get(key_id)
     if action == "reset":
@@ -843,7 +794,7 @@ async def delete_key(
     return {"deleted": True}
 
 
-async def _visible_key(keys: KeyService, key_id: UUID, operator: Operator) -> McpApiKey:
+async def _visible_key(keys: ApiKeys, key_id: UUID, operator: Operator) -> McpApiKey:
     key = await keys.get(key_id)
     if not operator.can_manage and not (
         key.key_type == "user" and str(key.user_uuid) == operator.uid
@@ -857,12 +808,12 @@ async def key_grants(
     key_id: UUID,
     operator: OperatorDep,
     keys: KeysDep,
-    registry: RegistryDep,
-    grants: GrantsDep,
+    catalog: CatalogDep,
+    authz: AuthzDep,
 ) -> list[ServiceScopeOut]:
     key = await _visible_key(keys, key_id, operator)
-    services = {s.name: s for s in await registry.list()}
-    return scopes_of(await grants.of_key(key, fresh=True), services)
+    services = {s.name: s for s in await catalog.list()}
+    return scopes_of(await authz.access_of(str(key.subject_uid), fresh=True), services)
 
 
 @router.put("/keys/{key_id}/grants", response_model=list[ServiceScopeOut])
@@ -871,17 +822,20 @@ async def set_key_grants(
     body: KeyGrantsIn,
     operator: OperatorDep,
     keys: KeysDep,
-    registry: RegistryDep,
-    grants: GrantsDep,
+    catalog: CatalogDep,
+    authz: AuthzDep,
     session: SessionDep,
 ) -> list[ServiceScopeOut]:
     """分配权限：只改列出来的服务；每个都要是自己能授权的。"""
     key = await keys.get(key_id)
     for item in body.grants:
-        await _require_assign(grants, operator, item.service)
+        operator = await authz.require_assign(operator, item.service)
+    subject = str(key.subject_uid)
     for item in body.grants:
-        svc = await registry.get(item.service)
-        await grants.set_key(svc, key, scope=item.scope, tools=item.tools, operator=operator.uid)
+        svc = await catalog.get(item.service)
+        await authz.set_scope(
+            svc, subject, scope=item.scope, tools=item.tools, operator=operator.uid
+        )
     await session.commit()
-    services = {s.name: s for s in await registry.list()}
-    return scopes_of(await grants.of_key(key, fresh=True), services)
+    services = {s.name: s for s in await catalog.list()}
+    return scopes_of(await authz.access_of(subject, fresh=True), services)

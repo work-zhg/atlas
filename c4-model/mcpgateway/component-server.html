@@ -21,7 +21,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "组件图：MCP 网关 - 网关服务",
-  "description": "目标模型。组件按领域拆：工具调用、服务目录、上游接入、API Key、授权五个领域，前面是四个入口（领域之间的类级依赖见 code-domains.html）。各领域读写自己的表，图中不画网关库；管理审计是共享内核，服务目录、API Key、授权的管理动作都记进去，图中未画；Trace 发往 OTel Collector，图中未画",
+  "description": "目标模型。组件按领域拆：工具调用、服务目录、上游接入、API Key、授权五个领域，前面是五个入口（领域之间的类级依赖见 code-domains.html）。各领域读写自己的表（都带租户，按当前租户自动过滤），图中不画网关库；运营接口删租户时按序分批删各领域的表，图中未画；管理审计是共享内核，服务目录、API Key、授权的管理动作都记进去，图中未画；Trace 发往 OTel Collector，图中未画。代码按领域分包：access/、catalog/、invocation/、keys/、upstream/，api/ 是入口，wiring.py 是组合根",
   "system": "MCP 网关",
   "container": "网关服务",
   "elements": [
@@ -130,8 +130,8 @@
       "id": "maint",
       "kind": "component",
       "name": "维护任务",
-      "technology": "asyncio 后台任务",
-      "description": "每分钟领一次到期的 MCP 代理（租约），重新拉它的工具定义。",
+      "technology": "atlas_jobs 实例任务",
+      "description": "每分钟在系统范围里领一次到期的 MCP 代理（租约，跨租户），逐个进入服务所属的租户重新拉定义；停用的租户跳过。",
       "at": [
         1.6,
         5.1
@@ -142,7 +142,7 @@
       "kind": "component",
       "name": "工具调用",
       "technology": "Python 模块 + OpenTelemetry",
-      "description": "准入（服务 → Key → 判权），列工具，调工具：校验参数、交给上游接入、错误协议、身份传递和 Trace。",
+      "description": "准入（认 Key → 它所在租户里的服务 → 判权），列工具，调工具：校验参数、交给上游接入、错误协议、身份传递和 Trace。",
       "at": [
         2.9,
         2.6
@@ -153,7 +153,7 @@
       "kind": "component",
       "name": "服务目录",
       "technology": "SQLAlchemy 异步",
-      "description": "服务和工具的登记、修改、停用，MCP 代理的定义同步和定义指纹；发目录事件。",
+      "description": "服务和工具的登记、修改、停用（服务名租户内唯一），MCP 代理的定义同步和定义指纹；发目录事件。",
       "at": [
         1.5,
         3.9
@@ -164,7 +164,7 @@
       "kind": "component",
       "name": "上游接入",
       "technology": "httpx + FastMCP 客户端 + grpcio",
-      "description": "MCP 代理、REST 转换、gRPC 转换的发现与调用；注入上游凭据，OAuth2 Token 和连接复用。",
+      "description": "MCP 代理、REST 转换、gRPC 转换的发现与调用；注入上游凭据，OAuth2 Token 和连接复用；租户填的地址不能指向平台内部。",
       "at": [
         2.95,
         3.9
@@ -190,6 +190,28 @@
       "at": [
         0.2,
         3.9
+      ]
+    },
+    {
+      "id": "opscenter",
+      "kind": "system",
+      "name": "运营中心",
+      "color": "#8a6d00",
+      "description": "管平台本身的独立系统：开通、停用、关闭租户，分份额，维护系统参数；看不到租户的业务内容。",
+      "at": [
+        -1.2,
+        5.1
+      ]
+    },
+    {
+      "id": "ops",
+      "kind": "component",
+      "name": "运营接口",
+      "technology": "FastAPI Router + 运营接口库",
+      "description": "/ops/v1：租户的停用、恢复、删除（按序分批删各领域的表），系统任务；只给运营中心，先验签名。",
+      "at": [
+        0.25,
+        5.1
       ]
     }
   ],
@@ -315,6 +337,17 @@
       "to": "upstream_sys",
       "description": "发现、调用（注入上游凭据）",
       "technology": "MCP/HTTP、JSON/HTTP、gRPC"
+    },
+    {
+      "from": "opscenter",
+      "to": "ops",
+      "description": "停用、恢复、删除租户，看系统任务",
+      "technology": "JSON/HTTP（运营接口，签名）"
+    },
+    {
+      "from": "ops",
+      "to": "maint",
+      "description": "系统任务的运行情况"
     }
   ]
 }

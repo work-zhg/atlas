@@ -104,9 +104,9 @@
     {
       "from": "maint",
       "to": "catalog",
-      "description": "refresh_due()",
+      "description": "claim_due()",
       "details": {
-        "note": "每个实例每分钟一次。"
+        "note": "每个实例每分钟一次（定时任务库的实例任务，运营接口 /ops/v1/jobs 看运行情况）。"
       }
     },
     {
@@ -115,16 +115,16 @@
       "description": "领到期的 MCP 代理，写租约，提交",
       "technology": "SQL/TCP",
       "details": {
-        "note": "一条语句领取，领到的才拉；进程死了，租约 60 秒后过期，别的实例再领。",
+        "note": "一条语句领取，领到的才拉；在系统范围里跨租户领，只拿服务名和租户。进程死了，租约 60 秒后过期，别的实例再领。",
         "example": "UPDATE mcp_service SET refresh_claimed_at = now()\n WHERE kind = 'mcp' AND status = 'enabled'\n   AND (fetched_at IS NULL OR fetched_at < now() - interval '600 s')\n   AND (refresh_claimed_at IS NULL OR refresh_claimed_at < now() - interval '60 s')\nRETURNING name"
       }
     },
     {
       "from": "catalog",
       "to": "upstream",
-      "description": "discover(spec)",
+      "description": "refresh(jira)：进入服务所属的租户，discover(spec)",
       "details": {
-        "note": "每个服务一个事务，一个出错不影响别的。在锁外拉，不占行锁。"
+        "note": "每个服务一个事务，一个出错不影响别的；停用的租户的不拉。在锁外拉，不占行锁。"
       }
     },
     {

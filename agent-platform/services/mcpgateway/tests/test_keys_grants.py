@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 import pytest
-from atlas_mcpgateway.perms import DATA_SERVER, DATA_TOOL
+from atlas_mcpgateway.access.usercenter import DATA_SERVER, DATA_TOOL
 from fake_upstreams import REST_KEY
 from gateway_testkit import (
     ADMIN,

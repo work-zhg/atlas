@@ -150,30 +150,21 @@ async def gateway(
 ) -> AsyncIterator[tuple[Any, FakePermissions, httpx.AsyncClient]]:
     """进程内的 MCP 网关（空库）。→ (app, 用户中心替身, 管理接口的客户端)。"""
     import httpx2
-    from atlas_mcpgateway import auth as gateway_auth
     from atlas_mcpgateway.api.app import create_app
     from atlas_mcpgateway.db.session import get_engine, get_sessionmaker
 
-    def authz(request: httpx.Request) -> httpx.Response:
-        uid = request.url.path.split("/")[-2]
-        ops = ["mcp:manage"] if uid == ADMIN else []
-        # 人都在请求头写的租户里（网关核对「这个人在这个租户里」）
-        user = {"id": uid, "status": "active", "tenant_id": request.headers.get("x-tenant-id")}
-        return httpx.Response(200, json={"can_access": True, "permissions": ops, "user": user})
-
-    monkeypatch.setattr(gateway_auth, "_transport", httpx.MockTransport(authz))
-    monkeypatch.setattr(gateway_auth, "_cache", gateway_auth._Cache())
     async with get_sessionmaker()() as session:
         await session.execute(
             text(
-                "TRUNCATE mcp_service, mcp_tool, mcp_api_key, mcp_audit,"
+                "TRUNCATE mcp_service, mcp_tool, mcp_api_key, mcp_audit, mcp_data_object,"
                 " app_tenant_state, app_ops_request"
             )
         )
         await session.commit()
 
+    # 授权快照也由用户中心替身给：ADMIN 有 mcp:manage，人都在请求头写的租户里
     perms = FakePermissions()
-    app = create_app(perms=perms)
+    app = create_app(uc=perms)
     reset_gateway_cache()
     async with app.router.lifespan_context(app):
         monkeypatch.setattr(GatewayClient, "transport", httpx.ASGITransport(app=app))

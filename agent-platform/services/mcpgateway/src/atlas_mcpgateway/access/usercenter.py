@@ -1,52 +1,53 @@
-"""授权 = 用户中心数据权限（数据编码属于本服务这个应用）。
+"""UserCenterGateway：网关里唯一调用户中心的地方（防腐层，c4-model/mcpgateway/code-access.html）。
 
-    McpServer  一个服务一条，数据标识 = 服务名
-               READ   授给 Key：全部工具（含以后新增的）
-               OWNER  授给人：所有者，能给 Key 分配这个服务的权限
-    McpTool    一个工具一条，数据标识 = 服务名/工具名；第一次工具级授权时才登记
-               READ   授给 Key：只能用这个工具
-               OWNER  和服务的所有者保持一致（用户中心要求改授权的人是这条数据的 Owner）
+    数据权限    /open/v1/data-permissions*、/open/v1/data-objects
+                McpServer 一个服务一条（数据标识 = 服务名）：READ 授给 Key = 全部工具，
+                OWNER 授给人 = 所有者；McpTool 一个工具一条（服务名/工具名）：READ = 只能用这个工具
+    数字员工    /open/v1/digital-employees*：每把 Key 在用户中心的权限主体
+    用户        /open/v1/users*：查人、选人
+    授权快照    /open/v1/users/{id}/authz：管理端的操作码、所属租户（按 auth-uid + 租户缓存）
 
-★ Key 是权限主体：每把 Key 在用户中心有一个主体，本期复用数字员工（没有密码、不能登录、
-  没有部门，部门授权落不到它身上）。网关判权时以 Key 的主体 uid 作 X-Auth-Uid 调用户中心。
-  主体停用后用户中心对它一律回「无权限」：删 Key 时就这样让它的授权全部失效。
-★ 公开服务不判权，不查用户中心。
-★ 判权结果按 Key 短时缓存：每次工具调用都过网关，不能每个请求都查用户中心。新授、收回的授权
-  在缓存时长内生效。用户中心不可用、缓存又过期时一律拒绝（Unavailable），不放行。
-★ MCP 管理员给不是自己的服务授权，要在用户中心有「全部 MCP 服务 · 所有者」和
-  「全部 MCP 工具 · 所有者」（数据编码级授权）：角色只管能不能做这类事，对哪些数据是数据权限。
+★ 带上本次请求的身份请求头（access/identity.py）；数据面没有入站身份时用 Key 的主体；
+  X-Caller-App 写 mcp-gateway。
+★ 错误只有一份口径（授权快照、数据权限、数字员工、用户都走 _call）：
+      OWNER_REQUIRED、NOT_DATA_OWNER → Forbidden；LAST_DATA_OWNER → Conflict
+      404                             → NotFound（授权快照的 401、404 → Unauthorized）
+      其他 4xx                         → Invalid
+      不可达、5xx、意外的 401 / 403     → Unavailable（503）—— 一律不放行
 
-两个实现：UCPermissions（用户中心开放接口）；测试里的内存实现（tests/gateway_testkit.py）。
+两个实现：UserCenterGateway；测试里的内存实现（tests/gateway_testkit.py 的 FakePermissions）。
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Protocol
+from uuid import UUID
 
 import httpx
+from atlas_tenancy import TENANT_HEADER, parse_tenant
 
-from .auth import outbound_headers
-from .errors import Conflict, Forbidden, Invalid, NotFound, Unavailable
+from ..db.models import DATA_SERVER, DATA_TOOL
+from ..errors import Conflict, Forbidden, Invalid, NotFound, Unauthorized, Unavailable
+from .identity import outbound_headers
+from .key_access import KeyAccess
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "DATA_SERVER",
     "DATA_TOOL",
-    "AccessCache",
     "AclEntry",
-    "KeyAccess",
-    "Permissions",
-    "UCPermissions",
+    "Snapshot",
+    "UserCenter",
+    "UserCenterGateway",
+    "key_access_from",
     "tool_data_id",
 ]
 
-#: 数据编码：只表达语义，不带应用名
-DATA_SERVER = "McpServer"
-DATA_TOOL = "McpTool"
 LEVEL_RANK = {"NONE": 0, "READ": 1, "WRITE": 2, "OWNER": 3}
 
 
@@ -54,26 +55,14 @@ def tool_data_id(service: str, tool: str) -> str:
     return f"{service}/{tool}"
 
 
-@dataclass(frozen=True)
-class KeyAccess:
-    """一把 Key 被授了哪些私有服务、哪些工具。
-
-    servers  服务级授权：这些服务的全部工具（含以后新增的）
-    tools    工具级授权：「服务名/工具名」
-    """
-
-    servers: frozenset[str] = frozenset()
-    tools: frozenset[str] = frozenset()
-
-    def allows(self, service: str, tool: str) -> bool:
-        return service in self.servers or tool_data_id(service, tool) in self.tools
-
-    def tools_of(self, service: str) -> frozenset[str]:
-        prefix = f"{service}/"
-        return frozenset(t[len(prefix) :] for t in self.tools if t.startswith(prefix))
-
-    def touches(self, service: str) -> bool:
-        return service in self.servers or bool(self.tools_of(service))
+def key_access_from(servers: Iterable[str], tool_ids: Iterable[str]) -> KeyAccess:
+    """用户中心给的数据标识 → KeyAccess（工具按服务分组）。"""
+    grouped: dict[str, set[str]] = {}
+    for data_id in tool_ids:
+        service, sep, tool = data_id.partition("/")
+        if sep and tool:
+            grouped.setdefault(service, set()).add(tool)
+    return KeyAccess(frozenset(servers), {s: frozenset(t) for s, t in grouped.items()})
 
 
 @dataclass(frozen=True)
@@ -87,12 +76,26 @@ class AclEntry:
     subject_name: str = ""
 
 
-class Permissions(Protocol):
+@dataclass(frozen=True)
+class Snapshot:
+    """授权快照：这个人在这个租户里的操作码，以及用户中心给的所属租户。"""
+
+    operations: frozenset[str]
+    tenant: UUID | None
+
+
+class UserCenter(Protocol):
     # ── 判权
-    async def key_access(self, subject: str) -> KeyAccess: ...
+    async def key_access(self, subject: str) -> KeyAccess:
+        """只认授给单条数据的（scope=data）：编码级授权是给管理员的，不该落到 Key 上。"""
+        ...
 
     async def owned(self, user: str) -> tuple[frozenset[str], bool]:
         """这个人是所有者的服务；第二项 = 有「全部 MCP 服务 · 所有者」。"""
+        ...
+
+    async def authz(self, uid: str, tenant: UUID) -> Snapshot:
+        """不在这个租户里、停用、不存在 → Unauthorized。"""
         ...
 
     # ── 数据对象与授权
@@ -124,12 +127,14 @@ class Permissions(Protocol):
 
     async def revoke(self, acl_id: str, operator: str) -> None: ...
 
-    # ── 主体
+    # ── 用户与主体
     async def user(self, uid: str) -> dict[str, Any] | None: ...
 
     async def search_users(self, q: str) -> list[dict[str, Any]]:
         """选人（只有人，不含数字员工）：添加所有者时用。"""
         ...
+
+    async def user_by_account(self, account: str) -> dict[str, Any] | None: ...
 
     async def create_subject(self, *, ref: str, name: str, owner: str) -> str:
         """为一把 Key 建用户中心主体（幂等：同一个 ref 返回同一个 uid）。→ uid。"""
@@ -139,25 +144,60 @@ class Permissions(Protocol):
 
 
 def _unavailable() -> Unavailable:
-    return Unavailable("用户中心暂不可用，暂时无法校验 MCP 服务的授权", code="AUTHZ_UNAVAILABLE")
+    return Unavailable("用户中心暂不可用，请稍后重试", code="AUTHZ_UNAVAILABLE")
 
 
-class UCPermissions:
-    """用户中心开放接口（/open/v1/data-permissions*、/open/v1/digital-employees*）。"""
+class _SnapshotCache:
+    """(auth-uid, 租户) → (过期时刻, 授权快照)。只缓存成功结果。"""
 
-    def __init__(self, base_url: str, *, transport: httpx.AsyncBaseTransport | None = None) -> None:
+    def __init__(self, ttl_s: float) -> None:
+        self._ttl = ttl_s
+        self._rows: dict[tuple[str, UUID], tuple[float, Snapshot]] = {}
+
+    def get(self, key: tuple[str, UUID]) -> Snapshot | None:
+        row = self._rows.get(key)
+        if row is None or row[0] < time.monotonic():
+            self._rows.pop(key, None)
+            return None
+        return row[1]
+
+    def put(self, key: tuple[str, UUID], snap: Snapshot) -> None:
+        if len(self._rows) > 10_000:
+            self._rows.clear()
+        self._rows[key] = (time.monotonic() + self._ttl, snap)
+
+
+class UserCenterGateway:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        snapshot_ttl_s: float = 30.0,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         self._http = httpx.AsyncClient(
             base_url=base_url.rstrip("/"), timeout=10.0, trust_env=False, transport=transport
         )
+        self._snapshots = _SnapshotCache(snapshot_ttl_s)
 
     async def aclose(self) -> None:
         await self._http.aclose()
 
-    async def _call(self, method: str, path: str, **kw: Any) -> Any:
+    async def _call(
+        self,
+        method: str,
+        path: str,
+        *,
+        headers: dict[str, str] | None = None,
+        not_found: tuple[int, ...] = (404,),
+        **kw: Any,
+    ) -> Any:
         try:
-            r = await self._http.request(method, path, headers=outbound_headers(), **kw)
+            r = await self._http.request(
+                method, path, headers={**outbound_headers(), **(headers or {})}, **kw
+            )
         except httpx.HTTPError as exc:
-            logger.warning("用户中心不可达：%s", exc)
+            logger.warning("用户中心不可达：%s %s：%s", method, path, exc)
             raise _unavailable() from exc
         if r.status_code < 400:
             return r.json() if r.content else None
@@ -168,12 +208,14 @@ class UCPermissions:
             raise Forbidden(message, code=code)
         if code == "LAST_DATA_OWNER":
             raise Conflict(message, code=code)
-        if r.status_code == 404:
+        if r.status_code in not_found:
             raise NotFound(message, code=code or "NOT_FOUND")
         if r.status_code < 500 and r.status_code not in (401, 403):
             raise Invalid(message, code=code or "INVALID")
         logger.warning("用户中心拒绝了开放接口调用：%s %s", r.status_code, r.text[:200])
         raise _unavailable()
+
+    # ------------------------------------------------------------------ 判权
 
     async def _accessible(
         self, data_code: str, user: str, min_level: str, *, scope: str
@@ -205,13 +247,35 @@ class UCPermissions:
             page += 1
 
     async def key_access(self, subject: str) -> KeyAccess:
-        # ★ scope=data：Key 只认授给单条数据的（编码级授权是给管理员的，不该落到 Key 上）
         servers, _ = await self._accessible(DATA_SERVER, subject, "READ", scope="data")
         tools, _ = await self._accessible(DATA_TOOL, subject, "READ", scope="data")
-        return KeyAccess(servers, tools)
+        return key_access_from(servers, tools)
 
     async def owned(self, user: str) -> tuple[frozenset[str], bool]:
         return await self._accessible(DATA_SERVER, user, "OWNER", scope="all")
+
+    async def authz(self, uid: str, tenant: UUID) -> Snapshot:
+        hit = self._snapshots.get((uid, tenant))
+        if hit is not None:
+            return hit
+        try:
+            body = await self._call(
+                "GET",
+                f"/open/v1/users/{uid}/authz",
+                headers={TENANT_HEADER: str(tenant)},
+                not_found=(401, 404),
+            )
+        except NotFound as exc:
+            raise Unauthorized("请先登录") from exc
+        user = body.get("user") or {}
+        if user.get("status") == "disabled":
+            raise Unauthorized("账号已停用")
+        ops = frozenset(body.get("permissions") or []) if body.get("can_access") else frozenset()
+        snap = Snapshot(ops, parse_tenant(user.get("tenant_id")))
+        self._snapshots.put((uid, tenant), snap)
+        return snap
+
+    # ------------------------------------------------------------------ 数据对象与授权
 
     async def register(
         self,
@@ -306,6 +370,8 @@ class UCPermissions:
             "DELETE", f"/open/v1/data-permissions/acl/{acl_id}", params={"operator_id": operator}
         )
 
+    # ------------------------------------------------------------------ 用户与主体
+
     async def user(self, uid: str) -> dict[str, Any] | None:
         try:
             return dict(await self._call("GET", f"/open/v1/users/{uid}"))
@@ -343,33 +409,3 @@ class UCPermissions:
             await self._call("POST", f"/open/v1/digital-employees/{uid}/{action}")
         except NotFound:
             return
-
-
-class AccessCache:
-    """「Key 的主体 → 被授了什么」的短时缓存。控制面（替 Atlas 回答）和数据面（每个请求判权）共用。
-
-    ★ 用户中心不可用时：缓存没过期就继续用，过期了一律拒绝（Unavailable 往上抛）。
-    """
-
-    def __init__(self, inner: Permissions, ttl_s: float) -> None:
-        self.inner = inner
-        self._ttl = ttl_s
-        self._rows: dict[str, tuple[float, KeyAccess]] = {}
-
-    async def get(self, subject: str) -> KeyAccess:
-        row = self._rows.get(subject)
-        if row is not None and row[0] >= time.monotonic():
-            return row[1]
-        found = await self.inner.key_access(subject)
-        if self._ttl > 0:
-            if len(self._rows) > 50_000:
-                self._rows.clear()
-            self._rows[subject] = (time.monotonic() + self._ttl, found)
-        return found
-
-    def forget(self, subject: str | None = None) -> None:
-        """本进程里刚改过授权：立即生效（别的实例等缓存过期）。"""
-        if subject is None:
-            self._rows.clear()
-        else:
-            self._rows.pop(subject, None)

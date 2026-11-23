@@ -2,7 +2,7 @@
 
 隔离    服务名在租户内唯一；Key 说明了是哪个租户，别的租户的服务即使同名也找不到
 身份    管理接口的人要在请求头写的租户里（用户中心核对）
-地址    租户填的上游地址不能指向平台内部（upstreams/guard.py）
+地址    租户填的上游地址不能指向平台内部（upstream/guard.py）
 停用    运营接口停用租户：管理接口 403、这个租户的 Key 在数据面一律无效；删除只删它的数据
 """
 
@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 import pytest
-from atlas_mcpgateway.upstreams.guard import AddressGuard, UpstreamBlocked
+from atlas_mcpgateway.upstream.guard import AddressGuard, UpstreamBlocked
 from fake_upstreams import REST_KEY
 from gateway_testkit import (
     ADMIN,

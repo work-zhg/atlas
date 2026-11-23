@@ -36,7 +36,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "动态图：MCP 网关 - 调用一个工具",
-  "description": "目标模型（参与者按组件图拆）。Atlas 的原生智能体调私有服务 serpapi（REST 转换）的 google_search；外部客户端带用户 Key、会话 Pod 里的 CLI 带智能体 Key，走的是同一条路",
+  "description": "目标模型（参与者按组件图拆）。Atlas 的原生智能体调私有服务 serpapi（REST 转换）的 google_search；外部客户端带用户 Key、会话 Pod 里的 CLI 带智能体 Key，走的是同一条路。服务、Key 都归租户：先认 Key，再在它所在的租户里找服务",
   "boundaries": [
     {
       "id": "gwsys",
@@ -163,8 +163,22 @@
     },
     {
       "from": "invoke",
+      "to": "keys",
+      "description": "authenticate(原文)：Key 说明了租户"
+    },
+    {
+      "from": "keys",
+      "to": "db",
+      "description": "按原文查正常的 Key（系统范围）",
+      "technology": "SQL/TCP",
+      "details": {
+        "note": "还不知道是哪个租户：原文全局唯一，在系统范围里只查这一行。每个请求都查、不缓存：停用、重置立即生效；缺 Key / 无效、Key 所在的租户已停用 → 401。之后都在这个租户里。"
+      }
+    },
+    {
+      "from": "invoke",
       "to": "catalog",
-      "description": "get(serpapi)：存在且启用？"
+      "description": "get(serpapi)：这个租户里存在且启用？"
     },
     {
       "from": "catalog",
@@ -172,21 +186,7 @@
       "description": "查服务",
       "technology": "SQL/TCP",
       "details": {
-        "note": "短会话，读完就还连接；不存在 → service_not_found（404），停用 → service_disabled（403）。"
-      }
-    },
-    {
-      "from": "invoke",
-      "to": "keys",
-      "description": "authenticate(原文)"
-    },
-    {
-      "from": "keys",
-      "to": "db",
-      "description": "按原文查正常的 Key",
-      "technology": "SQL/TCP",
-      "details": {
-        "note": "每个请求都查、不缓存：停用、重置立即生效。缺 Key / 无效 → 401。"
+        "note": "短会话，读完就还连接；别的租户同名的服务也找不到。不存在 → service_not_found（404），停用 → service_disabled（403）。"
       }
     },
     {
@@ -194,7 +194,7 @@
       "to": "access",
       "description": "access_of(Key 的主体)",
       "details": {
-        "note": "serpapi 是私有服务才判；公开服务跳过这一步，任何有效的 Key 都能用全部工具。"
+        "note": "serpapi 是私有服务才判；公开服务跳过这一步，任何有效的 Key 都能用全部工具。查的是授权的判权缓存，不占数据库连接。"
       }
     },
     {

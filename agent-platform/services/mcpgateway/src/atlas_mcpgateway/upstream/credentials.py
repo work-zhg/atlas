@@ -28,7 +28,7 @@ import httpx
 
 from ..errors import Invalid
 
-__all__ = ["BY_KIND", "Credential", "TokenCache", "hint", "validate"]
+__all__ = ["BY_KIND", "TokenCache", "UpstreamCredential", "hint"]
 
 #: 每种服务能用哪些凭据类型
 BY_KIND: dict[str, tuple[str, ...]] = {
@@ -54,7 +54,7 @@ def hint(secret: str | None) -> str | None:
     return f"••••{secret[-4:]}" if secret else None
 
 
-def validate(
+def _validate(
     kind: str, raw: Mapping[str, Any], secret: str | None, *, previous: Mapping[str, Any] | None
 ) -> dict[str, Any]:
     """接口给的凭据 → 存库的不保密部分。secret 为 None = 沿用原来的（类型没变时）。"""
@@ -79,13 +79,18 @@ def validate(
 
 
 @dataclass(frozen=True)
-class Credential:
+class UpstreamCredential:
+    """上游凭据：不保密的部分（存在服务的 credential 上）和保密的值。只在网关里。"""
+
     type: str
     fields: Mapping[str, Any]
     secret: str | None
 
+    #: 接口给的凭据 → 存库的不保密部分（服务目录登记、改凭据时用）
+    validate = staticmethod(_validate)
+
     @classmethod
-    def of(cls, credential: Mapping[str, Any] | None, secret: str | None) -> Credential:
+    def of(cls, credential: Mapping[str, Any] | None, secret: str | None) -> UpstreamCredential:
         data = dict(credential or {})
         return cls(str(data.get("type") or "none"), data, secret)
 

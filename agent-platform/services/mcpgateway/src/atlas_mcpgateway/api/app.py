@@ -11,17 +11,19 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.types import Receive, Scope, Send
 
-from .. import tracing
-from ..auth import IdentityHeadersMiddleware
-from ..dataplane import DataPlane
-from ..db.models import Base, McpApiKey, McpAudit, McpService, McpTool
+from ..access.identity import IdentityHeadersMiddleware
+from ..access.key_access import AccessCache
+from ..access.usercenter import UserCenter, UserCenterGateway
+from ..db.models import Base, McpApiKey, McpAudit, McpDataObject, McpService, McpTool
 from ..db.session import get_sessionmaker
 from ..errors import GatewayError
+from ..invocation import trace
+from ..invocation.service import ToolInvocation
 from ..maintainer import ToolRefresh
-from ..perms import AccessCache, Permissions, UCPermissions
 from ..settings import get_settings
-from ..upstreams.hub import Upstreams
+from ..upstream.gateway import UpstreamGateway
 from . import admin, internal
+from .endpoint import McpEndpoint
 
 __all__ = ["create_app"]
 
@@ -30,52 +32,56 @@ _MCP_PATHS = ("/mcp/{service}", "/mcp/{service}/")
 
 
 class _McpRoute:
-    """数据面的 ASGI 入口：转给 app 生命周期里建好的 DataPlane。"""
+    """数据面的 ASGI 入口：转给 app 生命周期里建好的 MCP 端点。"""
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        await scope["app"].state.data_plane(scope, receive, send)
+        await scope["app"].state.mcp_endpoint(scope, receive, send)
 
 
-def create_app(*, perms: Permissions | None = None) -> FastAPI:
-    """perms 可注入 —— 测试用内存实现；不注入则按设置连用户中心。"""
+def create_app(*, uc: UserCenter | None = None) -> FastAPI:
+    """uc 可注入 —— 测试用内存实现；不注入则按设置连用户中心。"""
     settings = get_settings()
-    tracing.setup()
+    trace.setup()
     # 定时任务（刷新工具定义）：lifespan 里注册、启动；运营接口 /ops/v1/jobs 看运行情况
     jobs = JobScheduler()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        owned: UCPermissions | None = None
-        if perms is None:
-            owned = UCPermissions(settings.uc_base_url)
+        owned: UserCenterGateway | None = None
+        if uc is None:
+            owned = UserCenterGateway(settings.uc_base_url, snapshot_ttl_s=settings.authz_ttl_s)
             _wire(app, owned)
-        upstreams = Upstreams(settings)
-        app.state.upstreams = upstreams
+        upstream = UpstreamGateway(settings)
+        app.state.upstream = upstream
         gate = app.state.tenant_gate
-        plane = DataPlane(get_sessionmaker(), app.state.perms, app.state.access, upstreams, gate)
-        app.state.data_plane = plane
+        invocation = ToolInvocation(
+            get_sessionmaker(), app.state.uc, app.state.access, upstream, gate
+        )
+        app.state.invocation = invocation
+        endpoint = McpEndpoint(invocation)
+        app.state.mcp_endpoint = endpoint
         if settings.maintainer_tick_s > 0:
             jobs.register(
-                ToolRefresh(settings, app.state.perms, upstreams, gate),
+                ToolRefresh(settings, app.state.uc, upstream, gate),
                 scope="instance",
                 every=settings.maintainer_tick_s,
             )
-        await plane.start()
+        await endpoint.start()
         jobs.start()
         try:
             yield
         finally:
-            await plane.stop()
+            await endpoint.stop()
             await jobs.stop()
-            await upstreams.aclose()
+            await upstream.aclose()
             if owned is not None:
                 await owned.aclose()
 
     app = FastAPI(title="MCP Gateway", version="0.2.0", lifespan=lifespan)
     app.state.jobs = jobs
-    if perms is not None:
-        _wire(app, perms)
-    # 身份请求头透传：管理接口里调用户中心都带上（auth.py）
+    if uc is not None:
+        _wire(app, uc)
+    # 身份请求头透传：管理接口里调用户中心都带上（access/identity.py）
     app.add_middleware(IdentityHeadersMiddleware)
 
     @app.exception_handler(GatewayError)
@@ -114,11 +120,11 @@ def _mount_ops(app: FastAPI, jobs: JobScheduler) -> None:
     sessions = get_sessionmaker()
     app.state.ops_guard = guard = OpsGuard(key)
     app.state.tenant_gate = gate = TenantGate(sessions)
-    purge = TenantDataPurge((McpAudit, McpTool, McpApiKey, McpService), base=Base)
+    purge = TenantDataPurge((McpAudit, McpDataObject, McpTool, McpApiKey, McpService), base=Base)
     lifecycle = TenantLifecycleService(sessions, NoExternal(), gate, purge)
     app.include_router(OpsRoutes(guard, lifecycle, jobs=jobs).router)
 
 
-def _wire(app: FastAPI, perms: Permissions) -> None:
-    app.state.perms = perms
-    app.state.access = AccessCache(perms, get_settings().perm_cache_ttl_s)
+def _wire(app: FastAPI, uc: UserCenter) -> None:
+    app.state.uc = uc
+    app.state.access = AccessCache(uc, get_settings().perm_cache_ttl_s)

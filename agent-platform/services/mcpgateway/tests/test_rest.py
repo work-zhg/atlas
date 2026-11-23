@@ -8,7 +8,7 @@ from uuid import UUID
 
 import httpx
 import pytest
-from atlas_mcpgateway.perms import DATA_SERVER, DATA_TOOL
+from atlas_mcpgateway.access.usercenter import DATA_SERVER, DATA_TOOL
 from atlas_tenancy import TenantScope
 from fake_upstreams import REST_KEY, FakeRest
 from gateway_testkit import (
@@ -269,9 +269,9 @@ async def test_add_service_from_spec_file(
     upstream_base: str,
 ) -> None:
     """部署脚本的登记（service add --file）：手工定义的 REST 工具一起建好；已存在就跳过。"""
+    from atlas_mcpgateway import wiring
     from atlas_mcpgateway.__main__ import add_service
     from atlas_mcpgateway.db.session import get_sessionmaker
-    from atlas_mcpgateway.registry import Registry
     from atlas_mcpgateway.settings import get_settings
 
     spec = {
@@ -304,8 +304,8 @@ async def test_add_service_from_spec_file(
         # 命令行登记时写明租户（service --tenant …）
         with TenantScope.enter(UUID(TEST_TENANT)):
             async with get_sessionmaker()() as session:
-                registry = Registry(session, get_settings(), perms, app.state.upstreams)
-                row = await add_service(registry, spec, owner=ADMIN)
+                catalog = wiring.catalog(session, get_settings(), perms, app.state.upstream)
+                row = await add_service(catalog, spec, owner=ADMIN)
                 await session.commit()
         assert (row is not None) is expected
     assert perms.owners_of(DATA_SERVER, "search") == {ADMIN}

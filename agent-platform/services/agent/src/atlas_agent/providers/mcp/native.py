@@ -114,8 +114,9 @@ class ResponseWatch:
         self.auth_status, self.session_lost = None, False
 
 
-#: 网关的拒绝原因（error.data.reason，atlas_mcpgateway/proxy.py::Reason）→ 给模型的说明
-#: 与处理方式。retry：能先修复再自动重试一次的；remember：本 Run 段内记住、不再发请求的范围
+#: 网关的拒绝原因（error.data.reason，atlas_mcpgateway/invocation/rejection.py::Reason）
+#: → 给模型的说明与处理方式。retry：能先修复再自动重试一次的；
+#: remember：本 Run 段内记住、不再发请求的范围
 @dataclass(frozen=True)
 class _Failure:
     message: str

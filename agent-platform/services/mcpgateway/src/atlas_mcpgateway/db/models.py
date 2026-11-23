@@ -5,10 +5,14 @@
     mcp_tool      工具：定义（MCP 代理从上游拉来；REST / gRPC 由管理员定义）、映射、副作用、状态
     mcp_api_key   API Key：用户 Key（本人申请）与智能体 Key（应用创建）。每把 Key 在用户中心有一个
                   主体（subject_uid），授权授给它，网关判权时以它作 X-Auth-Uid
+    mcp_data_object  在用户中心登记过的数据对象（McpServer、McpTool），授权据此知道要不要先登记
     mcp_audit     管理动作的审计（不记 Key 原文、上游凭据）
 
+各表归哪个领域见 c4-model/mcpgateway/code-domains.html：服务目录 mcp_service、mcp_tool；API Key
+mcp_api_key；授权 mcp_data_object；管理审计 mcp_audit 是共享内核。
+
 ★ 自增 id + uuid 逻辑主键；关联与 API 一律用 uuid（字段名 xxx_uuid）。
-★ 多租户（迁移 g0003）：四张表都归租户（TenantOwned），查询按当前租户自动过滤；服务名在租户内
+★ 多租户（迁移 g0003）：表都归租户（TenantOwned），查询按当前租户自动过滤；服务名在租户内
   唯一，「公有」只对本租户公有。数据面先按 Key 认出租户，再在这个租户里找服务。
 ★ 不建外键（与其它服务一致）：引用完整性由 service 层保证。
 ★ 服务没有删除：服务名是工具名前缀、用户中心里的数据标识、智能体配置里的引用，
@@ -37,6 +41,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from ..keys import secret as key_secret
+from ..upstream.credentials import UpstreamCredential
+from ..upstream.spec import ToolBinding, UpstreamSpec
 from .types import JSONType, UTCDateTime, UUIDType, utcnow, uuid7
 
 NAMING_CONVENTION = {
@@ -55,6 +62,9 @@ EFFECTS = ("read", "write", "destructive")
 TOOL_STATUSES = ("active", "disabled")
 KEY_TYPES = ("user", "client")
 KEY_STATUSES = ("active", "blocked")
+#: 用户中心里的数据编码：只表达语义，不带应用名
+DATA_SERVER = "McpServer"
+DATA_TOOL = "McpTool"
 
 
 class Base(DeclarativeBase):
@@ -112,6 +122,15 @@ class McpService(TenantOwned, _Row, Base):
         CheckConstraint("status IN ('enabled','disabled')", name="status"),
     )
 
+    def upstream_spec(self, *, descriptor: bytes | None = None) -> UpstreamSpec:
+        """交给上游接入的连接、凭据和描述（它不认识这张表）。descriptor：发现时用别的描述文件。"""
+        return UpstreamSpec(
+            kind=self.kind,
+            connection=dict(self.connection or {}),
+            credential=UpstreamCredential.of(self.credential, self.credential_secret),
+            descriptor=descriptor if descriptor is not None else self.descriptor,
+        )
+
 
 class McpTool(TenantOwned, _Row, Base):
     __tablename__ = "mcp_tool"
@@ -140,14 +159,20 @@ class McpTool(TenantOwned, _Row, Base):
     changed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     #: MCP 代理：上游最近一次完整拉取里没有它 = 已删除。留着行，管理端要显示删了哪些
     removed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-    #: 用户中心里登记过这个工具的数据对象（McpTool / 服务名/工具名）。第一次工具级授权时登记
-    uc_registered: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     __table_args__ = (
         UniqueConstraint("service_uuid", "name"),
         CheckConstraint("effect IN ('read','write','destructive')", name="effect"),
         CheckConstraint("status IN ('active','disabled')", name="status"),
     )
+
+    def callable(self) -> bool:
+        """可用 = 启用、没被删除、没有不合规的原因。"""
+        return self.status == "active" and self.removed_at is None and not self.issues
+
+    def binding(self) -> ToolBinding:
+        """交给上游接入的「怎么调」。"""
+        return ToolBinding(self.name, dict(self.mapping or {}))
 
 
 class McpApiKey(TenantOwned, _Row, Base):
@@ -179,6 +204,24 @@ class McpApiKey(TenantOwned, _Row, Base):
     #: 最近一次生成原文的时间（申请、重置）
     rotated_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
 
+    @property
+    def target(self) -> str:
+        """归属（KeyOwner）：审计里的标识。"""
+        if self.key_type == "user":
+            return f"key:user:{self.user_uuid}"
+        return f"key:client:{self.client_type}:{self.client_code}"
+
+    def rotate(self) -> str:
+        """生成新原文（申请、重置）：旧原文立即失效，主体和授权不变。→ 新原文。"""
+        self.secret, self.rotated_at = key_secret.generate(), utcnow()
+        return self.secret
+
+    def block(self) -> None:
+        self.status = "blocked"
+
+    def unblock(self) -> None:
+        self.status = "active"
+
     __table_args__ = (
         CheckConstraint("key_type IN ('user','client')", name="key_type"),
         CheckConstraint("status IN ('active','blocked')", name="status"),
@@ -200,6 +243,28 @@ class McpApiKey(TenantOwned, _Row, Base):
             unique=True,
             postgresql_where=text("key_type = 'client'"),
         ),
+    )
+
+
+class McpDataObject(TenantOwned, _Row, Base):
+    """在用户中心登记过的一条数据（授权领域的 DataObjectRegistry）。
+
+    McpServer  一个服务一条，数据标识 = 服务名；登记服务时登记
+    McpTool    一个工具一条，数据标识 = 服务名/工具名；第一次工具级授权时才登记
+
+    ★ 授权本身都在用户中心；这张表只为不必逐个问用户中心「这个工具登记过没有」。
+    """
+
+    __tablename__ = "mcp_data_object"
+
+    data_code: Mapped[str] = mapped_column(String(16), nullable=False)
+    data_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    #: 所属服务（mcp_service.uuid）
+    service_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("tenant_uuid", "data_code", "data_id"),
+        CheckConstraint("data_code IN ('McpServer','McpTool')", name="data_code"),
     )
 
 

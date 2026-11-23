@@ -14,7 +14,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from ..definitions import SERVICE_NAME_PATTERN
+from ..catalog.definitions import SERVICE_NAME_PATTERN
 
 Kind = Literal["mcp", "rest", "grpc"]
 Visibility = Literal["public", "private"]

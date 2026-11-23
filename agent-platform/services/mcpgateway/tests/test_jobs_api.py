@@ -19,7 +19,7 @@ async def test_jobs_are_listed_for_managers_only(
     # 测试环境把间隔设成 0（不注册）；这里打开，第一轮在 30 秒后，用例里不会真跑
     settings = get_settings().model_copy(update={"maintainer_tick_s": 30})
     monkeypatch.setattr(app_mod, "get_settings", lambda: settings)
-    app = app_mod.create_app(perms=perms)
+    app = app_mod.create_app(uc=perms)
     async with (
         app.router.lifespan_context(app),
         httpx.AsyncClient(

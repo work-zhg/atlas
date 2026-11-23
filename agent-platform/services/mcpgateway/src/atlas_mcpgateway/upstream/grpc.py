@@ -37,13 +37,23 @@ from google.protobuf import (  # noqa: F401  加载常用类型，描述文件�
 )
 from google.protobuf.descriptor import Descriptor, FieldDescriptor
 from grpc_reflection.v1alpha import reflection_pb2, reflection_pb2_grpc
+from opentelemetry import trace
+from opentelemetry.trace import SpanKind
 
-from . import DiscoveryFailed, UpstreamUnavailable, describe_error, tool_result, trace_headers
+from . import (
+    DiscoveryFailed,
+    InvalidArguments,
+    UpstreamUnavailable,
+    describe_error,
+    tool_result,
+    trace_headers,
+)
+from .spec import Discovered, ToolBinding, UpstreamAuth, UpstreamSpec
 
 __all__ = [
     "TLS_MODES",
     "Channels",
-    "InvalidArguments",
+    "GrpcConverter",
     "Method",
     "Pools",
     "call",
@@ -96,10 +106,6 @@ _WELL_KNOWN: dict[str, dict[str, Any]] = {
     "google.protobuf.Int64Value": {"type": "integer"},
     "google.protobuf.UInt64Value": {"type": "integer"},
 }
-
-
-class InvalidArguments(Exception):
-    """参数转不成请求消息（字段不存在、类型不对）。"""
 
 
 def effect_of_method(method: str) -> str:
@@ -420,3 +426,64 @@ async def call(
         raise UpstreamUnavailable(describe_error(exc)) from exc
     data = json_format.MessageToDict(response, preserving_proto_field_name=True)
     return tool_result(json.dumps(data, ensure_ascii=False), structured=data)
+
+
+_tracer = trace.get_tracer("atlas_mcpgateway")
+
+
+class GrpcConverter:
+    """扩展点 Upstream 的 gRPC 转换实现。连接、描述池在进程内复用。"""
+
+    def __init__(self, *, discovery_timeout_s: float) -> None:
+        self._timeout = discovery_timeout_s
+        self.channels = Channels()
+        self.pools = Pools()
+
+    async def aclose(self) -> None:
+        await self.channels.aclose()
+
+    def _channel(self, spec: UpstreamSpec) -> grpc.aio.Channel:
+        cred = spec.credential
+        mtls = cred.type == "mtls"
+        return self.channels.get(
+            str(spec.connection["address"]),
+            str(spec.connection.get("tls") or "plaintext"),
+            cert=cred.get("cert") if mtls else None,
+            key=cred.secret if mtls else None,
+        )
+
+    async def discover(self, spec: UpstreamSpec, auth: UpstreamAuth) -> Discovered:
+        """给了描述文件就解析它，否则服务端反射。"""
+        data = spec.descriptor
+        if data is None:
+            data = await reflect(
+                self._channel(spec), metadata=auth.metadata, timeout_s=self._timeout
+            )
+        return Discovered(
+            "grpc", methods=methods(data), descriptor=data, services=services_in(data)
+        )
+
+    async def call(
+        self,
+        spec: UpstreamSpec,
+        binding: ToolBinding,
+        arguments: Mapping[str, Any],
+        auth: UpstreamAuth,
+        identity: Mapping[str, str],
+    ) -> dict[str, Any]:
+        if spec.descriptor is None:
+            raise UpstreamUnavailable("这个 gRPC 服务还没有接口描述，请重新发现方法")
+        mapping = binding.mapping
+        metadata = [*auth.metadata, *((k.lower(), v) for k, v in identity.items())]
+        with _tracer.start_as_current_span(
+            str(mapping.get("method")),
+            kind=SpanKind.CLIENT,
+            attributes={"rpc.system": "grpc", "rpc.method": str(mapping.get("method"))},
+        ):
+            return await call(
+                self._channel(spec),
+                self.pools.get(spec.descriptor),
+                mapping,
+                arguments,
+                metadata=metadata,
+            )

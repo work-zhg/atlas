@@ -1,7 +1,7 @@
 """MCP 代理：已有的远程 MCP Server，网关作为客户端调它。
 
     传输   streamable = Streamable HTTP；sse = 旧版 HTTP+SSE（2024-11-05）
-    定义   tools/list（含分页）→ MCP 线上格式的工具定义，存库（registry.refresh）
+    定义   tools/list（含分页）→ MCP 线上格式的工具定义，原样交给服务目录（它规范化、存库）
     调用   每次 tools/call 开一个上游会话：initialize → tools/call → 关闭
 
 ★ 每次调用一个上游会话：网关对下游是无状态的（任一实例处理任一请求），不在实例里留上游会话。
@@ -19,9 +19,17 @@ from typing import Any
 
 from mcp.shared.exceptions import MCPError
 
-from . import UpstreamError, UpstreamUnavailable, describe_error, root_causes, trace_headers
+from . import (
+    DiscoveryFailed,
+    UpstreamError,
+    UpstreamUnavailable,
+    describe_error,
+    root_causes,
+    trace_headers,
+)
+from .spec import Discovered, ToolBinding, UpstreamAuth, UpstreamSpec
 
-__all__ = ["TRANSPORTS", "McpUpstream"]
+__all__ = ["TRANSPORTS", "McpProxy", "McpUpstream"]
 
 TRANSPORTS = ("streamable", "sse")
 
@@ -80,3 +88,35 @@ class McpUpstream:
         out.pop("_meta", None)
         out.pop("resultType", None)
         return out
+
+
+class McpProxy:
+    """扩展点 Upstream 的 MCP 代理实现。"""
+
+    def __init__(self, *, discovery_timeout_s: float) -> None:
+        self._timeout = discovery_timeout_s
+
+    @staticmethod
+    def _upstream(spec: UpstreamSpec, auth: UpstreamAuth) -> McpUpstream:
+        return McpUpstream(
+            spec.connection["url"], transport=spec.connection["transport"], headers=auth.headers
+        )
+
+    async def discover(self, spec: UpstreamSpec, auth: UpstreamAuth) -> Discovered:
+        try:
+            raw = await self._upstream(spec, auth).list_tools(timeout_s=self._timeout)
+        except UpstreamUnavailable as exc:
+            raise DiscoveryFailed(f"连不上 MCP Server：{exc}") from exc
+        return Discovered("mcp", tools=raw)
+
+    async def call(
+        self,
+        spec: UpstreamSpec,
+        binding: ToolBinding,
+        arguments: Mapping[str, Any],
+        auth: UpstreamAuth,
+        identity: Mapping[str, str],
+    ) -> dict[str, Any]:
+        return await self._upstream(spec, auth).call_tool(
+            binding.name, arguments, identity=identity
+        )

@@ -21,7 +21,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "容器图：MCP 网关",
-  "description": "范围是 agent-platform/services/mcpgateway。网关服务和运维命令行是同一个包、同一个镜像（atlas-app），分别以 serve 和 migrate / register-uc / service 子命令运行；不用 Redis：数据面无状态，判权结果按 Key 在进程内缓存 30 秒，多副本靠数据库行锁和租约协调；运维命令行登记、刷新服务时也会连上游发现工具，Trace 经 OTLP 发往 Collector，图中未画",
+  "description": "范围是 agent-platform/services/mcpgateway。服务、工具、Key 都归租户；网关服务和运维命令行是同一个包、同一个镜像（atlas-app），分别以 serve 和 migrate / service 子命令运行；不用 Redis：数据面无状态，判权结果按 Key 在进程内缓存 30 秒，多副本靠数据库行锁和租约协调；运维命令行登记、刷新服务时也会连上游发现工具，Trace 经 OTLP 发往 Collector，图中未画",
   "system": "MCP 网关",
   "elements": [
     {
@@ -76,7 +76,7 @@
       "shape": "server",
       "technology": "Python / FastAPI + MCP SDK",
       "name": "网关服务",
-      "description": "数据面 /mcp/{服务名}（无状态的 MCP 服务端）、管理接口、给 Atlas 的内部接口，以及定期刷新工具定义的维护任务。",
+      "description": "数据面 /mcp/{服务名}（无状态的 MCP 服务端）、管理接口、给 Atlas 的内部接口、给运营中心的运营接口，以及定期刷新工具定义的维护任务。",
       "at": [
         2.2,
         1.35
@@ -88,7 +88,7 @@
       "shape": "server",
       "technology": "Python / argparse",
       "name": "运维命令行",
-      "description": "迁移网关库、把应用和数据编码登记到用户中心、按文件登记服务；部署时运行。",
+      "description": "迁移网关库，按文件登记服务（写明租户，登记人成为所有者）；部署时运行。",
       "at": [
         0,
         1.35
@@ -111,7 +111,7 @@
       "shape": "database",
       "technology": "PostgreSQL 16",
       "name": "网关库",
-      "description": "服务、工具、API Key、在用户中心登记过的数据对象和管理审计（mcp_* 表）；上游凭据和 Key 原文也在这里。",
+      "description": "服务、工具、API Key、在用户中心登记过的数据对象和管理审计（mcp_* 表）；上游凭据和 Key 原文也在这里；表都带租户，按当前租户自动过滤。",
       "at": [
         1.1,
         2.45
@@ -126,6 +126,17 @@
       "at": [
         1.1,
         3.6
+      ]
+    },
+    {
+      "id": "ops",
+      "kind": "system",
+      "name": "运营中心",
+      "color": "#8a6d00",
+      "description": "管平台本身的独立系统：开通、停用、关闭租户，分份额，维护系统参数；看不到租户的业务内容。",
+      "at": [
+        3.9,
+        0
       ]
     }
   ],
@@ -145,7 +156,7 @@
     {
       "from": "admin",
       "to": "cli",
-      "description": "部署时登记到用户中心、按文件登记服务"
+      "description": "部署时迁移、按文件登记服务"
     },
     {
       "from": "agent",
@@ -186,8 +197,14 @@
     {
       "from": "cli",
       "to": "usercenter",
-      "description": "登记应用、操作码、角色和数据编码",
-      "technology": "JSON/HTTP（管理 API，管理员账号登录）"
+      "description": "按账号查登记人，登记 McpServer",
+      "technology": "JSON/HTTP（开放接口）"
+    },
+    {
+      "from": "ops",
+      "to": "server",
+      "description": "停用、恢复、删除租户，系统任务",
+      "technology": "JSON/HTTP（运营接口，签名）"
     }
   ]
 }

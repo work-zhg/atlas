@@ -32,7 +32,7 @@
   "title": "代码图：MCP 网关 - 网关服务 - 工具调用",
   "description": "目标领域模型，只画期望的样子。数据面：准入、列工具、调工具、错误协议、身份传递和 Trace；本领域没有自己的表，领域总览见 code-domains.html",
   "component": "工具调用",
-  "package": "atlas_mcpgateway.invocation（目标模型）",
+  "package": "atlas_mcpgateway.invocation",
   "overview": "工具调用就是网关的数据面。网关自己是 MCP 服务端（/mcp/{服务名}，无状态、JSON 响应），Atlas 的原生智能体、会话 Pod 里的 CLI、员工本机的 MCP 客户端都连它。一个请求先认人后办事：服务存在且启用、Key 有效、私有服务上这把 Key 有权限，才交给 MCP SDK；tools/list 按库里的定义只列能用的，tools/call 再做工具级判权和参数校验，交给上游接入按服务类型转换后调用。被拒的请求带着原因和「有没有转发」返回。\n\n它只编排，规则都在别的领域：服务和工具在服务目录，Key 在 API Key，权限在授权，协议转换和上游凭据在上游接入。",
   "elements": [
     {
@@ -44,7 +44,7 @@
         1.6,
         0.35
       ],
-      "responsibility": "数据面的编排，自己不含规则：准入按「服务存在且启用 → 认 Key → 私有服务判权」的顺序，任何一步不过就抛 Rejection；列工具只列可用且这把 Key 能用的；调工具先做工具级判权和参数校验，再交给上游接入，把上游的失败转成拒绝原因。每个请求独立，不开长事务：读目录、认 Key 各用一个短会话，转发上游时不占数据库连接。",
+      "responsibility": "数据面的编排，自己不含规则：准入按「认 Key（它说明了租户，停用的租户的 Key 无效）→ 这个租户里服务存在且启用 → 私有服务判权」的顺序，任何一步不过就抛 Rejection；列工具只列可用且这把 Key 能用的；调工具先做工具级判权和参数校验，再交给上游接入，把上游的失败转成拒绝原因。每个请求独立，不开长事务：读目录、认 Key 各用一个短会话，转发上游时不占数据库连接。",
       "methods": [
         [
           "+",
@@ -401,7 +401,7 @@
       "name": "准入",
       "entry": "admit(service, secret, *, user_uid, audit)",
       "callers": "MCP 端点（每个请求，交给 SDK 之前）、管理接口（试调）",
-      "description": "服务存在且启用 → 认 Key（Authorization: Bearer）→ 私有服务以 Key 的主体判权，一点权限都没有就拒绝；不过就抛 Rejection"
+      "description": "认 Key（Authorization: Bearer，确定租户）→ 这个租户里服务存在且启用 → 私有服务以 Key 的主体判权（授权的判权缓存，不占数据库连接），一点权限都没有就拒绝；不过就抛 Rejection"
     },
     {
       "name": "列工具",
@@ -448,6 +448,10 @@
     {
       "decision": "只接 Trace，不记调用记录",
       "reason": "调用记录要存参数和结果，涉及个人信息和业务数据，按用户要求去掉了；Trace 只带网关属性，排查时按 trace 串起 Atlas、网关和上游。"
+    },
+    {
+      "decision": "先认 Key 再找服务",
+      "reason": "服务名只在租户内唯一：Key 说明了租户，在这个租户里找服务，别的租户同名的服务找不到（service_not_found）。"
     }
   ]
 }

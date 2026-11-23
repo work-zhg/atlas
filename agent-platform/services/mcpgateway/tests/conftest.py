@@ -19,7 +19,7 @@ from typing import Any
 import httpx
 import pytest
 from fake_upstreams import FakeGrpc, FakeMcp, FakeRest, http_upstreams, serve_in_thread
-from gateway_testkit import ADMIN, OPS_KEY, TEST_TENANT, USERS_ELSEWHERE, FakePermissions
+from gateway_testkit import OPS_KEY, TEST_TENANT, USERS_ELSEWHERE, FakePermissions
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -31,6 +31,7 @@ _TABLES = (
     "mcp_tool",
     "mcp_api_key",
     "mcp_audit",
+    "mcp_data_object",
     "app_tenant_state",
     "app_ops_request",
 )
@@ -75,7 +76,7 @@ def _environment() -> Iterator[str]:
             "ATLAS_MCPGW_UC_BASE_URL": "http://uc.invalid",
             "ATLAS_MCPGW_DISCOVERY_TIMEOUT_S": "5",
             "ATLAS_MCPGW_PERM_CACHE_TTL_S": "0",
-            # 上游替身都在本机：放开回环（默认不许连内部地址，见 upstreams/guard.py）
+            # 上游替身都在本机：放开回环（默认不许连内部地址，见 upstream/guard.py）
             "ATLAS_MCPGW_UPSTREAM_ALLOW_CIDRS": '["127.0.0.0/8", "::1/128"]',
             "ATLAS_MCPGW_OPS_API_KEY": OPS_KEY,
         }
@@ -159,23 +160,8 @@ def perms() -> FakePermissions:
 
 
 @pytest.fixture(autouse=True)
-def _fake_authz(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """管理接口的授权快照：ADMIN 有 mcp:manage，其他人没有。人都在请求头写的租户里，除了
-    USERS_ELSEWHERE 里登记过的（用户中心在别的租户里找不到他 → 404）。"""
-    from atlas_mcpgateway import auth
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        uid = request.url.path.split("/")[-2]
-        tenant = request.headers.get("x-tenant-id")
-        home = USERS_ELSEWHERE.get(uid)
-        if home is not None and home != tenant:
-            return httpx.Response(404, json={"message": "用户不存在"})
-        ops = ["mcp:manage"] if uid == ADMIN else []
-        user = {"id": uid, "status": "active", "tenant_id": tenant}
-        return httpx.Response(200, json={"can_access": True, "permissions": ops, "user": user})
-
-    monkeypatch.setattr(auth, "_transport", httpx.MockTransport(handler))
-    monkeypatch.setattr(auth, "_cache", auth._Cache())
+def _users_home() -> Iterator[None]:
+    """授权快照由用户中心替身给（FakePermissions.authz）；每个测试后清掉「不在测试租户里的人」。"""
     yield
     USERS_ELSEWHERE.clear()
 
@@ -184,7 +170,7 @@ def _fake_authz(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 async def app(perms: FakePermissions) -> AsyncIterator[Any]:
     from atlas_mcpgateway.api.app import create_app
 
-    application = create_app(perms=perms)
+    application = create_app(uc=perms)
     async with application.router.lifespan_context(application):
         yield application
 

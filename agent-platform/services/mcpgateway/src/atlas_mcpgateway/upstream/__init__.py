@@ -1,10 +1,16 @@
-"""上游：网关直接连的服务。
+"""上游接入（c4-model/mcpgateway/code-upstream.html）：网关直接连的服务。
 
-    mcp.py    MCP 代理：已有的远程 MCP Server（Streamable HTTP / 旧版 SSE），网关作为客户端调它
-    rest.py   REST 转换：解析 OpenAPI、按映射拼 HTTP 请求
-    grpc.py   gRPC 转换：服务端反射 / 描述文件，动态构造请求消息
+    gateway.py      UpstreamGateway：唯一入口，按服务类型选上游，注入上游凭据
+    spec.py         值对象：UpstreamSpec、ToolBinding、UpstreamAuth、Discovered
+    base.py         扩展点 Upstream：发现工具、调用工具
+    mcp.py          MCP 代理：已有的远程 MCP Server（Streamable HTTP / 旧版 SSE），网关是客户端
+    rest.py         REST 转换：解析 OpenAPI、按映射拼 HTTP 请求
+    grpc.py         gRPC 转换：服务端反射 / 描述文件，动态构造请求消息
+    credentials.py  上游凭据、OAuth2 Token
+    guard.py        上游地址不能指向平台内部
 
-★ 调用方只认网关：网关自己就是 MCP 服务端（dataplane.py），三种上游都由它转换后调用。
+★ 只收值对象，不认识任何领域：服务目录把服务、工具转成 UpstreamSpec、ToolBinding 交过来，身份是
+  工具调用算好的请求头。
 ★ 上游凭据由网关注入（credentials.py），调用方拿不到；调用方的 Key 不转发。
 ★ 不设读超时：工具调用可能要很久。超时属于流量治理（通用组件，单独设计）。
 """
@@ -13,14 +19,13 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from dataclasses import dataclass, field
 from typing import Any
 
 from opentelemetry import propagate
 
 __all__ = [
-    "CallContext",
     "DiscoveryFailed",
+    "InvalidArguments",
     "UpstreamError",
     "UpstreamUnavailable",
     "describe_error",
@@ -46,25 +51,8 @@ class DiscoveryFailed(Exception):
     """拉取 / 解析接口定义失败：给管理员看的原因。"""
 
 
-@dataclass(frozen=True)
-class CallContext:
-    """一次调用里要带给上游的身份与追踪上下文。
-
-    key_uid    Key 在用户中心的主体（权限主体）→ X-Auth-Uid
-    user_uid   使用者：用户 Key 是持有人；智能体 Key 是调用方带来的（只作审计，网关不校验）→ X-Uid
-    audit      调用方带来的 X-Run-Id、X-Thread-Id（只作审计）→ 原样转给上游
-    """
-
-    key_uid: str
-    user_uid: str | None = None
-    pass_identity: bool = True
-    #: 调用方带来的审计头（X-Run-Id、X-Thread-Id），照转给上游
-    audit: Mapping[str, str] = field(default_factory=dict)
-
-    def identity(self) -> dict[str, str]:
-        if not self.pass_identity:
-            return {}
-        return {"X-Auth-Uid": self.key_uid, "X-Uid": self.user_uid or self.key_uid, **self.audit}
+class InvalidArguments(Exception):
+    """参数转不成上游的请求（gRPC：字段不存在、类型不对）。请求没有发出去。"""
 
 
 def trace_headers() -> dict[str, str]:

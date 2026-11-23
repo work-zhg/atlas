@@ -32,7 +32,7 @@
   "title": "代码图：MCP 网关 - 网关服务 - 服务目录",
   "description": "目标领域模型，只画期望的样子。服务和工具的登记、修改、停用，MCP 代理的定义同步；领域总览见 code-domains.html",
   "component": "服务目录",
-  "package": "atlas_mcpgateway.catalog（目标模型）",
+  "package": "atlas_mcpgateway.catalog",
   "overview": "服务目录管「网关上有哪些服务、每个服务有哪些工具、工具长什么样」。三种服务的工具来源不同：MCP 代理从上游拉，全部登记、定期刷新；REST、gRPC 转换由管理员从 OpenAPI、反射结果里挑，或者手工定义。每个工具有定义指纹，Atlas 据此提示定义变化；名字不合规、参数定义不是对象的工具标成不可用。\n\n它不管谁能用（授权），不连上游（上游接入，目录只把连接、凭据和映射作为值对象交过去），也不处理调用（工具调用只读目录）。登记、改名、删工具时发目录事件，用户中心里的数据对象由授权去改。",
   "elements": [
     {
@@ -48,11 +48,11 @@
       "methods": [
         [
           "+",
-          "discover(draft) -> Discovered"
+          "discover(…) -> Preview"
         ],
         [
           "+",
-          "register(draft, selected, *, actor) -> McpService"
+          "register(…, selected, *, actor) -> McpService"
         ],
         [
           "+",
@@ -64,11 +64,11 @@
         ],
         [
           "+",
-          "refresh_due() · refresh(name, *, manual)"
+          "claim_due() · refresh(service, *, manual)"
         ],
         [
           "+",
-          "get(name) · list() · callable_tools(service)"
+          "get · list · tools · callable_tools(service)"
         ]
       ]
     },
@@ -81,7 +81,7 @@
         1.6,
         2.4
       ],
-      "responsibility": "一个 MCP 服务和它的全部工具，同进同出。服务名是工具名前缀和用户中心里的数据标识，不能改、停用后也不能复用，所以没有删除。连接、上游凭据、gRPC 描述按服务类型取不同形状；把连接和凭据交给上游接入时转成 UpstreamSpec。MCP 代理的拉取状态（最近一次拉取、失败原因、指纹汇总、租约）也在这里。",
+      "responsibility": "一个 MCP 服务和它的全部工具，同进同出。服务名在租户内唯一，是工具名前缀和用户中心里的数据标识，不能改、停用后也不能复用，所以没有删除。连接、上游凭据、gRPC 描述按服务类型取不同形状；把连接和凭据交给上游接入时转成 UpstreamSpec。MCP 代理的拉取状态（最近一次拉取、失败原因、指纹汇总、租约）也在这里。",
       "attributes": [
         [
           "+",
@@ -103,19 +103,7 @@
       "methods": [
         [
           "+",
-          "upstream_spec() -> UpstreamSpec"
-        ],
-        [
-          "+",
-          "apply_definitions(defs) -> removed"
-        ],
-        [
-          "+",
-          "add_tool · edit_tool · remove_tool"
-        ],
-        [
-          "+",
-          "enable() · disable()"
+          "upstream_spec(*, descriptor) -> UpstreamSpec"
         ]
       ]
     },
@@ -248,15 +236,19 @@
         -0.35,
         2.3
       ],
-      "responsibility": "MCP 代理的定义同步：领到期的服务（写租约），在锁外拉一次完整的 tools/list，再锁住服务行重读、按指纹比对：新增的登记、变了的留旧版、上游没了的标删除。比对结果交回 ServiceCatalog，由它发 tools_removed。失败保留旧定义，记下原因。手动刷新 10 秒内只能一次。",
+      "responsibility": "MCP 代理的定义同步：领到期的服务（写租约；跨租户在系统范围里领，逐个进入服务所属的租户去拉，停用的租户跳过），在锁外拉一次完整的 tools/list，再锁住服务行重读、按指纹比对：新增的登记、变了的留旧版、上游没了的标删除。比对结果交回 ServiceCatalog，由它发 tools_removed。失败保留旧定义，记下原因。手动刷新 10 秒内只能一次。",
       "methods": [
         [
           "+",
-          "refresh_due() -> list[str]"
+          "claim_due() -> [(服务名, 租户)]"
         ],
         [
           "+",
-          "refresh(service, *, manual)"
+          "refresh(service, *, manual) -> 删掉的工具"
+        ],
+        [
+          "+",
+          "apply(service, defs) -> 删掉的工具"
         ]
       ]
     },
@@ -298,7 +290,7 @@
       "methods": [
         [
           "+",
-          "get(name) · find · list · add(service)"
+          "get(name) · find · list · tools · tool"
         ],
         [
           "+",
@@ -306,7 +298,7 @@
         ],
         [
           "+",
-          "claim_due(interval, lease) -> names"
+          "claim_due(due, lease, now) -> [(服务名, 租户)]"
         ]
       ]
     },
@@ -353,7 +345,7 @@
       "methods": [
         [
           "+",
-          "discover(spec, *, service) -> Discovered"
+          "discover(spec) -> Discovered"
         ],
         [
           "+",
@@ -453,7 +445,7 @@
     {
       "from": "sync",
       "to": "svc",
-      "description": "apply_definitions"
+      "description": "按指纹比对、写定义"
     },
     {
       "from": "sync",
@@ -499,7 +491,7 @@
   "capabilities": [
     {
       "name": "登记前预览",
-      "entry": "discover(draft)",
+      "entry": "discover(kind, connection, credential, …) -> Preview",
       "callers": "管理接口",
       "description": "校验服务名、连接和凭据，发现能转换成哪些工具；不写库"
     },
@@ -523,13 +515,13 @@
     },
     {
       "name": "刷新定义",
-      "entry": "refresh_due() · refresh(name, *, manual)",
+      "entry": "claim_due() · refresh(service, *, manual)",
       "callers": "维护任务（每分钟）、管理接口（立即刷新）、运维命令行",
       "description": "只对 MCP 代理；多副本按租约分着拉，同一个服务同一时间只有一个实例在拉"
     },
     {
       "name": "读目录",
-      "entry": "get · list · callable_tools(service)",
+      "entry": "get · list · tools · callable_tools(service)",
       "callers": "工具调用、内部接口（工具元数据）、授权（校验工具名）",
       "description": "可用 = 启用、没被删除、没有不合规的原因"
     }
@@ -565,10 +557,10 @@
     },
     {
       "decision": "对授权只发事件，事件在同一个事务里同步分发",
-      "reason": "现在 registry 直接调用户中心登记 McpServer、删 McpTool 对象，grants 又依赖 registry，两边互相认识。目录定义 CatalogEvents、授权实现它，目录不再认识用户中心。同步分发保留现在的语义：用户中心登记失败，服务就登记不上，不会出现没人能管的服务。"
+      "reason": "目录要是直接调用户中心登记 McpServer、删 McpTool 对象，而授权又要读目录，两边就互相认识。目录定义 CatalogEvents、授权实现它，目录不再认识用户中心。同步分发的语义是：用户中心登记失败，服务就登记不上，不会出现没人能管的服务。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成 uuid7），接口和表间引用都用它，引用列叫 xxx_uuid。表间不建外键约束，连线是逻辑引用，由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成 uuid7），接口和表间引用都用它，引用列叫 xxx_uuid。表间不建外键约束，连线是逻辑引用，由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。每张表还有 tenant_uuid（uuid，所属租户；atlas_tenancy 按当前租户自动过滤，没进入租户就查不到任何租户的数据），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
   "tables": [
     {
       "name": "mcp_service",
@@ -594,8 +586,7 @@
         {
           "name": "name",
           "type": "varchar(24)",
-          "key": "UK",
-          "description": "服务名：小写字母开头，不含下划线；不能改、不能复用"
+          "description": "服务名：租户内唯一，小写字母开头，不含下划线；不能改、不能复用"
         },
         {
           "name": "display_name",
@@ -688,6 +679,17 @@
           "type": "timestamptz",
           "nullable": true,
           "description": "刷新租约：多副本只让一个去拉"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uq_mcp_service_tenant_uuid_name",
+          "columns": [
+            "tenant_uuid",
+            "name"
+          ],
+          "unique": true,
+          "description": "服务名在租户内唯一：「公有」也只对本租户公有"
         }
       ]
     },

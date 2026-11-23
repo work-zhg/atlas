@@ -28,14 +28,19 @@ from urllib.parse import quote
 
 import httpx
 import yaml
+from opentelemetry import trace
+from opentelemetry.trace import SpanKind
 
-from ..definitions import PARAM_TYPES, TOOL_NAME_PATTERN
 from ..errors import Invalid
 from . import DiscoveryFailed, UpstreamUnavailable, describe_error, tool_result, trace_headers
+from .spec import Discovered, ToolBinding, UpstreamAuth, UpstreamSpec
 
 __all__ = [
     "METHODS",
+    "PARAM_TYPES",
+    "TOOL_NAME_PATTERN",
     "Operation",
+    "RestConverter",
     "call",
     "check_name",
     "effect_of_method",
@@ -46,6 +51,10 @@ __all__ = [
 ]
 
 METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
+#: 网关里定义的工具（REST、gRPC 转换）的名字
+TOOL_NAME_PATTERN = r"^[a-z][a-z0-9_]{0,63}$"
+#: REST 参数的类型（JSON Schema）
+PARAM_TYPES = ("string", "integer", "number", "boolean", "array", "object")
 _LOCATIONS = ("path", "query", "header", "body")
 _DEFAULT_LIMIT_KB = 32
 _MAX_LIMIT_KB = 1024
@@ -431,3 +440,46 @@ async def call(
         text = _limit(json.dumps(data, ensure_ascii=False), limit_kb)
         return tool_result(text, structured=data if isinstance(data, dict) else None)
     return tool_result(_limit(r.text, limit_kb))
+
+
+_tracer = trace.get_tracer("atlas_mcpgateway")
+
+
+class RestConverter:
+    """扩展点 Upstream 的 REST 转换实现。"""
+
+    def __init__(self, http: httpx.AsyncClient) -> None:
+        self._http = http
+
+    async def discover(self, spec: UpstreamSpec, auth: UpstreamAuth) -> Discovered:
+        url = spec.connection.get("spec_url")
+        if not url:  # 没给 OpenAPI 地址：工具都手工添加
+            return Discovered("rest")
+        doc = await fetch_spec(self._http, str(url), headers=auth.headers, query=auth.query)
+        return Discovered("rest", operations=parse(doc))
+
+    async def call(
+        self,
+        spec: UpstreamSpec,
+        binding: ToolBinding,
+        arguments: Mapping[str, Any],
+        auth: UpstreamAuth,
+        identity: Mapping[str, str],
+    ) -> dict[str, Any]:
+        mapping = binding.mapping
+        with _tracer.start_as_current_span(
+            f"{mapping.get('method')} {mapping.get('path')}",
+            kind=SpanKind.CLIENT,
+            attributes={
+                "http.request.method": str(mapping.get("method")),
+                "url.template": str(mapping.get("path")),
+            },
+        ):
+            return await call(
+                self._http,
+                spec.connection["base_url"],
+                mapping,
+                arguments,
+                headers={**auth.headers, **identity},
+                query=auth.query,
+            )

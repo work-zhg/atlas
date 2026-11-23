@@ -32,7 +32,7 @@
   "title": "代码图：MCP 网关 - 网关服务 - 授权",
   "description": "目标领域模型，只画期望的样子。Key 能用什么、给 Key 授权、所有者、管理员操作码和权限主体；授权本身都在用户中心，领域总览见 code-domains.html",
   "component": "授权",
-  "package": "atlas_mcpgateway.access（目标模型）",
+  "package": "atlas_mcpgateway.access",
   "overview": "授权就是用户中心的数据权限，两个数据编码属于网关这个应用：McpServer 一个服务一条，只读授给 Key 的主体 = 全部工具（含以后新增的），Owner 授给人 = 所有者，能给 Key 分配这个服务；McpTool 一个工具一条，只读授给主体 = 只能用这个工具。公开服务不判权，任何有效的 Key 都能用。管理员靠操作码 mcp:manage，再加上用户中心里「全部 MCP 服务 / 全部 MCP 工具 · 所有者」的编码级授权，才能给不是自己的服务授权。\n\n它是网关里唯一认识用户中心的地方：判权、授权、所有者、管理端操作码，以及 Key 的权限主体（数字员工）都经它。它不认识 Key（只认主体 uid），也不决定服务和工具有哪些（服务目录），只跟着目录事件改用户中心里的数据对象。",
   "elements": [
     {
@@ -48,19 +48,23 @@
       "methods": [
         [
           "+",
-          "access_of(subject) -> KeyAccess"
+          "access_of(subject, *, fresh) -> KeyAccess"
         ],
         [
           "+",
-          "operator(uid, auth_uid) -> Operator"
+          "operator(uid, auth_uid, tenant) -> Operator · with_ownership(op)"
         ],
         [
           "+",
-          "set_scope(service, subject, scope, *, operator)"
+          "require_assign(op, service) · require_grantor(op)"
         ],
         [
           "+",
-          "grants_of(service) -> (owners, [(subject, scope)])"
+          "set_scope(service, subject, *, scope, tools, operator)"
+        ],
+        [
+          "+",
+          "grants_of(service) -> ServerGrants(owners, [SubjectScope])"
         ],
         [
           "+",
@@ -68,7 +72,7 @@
         ],
         [
           "+",
-          "register_subject · set_subject_active · person"
+          "register_subject · set_subject_active · person · search_people"
         ]
       ]
     },
@@ -158,7 +162,7 @@
         -0.6,
         1.75
       ],
-      "responsibility": "管理端的操作人：X-Uid 谁在用，X-Auth-Uid 按谁判。操作码 mcp:manage 管能不能登记服务、管全部 Key；能给哪个服务授权看是不是它的所有者（或有「全部 MCP 服务 · 所有者」）。",
+      "responsibility": "管理端的操作人：X-Uid 谁在用，X-Auth-Uid 按谁判；授权快照里的人必须在请求头写的租户里。操作码 mcp:manage 管能不能登记服务、管全部 Key；能给哪个服务授权看是不是它的所有者（或有「全部 MCP 服务 · 所有者」），所有者信息按需才问用户中心。",
       "attributes": [
         [
           "+",
@@ -177,6 +181,10 @@
         [
           "+",
           "can_assign(service) -> bool"
+        ],
+        [
+          "+",
+          "grants_anything -> bool"
         ]
       ]
     },
@@ -252,7 +260,7 @@
       "methods": [
         [
           "+",
-          "accessible(code, subject, min, scope)"
+          "key_access(subject) · owned(user) · authz(uid, tenant)"
         ],
         [
           "+",
@@ -264,7 +272,7 @@
         ],
         [
           "+",
-          "user · search_users · authz(uid)"
+          "user · search_users · user_by_account"
         ]
       ]
     },
@@ -472,13 +480,13 @@
     },
     {
       "name": "管理端身份",
-      "entry": "operator(uid, auth_uid)",
+      "entry": "operator(uid, auth_uid, tenant) · with_ownership",
       "callers": "管理接口（每个请求）",
-      "description": "授权快照里的操作码，是哪些服务的所有者；账号停用 → 401，没有权限 → 403"
+      "description": "授权快照里的操作码（按人和租户缓存）；人不在请求头写的租户里、账号停用 → 401，没有权限 → 403；是哪些服务的所有者按需再问"
     },
     {
       "name": "给主体授权",
-      "entry": "set_scope(service, subject, scope, *, operator)",
+      "entry": "set_scope(service, subject, *, scope, tools, operator)",
       "callers": "管理接口",
       "description": "只有这个服务的所有者或 MCP 管理员；第一次工具级授权时登记 McpTool；本实例立即生效，别的实例最多晚 30 秒"
     },
@@ -504,7 +512,7 @@
   "decisions": [
     {
       "decision": "授权全在用户中心，网关只记登记过哪些数据对象",
-      "reason": "复用用户中心的授权、操作人校验和「全部 MCP 服务 · 所有者」这类编码级授权。本地的表只为不必逐个问用户中心「这个工具登记过没有」；现在这个标记是 mcp_tool.uc_registered，授权逻辑在写目录的表。"
+      "reason": "复用用户中心的授权、操作人校验和「全部 MCP 服务 · 所有者」这类编码级授权。本地的表只为不必逐个问用户中心「这个工具登记过没有」；这个标记要是放在 mcp_tool 上，授权逻辑就得写目录的表。"
     },
     {
       "decision": "判权按 Key 的主体、只认单条数据上的授权",
@@ -528,14 +536,14 @@
     },
     {
       "decision": "只认主体，不认 Key",
-      "reason": "现在 grants 依赖 KeyService.by_subjects，keys 又调 perms 建主体。授权只给出「主体 → 范围」，由管理接口换成 Key；API Key 依赖授权登记主体，授权不依赖 API Key，没有环。"
+      "reason": "授权要是认识 Key（列授权时按主体查 Key），而 API Key 又要授权登记主体，两个领域就互相依赖。授权只给出「主体 → 范围」，由管理接口换成 Key；API Key 依赖授权登记主体，授权不依赖 API Key，没有环。"
     },
     {
       "decision": "用户中心的调用收在一个防腐层",
-      "reason": "现在操作码快照在 auth.py 里单独发请求、单独缓存，数据权限和数字员工在 perms.py。收在一处后，身份透传、错误映射、不可用即拒绝的口径只有一份。"
+      "reason": "操作码快照要是单独发请求、单独缓存，数据权限和数字员工又在另一处，身份透传和错误映射就各有一份、口径很难一致。收在一处后，身份透传、错误映射、不可用即拒绝的口径只有一份。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成 uuid7），接口和表间引用都用它，引用列叫 xxx_uuid。表间不建外键约束，连线是逻辑引用，由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成 uuid7），接口和表间引用都用它，引用列叫 xxx_uuid。表间不建外键约束，连线是逻辑引用，由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。每张表还有 tenant_uuid（uuid，所属租户；atlas_tenancy 按当前租户自动过滤，没进入租户就查不到任何租户的数据），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
   "tables": [
     {
       "name": "mcp_data_object",
@@ -576,12 +584,14 @@
       ],
       "indexes": [
         {
-          "name": "uq_mcp_data_object_code_id",
+          "name": "uq_mcp_data_object_tenant_uuid_data_code_data_id",
           "columns": [
+            "tenant_uuid",
             "data_code",
             "data_id"
           ],
-          "unique": true
+          "unique": true,
+          "description": "数据标识在租户内唯一"
         },
         {
           "name": "ix_mcp_data_object_service_uuid",

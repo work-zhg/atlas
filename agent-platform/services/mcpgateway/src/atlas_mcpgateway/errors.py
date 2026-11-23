@@ -1,6 +1,6 @@
 """领域错误。管理 / 内部接口统一翻译成 {"detail": 说明, "code": 错误码, "context": {...}}。
 
-★ 数据面（/mcp/*）的拒绝不走这里：那里要按 MCP 协议回 JSON-RPC 错误体（proxy.py）。
+★ 数据面（/mcp/*）的拒绝不走这里：那里要按 MCP 协议回 JSON-RPC 错误体（invocation/rejection.py）。
 """
 
 from __future__ import annotations

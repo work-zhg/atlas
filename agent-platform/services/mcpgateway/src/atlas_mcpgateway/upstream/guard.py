@@ -20,13 +20,12 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import socket
-from collections.abc import Iterable, Mapping
-from typing import Any
+from collections.abc import Iterable
 from urllib.parse import urlsplit
 
 from . import UpstreamUnavailable
 
-__all__ = ["AddressGuard", "UpstreamBlocked", "upstream_targets"]
+__all__ = ["AddressGuard", "UpstreamBlocked"]
 
 _CGNAT = ipaddress.ip_network("100.64.0.0/10")
 
@@ -44,17 +43,6 @@ def _host_port(target: str) -> tuple[str, int | None]:
         raw = "//" + raw.removeprefix("dns:").lstrip("/")
     parts = urlsplit(raw)
     return (parts.hostname or "", parts.port)
-
-
-def upstream_targets(
-    kind: str, connection: Mapping[str, Any], credential: Mapping[str, Any] | None = None
-) -> list[str]:
-    """一个服务会去连的全部地址。"""
-    keys = {"mcp": ("url",), "rest": ("base_url", "spec_url"), "grpc": ("address",)}.get(kind, ())
-    out = [str(connection[k]) for k in keys if connection.get(k)]
-    if credential and credential.get("token_url"):
-        out.append(str(credential["token_url"]))
-    return out
 
 
 class AddressGuard:

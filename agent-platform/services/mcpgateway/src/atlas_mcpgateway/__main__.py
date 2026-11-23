@@ -28,12 +28,13 @@ from uuid import UUID
 
 from atlas_tenancy import TenantScope
 
+from . import wiring
+from .access.usercenter import UserCenterGateway
+from .catalog.service import ServiceCatalog
 from .db.session import get_engine, get_sessionmaker
 from .errors import GatewayError
-from .perms import UCPermissions
-from .registry import Registry
 from .settings import get_settings
-from .upstreams.hub import Upstreams
+from .upstream.gateway import UpstreamGateway
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 
@@ -78,18 +79,18 @@ async def _upgrade_opsapi() -> None:
         await engine.dispose()
 
 
-async def _with_registry(fn: Callable[[Registry], Awaitable[Any]]) -> Any:
+async def _with_catalog(fn: Callable[[ServiceCatalog, UserCenterGateway], Awaitable[Any]]) -> Any:
     settings = get_settings()
-    perms = UCPermissions(settings.uc_base_url)
-    upstreams = Upstreams(settings)
+    uc = UserCenterGateway(settings.uc_base_url)
+    upstream = UpstreamGateway(settings)
     try:
         async with get_sessionmaker()() as session:
-            result = await fn(Registry(session, settings, perms, upstreams))
+            result = await fn(wiring.catalog(session, settings, uc, upstream), uc)
             await session.commit()
             return result
     finally:
-        await upstreams.aclose()
-        await perms.aclose()
+        await upstream.aclose()
+        await uc.aclose()
         await get_engine().dispose()
 
 
@@ -113,14 +114,14 @@ def _load_spec(path: str) -> dict[str, Any]:
     return spec
 
 
-async def add_service(registry: Registry, spec: dict[str, Any], *, owner: str) -> Any:
+async def add_service(catalog: ServiceCatalog, spec: dict[str, Any], *, owner: str) -> Any:
     """按登记文件登记一个服务（owner 成为所有者）。已存在 → None（不改它）。"""
-    if await registry.find(spec["name"]) is not None:
+    if await catalog.find(spec["name"]) is not None:
         print(f"· MCP 服务 {spec['name']} 已存在，跳过（要改请在管理端上改）")
         return None
     credential = dict(spec.get("credential") or {"type": "none"})
     secret = (credential.pop("secret", None) or "").strip() or None
-    row = await registry.create(
+    row = await catalog.register(
         kind=spec["kind"],
         name=spec["name"],
         display_name=spec.get("display_name") or spec["name"],
@@ -135,7 +136,7 @@ async def add_service(registry: Registry, spec: dict[str, Any], *, owner: str) -
         actor=owner,
     )
     for tool in spec.get("tools") or []:
-        await registry.add_tool(
+        await catalog.add_tool(
             row.name,
             tool_name=tool["name"],
             description=tool["description"],
@@ -155,33 +156,31 @@ def _service_command(args: argparse.Namespace) -> int:
     if args.action == "add":
         spec = _load_spec(args.file)
 
-        async def _add(registry: Registry) -> Any:
-            perms = registry.perms
-            assert isinstance(perms, UCPermissions)  # 命令行只连真实的用户中心
-            user = await perms.user_by_account(args.owner_account)
+        async def _add(catalog: ServiceCatalog, uc: UserCenterGateway) -> Any:
+            user = await uc.user_by_account(args.owner_account)
             if user is None:
                 raise GatewayError(f"用户中心里没有账号 {args.owner_account}")
-            return await add_service(registry, spec, owner=str(user["id"]))
+            return await add_service(catalog, spec, owner=str(user["id"]))
 
-        row = asyncio.run(_with_registry(_add))
+        row = asyncio.run(_with_catalog(_add))
         if row is not None:
             _print_service(row)
         return 0
     if args.action == "list":
 
-        async def _list(registry: Registry) -> None:
-            for row in await registry.list():
+        async def _list(catalog: ServiceCatalog, _: UserCenterGateway) -> None:
+            for row in await catalog.list():
                 _print_service(row)
-                for tool in await registry.tools(row):
+                for tool in await catalog.tools(row):
                     print(f"    {tool.name:<32} {tool.effect:<12} {tool.status}")
 
-        asyncio.run(_with_registry(_list))
+        asyncio.run(_with_catalog(_list))
         return 0
 
-    async def _refresh(registry: Registry) -> Any:
-        return await registry.refresh(await registry.get(args.name))
+    async def _refresh(catalog: ServiceCatalog, _: UserCenterGateway) -> Any:
+        return await catalog.refresh(await catalog.get(args.name))
 
-    _print_service(asyncio.run(_with_registry(_refresh)))
+    _print_service(asyncio.run(_with_catalog(_refresh)))
     return 0
 
 

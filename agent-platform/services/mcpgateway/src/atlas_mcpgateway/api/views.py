@@ -2,16 +2,14 @@
 
 from __future__ import annotations
 
-from ..dataplane import callable_tool
+from ..access.key_access import KeyAccess
+from ..catalog.definitions import content_hash, model_name, read_only, schema_from_params
+from ..catalog.service import Preview
 from ..db.models import McpApiKey, McpService, McpTool
-from ..definitions import content_hash, model_name, read_only
-from ..grants import KeyGrant
-from ..keys import mask
-from ..perms import KeyAccess
-from ..upstreams import grpc as grpc_up
-from ..upstreams import rest as rest_up
-from ..upstreams.credentials import hint
-from ..upstreams.hub import Discovered
+from ..keys.secret import mask
+from ..upstream import grpc as grpc_up
+from ..upstream import rest as rest_up
+from ..upstream.credentials import hint
 from .schemas import (
     CredentialOut,
     DiscoveredOut,
@@ -75,7 +73,7 @@ def service_out(svc: McpService, tools: list[McpTool], my: MyAccessOut | None = 
         fetch_error=svc.fetch_error,
         changed_at=svc.changed_at,
         tool_count=len(current),
-        active_tool_count=sum(1 for t in current if callable_tool(t)),
+        active_tool_count=sum(1 for t in current if t.callable()),
         my=my or MyAccessOut(),
     )
 
@@ -94,7 +92,7 @@ def tool_out(service: str, t: McpTool) -> ToolOut:
         digest=t.digest,
         changed_at=t.changed_at,
         previous=t.previous,
-        callable=callable_tool(t),
+        callable=t.callable(),
     )
 
 
@@ -116,8 +114,9 @@ def service_detail(
     )
 
 
-def discovered_out(found: Discovered, *, existing: set[str] | None = None) -> DiscoveredOut:
+def discovered_out(preview: Preview, *, existing: set[str] | None = None) -> DiscoveredOut:
     existing = existing or set()
+    found = preview.found
     items: list[DiscoveredToolOut] = []
     if found.kind == "mcp":
         items = [
@@ -131,7 +130,7 @@ def discovered_out(found: Discovered, *, existing: set[str] | None = None) -> Di
                 issues=list(d.issues),
                 exists=d.name in existing,
             )
-            for d in found.definitions
+            for d in preview.definitions
         ]
     elif found.kind == "rest":
         items = [_operation_out(o, existing) for o in found.operations]
@@ -141,8 +140,6 @@ def discovered_out(found: Discovered, *, existing: set[str] | None = None) -> Di
 
 
 def _operation_out(o: rest_up.Operation, existing: set[str]) -> DiscoveredToolOut:
-    from ..definitions import schema_from_params
-
     return DiscoveredToolOut(
         key=o.key,
         name=o.name,
@@ -180,8 +177,8 @@ def key_ref(k: McpApiKey) -> KeyRefOut:
     )
 
 
-def key_grant_out(g: KeyGrant) -> KeyGrantOut:
-    return KeyGrantOut(key=key_ref(g.key), scope=g.scope, tools=sorted(g.tools))
+def key_grant_out(key: McpApiKey, scope: str, tools: list[str]) -> KeyGrantOut:
+    return KeyGrantOut(key=key_ref(key), scope=scope, tools=sorted(tools))
 
 
 def scopes_of(access: KeyAccess | None, services: dict[str, McpService]) -> list[ServiceScopeOut]:

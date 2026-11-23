@@ -5,9 +5,24 @@ from __future__ import annotations
 import itertools
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
-from atlas_mcpgateway.errors import Conflict, Forbidden, Invalid, NotFound, Unavailable
-from atlas_mcpgateway.perms import DATA_SERVER, DATA_TOOL, AclEntry, KeyAccess
+from atlas_mcpgateway.access.key_access import KeyAccess
+from atlas_mcpgateway.access.usercenter import (
+    DATA_SERVER,
+    DATA_TOOL,
+    AclEntry,
+    Snapshot,
+    key_access_from,
+)
+from atlas_mcpgateway.errors import (
+    Conflict,
+    Forbidden,
+    Invalid,
+    NotFound,
+    Unauthorized,
+    Unavailable,
+)
 
 #: 测试里的人（用户中心的 uid）
 ADMIN = "00000000-0000-7000-8000-00000000000a"
@@ -58,11 +73,13 @@ class _Row:
 
 
 class FakePermissions:
-    """用户中心的内存替身。规则照用户中心：
+    """用户中心的内存替身（实现 access/usercenter.py 的 UserCenter）。规则照用户中心：
 
     - 数据对象第一次写授权不需要操作人，但必须至少有一条 OWNER；已经有授权再「第一次写」= 冲突
     - 之后改授权，操作人要是这条数据的 Owner（或有这个编码的编码级 Owner）
     - 主体停用后对它一律「无权限」
+    - 授权快照：ADMIN 有 mcp:manage，其他人没有；人都在请求的租户里，除了 USERS_ELSEWHERE 里
+      登记过的（用户中心在别的租户里找不到他）。不受 down 影响、不计入 calls
     """
 
     def __init__(self) -> None:
@@ -135,9 +152,18 @@ class FakePermissions:
         self._check()
         if not self._active(subject):
             return KeyAccess()
-        return KeyAccess(
+        return key_access_from(
             self._ids_with(DATA_SERVER, subject, "READ"), self._ids_with(DATA_TOOL, subject, "READ")
         )
+
+    async def authz(self, uid: str, tenant: UUID) -> Snapshot:
+        home = USERS_ELSEWHERE.get(uid)
+        if home is not None and home != str(tenant):
+            raise Unauthorized("请先登录")
+        return Snapshot(frozenset({"mcp:manage"} if uid == ADMIN else ()), tenant)
+
+    async def user_by_account(self, account: str) -> dict[str, Any] | None:
+        return next((u for u in self.users.values() if u["account"] == account), None)
 
     async def owned(self, user: str) -> tuple[frozenset[str], bool]:
         self._check()

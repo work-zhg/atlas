@@ -32,7 +32,7 @@
   "title": "代码图：MCP 网关 - 网关服务 - API Key",
   "description": "目标领域模型，只画期望的样子。用户 Key、智能体 Key 的生命周期和认 Key；领域总览见 code-domains.html",
   "component": "API Key",
-  "package": "atlas_mcpgateway.keys（目标模型）",
+  "package": "atlas_mcpgateway.keys",
   "overview": "调用网关的一律带 API Key。用户 Key 由本人申请，给 Claude Code、Cursor 这类外部客户端用；智能体 Key 由应用（Atlas 新建智能体时）申请，原生智能体和会话 Pod 里的 CLI 都用它。每把 Key 在用户中心有一个权限主体，授权授给这个主体，所以 Key 能用什么和谁拿着它无关。\n\n它不判断 Key 能用哪些服务（授权），也不管调用（工具调用每个请求来认一次 Key）。",
   "elements": [
     {
@@ -52,7 +52,7 @@
         ],
         [
           "+",
-          "ensure_client(type, code, *, name, owner, app) -> (ApiKey, created)"
+          "ensure_client(*, client_type, client_code, name, owner, actor) -> (ApiKey, created)"
         ],
         [
           "+",
@@ -99,7 +99,7 @@
       "methods": [
         [
           "+",
-          "rotate() -> KeySecret"
+          "rotate() -> 新原文"
         ],
         [
           "+",
@@ -107,7 +107,7 @@
         ],
         [
           "+",
-          "reveal() -> str"
+          "target  # KeyOwner：key:user:… / key:client:…"
         ]
       ]
     },
@@ -200,6 +200,10 @@
         [
           "+",
           "require(client_type, app)"
+        ],
+        [
+          "+",
+          "known(client_type) -> bool"
         ]
       ]
     },
@@ -216,11 +220,11 @@
       "methods": [
         [
           "+",
-          "get(uuid) · by_owner(owner) · list(filter)"
+          "get(uuid) · user_key · client_key · list(filter)"
         ],
         [
           "+",
-          "by_secret(secret)  # 只取 active"
+          "authenticate(secret)  # 只取 active；系统范围里查"
         ],
         [
           "+",
@@ -394,7 +398,7 @@
       "name": "认 Key",
       "entry": "authenticate(secret)",
       "callers": "工具调用（每个请求）",
-      "description": "原文 → 正常的 Key；停用、重置立即生效"
+      "description": "原文 → 正常的 Key；原文全局唯一，还不知道租户时在系统范围里只查这一行，查到的 Key 说明了租户；停用、重置立即生效"
     },
     {
       "name": "主体 → Key",
@@ -433,7 +437,7 @@
       "reason": "登记、停用主体是授权的事（主体就是为了被授权才存在的），用户中心只有授权一个出口。API Key 依赖授权，授权不认识 Key，两个领域之间没有环。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成 uuid7），接口和表间引用都用它，引用列叫 xxx_uuid。表间不建外键约束，连线是逻辑引用，由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
+  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成 uuid7），接口和表间引用都用它，引用列叫 xxx_uuid。表间不建外键约束，连线是逻辑引用，由代码维护；引用别的领域的表时只写列说明，不画连线。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。每张表还有 tenant_uuid（uuid，所属租户；atlas_tenancy 按当前租户自动过滤，没进入租户就查不到任何租户的数据），下面不重复列出。人员字段存用户中心用户 id 的字符串。",
   "tables": [
     {
       "name": "mcp_api_key",

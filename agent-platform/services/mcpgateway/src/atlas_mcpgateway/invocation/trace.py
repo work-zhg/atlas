@@ -1,11 +1,11 @@
-"""Trace（OpenTelemetry）。只接 Trace：不做调用记录、指标。
+"""CallTrace：Trace（OpenTelemetry）。只接 Trace：不做调用记录、指标。
 
-    服务端 Span   HTTP 级一个（dataplane.py）；每条消息一个，MCP SDK 自带，名字如
+    服务端 Span   HTTP 级一个（api/endpoint.py）；每条消息一个，MCP SDK 自带，名字如
                  「tools/call 工具名」，属性按 OTel 的 MCP 语义约定（mcp.method.name、
                  gen_ai.tool.name、jsonrpc.request.id …）
     网关属性      加在当前 Span 上：mcp.gateway.service、mcp.gateway.key_uid、mcp.gateway.outcome；
                  被拒的请求也有 Span，带 error.type
-    客户端 Span   调 REST / gRPC 上游时（upstreams/hub.py）；MCP 上游由 MCP SDK 的客户端出
+    客户端 Span   调 REST / gRPC 上游时（upstream/rest.py、grpc.py）；MCP 上游由 MCP SDK 的客户端出
     上下文传递    进：HTTP 头 traceparent，没有时取 params._meta；
                  出：HTTP 头 / gRPC metadata，MCP 上游另外写进 params._meta
 

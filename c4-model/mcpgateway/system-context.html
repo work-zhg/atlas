@@ -56,7 +56,7 @@
         1.25
       ],
       "name": "MCP 网关",
-      "description": "所有 MCP 调用的唯一入口：代理已有的 MCP Server，把 REST、gRPC 转换成 MCP 工具；Key 是权限主体，按授权调用，上游凭据只在网关。"
+      "description": "所有 MCP 调用的唯一入口：代理已有的 MCP Server，把 REST、gRPC 转换成 MCP 工具；Key 是权限主体，按授权调用，上游凭据只在网关；服务和 Key 都归租户。"
     },
     {
       "id": "client",
@@ -101,6 +101,17 @@
         1.65,
         2.5
       ]
+    },
+    {
+      "id": "ops",
+      "kind": "system",
+      "name": "运营中心",
+      "color": "#8a6d00",
+      "description": "管平台本身的独立系统：开通、停用、关闭租户，分份额，维护系统参数；看不到租户的业务内容。",
+      "at": [
+        2.2,
+        0
+      ]
     }
   ],
   "relationships": [
@@ -138,6 +149,11 @@
       "from": "gw",
       "to": "upstream",
       "description": "拉工具定义，带上游凭据调用"
+    },
+    {
+      "from": "ops",
+      "to": "gw",
+      "description": "停用、恢复租户，关闭时删除租户的 MCP 数据；看系统任务"
     }
   ]
 }
