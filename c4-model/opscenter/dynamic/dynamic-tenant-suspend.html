@@ -36,7 +36,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "动态图：运营中心 - 停用租户",
-  "description": "目标模型。先让用户中心挡住入口，再通知各系统挂起；知识库一次超时，退避后用同一个幂等键重做。技能、MCP 网关、模型平台、记忆服务和知识库服务一样，图中省略。到期由 ExpiryWatcher 发起，从第 3 步起相同。整体设计见 ../design-tenant-isolation.html",
+  "description": "目标模型。停用只改用户中心：挡住之后，这个租户的人登录不了，各系统取角色权限、数据权限一律无权限；业务系统不知道租户状态，不收通知。恢复是反过来的一步（放开）。到期不用发起停用：用户中心判权限时已算作停用。整体设计见 ../design-tenant-isolation.html；运营人员怎么登录、按模块授权见 ../design-opscenter.html",
   "boundaries": [
     {
       "id": "ops",
@@ -93,12 +93,6 @@
       "name": "用户中心"
     },
     {
-      "id": "agent",
-      "kind": "system",
-      "color": "#bf101d",
-      "name": "Agent 平台"
-    },
-    {
       "id": "knowledge",
       "kind": "system",
       "tag": "同级服务",
@@ -116,46 +110,47 @@
       "from": "console",
       "to": "tenants",
       "description": "停用",
-      "technology": "JSON/HTTPS",
+      "technology": "JSON/HTTPS（经 API 网关）",
       "details": {
         "items": [
           [
             "请求",
-            "运营服务接口",
-            "POST /api/tenants/{tenant_uuid}/suspend"
+            "运营服务接口（网关去掉 /opscenter 后转发）",
+            "POST /opscenter/api/tenants/{tenant_uuid}/suspend"
           ],
           [
-            "到期",
-            "ExpiryWatcher（后台任务）",
-            "问用户中心哪些租户已过期但还在用 → suspend(tenant, reason=到期)"
+            "身份",
+            "网关验过访问 JWT 后写的头（浏览器带来的早被清掉）",
+            "X-Uid: <小周>、X-Tenant-Id: <系统租户>"
           ]
-        ]
+        ],
+        "note": "接口层的依赖先判：要租户模块读写，不够 403；记一条「发起」审计（图中不画）。"
       }
     },
     {
       "from": "tenants",
       "to": "opsdb",
-      "description": "这个租户没有进行中的操作；保存操作和步骤",
+      "description": "这个租户没有进行中的操作；保存操作和一个步骤",
       "technology": "SQL/TCP",
       "details": {
-        "note": "部分唯一索引兜底：同一租户同时只能有一个 RUNNING 的操作。步骤：① 用户中心挡住入口 ② Atlas 挂起 ③ 知识库挂起 ④ 技能 … ⑦ 记忆服务挂起（各系统 = 系统登记里声明了租户生命周期的）。"
+        "note": "部分唯一索引兜底：同一租户同时只能有一个 RUNNING 的操作。系统租户不能停用（用户中心给的租户信息里带着；用户中心也拒绝挡住它）。只有一步：用户中心挡住。业务系统不知道租户状态，不在步骤里。"
       }
     },
     {
       "from": "tenants",
       "to": "console",
       "description": "返回操作（进行中）",
-      "technology": "JSON/HTTPS"
+      "technology": "JSON/HTTPS（经 API 网关）"
     },
     {
       "from": "tenants",
       "to": "tenants",
-      "description": "后台任务推进，每做完一步保存一次"
+      "description": "后台任务推进"
     },
     {
       "from": "tenants",
       "to": "gateway",
-      "description": "第一步：挡住入口"
+      "description": "挡住入口"
     },
     {
       "from": "gateway",
@@ -175,7 +170,7 @@
             "Idempotency-Key: <step_uuid>"
           ]
         ],
-        "note": "之后这个租户的登录、网关校验、各系统调开放接口都被拒（租户已停用），新请求一个也进不来。"
+        "note": "用户中心把租户改成停用，作废这个租户的登录会话；之后登录、网关校验都被拒，各系统取权限一律无权限。超时就按退避重做，挡住本身能重做。"
       }
     },
     {
@@ -185,68 +180,28 @@
       "technology": "JSON/HTTP（运营接口，签名）"
     },
     {
-      "from": "gateway",
-      "to": "agent",
-      "description": "挂起这个租户",
-      "technology": "JSON/HTTP（运营接口，签名）",
-      "details": {
-        "items": [
-          [
-            "请求",
-            "Atlas 的运营接口（运营接口库）",
-            "POST /ops/v1/tenants/{tenant_uuid}/suspend"
-          ]
-        ],
-        "note": "Atlas 本地记 SUSPENDED（后台工作开始前经 TenantGate 查它）；执行器把这个租户在跑的 run 停到下一个安全点并挂起；回收沙箱和会话 Pod；断开本机设备。数据都留着。见 ../../agent/code-ops.html"
-      }
-    },
-    {
-      "from": "agent",
-      "to": "gateway",
-      "description": "已挂起",
-      "technology": "JSON/HTTP（运营接口，签名）"
-    },
-    {
-      "from": "gateway",
-      "to": "knowledge",
-      "description": "挂起这个租户",
-      "technology": "JSON/HTTP（运营接口，签名）"
-    },
-    {
-      "from": "knowledge",
-      "to": "gateway",
-      "description": "超时",
-      "technology": "JSON/HTTP（运营接口，签名）",
-      "details": {
-        "note": "不知道对方做没做：记 FAILED（可重试），按退避定下次时间（10 秒起翻倍，最长 10 分钟）。不放弃，界面上标出卡住的步骤，可以立即重做。"
-      }
-    },
-    {
       "from": "tenants",
       "to": "opsdb",
-      "description": "这一步记失败，定下次重做的时间",
+      "description": "这一步成功，操作结束",
       "technology": "SQL/TCP"
     },
     {
-      "from": "gateway",
-      "to": "knowledge",
-      "description": "到时间了，用同一个幂等键再调一次",
-      "technology": "JSON/HTTP（运营接口，签名）",
+      "from": "knowledge",
+      "to": "uc",
+      "description": "（之后）这个租户的人来检索：取授权快照",
+      "technology": "JSON/HTTP（开放接口）",
       "details": {
-        "note": "知识库按幂等键查 app_ops_request：上次其实做完了就直接返回上次的结果，没做完就接着做。"
+        "note": "例子：Atlas 里一个 run 替这个租户的人调知识库检索。知识库照常按权限判断，不知道也不问租户状态；Atlas 等其他系统一样。"
       }
     },
     {
-      "from": "knowledge",
-      "to": "gateway",
-      "description": "已挂起（暂停入库）",
-      "technology": "JSON/HTTP（运营接口，签名）"
-    },
-    {
-      "from": "tenants",
-      "to": "opsdb",
-      "description": "全部步骤成功，操作结束",
-      "technology": "SQL/TCP"
+      "from": "uc",
+      "to": "knowledge",
+      "description": "无权限",
+      "technology": "JSON/HTTP（开放接口）",
+      "details": {
+        "note": "租户停用、到期、删除时，用户中心对这个租户的人一律返回无权限；知识库按无权限拒绝（403），不区分原因。已经在跑的后台工作不会被立即叫停，它们再取权限时失败。"
+      }
     }
   ]
 }

@@ -30,46 +30,50 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：模型平台 - 模型网关 - 格式",
-  "description": "目标领域模型，只画期望的样子。读写器、转换器、直通还是转换、连上游；本领域没有自己的表，领域总览见 code-gateway-domains.html",
+  "description": "入口协议读写器、同格式直通与 Anthropic 枢纽跨格式转换（含 PDF 文档保护与流式工具参数上限），以及绑定 IP 防 DNS 重绑定的上游通信；领域总览见 code-gateway-domains.html。",
   "component": "格式",
-  "package": "atlas_modelgateway.gateway.format（目标模型）",
-  "overview": "每个请求涉及两种格式：调用方用的（入口格式）和选中的账号用的（上游格式）。相同就直通：只换模型名、按 ParamPlan 改几个参数，别的原样带过去；不同才转换。\n\n和格式有关的部件分两种：读写器每种入口格式一个，只读写少数字段（共同信息、参数、每段回答的要点、错误体），共用的步骤都只跟它打交道；转换器在格式不同时把整个请求和回答转过去、转回来，流式回答由状态机一段段转。连上游也在这里：地址检查、出网代理、按行读 SSE。同一种格式下各家写法不一样的地方（认证、地址、字段名、用量字段、报错的意思）交给供应商领域的方言翻译；除此之外它不认识别的领域，只收共享内核里的 Route 和 ParamPlan。",
+  "package": "atlas_modelgateway.gateway.format",
+  "overview": "格式领域处理入口格式与上游账号格式之间的差异：若账号登记了与入口相同的格式地址就直接原样直通（只按 ParamPlan 改少数字段），保留未知新字段；若格式不同（且走 /universal 通用入口）则以 Anthropic Messages 为枢纽双向转换请求体与 SSE 流。\n\n针对多模态二进制文档（如 Anthropic document PDF 块）：OpenAI Chat Completions 无对应结构，routes_for 会自动过滤掉纯 OpenAI 线路，优先路由至原生 Anthropic 或支持 inlineData 的 Google Gemini 线路；若无可兼容线路则显式报 400 BEYOND_CAPABILITY，绝不静默丢弃用户上传的文档。连接上游统一经共享基础层的 UpstreamClient：直连模式通过自定义网络后端绑定校验通过的公网 IP 字面量建连（根除 DNS 重绑定 SSRF），代理模式校验禁止访问内网主机名。",
   "elements": [
     {
       "id": "inv",
       "kind": "class",
-      "name": "Invocation · AttemptLoop",
-      "at": [
-        1.6,
-        -1.2
-      ],
+      "name": "Invocation",
+      "external": true,
+      "source": "调用编排领域（gateway/invocation.py）",
       "methods": [
         [
           "+",
-          "read（进门）· open（每次尝试）· error_body"
+          "read · routes_for · open · error_body"
         ]
       ],
-      "external": true,
-      "source": "调用编排领域"
+      "at": [
+        1.7,
+        -1.2
+      ]
     },
     {
       "id": "fg",
       "kind": "class",
       "name": "FormatGateway",
+      "stereotype": "应用服务",
       "at": [
-        1.6,
+        1.7,
         0.3
       ],
-      "stereotype": "应用服务",
-      "responsibility": "和格式有关的事都在这里。read：按入口格式找读写器，读出共同信息。open：PathChooser 按 Route 挑地址、决定直通还是转换；直通就由读写器按 ParamPlan 在原格式上改参数，转换就先改再交给转换器；然后经 UpstreamClient 发出。返回的 UpstreamCall 一段段给出入口格式的回答，每段都由读写器标明是不是内容、带没带用量、是不是错误。",
+      "responsibility": "格式领域门面：read 提取请求共同摘要（含是否带图片、PDF 文档块、工具）；routes_for 过滤协议可达且支持请求内容块的线路；open 执行直通或跨格式请求并在出口帧上统一产出入口格式的 FrameInfo。",
       "methods": [
         [
           "+",
-          "read(entry, body) -> RequestSummary"
+          "read(entry, body, headers) -> RequestSummary"
         ],
         [
           "+",
-          "open(entry, body, route, plan) -> UpstreamCall"
+          "routes_for(entry, routes, *, universal, summary?) -> list[Route]"
+        ],
+        [
+          "+",
+          "open(entry, body, route, plan, *, stream) -> UpstreamCall"
         ],
         [
           "+",
@@ -81,113 +85,58 @@
       "id": "codec",
       "kind": "interface",
       "name": "FormatCodec",
-      "at": [
-        -0.2,
-        1.95
-      ],
       "stereotype": "扩展点",
-      "responsibility": "一种入口格式的读写器：读共同信息（模型名、会话标识、思考 / 力度 / 温度 / 最大输出、有没有图片和工具、大致长度）；按 ParamPlan 改参数；看回答的每一段；把 GatewayError 写成这种格式的错误体。只碰少数字段，不做整体转换。",
-      "methods": [
-        [
-          "+",
-          "summarize(body) -> RequestSummary"
-        ],
-        [
-          "+",
-          "apply(body, plan) -> body"
-        ],
-        [
-          "+",
-          "inspect(frame) -> FrameInfo"
-        ],
-        [
-          "+",
-          "error_body(error) -> bytes"
-        ]
-      ]
-    },
-    {
-      "id": "anth",
-      "kind": "class",
-      "name": "AnthropicCodec",
-      "at": [
-        -1.0,
-        3.55
-      ],
-      "stereotype": "策略",
-      "responsibility": "Anthropic 格式：思考块按 ParamPlan 打来源标记、处理历史里的思考块；用量开头一段给输入、最后一段给输出，输入不含缓存部分。"
-    },
-    {
-      "id": "oai",
-      "kind": "class",
-      "name": "OpenAICodec",
-      "at": [
-        0.6,
-        3.55
-      ],
-      "stereotype": "策略",
-      "responsibility": "OpenAI 格式：标准字段里输入包含缓存命中，读出来先减掉；流式时要求上游最后一段带用量，调用方自己没要就不转给它。这家供应商的字段和标准不一样时（比如 DeepSeek 的缓存命中字段），交给方言换算。"
-    },
-    {
-      "id": "info",
-      "kind": "class",
-      "name": "FrameInfo",
       "at": [
         -0.2,
-        5.0
+        2.0
       ],
-      "stereotype": "值对象",
-      "responsibility": "一段回答的要点：是不是内容（文字、思考、工具调用）、带的用量（经方言换算成四项）、是不是错误（经方言归成 UpstreamFailure 的种类）。只有这几类段才完整解析，其余只看事件类型。",
-      "attributes": [
+      "responsibility": "入口协议轻量读写器接口：提取摘要、按 ParamPlan 增删改参数与清理异源思考块、回写调用方模型名与来源戳、解析单帧内容/用量/错误。",
+      "methods": [
         [
           "+",
-          "is_content · usage: Usage | None"
+          "summarize · apply · outgoing"
         ],
         [
           "+",
-          "failure: UpstreamFailure | None"
+          "inspect(event, dialect) -> FrameInfo · error_body"
         ]
       ]
     },
     {
-      "id": "path",
+      "id": "codecs_impl",
       "kind": "class",
-      "name": "PathChooser",
-      "at": [
-        3.3,
-        1.95
-      ],
+      "name": "AnthropicCodec · OpenAICodec",
       "stereotype": "策略",
-      "responsibility": "入口格式和账号登记的某个地址格式相同就直通；不同就选转换器。账号可以同时登记两种格式，有同格式的地址就用它。Google 只有 Anthropic → Google 一个转换器，OpenAI 入口要先转 Anthropic 再转 Google（两跳）。",
+      "at": [
+        -0.2,
+        3.75
+      ],
+      "responsibility": "两种入口格式的读写实现：AnthropicCodec 同时处理 thinking 与 redacted_thinking 的来源标记及 document 块识别；OpenAICodec 自动注入 stream_options.include_usage 并扣减缓存命中输入数。",
       "methods": [
         [
           "+",
-          "choose(entry, route) -> Path"
+          "Anthropic Messages · OpenAI Chat Completions"
         ]
       ]
     },
     {
       "id": "conv",
-      "kind": "interface",
-      "name": "Converter",
+      "kind": "class",
+      "name": "MessageConverters",
+      "stereotype": "策略",
       "at": [
-        3.3,
-        3.55
+        1.9,
+        2.0
       ],
-      "stereotype": "扩展点",
-      "responsibility": "两种格式之间的转换：请求转过去，回答（非流式整体、流式一段段）转回来。都以 Anthropic 格式为一端：Anthropic ↔ OpenAI 两个方向各一个，Anthropic → Google 一个。去掉的东西（缓存标记、签名）是事先写清楚的。",
+      "responsibility": "以 Anthropic 格式为中心的转换器集合（convert.py · convert_google.py）：实现 Anthropic ↔ OpenAI 及 Anthropic → Google Gemini（含 base64 PDF 转 inlineData）的请求与响应互转。",
       "methods": [
         [
           "+",
-          "request(body) -> body"
+          "anthropic_to_openai · openai_to_anthropic"
         ],
         [
           "+",
-          "response(body) -> body"
-        ],
-        [
-          "+",
-          "transcoder() -> StreamTranscoder"
+          "anthropic_to_google · google_to_anthropic"
         ]
       ]
     },
@@ -195,98 +144,73 @@
       "id": "trans",
       "kind": "class",
       "name": "StreamTranscoder",
-      "at": [
-        3.3,
-        5.0
-      ],
       "stereotype": "领域服务",
-      "responsibility": "流式回答的转换状态机：记着现在在写哪一块，内容类型一变就先关上旧块、再开新块；工具参数片段原样拼接，参数不是合法 JSON 时原文放进专门的字段，不让整轮失败；停止原因和用量在最后一段给出。",
+      "at": [
+        1.9,
+        3.75
+      ],
+      "responsibility": "流式跨格式状态机：维护当前打开的文本/思考/工具块边界，对流式工具调用参数施加硬上限（_MAX_TOOL_ARGS_CHARS = 2MB）防内存耗尽，非法 JSON 自动兜底封装进 _raw_arguments。",
       "methods": [
         [
           "+",
-          "feed(frame) -> list[Frame]"
+          "feed(sse_event) -> list[SSEEvent] · finish()"
+        ]
+      ]
+    },
+    {
+      "id": "up",
+      "kind": "class",
+      "name": "UpstreamClient · _GuardedBackend",
+      "external": true,
+      "source": "共享基础层（shared.upstream）",
+      "methods": [
+        [
+          "+",
+          "直连：单次解析并绑定公网 IP 建连（保留 TLS SNI 与 Host，禁重定向）"
         ],
         [
           "+",
-          "finish() -> list[Frame]"
+          "代理：AddressGuard.check_proxy 拦截内网域名与私网 IP"
         ]
-      ]
-    },
-    {
-      "id": "client",
-      "kind": "class",
-      "name": "UpstreamClient",
-      "at": [
-        5.0,
-        1.95
       ],
-      "stereotype": "防腐层",
-      "responsibility": "唯一连供应商的地方：连接池；按账号的出网方式直连或经出网代理；认证头和地址由方言给出；按行读 SSE；调用方断开时关连接。HTTP 状态码和错误体原样交回，由方言归成哪种失败。",
-      "methods": [
-        [
-          "+",
-          "send(endpoint, secret, body, *, stream, egress) -> AsyncIterator[Frame]"
-        ],
-        [
-          "+",
-          "close()"
-        ]
-      ]
-    },
-    {
-      "id": "guard",
-      "kind": "class",
-      "name": "AddressGuard",
       "at": [
-        5.0,
-        3.55
-      ],
-      "stereotype": "策略",
-      "responsibility": "每次真正连接前，按解析出来的 IP 再查一次：不能指向平台内部（租户填的地址可能先指向外网、事后改成内网）。",
-      "methods": [
-        [
-          "+",
-          "check(endpoint)"
-        ]
+        4.95,
+        2.0
       ]
     },
     {
-      "id": "dialect",
+      "id": "prov",
       "kind": "class",
       "name": "ProviderDialect",
-      "at": [
-        6.6,
-        1.95
-      ],
+      "external": true,
+      "source": "供应商共享包（provider）",
       "methods": [
         [
           "+",
-          "auth · endpoint · adjust"
-        ],
-        [
-          "+",
-          "usage · reasoning · classify"
+          "headers · url · adjust_request · parse_usage · classify"
         ]
       ],
-      "external": true,
-      "source": "供应商领域（共享包）"
+      "at": [
+        4.95,
+        0.3
+      ]
     },
     {
       "id": "kernel",
       "kind": "class",
-      "name": "RequestSummary · ParamPlan · Route",
-      "at": [
-        -1.9,
-        0.3
-      ],
+      "name": "RequestSummary · ParamPlan · FrameInfo",
+      "external": true,
+      "source": "共享基础层（shared.kernel）",
       "attributes": [
         [
           "+",
-          "Usage · UpstreamFailure · GatewayError · Format"
+          "has_images · has_documents · has_tools · est_input_tokens"
         ]
       ],
-      "external": true,
-      "source": "共享内核"
+      "at": [
+        -2.0,
+        0.3
+      ]
     }
   ],
   "relationships": [
@@ -294,7 +218,7 @@
       "from": "inv",
       "to": "fg",
       "type": "uses",
-      "description": "read · open · error_body"
+      "description": "读摘要、筛线路、打开流"
     },
     {
       "from": "fg",
@@ -304,120 +228,69 @@
       "multiplicity": "2"
     },
     {
-      "from": "fg",
-      "to": "path",
-      "type": "uses",
-      "description": "直通还是转换"
-    },
-    {
-      "from": "fg",
-      "to": "client",
-      "type": "uses",
-      "description": "发出"
-    },
-    {
-      "from": "fg",
-      "to": "kernel",
-      "type": "uses",
-      "description": "产出共同信息，收 Route、ParamPlan"
-    },
-    {
-      "from": "anth",
+      "from": "codecs_impl",
       "to": "codec",
       "type": "implements"
     },
     {
-      "from": "oai",
-      "to": "codec",
-      "type": "implements"
-    },
-    {
-      "from": "codec",
-      "to": "info",
-      "type": "uses",
-      "description": "creates",
-      "labelAt": 0.7
-    },
-    {
-      "from": "path",
+      "from": "fg",
       "to": "conv",
       "type": "uses",
-      "description": "选"
+      "description": "异格式转换"
     },
     {
       "from": "conv",
       "to": "trans",
       "type": "uses",
-      "description": "creates"
-    },
-    {
-      "from": "client",
-      "to": "guard",
-      "type": "uses",
-      "description": "连接前检查"
-    },
-    {
-      "from": "client",
-      "to": "dialect",
-      "type": "uses",
-      "description": "认证头、地址"
+      "description": "创建流式状态机"
     },
     {
       "from": "fg",
-      "to": "dialect",
+      "to": "up",
       "type": "uses",
-      "description": "按账号的供应商取方言",
-      "labelAt": 0.75
+      "description": "安全发送 HTTP/SSE"
+    },
+    {
+      "from": "fg",
+      "to": "prov",
+      "type": "uses",
+      "description": "取供应商方言"
+    },
+    {
+      "from": "fg",
+      "to": "kernel",
+      "type": "uses",
+      "description": "读写摘要与帧信息"
     }
   ],
   "capabilities": [
     {
-      "name": "读共同信息",
-      "entry": "read(entry, body)",
-      "callers": "调用编排（进门）",
-      "description": "入口格式的读写器读出 RequestSummary；不改请求"
+      "name": "同格式零损直通与异格式桥接",
+      "entry": "FormatGateway.open",
+      "callers": "调用编排",
+      "description": "同格式保留全部原生扩展字段；/universal 入口支持跨 Anthropic、OpenAI、Google 三种上游协议无缝转换"
     },
     {
-      "name": "发出一次尝试",
-      "entry": "open(entry, body, route, plan)",
-      "callers": "调用编排（每次尝试）",
-      "description": "直通：在原格式上改参数、换模型名；转换：改完再转。返回 UpstreamCall，逐段给出入口格式的回答和每段的要点"
+      "name": "多模态内容块兼容性过滤",
+      "entry": "FormatGateway.routes_for",
+      "callers": "调用编排（选路之前）",
+      "description": "请求含二进制 PDF 文档块时自动避开纯 OpenAI 线路，无兼容线路时明确回 400 而非静默丢内容"
     },
     {
-      "name": "写错误体",
-      "entry": "error_body(entry, error)",
-      "callers": "调用编排、入口",
-      "description": "GatewayError 写成入口格式的错误体，带类别和「不要再重试」标记"
+      "name": "防 DNS 重绑定与代理 SSRF 防护",
+      "entry": "UpstreamClient · AddressGuard",
+      "callers": "FormatGateway、管理平台 AccountService",
+      "description": "TCP 建连直接钉死校验通过的公网 IP，关闭重定向，代理模式无需本机公网 DNS 即可安全放行海外域名并封堵集群内网"
     }
   ],
   "decisions": [
     {
-      "decision": "格式相同就直通，不同才转换",
-      "reason": "请求和上游格式相同时转一圈只会丢东西（OpenAI 格式独有的结构化输出、logprobs 在 Anthropic 格式里没有位置）；直通时网关不认识的字段原样带过去，供应商的新功能马上能用。"
+      "decision": "在 httpcore NetworkBackend 层钉死校验后的 IP 字面量",
+      "reason": "预检 check(url) 后再让 httpx 自己做第二次 DNS 解析会被攻击者利用 TTL=0 重绑定到 127.0.0.1 或 K8s Service；单次解析校验全部记录后直接向公网 IP 建 TCP 连接并保留原域名做 TLS SNI 校验，彻底闭合 TOCTOU 窗口。"
     },
     {
-      "decision": "读写器和转换器分开",
-      "reason": "读写器只碰少数字段，每种入口格式一个，认 Key、选线路、记用量这些共用步骤只跟它打交道；整体转换只在格式不同时才用。"
-    },
-    {
-      "decision": "只按入口格式读",
-      "reason": "转换过的回答已经是入口格式，用量、提交点、错误都在入口这一侧读；所以只要 Anthropic、OpenAI 两个读写器，Google 只要一个转换器。"
-    },
-    {
-      "decision": "转换都以 Anthropic 格式为一端",
-      "reason": "它表达得更细（分块的内容、带签名的思考、缓存标记），从细往粗转丢什么是确定的；转换器的数量也不随格式数量平方增长。"
-    },
-    {
-      "decision": "回答只在需要时解析",
-      "reason": "直通时只看每段的事件类型，第一段内容、带用量的段和错误才完整解析，网关增加的耗时和 CPU 都很少。"
-    },
-    {
-      "decision": "供应商之间的差异交给方言",
-      "reason": "同一种格式下各家的认证、地址、字段名、用量字段、报错意思不一样；这些放在供应商领域，读写器和转换器只管标准写法，加一家供应商不用改这里。"
-    },
-    {
-      "decision": "每次连接前按 IP 检查地址",
-      "reason": "上游地址是租户填的，网关替它去连；只在登记时查一次的话，域名可以事后改成指向内网。"
+      "decision": "出网代理模式（Egress.PROXY）走静态内网拦截而不要求本机解析公网域名",
+      "reason": "企业内网隔离集群往往没有公网 DNS，由外部代理负责解析 api.anthropic.com；check_proxy 拦死 localhost、无点短主机名、.cluster.local 与私网 IP 字面量，同时允许合法海外域名经代理出网。"
     }
   ]
 }

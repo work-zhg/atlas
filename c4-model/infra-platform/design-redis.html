@@ -72,7 +72,7 @@
       <tr><td>PubSub 多路复用</td><td>进程内只维护 1 条带自动重连的订阅连接，按 channel 路由分发到协程队列；重连后投递哨兵通知业务回库补查。</td><td>500 个等审批的 CLI 协程共用 1 条连接，不再各自占 1 条短命令池连接。</td></tr>
       <tr><td>ScriptRegistry</td><td>集中管理 Lua 脚本，自动走 <code>EVALSHA</code>（遇到 <code>NOSCRIPT</code> 重灌 <code>EVAL</code>），消除每次传输完整 Lua 源码的开销。</td><td>序号分配、<code>INCR+EXPIRE</code> 原子限流、设备在线续期、分布式锁续租。</td></tr>
       <tr><td>分级容灾</td><td>按原语一致性要求明确区分 <b>Fail-Closed</b>（出错必拒）与 <b>Fail-Open</b>（出错降级放行或读旧缓存）。</td><td>锁与序号必须 Fail-Closed；限流、缓存、失效通知可 Fail-Open + 熔断快返。</td></tr>
-      <tr><td>Singleflight</td><td>缓存过期瞬间只放行 1 个协程回源查库，同键并发请求共享同一个 <code>Future</code>；回源失败时在宽限期内返回旧值。</td><td>模型网关 <code>TenantGate</code> 每 5 秒过期不再产生 DB 惊群，DB 闪断也不再 500。</td></tr>
+      <tr><td>Singleflight</td><td>缓存过期瞬间只放行 1 个协程回源查库，同键并发请求共享同一个 <code>Future</code>；回源失败时在宽限期内返回旧值。</td><td>高频读（授权快照、配置）缓存过期时不再产生 DB 惊群，DB 闪断也不再 500。</td></tr>
     </tbody>
   </table>
 
@@ -82,7 +82,7 @@
     <thead><tr><th style="width: 14%">服务</th><th style="width: 34%">当前用法</th><th>暴露出的问题</th></tr></thead>
     <tbody>
       <tr><td><code>atlas_agent</code></td><td>自建 <code>redisx.py</code> 双池、<code>relay.py</code> 事件流、<code>approval/channel.py</code> 审批订阅、<code>redislock</code></td><td>短命令池被迫 <code>socket_timeout=None</code>；CLI 审批 <code>pubsub.subscribe()</code> 长占短命令池；<code>tail_thread</code> 末尾重连仍扫全流；<code>EVAL</code> 未走 <code>EVALSHA</code>。</td></tr>
-      <tr><td><code>atlas_modelgateway</code></td><td>裸 <code>from_url</code> + <code>QuotaGuard</code> 限流与预算 + <code>TenantGate</code> 查 PG</td><td><code>incr</code> 与 <code>expire</code> 分两次调用非原子泄漏；<code>TenantGate</code> 5 秒过期击穿且 DB 闪断直接 500；多副本缺少租户停用即时广播。</td></tr>
+      <tr><td><code>atlas_modelgateway</code></td><td>裸 <code>from_url</code> + <code>QuotaGuard</code> 限流与预算</td><td><code>incr</code> 与 <code>expire</code> 分两次调用非原子泄漏（原来的租户状态缓存已随「业务系统不存租户状态」去掉）。</td></tr>
       <tr><td><code>atlas_devicegw</code></td><td>裸 <code>from_url</code> + <code>store.py</code> 手写 <code>eval</code> Lua</td><td>无连接池上限、无超时治理、每次 <code>eval</code> 传完整 Lua 源码、无 OTel/慢日志。</td></tr>
       <tr><td><code>atlas_teamflow</code></td><td>裸 <code>from_url</code> + <code>process/bus.py</code> 自写 PubSub 与 Lua 锁</td><td>与 <code>atlas_redislock</code> 重复造轮子；缺少连接池治理与指标监控。</td></tr>
       <tr><td><code>atlas_knowledge</code></td><td>裸 <code>from_url</code> + <code>RedisLock</code> + Celery broker</td><td>无统一超时与观测；键前缀未标准化，与其它服务共享 Redis 实例时难排查大 Key。</td></tr>
@@ -210,7 +210,7 @@
     <text class="t-name" x="1090" y="104">Redis Pub/Sub</text>
     <text class="t-sub" x="1090" y="128">跨副本轻量广播通道</text>
   </svg>
-  <p><b>关键设计点</b>：Redis PubSub 断线期间不留离线消息，因此 <code>PubSubHub</code> 在每次重连重订阅成功后，向所有在听队列投递一个 <code>Resubscribed</code> 哨兵对象——业务监听方（如 <code>DecisionChannel</code>、<code>TenantGate</code>）收到哨兵即立刻回库查一次最新状态，关闭断线期间漏信号窗口。</p>
+  <p><b>关键设计点</b>：Redis PubSub 断线期间不留离线消息，因此 <code>PubSubHub</code> 在每次重连重订阅成功后，向所有在听队列投递一个 <code>Resubscribed</code> 哨兵对象——业务监听方（如 <code>DecisionChannel</code>）收到哨兵即立刻回库查一次最新状态，关闭断线期间漏信号窗口。</p>
 
   <h2>原理 4　标准高阶原语与各服务痛点对应</h2>
   <table>
@@ -219,7 +219,7 @@
       <tr><td><code>ScriptRegistry</code></td><td>集中登记 Lua 脚本，首次编译缓存 SHA1，调用走 <code>EVALSHA</code>，遇 <code>NOSCRIPT</code> 自动回退 <code>EVAL</code>。</td><td>收编 <code>relay.py</code>、<code>devicegw/store.py</code>、<code>teamflow/bus.py</code>、<code>redislock</code> 全部散落 Lua。</td></tr>
       <tr><td><code>StreamChannel</code></td><td>支持 <code>EVALSHA</code> 序号+写入；<code>tail(after_seq)</code> 先 <code>XREVRANGE COUNT 1</code> 快判流尾（命中直接 <code>XREAD</code>，O(1) 跳过 1 万条扫描），分页回放并跳过单条坏 JSON。</td><td>修复 <code>atlas_agent/stream/relay.py</code> 末尾重连扫全流与单条坏数据掐断 SSE 的问题。</td></tr>
       <tr><td><code>AtomicQuota</code></td><td>单条 Lua 原子执行 <code>INCR + if 1 then EXPIRE</code> 与浮点/整数额度累加，默认 <code>fail_open=True</code>。</td><td>修复 <code>atlas_modelgateway/gateway/admission.py</code> 中 <code>incr</code>/<code>expire</code> 非原子永久 key 泄漏。</td></tr>
-      <tr><td><code>CoalescedCache</code></td><td>内存 L1 + Singleflight 单飞锁防击穿 + <code>stale_ttl_s</code> 异常降级读旧值 + 可选接 <code>PubSubHub</code> 收跨副本失效广播。</td><td>修复 <code>modelgateway</code> 数据面 <code>TenantGate</code> 每 5 秒缓存击穿、DB 闪断 500 及停用 5 秒延迟。</td></tr>
+      <tr><td><code>CoalescedCache</code></td><td>内存 L1 + Singleflight 单飞锁防击穿 + <code>stale_ttl_s</code> 异常降级读旧值 + 可选接 <code>PubSubHub</code> 收跨副本失效广播。</td><td>给授权快照、配置这类高频读用；现在没有业务方在用（模型网关原来用它缓存租户状态，业务系统不再存租户状态后去掉了）。</td></tr>
       <tr><td><code>PubSubHub</code></td><td>单连接多路复用 + 自动重连重订阅 + <code>Resubscribed</code> 哨兵。</td><td>替换 <code>agent/approval/channel.py</code>（释放短命令池）、<code>agent/auth/service.py</code>、<code>teamflow/process/bus.py</code>。</td></tr>
       <tr><td><code>DistributedLock</code></td><td>复用现有 <code>atlas_redislock</code>（Lua 原子续租/释放 + 单调时钟 + Python 3.13 <code>uncancel()</code>），由 <code>RedisRuntime</code> 注入 <code>commands</code> 客户端与脚本表。</td><td>保持 <code>atlas_redislock</code> 为独立叶子包，零破坏复用并删掉 <code>teamflow</code> 重复锁实现。</td></tr>
     </tbody>
@@ -237,7 +237,7 @@
 
   <h2>渐进式三阶段迁移路线</h2>
   <ol class="steps">
-    <li><span class="n">1</span><b>Phase 1（建库 + 止血高危问题）</b>：新建 <code>infra-platform/libs/redis</code>，落地 <code>RedisRuntime</code>、拦截器链、<code>ScriptRegistry</code>、<code>PubSubHub</code>、<code>CoalescedCache</code>、<code>AtomicQuota</code>、<code>StreamChannel</code>；优先接入 <code>atlas_agent</code>（释放 CLI 审批短命令池 + 流尾快跳）与 <code>atlas_modelgateway</code>（修复 <code>TenantGate</code> 击穿/DB 降级 + <code>QuotaGuard</code> 原子化）。</li>
+    <li><span class="n">1</span><b>Phase 1（建库 + 止血高危问题）</b>：新建 <code>infra-platform/libs/redis</code>，落地 <code>RedisRuntime</code>、拦截器链、<code>ScriptRegistry</code>、<code>PubSubHub</code>、<code>CoalescedCache</code>、<code>AtomicQuota</code>、<code>StreamChannel</code>；优先接入 <code>atlas_agent</code>（释放 CLI 审批短命令池 + 流尾快跳）与 <code>atlas_modelgateway</code>（<code>QuotaGuard</code> 原子化）。</li>
     <li><span class="n">2</span><b>Phase 2（全服务收编）</b>：将 <code>atlas_devicegw</code>、<code>atlas_knowledge</code>、<code>atlas_teamflow</code> 迁入 <code>atlas_redis</code>，删除 <code>teamflow/process/bus.py</code> 重复锁与手写 PubSub，删除 <code>atlas_agent/redisx.py</code> 重复建池逻辑。</li>
     <li><span class="n">3</span><b>Phase 3（护栏固化）</b>：接入 <code>import-linter</code> 禁止业务服务绕过 <code>atlas_redis</code> 建连；统一开启 OTel Redis 延迟、连接池水位与大 Key 告警。</li>
   </ol>

@@ -35,8 +35,8 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "动态图：模型平台 - 定期对账",
-  "description": "目标模型（参与者按组件图拆）。对账任务逐把 Key 重算有效模型、问 LiteLLM 现在的样子，不一致以平台为准修正。图里画的是一把用户 Key 的过程，客户端 Key 不问用户中心",
+  "title": "动态图：模型平台 - 定时巡检同步离职与部门变动（KeyRefresh）",
+  "description": "用户中心里的员工离职或调换部门没有推送通知，管理平台每 5 分钟由单实例持 Redis 租约锁按租户扫描个人 Key，更新 effective_models 并广播网关驱逐缓存。",
   "boundaries": [
     {
       "id": "mpsys",
@@ -52,38 +52,38 @@
   ],
   "participants": [
     {
-      "id": "recon",
+      "id": "jobs",
       "kind": "component",
-      "name": "对账任务",
-      "technology": "asyncio 后台任务",
+      "name": "定时巡检",
+      "technology": "KeyRefresh（jobs.py）",
       "in": "srvB"
     },
     {
       "id": "keys",
       "kind": "component",
       "name": "API Key",
-      "technology": "SQLAlchemy 异步",
+      "technology": "KeyService",
       "in": "srvB"
     },
     {
       "id": "access",
       "kind": "component",
       "name": "授权",
-      "technology": "httpx",
+      "technology": "SubjectsCache · UCPermissions",
       "in": "srvB"
     },
     {
       "id": "catalog",
       "kind": "component",
-      "name": "模型目录",
-      "technology": "SQLAlchemy 异步",
+      "name": "模型与线路",
+      "technology": "ModelRegistry",
       "in": "srvB"
     },
     {
-      "id": "gw",
+      "id": "shared",
       "kind": "component",
-      "name": "LiteLLM 接入",
-      "technology": "httpx",
+      "name": "共享基础层",
+      "technology": "shared.sync",
       "in": "srvB"
     },
     {
@@ -95,10 +95,18 @@
       "in": "mpsys"
     },
     {
-      "id": "litellm",
+      "id": "redis",
       "kind": "container",
-      "name": "LiteLLM",
-      "technology": "LiteLLM 1.106（第三方）",
+      "name": "网关状态",
+      "technology": "Redis 7（键值 + Pub/Sub）",
+      "shape": "database",
+      "in": "mpsys"
+    },
+    {
+      "id": "gateway",
+      "kind": "container",
+      "name": "模型网关",
+      "technology": "Python / FastAPI（asyncio + httpx 流式）",
       "in": "mpsys"
     },
     {
@@ -110,101 +118,78 @@
   ],
   "messages": [
     {
-      "from": "recon",
-      "to": "keys",
-      "description": "reconcile_all()",
+      "from": "jobs",
+      "to": "redis",
+      "description": "尝试获取分布式租约锁 modelgw:joblock:key-refresh",
+      "technology": "Redis SET NX EX",
       "details": {
-        "note": "每 5 分钟一次。多副本各自跑：同步是幂等的，重复做只是多问几次 LiteLLM。"
+        "note": "管理平台多副本部署时只有抢到锁的 1 个副本执行巡检，避免对用户中心造成 N 倍重复查询。"
       }
     },
     {
-      "from": "keys",
-      "to": "catalog",
-      "description": "作废部署缓存"
+      "from": "jobs",
+      "to": "db",
+      "description": "TenantSweep.tenants_in(gw_api_key)：列出有 Key 的活跃租户",
+      "technology": "SQL/TCP"
+    },
+    {
+      "from": "jobs",
+      "to": "keys",
+      "description": "逐租户进入 TenantScope 执行 refresh_user_keys()"
     },
     {
       "from": "keys",
       "to": "db",
-      "description": "全部非待分配的 Key",
+      "description": "读取本租户全部个人 Key（key_type='user'）",
       "technology": "SQL/TCP"
     },
     {
       "from": "keys",
+      "to": "catalog",
+      "description": "list_models()：获取本租户启用模型与可见性"
+    },
+    {
+      "from": "keys",
       "to": "access",
-      "description": "usable(持有人, fresh) · person(持有人, fresh)",
-      "details": {
-        "note": "逐把用户 Key。对账没有入站请求：按持有人带 X-Uid 调用户中心（用户中心据此确定租户）。"
-      }
+      "description": "按持有人去重查询 subject(uid, fresh=True) 与 usable(uid, fresh=True)"
     },
     {
       "from": "access",
       "to": "usercenter",
-      "description": "能用的私有模型、在不在职",
-      "technology": "JSON/HTTP（开放接口）",
+      "description": "实时查询员工在职状态与当前部门继承下的可用私有模型",
+      "technology": "JSON/HTTP（/open/v1）",
       "details": {
-        "note": "调部门、离职只能这样发现：用户中心没有变更通知。不可用时沿用上一次的结果，最多 1 小时。"
+        "note": "若员工已离职停用（active=False），其所有个人 Key 的 effective_models 直接清空为 []；若调离原部门则自动剔除原部门私有模型。"
       }
-    },
-    {
-      "from": "keys",
-      "to": "catalog",
-      "description": "callable()"
-    },
-    {
-      "from": "catalog",
-      "to": "gw",
-      "description": "deployments(fresh)"
-    },
-    {
-      "from": "gw",
-      "to": "litellm",
-      "description": "GET /v1/models、/model/info",
-      "technology": "JSON/HTTP（管理接口，master key）",
-      "details": {
-        "note": "LiteLLM 里一个模型都没有时 /model/info 返回 500（1.106），先看 /v1/models。"
-      }
-    },
-    {
-      "from": "keys",
-      "to": "gw",
-      "description": "key_info(哈希)"
-    },
-    {
-      "from": "gw",
-      "to": "litellm",
-      "description": "GET /key/info?key=<哈希>",
-      "technology": "JSON/HTTP（管理接口，master key）",
-      "details": {
-        "note": "传哈希不传原文：查询参数会被前面的访问日志原样记下（LiteLLM 1.106 接受哈希，文档也建议这样）。现在对账传的是原文。软删除的按「没有」处理。"
-      }
-    },
-    {
-      "from": "keys",
-      "to": "keys",
-      "description": "有效模型、停用状态和 LiteLLM 现在的比",
-      "details": {
-        "note": "能补上：同步失败、用户中心那边的变化、有人在 LiteLLM 界面里改了平台管的 Key。LiteLLM 里找不到的只记 sync_error「可能在 LiteLLM 里被删了，请重置」，不自动重建。"
-      }
-    },
-    {
-      "from": "keys",
-      "to": "gw",
-      "description": "update_key · block_key · unblock_key（不一致时）"
-    },
-    {
-      "from": "gw",
-      "to": "litellm",
-      "description": "POST /key/update、/key/block、/key/unblock",
-      "technology": "JSON/HTTP（管理接口，master key）"
     },
     {
       "from": "keys",
       "to": "db",
-      "description": "写同步状态，提交",
-      "technology": "SQL/TCP",
-      "details": {
-        "note": "有修正或失败才打日志：检查 N 把，修正 M 把，K 把同步失败。"
-      }
+      "description": "仅对 effective_models 发生变化的 Key 执行 UPDATE 并提交",
+      "technology": "SQL/TCP"
+    },
+    {
+      "from": "keys",
+      "to": "shared",
+      "description": "若有变更：notify.flush -> VersionWatch.bump(keys_changed=True, evict_digests)"
+    },
+    {
+      "from": "shared",
+      "to": "redis",
+      "description": "递增 Key 版本并发布受影响 Key 摘要列表",
+      "technology": "Redis INCR + Pub/Sub"
+    },
+    {
+      "from": "redis",
+      "to": "gateway",
+      "description": "广播即时驱逐被收敛或离职员工的 Key 缓存",
+      "technology": "Redis Pub/Sub"
+    },
+    {
+      "from": "jobs",
+      "to": "redis",
+      "description": "巡检结束，按 token 安全释放分布式锁",
+      "technology": "Redis Lua DEL"
     }
   ]
 }

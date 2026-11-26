@@ -49,7 +49,7 @@
       "id": "usercenter",
       "kind": "system",
       "name": "用户中心",
-      "description": "用户、组织与权限的唯一数据源，负责统一登录。",
+      "description": "用户、组织、租户与权限的唯一数据源，负责统一登录。",
       "at": [
         -1.55,
         2.25
@@ -71,7 +71,7 @@
       "shape": "server",
       "technology": "Python / FastAPI",
       "name": "知识库接口",
-      "description": "管理接口（知识集、知识库、文档、分段、共享、召回测试）、智能体运行时的内部接口、给会话 Pod 的 MCP 端点，以及给运营中心的运营接口；入库巡检也跑在这里。",
+      "description": "管理接口（知识集、知识库、文档、分段、共享、索引版本、用量）和检索接口（能检索哪些知识集和库、检索、召回测试、检索记录），以及给运营中心的运营接口；入库巡检也跑在这里。",
       "at": [
         0,
         2.25
@@ -147,6 +147,17 @@
         -1.55,
         -0.45
       ]
+    },
+    {
+      "id": "mcpgw",
+      "kind": "system",
+      "name": "MCP 网关",
+      "description": "所有 MCP 调用的唯一入口：代理已有的 MCP Server，把 REST、gRPC 接口转换成 MCP 工具；知识库作为平台服务登记在它上面。",
+      "at": [
+        -1.0,
+        4.3
+      ],
+      "color": "#1a7f64"
     }
   ],
   "relationships": [
@@ -154,18 +165,24 @@
       "from": "employee",
       "to": "api",
       "description": "管理知识集、知识库和文档，做召回测试",
-      "technology": "JSON/HTTPS（控制台的知识库页面，经网关）"
+      "technology": "JSON/HTTPS（管理接口、检索接口，经网关）"
     },
     {
       "from": "agent",
       "to": "api",
-      "description": "运行时按知识集检索、查能用的知识集；会话 Pod 经 MCP 列库和检索",
-      "technology": "JSON/HTTP、MCP/HTTP"
+      "description": "运行时检索、查能用的知识集",
+      "technology": "JSON/HTTP（检索接口）"
+    },
+    {
+      "from": "mcpgw",
+      "to": "api",
+      "description": "替 CLI 智能体列知识集里的库、检索",
+      "technology": "JSON/HTTP（检索接口）"
     },
     {
       "from": "ops",
       "to": "api",
-      "description": "停用、恢复、删除租户，存储份额，系统参数和系统任务",
+      "description": "开通时为租户创建、关闭时删除租户数据，存储份额，系统参数和系统任务",
       "technology": "JSON/HTTP（运营接口，签名）"
     },
     {

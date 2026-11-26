@@ -21,7 +21,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "系统上下文图：模型平台",
-  "description": "目标模型：自研模型网关取代 LiteLLM，方案见 agent-platform/doc/design/model-gateway-design.html。范围是 agent-platform/services/modelgateway。控制台的模型页面属于 Agent 平台的前端，但浏览器经 nginx 直接调本服务，所以员工和管理员直接连到本系统。账号、模型、Key、调用记录都属于租户",
+  "description": "自研模型管理平台与模型网关（代码位于 agent-platform/services/modelgateway，原理见 design-model-gateway.html）。账号、模型、线路、API Key 与调用记录均按租户隔离。",
   "elements": [
     {
       "id": "employee",
@@ -29,10 +29,10 @@
       "tag": "员工",
       "name": "员工",
       "color": "#297e06",
-      "description": "申请自己的个人 Key，在 Claude Code、Cursor、脚本里用它调模型。",
+      "description": "在控制台申请并管理个人 Key，在研发工具或脚本中调用授权范围内的模型。",
       "at": [
         0.55,
-        0
+        0.0
       ]
     },
     {
@@ -41,31 +41,31 @@
       "tag": "模型管理员",
       "name": "模型管理员",
       "color": "#1a849c",
-      "description": "租户里管模型的人：登记供应商账号、模型和线路，设公有私有并授权，给智能体和平台服务的 Key 分配模型，看调用记录和花费。",
+      "description": "登记供应商账号、模型与线路，配置公有或私有可见性并授权，给客户端 Key 分配模型与限额，查看调用明细与费用。",
       "at": [
         1.65,
-        0
+        0.0
       ]
     },
     {
       "id": "mp",
       "kind": "system",
       "scope": true,
+      "name": "模型平台",
+      "description": "统一承载租户的模型管理与模型调用：管理面维护供应商账号、模型线路、授权与 API Key；数据面认 Key、校验限额与能力、按会话或权重选路、桥接协议并计量记账。",
       "at": [
         1.1,
         1.25
-      ],
-      "name": "模型平台",
-      "description": "租户的模型调用都经过它：自研的模型网关认 Key、按模型整理参数、选线路、转发给供应商、记用量；管理平台管账号、模型、线路、Key 和授权。"
+      ]
     },
     {
       "id": "usercenter",
       "kind": "system",
       "name": "用户中心",
       "color": "#bf101d",
-      "description": "用户、组织与权限的唯一数据源，负责统一登录。",
+      "description": "用户、组织架构、在职状态与数据权限的唯一事实源，负责统一身份认证。",
       "at": [
-        -0.15,
+        -0.2,
         0.75
       ]
     },
@@ -74,9 +74,9 @@
       "kind": "system",
       "name": "运营中心",
       "color": "#8a6d00",
-      "description": "管理平台本身的独立系统：租户的开通和关闭、系统参数、系统任务；看不到租户的业务内容。",
+      "description": "平台级运维系统：管理租户启用、停用与数据清理，配置全局运行参数并查看后台巡检任务状态。",
       "at": [
-        -0.15,
+        -0.2,
         1.8
       ]
     },
@@ -85,9 +85,9 @@
       "kind": "system",
       "name": "Agent 平台",
       "color": "#ed8609",
-      "description": "智能体的配置、会话与执行：跑每一轮对话，实时推送模型、工具和子智能体的执行过程。",
+      "description": "智能体与平台系统功能的编排与运行时，按智能体或系统用途获取客户端 Key 并调用对话模型。",
       "at": [
-        2.35,
+        2.4,
         0.75
       ]
     },
@@ -96,9 +96,9 @@
       "kind": "system",
       "name": "知识库服务",
       "color": "#8411bd",
-      "description": "文档入库与检索，按文档权限过滤结果。",
+      "description": "企业文档解析、向量化入库与混合检索服务，调用对话、向量与重排模型。",
       "at": [
-        2.35,
+        2.4,
         1.8
       ]
     },
@@ -107,10 +107,10 @@
       "kind": "system",
       "name": "模型供应商",
       "color": "#5b6770",
-      "description": "DeepSeek、Anthropic、MiniMax、Kimi、Gemini 等的模型接口，以及自部署的 vLLM。",
+      "description": "公有云商业大模型厂商以及企业内部私有化部署的模型推理服务。",
       "at": [
         1.1,
-        2.5
+        2.55
       ]
     }
   ],
@@ -118,37 +118,37 @@
     {
       "from": "employee",
       "to": "mp",
-      "description": "申请个人 Key，用它调模型"
+      "description": "申请个人 Key，调用授权范围内的模型并查看个人用量"
     },
     {
       "from": "admin",
       "to": "mp",
-      "description": "登记账号、模型、线路，授权，分配模型，看调用记录和花费"
+      "description": "管理供应商账号、模型线路、私有授权与客户端 Key，查看调用与账单"
     },
     {
       "from": "agent",
       "to": "mp",
-      "description": "取智能体和平台服务的 Key、模型清单，带 Key 调模型"
+      "description": "申请并获取客户端 Key 与模型规格，携带凭据调用对话模型"
     },
     {
       "from": "kb",
       "to": "mp",
-      "description": "取服务级 Key，调对话、向量、重排模型"
+      "description": "获取服务级 Key，调用对话、向量与重排模型"
     },
     {
       "from": "ops",
       "to": "mp",
-      "description": "改系统参数、看系统任务；关闭租户时删除它的数据"
+      "description": "调整系统参数、查看定时任务，开通时创建、关闭时清理租户数据"
     },
     {
       "from": "mp",
       "to": "usercenter",
-      "description": "私有模型的授权，用户能用哪些模型、是否在职"
+      "description": "登记私有模型数据权限，查询用户可用模型范围、在职状态与管理员权限"
     },
     {
       "from": "mp",
       "to": "provider",
-      "description": "转发模型调用，带租户的供应商凭据"
+      "description": "携带租户的供应商凭据转发模型调用、测试连通性并查询账号余额"
     }
   ]
 }

@@ -30,10 +30,10 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：Agent 平台 - Agent 服务 - 运营接口",
-  "description": "目标模型，代码里还没有。Atlas 一侧的运营接口：租户的挂起、恢复、删除，容量，运行环境；系统参数和系统任务由运营接口库直接挂应用配置库、定时任务库。整体设计见 ../opscenter/design-tenant-isolation.html",
+  "description": "目标模型，每个元素下方的「现状」是现在承担它的代码。Atlas 一侧的运营接口：租户的创建、删除，容量，运行环境；系统参数和系统任务由运营接口库直接挂应用配置库、定时任务库。整体设计见 ../opscenter/design-tenant-isolation.html",
   "component": "运营接口",
-  "package": "运营接口（目标模型）",
-  "overview": "运营中心经运营接口管 Atlas，这个组件是 Atlas 一侧的实现。通用的部分（签名校验、系统范围、幂等、本地的租户状态、数据库里租户数据的分批删除、系统参数和系统任务两组接口）都在运营接口库里，这里只写 Atlas 特有的：挂起、恢复时自己的后台工作怎么停、怎么接着做；删除时数据库之外还有哪些东西要删；以及只有 Atlas 有的两组契约——容量和运行环境。\n\n它不读也不返回任何租户的业务内容：挂起、恢复、删除只按租户 uuid 动作，容量只有数字，运行环境是沙箱模板。原来按 sandbox:manage、config:manage、job:manage 判的管理接口都移到这里，只给运营中心；Atlas 里不再有平台级的操作码。",
+  "package": "运营接口（ops/）",
+  "overview": "运营中心经运营接口管 Atlas，这个组件是 Atlas 一侧的实现。通用的部分（签名校验、接口地址、创建时进入租户、数据库里租户数据的分批删除、系统参数和系统任务两组接口）都在运营接口库里，这里只写 Atlas 特有的：新租户要先准备什么（开通时填的份额）；删除时数据库之外还有哪些东西要删；以及只有 Atlas 有的两组契约——容量和运行环境。\n\nAtlas 不知道租户状态：没有挂起、恢复。租户停用、到期后，用户中心对这个租户的人回答无权限，新的 run 发不起来；已经在跑、挂起等着的 run 照常（设计接受的代价），关闭租户时随数据一起删。\n\n它不读也不返回任何租户的业务内容：创建、删除只按租户 uuid 动作，容量只有数字，运行环境是沙箱模板。原来按 sandbox:manage、config:manage、job:manage 判的管理接口都移到这里，只给运营中心；Atlas 里不再有平台级的操作码。",
   "elements": [
     {
       "id": "life",
@@ -43,14 +43,22 @@
       "methods": [
         [
           "+",
-          "on_suspend · on_resume · purge_external"
+          "create(tenant_uuid, params)  # 抽象"
+        ],
+        [
+          "+",
+          "delete(tenant_uuid) -> PurgeReport"
+        ],
+        [
+          "#",
+          "delete_external(tenant_uuid, budget)"
         ]
       ],
       "at": [
         0,
         -1.3
       ],
-      "source": "公共库 · 运营接口（扩展点）",
+      "source": "公共库 · 运营接口（基类）",
       "external": true
     },
     {
@@ -97,24 +105,24 @@
       "methods": [
         [
           "+",
-          "on_suspend(tenant_uuid)"
+          "create(tenant_uuid, params)"
         ],
         [
-          "+",
-          "on_resume(tenant_uuid)"
+          "#",
+          "delete_external(tenant_uuid, budget) -> PurgeReport"
         ],
         [
-          "+",
-          "purge_external(tenant_uuid, budget) -> PurgeReport"
+          "#",
+          "purge_order = ATLAS_PURGE_ORDER"
         ]
       ],
       "at": [
         0,
         1.0
       ],
-      "source": "无：新建",
+      "source": "ops/lifecycle.py AtlasTenantLifecycle",
       "stereotype": "应用服务",
-      "responsibility": "Atlas 对租户生命周期的实现，由运营接口库在 OPS 系统范围里调用。挂起：让执行器把这个租户在跑的 run 停到下一个安全点并挂起（等「租户恢复」），回收这个租户的全部沙箱和会话 Pod，断开它的本机设备；排队中的 run 不动，TenantGate 不放行。恢复：把因租户停用而挂起的 run 放回队列，沙箱用到时再建。删除：按 TenantPurgePlan 分批删数据库之外的东西。"
+      "responsibility": "Atlas 对租户接入的实现。创建（在这个租户的上下文里）：开通时运营中心给 Atlas 填了份额（并发 run、沙箱、存储，null = 不限）就记下，一项都没填用默认份额；能重做。删除：基类先调 delete_external 删数据库之外的东西（按 TenantPurgePlan），删完再按 purge_order 分批删全部租户表。不查租户状态：只能删已停用的租户由运营中心保证。"
     },
     {
       "id": "plan",
@@ -131,9 +139,9 @@
         -1.5,
         3.2
       ],
-      "source": "无：新建",
+      "source": "ops/lifecycle.py AtlasTenantLifecycle.delete_external（没有单独拆出来）",
       "stereotype": "策略",
-      "responsibility": "删除数据库之外的东西，固定顺序：① 退役还剩的沙箱和会话 Pod（挂起时已回收，这里兜底）② 吊销本机设备的令牌 ③ 删对象存储里这个租户的目录（每批最多 N 个对象）。每一步做完才做下一步；预算用完就返回「还有剩」。数据库里的行由运营接口库在这之后删：行是找到这些东西的线索。"
+      "responsibility": "删除数据库之外的东西，固定顺序：① 退役这个租户的全部沙箱和会话 Pod ② 删对象存储里这个租户的人的全部文件（每批最多 budget 个）。前一步做完才做下一步；预算用完就返回「还有剩」。本机设备的令牌随设备行一起删（数据库最后删）就吊销了。数据库里的行是找到这些东西的线索，所以最后删。"
     },
     {
       "id": "capops",
@@ -154,7 +162,7 @@
         2.2,
         1.0
       ],
-      "source": "无：新建",
+      "source": "ops/capacity.py",
       "stereotype": "对外接口",
       "responsibility": "容量契约在 Atlas 的实现：总容量（各实例并发槽位之和、集群的沙箱上限）、各租户的份额和用量。挂在 /ops/v1/capacity，先过运营接口库的签名校验。"
     },
@@ -181,31 +189,9 @@
         4.2,
         1.0
       ],
-      "source": "api/v1/sandbox_templates.py（换成运营接口）",
+      "source": "ops/runtime_env.py",
       "stereotype": "对外接口",
       "responsibility": "运行环境契约在 Atlas 的实现：沙箱模板的查看、修订、发布。原来的 /v1/sandbox-templates（按 sandbox:manage 判）移到 /ops/v1/sandbox-templates，只给运营中心。"
-    },
-    {
-      "id": "exec",
-      "kind": "class",
-      "name": "RunSuspension",
-      "attributes": [],
-      "methods": [
-        [
-          "+",
-          "suspend_tenant(tenant_uuid)"
-        ],
-        [
-          "+",
-          "resume_tenant(tenant_uuid)"
-        ]
-      ],
-      "at": [
-        -1.2,
-        5.4
-      ],
-      "source": "Run 执行器（按租户挂起、续跑）",
-      "external": true
     },
     {
       "id": "sbx",
@@ -215,7 +201,7 @@
       "methods": [
         [
           "+",
-          "release_tenant(tenant_uuid, *, reason)"
+          "retire_tenant(*, limit) -> (退役了几个, 还有没有剩)"
         ]
       ],
       "at": [
@@ -226,24 +212,6 @@
       "external": true
     },
     {
-      "id": "dev",
-      "kind": "class",
-      "name": "DeviceService",
-      "attributes": [],
-      "methods": [
-        [
-          "+",
-          "revoke_tenant(tenant_uuid)"
-        ]
-      ],
-      "at": [
-        2.2,
-        5.4
-      ],
-      "source": "本机设备",
-      "external": true
-    },
-    {
       "id": "oss",
       "kind": "class",
       "name": "ObjectStore",
@@ -251,7 +219,7 @@
       "methods": [
         [
           "+",
-          "delete_prefix(prefix, limit) -> int"
+          "list_objects · delete_objects"
         ]
       ],
       "at": [
@@ -322,42 +290,22 @@
     },
     {
       "from": "lifecycle",
-      "to": "exec",
+      "to": "cap",
       "type": "uses",
-      "description": "挂起、续跑这个租户的 run"
-    },
-    {
-      "from": "lifecycle",
-      "to": "sbx",
-      "type": "uses",
-      "description": "回收沙箱"
-    },
-    {
-      "from": "lifecycle",
-      "to": "dev",
-      "type": "uses",
-      "description": "断开设备",
-      "labelAt": 0.75
+      "description": "开通时记份额"
     },
     {
       "from": "plan",
       "to": "sbx",
       "type": "uses",
-      "description": "退役剩下的",
-      "labelAt": 0.6
-    },
-    {
-      "from": "plan",
-      "to": "dev",
-      "type": "uses",
-      "description": "吊销令牌",
+      "description": "退役沙箱和 Pod",
       "labelAt": 0.6
     },
     {
       "from": "plan",
       "to": "oss",
       "type": "uses",
-      "description": "删租户目录",
+      "description": "删这个租户的人的文件",
       "labelAt": 0.6
     },
     {
@@ -375,22 +323,16 @@
   ],
   "capabilities": [
     {
-      "name": "挂起租户",
-      "entry": "on_suspend(tenant_uuid)",
-      "callers": "运营接口库（POST /ops/v1/tenants/{id}/suspend）",
-      "description": "在跑的 run 停到下一个安全点并挂起；沙箱、会话 Pod 回收；本机设备断开；数据都留着"
-    },
-    {
-      "name": "恢复租户",
-      "entry": "on_resume(tenant_uuid)",
-      "callers": "运营接口库",
-      "description": "因租户停用而挂起的 run 放回队列，接着跑"
+      "name": "创建租户",
+      "entry": "create(tenant_uuid, params)",
+      "callers": "运营接口库（PUT /ops/v1/tenants/{id}：开通租户、给新登记的系统补建）",
+      "description": "开通时填了份额（running_runs、sandboxes、storage_bytes）就记下；没填用默认份额；参数不对回 409；能重做"
     },
     {
       "name": "删除租户的外部资源",
-      "entry": "purge_external(tenant_uuid, budget)",
-      "callers": "运营接口库（关闭租户时，先于删数据库）",
-      "description": "沙箱和 Pod → 设备令牌 → 对象存储目录，分批，返回还有没有剩"
+      "entry": "delete_external(tenant_uuid, budget)",
+      "callers": "运营接口库（DELETE /ops/v1/tenants/{id}：关闭租户，先于删数据库）",
+      "description": "沙箱和会话 Pod → 对象存储里这个租户的人的文件，分批，返回还有没有剩"
     },
     {
       "name": "容量",
@@ -408,19 +350,19 @@
   "decisions": [
     {
       "decision": "通用部分放运营接口库，这里只写 Atlas 特有的",
-      "reason": "签名、幂等、租户状态、按表删除每个服务都一样；Atlas 特有的只有自己的后台工作（run、沙箱、设备）和自己的外部资源。"
+      "reason": "签名、接口地址、进入租户、按表分批删除每个服务都一样；Atlas 特有的只有新租户的份额和自己的外部资源（沙箱、Pod、文件）。"
     },
     {
-      "decision": "挂起时 run 停到下一个安全点并挂起，不取消",
-      "reason": "停用可能只是欠费或误操作，恢复后要能接着做；挂起后数据和检查点都在，和发版时的交接、等人决定是同一种「停下来等」。"
+      "decision": "不知道租户状态：没有挂起、恢复，后台工作也不查状态",
+      "reason": "租户归用户中心管。停用、到期后，用户中心对这个租户的人回答无权限，新的 run 发不起来。本地再存一份状态要和用户中心同步，停用还得逐个系统通知，漏了哪个就不一致。代价：已经在跑、挂起等着的 run 不会被立即叫停。"
     },
     {
-      "decision": "挂起时立刻回收沙箱和会话 Pod",
-      "reason": "Pod 占的是所有租户共用的集群资源；工作空间的文件都在对象存储里，恢复后用到时再建，不丢东西。"
+      "decision": "开通时的份额在创建里记，不另设一步",
+      "reason": "创建本来就是「新租户在本系统要先准备什么」；份额并进创建的参数，运营中心开通时少一步、少一种失败。"
     },
     {
-      "decision": "删除外部资源的顺序：Pod → 设备令牌 → 对象存储",
-      "reason": "先停掉还可能往对象存储里写东西的沙箱和设备，再删文件，不会边删边写。"
+      "decision": "删除外部资源的顺序：Pod → 对象存储 → 数据库",
+      "reason": "先停掉还可能往对象存储里写东西的沙箱，再删文件，不会边删边写；数据库里的行是找到这些东西的线索，最后删（设备令牌随设备行一起删）。"
     },
     {
       "decision": "原来的平台管理接口（沙箱模板、配置项、定时任务）都移到运营接口，Atlas 里不再有平台级操作码",

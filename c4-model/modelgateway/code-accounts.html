@@ -29,645 +29,345 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "代码图：运营中心 - 运营服务 - 运营账号与审计",
-  "description": "目标领域模型（运营中心是新系统，代码还没有）。运营账号自己管、不在用户中心的任何租户里；双因素登录、两个运营角色、只追加的运营审计。整体设计见 design-tenant-isolation.html",
-  "component": "运营账号与审计",
-  "package": "atlas_opscenter.accounts（目标模型）",
-  "overview": "运营中心有自己的账号和登录，和用户中心、和任何租户都没有关系：运营人员不出现在任何租户的人员列表里，租户里的人无论怎么授权都拿不到运营能力。本领域管三件事：运营账号（开、停、重置双因素、改角色）、登录（账号密码加双因素，发会话，每个请求解析出运营人员和角色）、运营审计（每个写操作记一条，跨系统的操作结束后补记结果）。\n\n角色只有两个：运营管理员能做全部运营操作，运营观察员只能看。它不管运营人员对租户做了什么（那是租户、容量、系统设置几个组件的事），只回答「这个请求是谁、能不能做」和「谁在什么时候做过什么」。",
+  "title": "代码图：模型平台 - 管理平台 - 供应商账号",
+  "description": "目标模型：供应商账号功能组件（内聚 /api/v1/accounts 路由与 AccountService），负责凭据加密存储、防重绑定连通性探测与余额巡检；领域总览见 code-domains.html。",
+  "component": "供应商账号",
+  "package": "atlas_modelgateway.accounts",
+  "overview": "供应商账号组件管理租户对接上游模型接口的凭据（gw_account）并直接提供 /api/v1/providers 与 /api/v1/accounts* 功能接口。同一家供应商可登记多个账号（如主账号与备用账号），密钥经 SecretCipher 信封加密后落库，HTTP 响应一律只展示末 4 位。\n\n保存前草稿测试与后台巡检（AccountCheck）复用网关同款的 UpstreamClient 与 AddressGuard（直连单次解析并绑定公网 IP 防 DNS 重绑定，代理做静态内网域名/IP 拦截）。对于不支持模型列表的供应商，自动选取该账号已配线路的真实上游模型与操作类型（对话 / 向量 / 重排）发最小请求验证。",
   "elements": [
     {
-      "id": "admin",
+      "id": "callers",
       "kind": "class",
-      "name": "OperatorAdmin",
+      "name": "模型管理员 · 定时巡检 · CLI",
+      "external": true,
+      "source": "控制台 · AccountCheck（jobs.py）· __main__.py",
+      "methods": [
+        [
+          "+",
+          "HTTP /api/v1/accounts* · check_accounts()"
+        ]
+      ],
+      "at": [
+        2.25,
+        -1.25
+      ]
+    },
+    {
+      "id": "router",
+      "kind": "class",
+      "name": "AccountsRouter",
+      "stereotype": "对外接口",
+      "source": "现状在 api/admin.py（待拆至 api/accounts.py）",
+      "at": [
+        0.85,
+        0.25
+      ],
+      "responsibility": "供应商账号 HTTP 路由：挂载 /api/v1/providers 与 /api/v1/accounts*，通过 ManagerDep 校验管理员权限，对外响应脱敏密钥末 4 位并附带实时冷却/异常状态。",
+      "methods": [
+        [
+          "+",
+          "GET /api/v1/providers · GET|POST /api/v1/accounts"
+        ],
+        [
+          "+",
+          "POST /api/v1/accounts/test · POST /api/v1/accounts/{id}/test"
+        ],
+        [
+          "+",
+          "PUT|DELETE /api/v1/accounts/{id} · enable | disable"
+        ]
+      ]
+    },
+    {
+      "id": "svc",
+      "kind": "class",
+      "name": "AccountService",
       "stereotype": "应用服务",
-      "responsibility": "管运营账号：开账号（给一次性临时密码，首次登录必须改密码并绑定双因素）、停用和启用、重置双因素、改角色。只有运营管理员能用。不能停用或降级最后一个可用的运营管理员。第一个账号由部署时的命令建，那时系统里还没有任何人能登录。",
-      "attributes": [],
+      "at": [
+        2.25,
+        1.9
+      ],
+      "responsibility": "供应商账号应用服务：校验格式与静态地址安全、加密保存密钥、删除前检查是否仍被线路引用；执行草稿测试与已存账号探测，更新余额与检查状态，恢复正常后调 RouteHealth.clear 解除网关侧异常。",
       "methods": [
         [
           "+",
-          "list() -> list[Operator]"
+          "list_accounts() · get(uuid) -> GwAccount"
         ],
         [
           "+",
-          "create(account, name, role, by) -> (Operator, str)"
+          "create · update · delete"
         ],
         [
           "+",
-          "disable(operator_uuid, by)"
-        ],
-        [
-          "+",
-          "enable(operator_uuid, by)"
-        ],
-        [
-          "+",
-          "reset_mfa(operator_uuid, by)"
-        ],
-        [
-          "+",
-          "set_role(operator_uuid, role, by)"
-        ],
-        [
-          "+",
-          "bootstrap(account, name) -> str"
+          "test_draft · probe · check_accounts() -> int"
         ]
-      ],
-      "at": [
-        0,
-        0
-      ],
-      "source": "无：新建"
+      ]
     },
     {
-      "id": "auth",
+      "id": "inp",
       "kind": "class",
-      "name": "OperatorAuth",
-      "stereotype": "应用服务",
-      "responsibility": "登录分两步：账号密码对了先发一个短时的挑战，再核对双因素验证码，通过才发会话。首次登录在第二步里绑定双因素、改掉临时密码。之后每个请求凭会话令牌解析出运营人员和角色（接口层的依赖调它）。连续失败会锁定账号。登录、失败、锁定都记审计。",
-      "attributes": [],
-      "methods": [
-        [
-          "+",
-          "login(account, password, ip) -> LoginChallenge"
-        ],
-        [
-          "+",
-          "verify(challenge, code, *, new_password) -> str"
-        ],
-        [
-          "+",
-          "resolve(token) -> OperatorPrincipal"
-        ],
-        [
-          "+",
-          "logout(token)"
-        ],
-        [
-          "+",
-          "change_password(principal, old, new)"
-        ]
-      ],
-      "at": [
-        2.5,
-        0
-      ],
-      "source": "无：新建"
-    },
-    {
-      "id": "audit",
-      "kind": "class",
-      "name": "AuditLog",
-      "stereotype": "应用服务",
-      "responsibility": "运营审计：每个写接口在接口层统一记一条「发起」（谁、什么时候、对哪个租户或系统、做什么），结果出来后补记。跨系统的操作（如关闭租户）结果要等很久，由租户领域在操作结束时补记。只追加，不改不删。",
-      "attributes": [],
-      "methods": [
-        [
-          "+",
-          "record(by, action, target, detail) -> UUID"
-        ],
-        [
-          "+",
-          "complete(audit_uuid, result)"
-        ],
-        [
-          "+",
-          "search(filter) -> list[AuditEntry]"
-        ]
-      ],
-      "at": [
-        5.6,
-        0
-      ],
-      "source": "无：新建"
-    },
-    {
-      "id": "oprepo",
-      "kind": "class",
-      "name": "OperatorRepository",
-      "stereotype": "仓储",
-      "responsibility": "读写 ops_operator。保存时按版本号 CAS。",
-      "attributes": [],
-      "methods": [
-        [
-          "+",
-          "get(operator_uuid) -> Operator"
-        ],
-        [
-          "+",
-          "by_account(account) -> Operator | None"
-        ],
-        [
-          "+",
-          "active_admins() -> int"
-        ],
-        [
-          "+",
-          "save(op)"
-        ]
-      ],
-      "at": [
-        1.25,
-        -1.7
-      ],
-      "source": "无：新建"
-    },
-    {
-      "id": "challenge",
-      "kind": "class",
-      "name": "LoginChallenge",
+      "name": "AccountInput",
       "stereotype": "值对象",
-      "responsibility": "密码对了之后、双因素之前的中间状态：签名的短时令牌（5 分钟），带上要不要首次绑定。不存库：过期就重新输密码。",
+      "at": [
+        -0.3,
+        2.75
+      ],
+      "responsibility": "新建或修改账号的输入参数：名称、供应商标识、各格式地址字典、明文密钥（更新时留空表示不改）、出网方式（direct / proxy）、首字超时与余额告警线。",
       "attributes": [
         [
           "+",
-          "operator_uuid: UUID"
+          "name · provider · endpoints: dict[Format, url]"
         ],
         [
           "+",
-          "needs_enrollment: bool"
-        ],
-        [
-          "+",
-          "expires_at: datetime"
+          "secret: str | None · egress: Egress"
         ]
-      ],
-      "methods": [],
-      "at": [
-        3.9,
-        -1.7
-      ],
-      "source": "无：新建"
+      ]
     },
     {
-      "id": "op",
+      "id": "cipher",
       "kind": "class",
-      "name": "Operator",
+      "name": "SecretCipher",
+      "stereotype": "防腐层",
+      "at": [
+        0.55,
+        3.85
+      ],
+      "responsibility": "基于主密钥列表（首把加密、全部可解，支持平滑轮换）对供应商 API Key 做认证加密，数据库不存明文凭据。",
+      "methods": [
+        [
+          "+",
+          "encrypt(plaintext) · decrypt(ciphertext)"
+        ]
+      ]
+    },
+    {
+      "id": "row",
+      "kind": "class",
+      "name": "GwAccount",
       "stereotype": "聚合根",
-      "responsibility": "一个运营账号：账号、名字、角色、状态、密码哈希、双因素、失败次数和锁定时间。核对密码时顺带计失败次数、到了就锁定；停用的账号什么都做不了。",
+      "at": [
+        2.25,
+        3.85
+      ],
+      "responsibility": "持久化在 gw_account 表中的供应商账号实体：保存加密密文 secret_cipher、末 4 位 secret_tail，以及最近查到的余额、检查时间与失败原因。",
       "attributes": [
         [
           "+",
-          "operator_uuid: UUID"
-        ],
-        [
-          "+",
-          "account: str"
-        ],
-        [
-          "+",
-          "name: str"
-        ],
-        [
-          "+",
-          "role: OperatorRole"
-        ],
-        [
-          "+",
-          "status: ACTIVE | DISABLED"
+          "uuid · tenant_uuid · name · provider · enabled"
         ],
         [
           "-",
-          "password_hash: str"
-        ],
-        [
-          "-",
-          "totp: TotpSecret | None"
-        ],
-        [
-          "-",
-          "failed_logins: int"
-        ],
-        [
-          "-",
-          "locked_until: datetime | None"
+          "secret_cipher · secret_tail"
         ],
         [
           "+",
-          "must_change_password: bool"
+          "balance · balance_alert · checked_at · check_error"
         ]
-      ],
-      "methods": [
-        [
-          "+",
-          "check_password(password, now) -> bool"
-        ],
-        [
-          "+",
-          "verify_totp(code, now) -> bool"
-        ],
-        [
-          "+",
-          "enroll(secret, code, now)"
-        ],
-        [
-          "+",
-          "reset_mfa()"
-        ]
-      ],
-      "at": [
-        2.5,
-        2.9
-      ],
-      "source": "无：新建"
+      ]
     },
     {
-      "id": "totp",
+      "id": "probe_res",
       "kind": "class",
-      "name": "TotpSecret",
+      "name": "ProbeResult",
       "stereotype": "值对象",
-      "responsibility": "双因素（TOTP，基于时间的一次性验证码）：密钥加密存储，加密密钥来自部署 Secret；验证码允许前后各一个时间窗，同一个验证码不能用两次。",
+      "at": [
+        3.95,
+        3.85
+      ],
+      "responsibility": "一次连接测试或巡检的结果：是否连通、错误说明、查到的余额（原币种）与上游返回的模型名列表。",
       "attributes": [
         [
-          "-",
-          "secret_encrypted: bytes"
-        ],
-        [
           "+",
-          "enrolled_at: datetime"
-        ],
-        [
-          "-",
-          "last_used_step: int"
+          "ok: bool · error: str · balance · models"
         ]
-      ],
+      ]
+    },
+    {
+      "id": "prov",
+      "kind": "class",
+      "name": "ProviderCatalog",
+      "external": true,
+      "source": "供应商共享包（provider）",
       "methods": [
         [
           "+",
-          "verify(code, now) -> bool"
+          "providers() · spec(provider) · dialect(provider)"
         ]
       ],
       "at": [
-        2.5,
-        5.55
-      ],
-      "source": "无：新建"
+        5.65,
+        0.25
+      ]
     },
     {
-      "id": "policy",
+      "id": "up",
       "kind": "class",
-      "name": "ActionPolicy",
-      "stereotype": "策略",
-      "responsibility": "运营角色能做什么，只有一条规则：运营观察员只能读；写操作、账号管理一律要运营管理员。每个接口在依赖里声明自己是读还是写。",
-      "attributes": [],
+      "name": "UpstreamClient · AddressGuard",
+      "external": true,
+      "source": "共享基础层（shared.upstream）",
       "methods": [
         [
           "+",
-          "require(principal, write: bool)"
+          "validate_static · check_proxy · request"
         ]
       ],
       "at": [
-        -0.4,
-        2.7
-      ],
-      "source": "无：新建"
+        5.65,
+        1.65
+      ]
     },
     {
-      "id": "principal",
+      "id": "health",
       "kind": "class",
-      "name": "OperatorPrincipal",
-      "stereotype": "值对象",
-      "responsibility": "一个请求的运营人员：uuid、名字、角色。随调用写进 OperatorStamp 带给业务系统。",
-      "attributes": [
-        [
-          "+",
-          "operator_uuid: UUID"
-        ],
-        [
-          "+",
-          "name: str"
-        ],
-        [
-          "+",
-          "role: OperatorRole"
-        ]
-      ],
-      "methods": [],
-      "at": [
-        0.95,
-        2.7
-      ],
-      "source": "无：新建"
-    },
-    {
-      "id": "role",
-      "kind": "enum",
-      "name": "OperatorRole",
-      "stereotype": "值对象",
-      "responsibility": "运营角色，只有两个。",
-      "attributes": [
-        [
-          "",
-          "ADMIN（运营管理员：全部运营操作）"
-        ],
-        [
-          "",
-          "OBSERVER（运营观察员：只读）"
-        ]
-      ],
-      "methods": [],
-      "at": [
-        0.95,
-        4.6
-      ],
-      "source": "无：新建"
-    },
-    {
-      "id": "sess",
-      "kind": "class",
-      "name": "LoginSession",
-      "stereotype": "实体",
-      "responsibility": "一次登录：只存令牌的哈希。空闲 30 分钟或登录满 12 小时失效；账号停用、重置双因素、改密码时，这个人的会话全部作废。",
-      "attributes": [
-        [
-          "+",
-          "session_uuid: UUID"
-        ],
-        [
-          "+",
-          "operator_uuid: UUID"
-        ],
-        [
-          "-",
-          "token_hash: str"
-        ],
-        [
-          "+",
-          "last_seen_at: datetime"
-        ],
-        [
-          "+",
-          "expires_at: datetime"
-        ]
-      ],
-      "methods": [],
-      "at": [
-        4.4,
-        3.3
-      ],
-      "source": "无：新建"
-    },
-    {
-      "id": "sessrepo",
-      "kind": "class",
-      "name": "SessionRepository",
-      "stereotype": "仓储",
-      "responsibility": "读写 ops_session：按令牌哈希查、续期、按人删光。",
-      "attributes": [],
+      "name": "RouteHealth",
+      "external": true,
+      "source": "共享基础层（shared.health）",
       "methods": [
         [
           "+",
-          "find(token_hash) -> LoginSession | None"
-        ],
-        [
-          "+",
-          "save(session)"
-        ],
-        [
-          "+",
-          "revoke_all(operator_uuid)"
+          "account_issue(uuid) · clear(uuid)"
         ]
       ],
       "at": [
-        4.4,
-        1.3
-      ],
-      "source": "无：新建"
+        5.65,
+        3.0
+      ]
     },
     {
-      "id": "entry",
+      "id": "notify",
       "kind": "class",
-      "name": "AuditEntry",
-      "stereotype": "实体",
-      "responsibility": "一条运营审计：谁、什么时候、做了什么、对哪个租户或系统、结果。detail 只放参数摘要，不放密码、临时密码、密钥、验证码。",
-      "attributes": [
-        [
-          "+",
-          "audit_uuid: UUID"
-        ],
-        [
-          "+",
-          "at: datetime"
-        ],
-        [
-          "+",
-          "operator_uuid: UUID | None"
-        ],
-        [
-          "+",
-          "action: str"
-        ],
-        [
-          "+",
-          "target: str"
-        ],
-        [
-          "+",
-          "tenant_uuid: UUID | None"
-        ],
-        [
-          "+",
-          "result: str | None"
-        ]
-      ],
-      "methods": [],
-      "at": [
-        5.9,
-        3.3
-      ],
-      "source": "无：新建"
-    },
-    {
-      "id": "auditrepo",
-      "kind": "class",
-      "name": "AuditRepository",
-      "stereotype": "仓储",
-      "responsibility": "ops_audit 只追加：插入、补记结果、按条件查；没有删除。",
-      "attributes": [],
+      "name": "ConfigNotifier · AuditLog",
+      "external": true,
+      "source": "跨领域基础（notify.py · audit.py）",
       "methods": [
         [
           "+",
-          "append(entry)"
-        ],
-        [
-          "+",
-          "complete(audit_uuid, result)"
-        ],
-        [
-          "+",
-          "search(filter) -> list[AuditEntry]"
+          "mark(tenant_changed=True) · record"
         ]
       ],
       "at": [
-        6.6,
-        1.3
-      ],
-      "source": "无：新建"
+        -2.15,
+        1.35
+      ]
     }
   ],
   "relationships": [
     {
-      "from": "admin",
-      "to": "oprepo",
+      "from": "callers",
+      "to": "router",
       "type": "uses",
-      "description": "读写账号"
+      "description": "HTTP 管理请求"
     },
     {
-      "from": "admin",
-      "to": "op",
+      "from": "callers",
+      "to": "svc",
       "type": "uses",
-      "description": "creates；停用、重置、改角色"
+      "description": "巡检与 CLI 直调",
+      "labelAt": 0.3
     },
     {
-      "from": "admin",
-      "to": "policy",
+      "from": "router",
+      "to": "svc",
       "type": "uses",
-      "description": "只给运营管理员"
+      "description": "委派业务处理"
     },
     {
-      "from": "auth",
-      "to": "oprepo",
+      "from": "router",
+      "to": "prov",
       "type": "uses",
-      "description": "按账号查，记失败次数"
+      "description": "列出预置供应商"
     },
     {
-      "from": "auth",
-      "to": "challenge",
+      "from": "svc",
+      "to": "inp",
       "type": "uses",
-      "description": "creates"
+      "description": "校验"
     },
     {
-      "from": "auth",
-      "to": "op",
+      "from": "svc",
+      "to": "cipher",
       "type": "uses",
-      "description": "核对密码和验证码"
+      "description": "加解密密钥"
     },
     {
-      "from": "auth",
-      "to": "principal",
-      "type": "uses",
-      "description": "解析出"
-    },
-    {
-      "from": "auth",
-      "to": "sessrepo",
-      "type": "uses",
-      "description": "存、查、续期、作废"
-    },
-    {
-      "from": "sessrepo",
-      "to": "sess",
-      "type": "uses",
-      "description": "读写"
-    },
-    {
-      "from": "policy",
-      "to": "principal",
-      "type": "uses",
-      "description": "按角色判"
-    },
-    {
-      "from": "principal",
-      "to": "role",
+      "from": "svc",
+      "to": "row",
       "type": "association",
-      "description": "角色"
+      "description": "读写 gw_account"
     },
     {
-      "from": "op",
-      "to": "role",
-      "type": "association",
-      "description": "角色"
-    },
-    {
-      "from": "op",
-      "to": "totp",
-      "type": "composition",
-      "description": "双因素",
-      "multiplicity": "0..1"
-    },
-    {
-      "from": "audit",
-      "to": "auditrepo",
+      "from": "svc",
+      "to": "probe_res",
       "type": "uses",
-      "description": "只追加"
+      "description": "返回探测结果"
     },
     {
-      "from": "auditrepo",
-      "to": "entry",
+      "from": "svc",
+      "to": "prov",
       "type": "uses",
-      "description": "读写"
+      "description": "取认证头与探测方式",
+      "labelAt": 0.55
+    },
+    {
+      "from": "svc",
+      "to": "up",
+      "type": "uses",
+      "description": "安全校验并发起探测"
+    },
+    {
+      "from": "svc",
+      "to": "health",
+      "type": "uses",
+      "description": "恢复正常后清除异常"
+    },
+    {
+      "from": "svc",
+      "to": "notify",
+      "type": "uses",
+      "description": "递增租户版本、记审计",
+      "labelAt": 0.25
     }
   ],
   "capabilities": [
     {
-      "name": "登录",
-      "entry": "login(account, password, ip) → verify(challenge, code)",
-      "callers": "运营控制台",
-      "description": "两步：密码对了发 5 分钟的挑战，验证码对了才发会话；首次登录在第二步里绑定双因素、改掉临时密码"
+      "name": "保存前草稿测试",
+      "entry": "POST /api/v1/accounts/test -> AccountService.test_draft",
+      "callers": "模型管理员",
+      "description": "不落库直接校验地址安全并实测上游连通性，返回可用余额与上游模型清单"
     },
     {
-      "name": "解析请求的运营人员",
-      "entry": "resolve(token)、ActionPolicy.require(principal, write)",
-      "callers": "运营服务所有接口（FastAPI 依赖）",
-      "description": "会话失效或账号停用 → 401；观察员调写接口 → 403"
+      "name": "账号 CRUD 与密钥轮换",
+      "entry": "/api/v1/accounts -> AccountService.create / update / delete",
+      "callers": "模型管理员、运维命令行",
+      "description": "加密密钥落库，存在关联线路时拒绝删除，提交后只递增本租户配置版本号"
     },
     {
-      "name": "管理运营账号",
-      "entry": "OperatorAdmin.create / disable / enable / reset_mfa / set_role",
-      "callers": "运营控制台（只给运营管理员）",
-      "description": "临时密码只在开账号的响应里出现一次；不能停用或降级最后一个运营管理员"
-    },
-    {
-      "name": "建第一个账号",
-      "entry": "bootstrap(account, name)",
-      "callers": "部署时的命令行",
-      "description": "只在还没有任何运营账号时可用"
-    },
-    {
-      "name": "记审计、查审计",
-      "entry": "AuditLog.record / complete / search",
-      "callers": "运营服务所有写接口（接口层统一记）、租户（操作结束补记）、运营控制台",
-      "description": "只追加；不记密码、临时密码、密钥、验证码"
+      "name": "异常账号自动巡检",
+      "entry": "AccountService.check_accounts",
+      "callers": "定时巡检（AccountCheck，每 5 分钟持 Redis 锁执行）",
+      "description": "按已配线路的模型类型（对话/向量/重排）实测或查余额，低于阈值打告警日志，恢复后解除网关异常标记"
     }
   ],
   "decisions": [
     {
-      "decision": "运营账号自己管，不放进用户中心",
-      "reason": "放进用户中心，就又出现了一种「不属于普通租户的特殊用户」，用户中心和各业务系统又要为它写特殊判断，和取消平台租户的方向相反。代价是多一套登录，但运营人员少、功能简单。"
+      "decision": "探测请求按账号下真实线路的 ModelKind 发送",
+      "reason": "纯向量或纯重排账号调用 /v1/messages 会报 400/404；从已配线路挑选真实模型名并按 Op.EMBEDDINGS / Op.RERANK / 对话发送最小探测，避免误判异常永不恢复。"
     },
     {
-      "decision": "必须双因素（TOTP），首次登录强制绑定；重置只能由另一个运营管理员做",
-      "reason": "运营账号人少、权限大：能停用、关闭租户。TOTP 不依赖短信、邮件这类外部服务，用手机上的验证器 App 就行。"
+      "decision": "不支持模型列表且未提供探测模型时拒绝假阳性",
+      "reason": "对于 list_models=False 且没有余额接口的供应商，若既无已配线路又未指定 test_model，直接返回明确提示而非空跑回 ok=True。"
     },
     {
-      "decision": "没有自助注册；第一个账号部署时用命令建；不能停用或降级最后一个运营管理员",
-      "reason": "开账号本身就是高权限操作，只能由已有的运营管理员做；保留至少一个运营管理员，避免把自己锁在门外后只能改库。"
-    },
-    {
-      "decision": "只有两个角色，写操作一律要运营管理员",
-      "reason": "运营中心能做的事不多，细分角色只会增加配错的机会；观察员用来给值班、排查的人看状态。"
-    },
-    {
-      "decision": "会话只存令牌哈希；空闲 30 分钟或满 12 小时失效；停用、重置双因素、改密码时作废这个人的全部会话",
-      "reason": "库被读到也拿不到能用的令牌；运营会话权限大，不该长期有效。"
-    },
-    {
-      "decision": "连续失败 5 次锁定 15 分钟",
-      "reason": "挡住对密码的暴力尝试；锁定是暂时的，不需要另一个运营管理员来解锁。"
-    },
-    {
-      "decision": "审计在接口层统一记，而不是让每个领域服务自己记",
-      "reason": "每个写接口都声明自己是写，依赖里统一记一条「发起」，新加接口不会忘记；跨系统的操作结果要等很久，由租户领域在操作结束时补记。业务系统那边也按 OperatorStamp 记一份，两边能对上。"
-    },
-    {
-      "decision": "审计只追加、不自动清理，不记任何秘密",
-      "reason": "审计是事后追责的依据，不能被改；密码、临时密码、密钥、验证码一旦进了审计，看审计的人就能拿到。"
+      "decision": "探测与网关转发共用同一套防 DNS 重绑定客户端",
+      "reason": "共用 shared.upstream 确保测试连接和实际调用执行完全一致的公网 IP 绑定与代理内网拦截。"
     }
   ],
-  "schemaNote": "主键约定：id 自增，只在库内使用；xxx_uuid 是逻辑主键，引用和接口都用它。不建外键约束，引用由代码维护，ER 图里的连线是逻辑引用。时间一律 UTC。ops_audit 只追加，操作人的名字在写入时存一份快照，账号停用后审计里照样看得懂。",
+  "schemaNote": "主键与租户约定：id 为库内自增主键；uuid 为对外与表间关联用的逻辑主键（Python 侧生成 UUIDv7），表间不建物理外键约束，由领域服务保证一致性。所有表均继承 TenantOwned（带 tenant_uuid），由 atlas_tenancy 在会话层自动附加当前租户过滤条件；每张表均含 created_at、updated_at（UTC timestamptz）。",
   "tables": [
     {
-      "name": "ops_operator",
-      "description": "对应聚合根 Operator（含值对象 TotpSecret）",
+      "name": "gw_account",
+      "description": "供应商账号凭据与巡检状态（对应聚合根 GwAccount）。同一租户内账号名称唯一。",
       "at": [
         0,
         0
@@ -681,272 +381,117 @@
           "description": "库内主键"
         },
         {
-          "name": "operator_uuid",
+          "name": "uuid",
           "type": "UUIDType",
           "key": "UK",
+          "default": "uuid7",
           "description": "逻辑主键"
-        },
-        {
-          "name": "account",
-          "type": "String(64)",
-          "description": "登录账号，唯一"
-        },
-        {
-          "name": "name",
-          "type": "String(64)"
-        },
-        {
-          "name": "role",
-          "type": "String(16)",
-          "description": "ADMIN | OBSERVER"
-        },
-        {
-          "name": "status",
-          "type": "String(16)",
-          "default": "ACTIVE",
-          "description": "ACTIVE | DISABLED"
-        },
-        {
-          "name": "password_hash",
-          "type": "String(255)",
-          "description": "argon2"
-        },
-        {
-          "name": "must_change_password",
-          "type": "Boolean",
-          "default": "true",
-          "description": "临时密码登录后必须改"
-        },
-        {
-          "name": "totp_secret",
-          "type": "LargeBinary",
-          "nullable": true,
-          "description": "加密后的 TOTP 密钥；未绑定或重置后为空"
-        },
-        {
-          "name": "totp_enrolled_at",
-          "type": "UTCDateTime",
-          "nullable": true
-        },
-        {
-          "name": "totp_last_step",
-          "type": "BigInteger",
-          "nullable": true,
-          "description": "最近用过的时间窗，防止同一个验证码用两次"
-        },
-        {
-          "name": "failed_logins",
-          "type": "Integer",
-          "default": "0"
-        },
-        {
-          "name": "locked_until",
-          "type": "UTCDateTime",
-          "nullable": true
-        },
-        {
-          "name": "version",
-          "type": "Integer",
-          "default": "0",
-          "description": "保存时 CAS"
-        },
-        {
-          "name": "created_at",
-          "type": "UTCDateTime",
-          "default": "now()"
-        },
-        {
-          "name": "updated_at",
-          "type": "UTCDateTime",
-          "default": "now()"
-        }
-      ],
-      "indexes": [
-        {
-          "name": "uk_ops_operator_uuid",
-          "columns": [
-            "operator_uuid"
-          ],
-          "unique": true
-        },
-        {
-          "name": "uk_ops_operator_account",
-          "columns": [
-            "account"
-          ],
-          "unique": true
-        }
-      ]
-    },
-    {
-      "name": "ops_session",
-      "description": "对应实体 LoginSession",
-      "at": [
-        1.6,
-        -0.9
-      ],
-      "columns": [
-        {
-          "name": "id",
-          "type": "BigInteger",
-          "key": "PK",
-          "default": "自增",
-          "description": "库内主键"
-        },
-        {
-          "name": "session_uuid",
-          "type": "UUIDType",
-          "key": "UK",
-          "description": "逻辑主键"
-        },
-        {
-          "name": "operator_uuid",
-          "type": "UUIDType",
-          "references": "ops_operator.operator_uuid"
-        },
-        {
-          "name": "token_hash",
-          "type": "String(64)",
-          "description": "会话令牌的 SHA-256；令牌本身只在登录响应里出现"
-        },
-        {
-          "name": "ip",
-          "type": "String(64)",
-          "nullable": true
-        },
-        {
-          "name": "created_at",
-          "type": "UTCDateTime",
-          "default": "now()"
-        },
-        {
-          "name": "last_seen_at",
-          "type": "UTCDateTime",
-          "description": "空闲超时按它算"
-        },
-        {
-          "name": "expires_at",
-          "type": "UTCDateTime",
-          "description": "登录满 12 小时"
-        }
-      ],
-      "indexes": [
-        {
-          "name": "uk_ops_session_uuid",
-          "columns": [
-            "session_uuid"
-          ],
-          "unique": true
-        },
-        {
-          "name": "uk_ops_session_token",
-          "columns": [
-            "token_hash"
-          ],
-          "unique": true
-        },
-        {
-          "name": "ix_ops_session_operator",
-          "columns": [
-            "operator_uuid"
-          ],
-          "description": "作废一个人的全部会话"
-        }
-      ]
-    },
-    {
-      "name": "ops_audit",
-      "description": "对应实体 AuditEntry，只追加",
-      "at": [
-        1.6,
-        1.2
-      ],
-      "columns": [
-        {
-          "name": "id",
-          "type": "BigInteger",
-          "key": "PK",
-          "default": "自增",
-          "description": "库内主键"
-        },
-        {
-          "name": "audit_uuid",
-          "type": "UUIDType",
-          "key": "UK",
-          "description": "逻辑主键；也随 OperatorStamp 带给业务系统"
-        },
-        {
-          "name": "at",
-          "type": "UTCDateTime",
-          "default": "now()"
-        },
-        {
-          "name": "operator_uuid",
-          "type": "UUIDType",
-          "nullable": true,
-          "references": "ops_operator.operator_uuid",
-          "referenceOptional": true,
-          "description": "后台任务自动发起时为空（如到期停用）"
-        },
-        {
-          "name": "operator_name",
-          "type": "String(64)",
-          "nullable": true,
-          "description": "写入时的名字快照"
-        },
-        {
-          "name": "action",
-          "type": "String(64)",
-          "description": "如 tenant.close、quota.set、operator.reset_mfa、login.failed"
-        },
-        {
-          "name": "target",
-          "type": "String(128)",
-          "description": "对象：系统编码、模板编码、运营账号等"
         },
         {
           "name": "tenant_uuid",
           "type": "UUIDType",
-          "nullable": true,
-          "description": "涉及的租户"
+          "description": "所属租户"
         },
         {
-          "name": "detail",
+          "name": "name",
+          "type": "String(100)",
+          "description": "账号名称（租户内唯一）"
+        },
+        {
+          "name": "provider",
+          "type": "String(64)",
+          "description": "供应商标识"
+        },
+        {
+          "name": "endpoints",
           "type": "JSONType",
-          "description": "参数摘要，不含任何秘密"
+          "description": "按格式登记的入口地址 {format: url}"
         },
         {
-          "name": "result",
-          "type": "String(16)",
+          "name": "secret_cipher",
+          "type": "Text",
           "nullable": true,
-          "description": "OK | FAILED；跨系统的操作结束后补记"
+          "description": "SecretCipher 加密后的密钥密文"
         },
         {
-          "name": "finished_at",
+          "name": "secret_tail",
+          "type": "String(8)",
+          "description": "密钥末 4 位（仅展示）"
+        },
+        {
+          "name": "egress",
+          "type": "String(16)",
+          "default": "'direct'",
+          "description": "direct / proxy"
+        },
+        {
+          "name": "first_content_timeout_s",
+          "type": "Integer",
+          "nullable": true,
+          "description": "首字超时秒数（空用默认）"
+        },
+        {
+          "name": "balance_alert",
+          "type": "Numeric(18,4)",
+          "nullable": true,
+          "description": "余额告警阈值"
+        },
+        {
+          "name": "enabled",
+          "type": "Boolean",
+          "default": "true",
+          "description": "是否启用"
+        },
+        {
+          "name": "balance",
+          "type": "Numeric(18,4)",
+          "nullable": true,
+          "description": "最近查到的余额"
+        },
+        {
+          "name": "balance_at",
           "type": "UTCDateTime",
-          "nullable": true
+          "nullable": true,
+          "description": "查余额时间"
+        },
+        {
+          "name": "checked_at",
+          "type": "UTCDateTime",
+          "nullable": true,
+          "description": "最近探测时间"
+        },
+        {
+          "name": "check_error",
+          "type": "Text",
+          "default": "''",
+          "description": "探测失败原因（成功为空）"
+        },
+        {
+          "name": "remark",
+          "type": "Text",
+          "default": "''",
+          "description": "备注"
+        },
+        {
+          "name": "created_by",
+          "type": "String(64)",
+          "description": "创建人"
+        },
+        {
+          "name": "updated_by",
+          "type": "String(64)",
+          "description": "最后修改人"
         }
       ],
       "indexes": [
         {
-          "name": "uk_ops_audit_uuid",
-          "columns": [
-            "audit_uuid"
-          ],
-          "unique": true
-        },
-        {
-          "name": "ix_ops_audit_at",
-          "columns": [
-            "at"
-          ]
-        },
-        {
-          "name": "ix_ops_audit_tenant",
+          "name": "uq_gw_account_tenant_uuid_name",
           "columns": [
             "tenant_uuid",
-            "at"
-          ]
+            "name"
+          ],
+          "unique": true,
+          "description": "同租户内账号不重名"
         }
       ]
     }

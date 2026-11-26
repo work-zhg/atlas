@@ -87,7 +87,7 @@
       "kind": "system",
       "name": "上游服务",
       "color": "#5b6770",
-      "description": "已有的远程 MCP Server，以及被转换成工具的 REST API、gRPC 服务，例如 SerpApi 搜索。",
+      "description": "已有的远程 MCP Server，以及被转换成工具的 REST API、gRPC 服务，例如 SerpApi 搜索；平台自己的服务（例如知识库）也作为上游登记成平台服务。",
       "at": [
         4.4,
         3.9
@@ -131,7 +131,7 @@
       "kind": "component",
       "name": "维护任务",
       "technology": "atlas_jobs 实例任务",
-      "description": "每分钟在系统范围里领一次到期的 MCP 代理（租约，跨租户），逐个进入服务所属的租户重新拉定义；停用的租户跳过。",
+      "description": "每分钟在系统范围里领一次到期的 MCP 代理（租约，跨租户），逐个进入服务所属的租户重新拉定义。",
       "at": [
         1.6,
         5.1
@@ -142,7 +142,7 @@
       "kind": "component",
       "name": "工具调用",
       "technology": "Python 模块 + OpenTelemetry",
-      "description": "准入（认 Key → 它所在租户里的服务 → 判权），列工具，调工具：校验参数、交给上游接入、错误协议、身份传递和 Trace。",
+      "description": "准入（认 Key → 它所在租户里的服务 → 判权），列工具，调工具：校验参数、交给上游接入、错误协议、身份传递（按谁判取 Atlas 签发的身份凭据）和 Trace。",
       "at": [
         2.9,
         2.6
@@ -153,7 +153,7 @@
       "kind": "component",
       "name": "服务目录",
       "technology": "SQLAlchemy 异步",
-      "description": "服务和工具的登记、修改、停用（服务名租户内唯一），MCP 代理的定义同步和定义指纹；发目录事件。",
+      "description": "服务和工具的登记、修改、停用（服务名租户内唯一；平台服务部署时登记、所有租户可见），MCP 代理的定义同步和定义指纹；发目录事件。",
       "at": [
         1.5,
         3.9
@@ -164,7 +164,7 @@
       "kind": "component",
       "name": "上游接入",
       "technology": "httpx + FastMCP 客户端 + grpcio",
-      "description": "MCP 代理、REST 转换、gRPC 转换的发现与调用；注入上游凭据，OAuth2 Token 和连接复用；租户填的地址不能指向平台内部。",
+      "description": "MCP 代理、REST 转换、gRPC 转换的发现与调用；注入上游凭据，OAuth2 Token 和连接复用；租户填的地址不能指向平台内部（平台服务除外）。",
       "at": [
         2.95,
         3.9

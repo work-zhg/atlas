@@ -30,46 +30,46 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：模型平台 - 模型网关 - 线路",
-  "description": "目标领域模型，只画期望的样子。按会话选线路、冷却和账号异常、上游失败的判断；本领域没有自己的表（线路登记在管理平台，状态在网关状态），领域总览见 code-gateway-domains.html",
+  "description": "会话一致性粘滞选路与无会话加权随机分流、全冷却半开单飞探测保护，以及按失败种类的冷却与账号异常标记；领域总览见 code-gateway-domains.html。",
   "component": "线路",
-  "package": "atlas_modelgateway.gateway.routing（目标模型）",
-  "overview": "线路回答「这一次走哪个账号的哪个上游模型」和「失败了换不换」。一个模型可以挂几条线路，每条有优先级和权重；同一个会话尽量一直走同一条，缓存才命中。\n\n上游失败时它按失败的种类（由供应商方言归好）决定：换不换、这条线路冷却多久、要不要把整个账号标异常。冷却和异常放在网关状态里，所有网关实例共用；账号恢复由管理平台检查后解除。它只在一个模型的线路之间换，不会换成别的模型。",
+  "package": "atlas_modelgateway.gateway.routing",
+  "overview": "线路领域决定「这次尝试走哪条线路」以及「提交点前失败后如何处置」。\n\n选路按优先级分组从高到低挑选：携带会话标识（X-Session-Id 或个人 Key）时按加权 Rendezvous 一致性哈希固定落点以最大化提示词缓存命中率；不带会话标识的客户端批量调用、向量与重排请求则按权重随机抽样（weighted_order），避免整把客户端 Key 的并发流量死钉在单条线路上。若所有可用线路都在冷却期，仅放行拿到半开单飞锁（RouteHealth.try_acquire_probe，5 秒窗口）的单个请求去试探冷却最早结束的线路，其余并发请求立即快速失败回 429 MODEL_BUSY + Retry-After，保护刚被限流的上游不被并发击穿。",
   "elements": [
     {
       "id": "inv",
       "kind": "class",
-      "name": "AttemptLoop",
-      "at": [
-        1.4,
-        -1.2
-      ],
+      "name": "Invocation",
+      "external": true,
+      "source": "调用编排领域（gateway/invocation.py）",
       "methods": [
         [
           "+",
-          "pick · report"
-        ],
-        [
-          "+",
-          "线路来自准入的 Grant"
+          "pick · report · min_cooling_remaining"
         ]
       ],
-      "external": true,
-      "source": "调用编排领域"
+      "at": [
+        1.5,
+        -1.2
+      ]
     },
     {
       "id": "sel",
       "kind": "class",
       "name": "RouteSelector",
+      "stereotype": "应用服务",
       "at": [
-        1.4,
+        1.5,
         0.3
       ],
-      "stereotype": "应用服务",
-      "responsibility": "选线路和换不换的判断。pick：收调用编排给的这个模型的线路（来自准入的 Grant），按优先级分组，从数字小的组开始，组里按会话落点排序，跳过停用、账号异常、冷却中和这次已经试过的；整组都不行就下一组；全部都在冷却时选冷却最早结束的那条；全部异常或停用就返回空，由调用编排报「没有可用线路」。report：把上游失败交给 FailurePolicy，按结论冷却线路或标账号异常。",
+      "responsibility": "选路与故障汇报服务：按优先级分组，sticky=True 调 rank 粘滞排序、sticky=False 调 weighted_order 加权随机排序；跳过停用、账号异常、冷却中与已尝试线路；全冷却时经 try_acquire_probe 控制半开单飞探测；report 按策略冷却线路或标记账号异常。",
       "methods": [
         [
           "+",
-          "pick(routes, session_key, *, tried) -> Route | None"
+          "pick(routes, session_key, *, tried, sticky=True) -> Route | None"
+        ],
+        [
+          "+",
+          "min_cooling_remaining(routes) -> float | None"
         ],
         [
           "+",
@@ -81,33 +81,37 @@
       "id": "sticky",
       "kind": "class",
       "name": "StickyPlacement",
-      "at": [
-        -0.4,
-        2.0
-      ],
       "stereotype": "策略",
-      "responsibility": "加权的一致性哈希（rendezvous）：每条线路用「会话标识 + 线路 id」算一个分数，权重越大分数越容易高，分数最高的就是这个会话的落点，后面的是落点不可用时的顺序。同一会话每一轮都落在同一条线路上，缓存才能命中；线路增减时只有落在变动线路上的会话会挪。不带会话标识的按 Key 算。",
+      "at": [
+        -0.35,
+        2.05
+      ],
+      "responsibility": "双模式分流算法：rank 使用 -ln(u)/weight 加权一致性哈希，保证同一会话跨实例落点稳定；weighted_order 使用无放回加权随机排序，让无会话客户端请求按真实权重比均匀分摊。",
       "methods": [
         [
           "+",
           "rank(session_key, routes) -> list[Route]"
+        ],
+        [
+          "+",
+          "weighted_order(routes) -> list[Route]"
         ]
       ]
     },
     {
-      "id": "fail",
+      "id": "pol",
       "kind": "class",
       "name": "FailurePolicy",
-      "at": [
-        1.4,
-        2.0
-      ],
       "stereotype": "策略",
-      "responsibility": "按失败的种类决定，不看状态码（种类由供应商方言归好，同一个状态码在不同供应商那里意思不同）：请求有误不换；限流换、线路冷却（供应商说了多久就多久，没说 60 秒）；过载、服务出错、连不上、等不到第一段内容换、线路冷却 60 秒；密钥失效、余额不足换、把整个账号标异常。",
+      "at": [
+        1.5,
+        2.05
+      ],
+      "responsibility": "只看方言归类后的 FailureKind 决策：BAD_REQUEST 不切换；RATE_LIMITED 按 Retry-After（默认 60s）冷却线路并切换；OVERLOADED / SERVER_ERROR / TIMEOUT / NETWORK 冷却 60s 并切换；AUTH_FAILED / NO_BALANCE 将整个账号标异常并切换。",
       "methods": [
         [
           "+",
-          "verdict(failure) -> Verdict"
+          "verdict(failure: UpstreamFailure) -> Verdict"
         ]
       ]
     },
@@ -115,20 +119,16 @@
       "id": "verdict",
       "kind": "class",
       "name": "Verdict",
-      "at": [
-        1.4,
-        3.6
-      ],
       "stereotype": "值对象",
-      "responsibility": "换不换、这条线路冷却多久、要不要把账号标异常及原因。",
+      "at": [
+        1.5,
+        3.7
+      ],
+      "responsibility": "一次上游失败的处置结论：是否继续切换下一条线路、线路冷却秒数，以及是否要把整个供应商账号标记为异常。",
       "attributes": [
         [
           "+",
-          "switch: bool"
-        ],
-        [
-          "+",
-          "cool_route_s | None"
+          "switch: bool · cool_route_s: float | None"
         ],
         [
           "+",
@@ -137,96 +137,59 @@
       ]
     },
     {
-      "id": "issue",
-      "kind": "enum",
-      "name": "AccountIssue",
-      "at": [
-        3.2,
-        3.6
-      ],
-      "stereotype": "值对象",
-      "responsibility": "账号异常的原因和开始时间：密钥失效或余额不足。管理平台据此决定怎么检查（查余额，或发一个 1 token 的请求）。",
-      "attributes": [
-        [
-          "",
-          "AUTH_FAILED · NO_BALANCE"
-        ],
-        [
-          "+",
-          "since"
-        ]
-      ]
-    },
-    {
       "id": "health",
       "kind": "class",
-      "name": "RouteHealth",
-      "at": [
-        3.2,
-        2.0
-      ],
-      "stereotype": "仓储",
-      "responsibility": "线路冷却、账号异常存在网关状态里，所有网关实例共用：一个实例撞上限流，别的实例马上知道。冷却到期自动失效；账号异常由管理平台检查恢复后 clear。网关状态不可用时退回进程内存，每个实例各记各的。",
+      "name": "RouteHealth · AccountIssue",
+      "external": true,
+      "source": "共享基础层（shared.health，管理面与网关共用）",
       "methods": [
         [
           "+",
-          "cooling_until(route_uuid)"
+          "cooling_until · cool · try_acquire_probe"
         ],
         [
           "+",
-          "cool(route_uuid, seconds)"
-        ],
-        [
-          "+",
-          "account_issue(account_uuid)"
-        ],
-        [
-          "+",
-          "mark(account_uuid, issue) · clear(account_uuid)"
+          "account_issue · mark · clear"
         ]
+      ],
+      "at": [
+        4.3,
+        2.05
       ]
     },
     {
-      "id": "probe",
+      "id": "probe_ext",
       "kind": "class",
-      "name": "异常账号检查",
-      "at": [
-        4.9,
-        1.5
-      ],
+      "name": "AccountService.check_accounts",
+      "external": true,
+      "source": "管理平台定时巡检（accounts.py）",
       "methods": [
         [
           "+",
-          "列出异常账号，恢复了就 clear"
+          "探测恢复后调 RouteHealth.clear"
         ]
       ],
-      "external": true,
-      "source": "管理平台（每 5 分钟）"
+      "at": [
+        4.3,
+        0.3
+      ]
     },
     {
       "id": "kernel",
       "kind": "class",
       "name": "Route · UpstreamFailure",
-      "at": [
-        -2.0,
-        0.3
-      ],
+      "external": true,
+      "source": "共享基础层（shared.kernel）",
       "attributes": [
         [
           "+",
-          "route：账号、各格式的地址、上游模型、优先级、权重"
-        ],
-        [
-          "+",
-          "failure.kind：请求有误 · 限流 · 过载 · 密钥失效 · 余额不足"
-        ],
-        [
-          "+",
-          "failure：Retry-After、是否提交前、原始状态码（只记录）"
+          "FailureKind: BAD_REQUEST · RATE_LIMITED · OVERLOADED · AUTH_FAILED · NO_BALANCE"
         ]
       ],
-      "external": true,
-      "source": "共享内核"
+      "at": [
+        -2.0,
+        0.3
+      ]
     }
   ],
   "relationships": [
@@ -240,104 +203,61 @@
       "from": "sel",
       "to": "sticky",
       "type": "uses",
-      "description": "排序"
+      "description": "粘滞或加权随机排序"
     },
     {
       "from": "sel",
-      "to": "fail",
+      "to": "pol",
       "type": "uses",
-      "description": "判断"
+      "description": "判定失败处置"
+    },
+    {
+      "from": "pol",
+      "to": "verdict",
+      "type": "uses",
+      "description": "构造"
     },
     {
       "from": "sel",
       "to": "health",
       "type": "uses",
-      "description": "读、写状态"
+      "description": "读写冷却、半开锁与异常"
+    },
+    {
+      "from": "probe_ext",
+      "to": "health",
+      "type": "uses",
+      "description": "恢复后清除异常"
     },
     {
       "from": "sel",
       "to": "kernel",
       "type": "uses",
-      "description": "产出 Route，收 UpstreamFailure"
-    },
-    {
-      "from": "fail",
-      "to": "verdict",
-      "type": "uses",
-      "description": "creates"
-    },
-    {
-      "from": "verdict",
-      "to": "issue",
-      "type": "association",
-      "description": "account_issue"
-    },
-    {
-      "from": "health",
-      "to": "issue",
-      "type": "uses",
-      "description": "存",
-      "labelAt": 0.5
-    },
-    {
-      "from": "probe",
-      "to": "health",
-      "type": "uses",
-      "description": "clear"
+      "description": "输入线路与失败对象"
     }
   ],
   "capabilities": [
     {
-      "name": "选线路",
-      "entry": "pick(routes, session_key, *, tried)",
+      "name": "会话粘滞与无状态加权选路",
+      "entry": "RouteSelector.pick",
       "callers": "调用编排（每次尝试）",
-      "description": "返回 Route；全部异常或停用返回空，调用编排报「没有可用线路」（503），不打到供应商"
+      "description": "多轮对话保缓存命中，无会话批量请求按权重均衡负载，全冷却时半开单飞防击穿"
     },
     {
-      "name": "报告失败",
-      "entry": "report(route, failure)",
-      "callers": "调用编排（提交点之前的失败）",
-      "description": "返回 Verdict：换不换；同时按结论冷却线路或标账号异常"
-    },
-    {
-      "name": "解除账号异常",
-      "entry": "RouteHealth.clear(account_uuid)",
-      "callers": "管理平台（检查到账号恢复）",
-      "description": "管理平台和网关用同一个包里的 RouteHealth，键的格式只有一份"
+      "name": "故障隔离与快速切换",
+      "entry": "RouteSelector.report",
+      "callers": "调用编排（提交点前失败）",
+      "description": "区分单线路瞬时拥塞（冷却线路）与账号级故障（拉黑整个账号等待管理面巡检恢复）"
     }
   ],
   "decisions": [
     {
-      "decision": "分配的单位是会话，不是请求",
-      "reason": "智能体每一轮都带着前面几万字的对话，缓存只在同一个账号里有效；随机分配会让这部分按原价重算，一次调用贵 5 倍多。"
+      "decision": "有会话粘滞、无会话加权随机分流",
+      "reason": "以前没传会话头时退化为固定按 key_uuid 哈希，导致同一个后台服务的数百并发全部压在单条线路上；改为 sticky=False 走加权随机后权重配置真正生效。"
     },
     {
-      "decision": "一致性哈希，不存「会话 → 线路」",
-      "reason": "几个网关实例算出来的落点一样，不用共享一张粘滞表；线路增减只挪落在变动线路上的会话。"
-    },
-    {
-      "decision": "按失败的种类判断，不按状态码",
-      "reason": "OpenAI 额度用完回的是 429（insufficient_quota），按状态码会当成限流，每分钟冷却一次再撞一次；由供应商方言先归成「余额不足」，这里只认种类，各家的差异不会漏进线路领域。"
-    },
-    {
-      "decision": "冷却按线路，异常按账号",
-      "reason": "限流、过载往往只是这个上游模型忙；密钥失效、余额不足是账号本身的问题，这个账号下的所有线路都该一起跳过。"
-    },
-    {
-      "decision": "状态在几个实例之间共用",
-      "reason": "每个实例各记各的话，一次限流要每个实例各撞一遍，供应商那边会把账号限得更狠。"
-    },
-    {
-      "decision": "全部冷却时试冷却最早结束的那条",
-      "reason": "冷却时长是估的，直接拒绝不如再试一次；全部异常（密钥、余额）就不试了，那是要人处理的事。"
-    },
-    {
-      "decision": "只在一个模型的线路之间换",
-      "reason": "换成别的模型，能力和价格都会变，调用方不知道；要不要换模型由调用方决定（界面提示「换个模型」）。"
-    },
-    {
-      "decision": "恢复由管理平台检查，网关只标记",
-      "reason": "检查要查余额或发真实请求，放在一个地方做（管理平台本来就有「测试连接」），网关的调用路径上不做探测。"
+      "decision": "全冷却时引入 try_acquire_probe 半开单飞锁",
+      "reason": "所有线路冷却期间若把成百上千并发全部放行到最早到期线路，会把正在恢复的供应商彻底打死；每 5 秒只放 1 个探测请求，其余立即回 429 + Retry-After。"
     }
   ]
 }

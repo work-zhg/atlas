@@ -124,7 +124,7 @@
       "description": "提交一轮（经 HTTP 接口和 Run 执行器）",
       "technology": "JSON/HTTPS",
       "details": {
-        "note": "同 dynamic-run.html 的 1–9 步。CLI 运行时先照常组装本轮能力：MCP 服务的网关地址和智能体的 Key、知识库的签名令牌、模型网关地址和智能体的模型 Key——都是真实的。"
+        "note": "同 dynamic-run.html 的 1–9 步。CLI 运行时先照常组装本轮能力：MCP 服务（含知识库）的网关地址、智能体的 Key 和身份凭据、模型网关地址和智能体的模型 Key——都是真实的。"
       }
     },
     {
@@ -154,7 +154,7 @@
           [
             "上游",
             "本轮能力",
-            "m1 → 模型网关地址 + 智能体的模型 Key；s1 → MCP 网关上的 serpapi + 智能体的 MCP Key + 使用者；k1 → 知识库 /mcp + 签名令牌"
+            "m1 → 模型网关地址 + 智能体的模型 Key；s1 → MCP 网关上的 serpapi + 智能体的 MCP Key + 使用者；k1 → MCP 网关上的 knowledge + 智能体的 MCP Key + 身份凭据"
           ],
           [
             "启动参数",

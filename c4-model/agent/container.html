@@ -75,7 +75,7 @@
         4.2
       ],
       "name": "MCP 网关",
-      "description": "统一接入 MCP 服务和外部 API，如 SerpApi 搜索，按 Key 授权。"
+      "description": "统一接入 MCP 服务和外部 API，如 SerpApi 搜索、平台的知识库检索，按 Key 授权。"
     },
     {
       "id": "skill",
@@ -409,13 +409,7 @@
     {
       "from": "acp",
       "to": "mcp",
-      "description": "调用 MCP 工具",
-      "technology": "MCP/HTTP"
-    },
-    {
-      "from": "acp",
-      "to": "knowledge",
-      "description": "检索知识库",
+      "description": "调用 MCP 工具，含知识库检索（智能体的 Key 和身份凭据）",
       "technology": "MCP/HTTP"
     },
     {
@@ -472,7 +466,7 @@
     {
       "from": "localcli",
       "to": "devicegw",
-      "description": "调模型、MCP、知识库（会话令牌）",
+      "description": "调模型、MCP 和知识库（会话令牌）",
       "technology": "HTTPS",
       "labelAt": 0.3
     },
@@ -485,13 +479,7 @@
     {
       "from": "devicegw",
       "to": "mcp",
-      "description": "换上智能体的 Key，转发 MCP 调用",
-      "technology": "MCP/HTTP"
-    },
-    {
-      "from": "devicegw",
-      "to": "knowledge",
-      "description": "换上知识库令牌，转发检索",
+      "description": "换上智能体的 Key 和身份凭据，转发 MCP 调用（含知识库）",
       "technology": "MCP/HTTP"
     },
     {
@@ -527,7 +515,7 @@
     {
       "from": "ops",
       "to": "server",
-      "description": "维护沙箱模板、系统参数和租户份额，查看用量；停用时挂起 run、回收沙箱；关闭时删除租户数据",
+      "description": "维护沙箱模板、系统参数和租户份额，查看用量；开通时创建（记份额），关闭时删除租户数据",
       "technology": "JSON/HTTP（运营接口，签名）"
     }
   ]

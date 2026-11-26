@@ -29,501 +29,326 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "代码图：模型平台 - 管理平台 - 模型目录",
-  "description": "目标领域模型，只画期望的样子。模型的登记、纳入、修改、删除，平台记录和 LiteLLM 部署的合并；领域总览见 code-domains.html",
-  "component": "模型目录",
-  "package": "atlas_modelgateway.catalog（目标模型）",
-  "overview": "模型目录管「平台上有哪些模型」。管理员登记模型时，平台只记基本信息（模型名、显示名、供应商、公有私有、描述），地址、供应商凭据、规格价格直接交给 LiteLLM。列表按模型名把平台记录和 LiteLLM 里的部署合起来：平台登记的能放进 Key，LiteLLM 里直接配的只读、可以纳入，平台登记了 LiteLLM 里却没了的标「缺失」。\n\n它不管谁能用私有模型（授权），不管 Key 分配了什么（API Key），也不直接调 LiteLLM 的 HTTP 接口（LiteLLM 接入）。改动后发模型事件，由授权和 API Key 各自跟着改。",
+  "title": "代码图：模型平台 - 管理平台 - 模型与线路",
+  "description": "目标模型：模型与线路功能组件（内聚统一的 /api/v1/models 路由与 ModelRegistry），消除管理端与内部应用的重复模型目录接口；领域总览见 code-domains.html。",
+  "component": "模型与线路",
+  "package": "atlas_modelgateway.registry",
+  "overview": "模型与线路组件管理租户对外暴露的模型、能力承诺、统一单价与多账号优先级/权重线路，并通过单一的 /api/v1/models* 功能接口对外服务。\n\n模型目录查询 GET /api/v1/models 不再按调用方拆成两套接口，而是根据入站调用主体返回对应投影：模型管理员看到全部模型、线路与冷却状态；普通员工看到自己可选的公有及已获授权私有模型；受信任内部应用（携带 X-Caller-App）看到本租户全部已启用可调用的模型与能力规格。保存线路时调用 PresetRules 强制校验每条线路都能兑现模型承诺的能力，确保故障切换时能力不缩水。",
   "elements": [
-    {
-      "id": "cat",
-      "kind": "class",
-      "name": "ModelCatalog",
-      "stereotype": "应用服务",
-      "at": [
-        1.6,
-        0.35
-      ],
-      "responsibility": "模型目录的唯一入口：供应商列表、合并列表、能放进 Key 的模型；登记前测试连接，登记、纳入、修改、重新登记、删除。地址、凭据、规格价格只交给 LiteLLM。改动后发模型事件，用户中心和 Key 由别的领域去改。写操作记操作日志。",
-      "methods": [
-        [
-          "+",
-          "providers() · listing(*, fresh) -> (views, reachable)"
-        ],
-        [
-          "+",
-          "callable() -> dict[模型名, Model]"
-        ],
-        [
-          "+",
-          "test_connection(name, provider, route)"
-        ],
-        [
-          "+",
-          "register(name, fields, route, *, actor) · adopt(…)"
-        ],
-        [
-          "+",
-          "update(model, fields, route?, *, actor)"
-        ],
-        [
-          "+",
-          "reregister(model, provider, route, *, actor) · delete"
-        ],
-        [
-          "+",
-          "get(uuid) · by_name(name)"
-        ]
-      ]
-    },
-    {
-      "id": "model",
-      "kind": "class",
-      "name": "Model",
-      "stereotype": "聚合根",
-      "at": [
-        2.25,
-        4.1
-      ],
-      "responsibility": "平台登记的一个模型，只存基本信息。模型名同时是 LiteLLM 的 model_name、应用调用时传的 model、用户中心里的数据标识，所以不能改、不能重名。litellm_model_id 是平台在 LiteLLM 里建的部署（= 本行 uuid）；为空表示纳入的 LiteLLM 直配模型，平台不改它在 LiteLLM 里的配置。",
-      "attributes": [
-        [
-          "+",
-          "name（不能改）· display_name · description"
-        ],
-        [
-          "+",
-          "provider: Provider · visibility: Visibility"
-        ],
-        [
-          "+",
-          "litellm_model_id: str | None"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "managed -> bool  # 平台建的部署"
-        ],
-        [
-          "+",
-          "change(fields) -> visibility_changed"
-        ]
-      ]
-    },
-    {
-      "id": "view",
-      "kind": "class",
-      "name": "ModelView",
-      "stereotype": "值对象",
-      "at": [
-        0.85,
-        2.45
-      ],
-      "responsibility": "合并列表的一行：平台记录（可能没有，是 LiteLLM 直配的）+ LiteLLM 里同名的部署（可能没有，是「缺失」，也可能有好几个）。能放进 Key 的 = 平台登记的、LiteLLM 里存在的；LiteLLM 不可达时状态未知，按存在处理。",
-      "attributes": [
-        [
-          "+",
-          "name · model: Model | None"
-        ],
-        [
-          "+",
-          "deployments · unknown"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "source · missing · callable · primary"
-        ]
-      ]
-    },
-    {
-      "id": "provider",
-      "kind": "enum",
-      "name": "Provider",
-      "stereotype": "值对象",
-      "at": [
-        1.45,
-        5.75
-      ],
-      "responsibility": "供应商 = LiteLLM 的 custom_llm_provider，决定登记时要不要填 API 地址、能不能不填凭据。",
-      "attributes": [
-        [
-          "",
-          "deepseek · anthropic · openai"
-        ],
-        [
-          "",
-          "dashscope · volcengine · moonshot"
-        ],
-        [
-          "",
-          "azure（要填地址）"
-        ],
-        [
-          "",
-          "hosted_vllm（要填地址，可不填凭据）"
-        ]
-      ]
-    },
-    {
-      "id": "visibility",
-      "kind": "enum",
-      "name": "Visibility",
-      "stereotype": "值对象",
-      "at": [
-        3.1,
-        5.75
-      ],
-      "responsibility": "公有：谁都能选进自己的用户 Key，不判权；私有：授权给本人或所在部门后才能选。客户端 Key 由管理员分配，不看它。新登记的默认私有。",
-      "attributes": [
-        [
-          "",
-          "public：谁都能选"
-        ],
-        [
-          "",
-          "private：授权后才能选"
-        ]
-      ]
-    },
-    {
-      "id": "route",
-      "kind": "class",
-      "name": "RouteSpec",
-      "stereotype": "值对象",
-      "at": [
-        -0.6,
-        2.45
-      ],
-      "responsibility": "只交给 LiteLLM、不落平台库的部分：API 地址、供应商凭据、规格（上下文窗口、最大输出）、价格（美元 / 百万 token）。编辑时凭据不填 = 不改。",
-      "attributes": [
-        [
-          "+",
-          "api_base · api_key"
-        ],
-        [
-          "+",
-          "max_input_tokens · max_output_tokens"
-        ],
-        [
-          "+",
-          "input_price · output_price"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "model_info() · pricing()"
-        ]
-      ]
-    },
-    {
-      "id": "events",
-      "kind": "interface",
-      "name": "ModelEvents",
-      "stereotype": "扩展点",
-      "at": [
-        3.55,
-        2.3
-      ],
-      "responsibility": "目录变化时要别的领域跟着做的事。授权实现它：在用户中心登记、改名、删除数据对象；API Key 实现它：可见性变了、重新登记了，重算分配了这个模型的 Key；删除了，从分配里去掉再重算。同一个事务里同步分发。",
-      "methods": [
-        [
-          "+",
-          "model_registered(model, owner) · model_renamed"
-        ],
-        [
-          "+",
-          "visibility_changed · model_restored"
-        ],
-        [
-          "+",
-          "model_removed(model)"
-        ]
-      ]
-    },
-    {
-      "id": "repo",
-      "kind": "class",
-      "name": "ModelRepository",
-      "stereotype": "仓储",
-      "at": [
-        -0.45,
-        0.35
-      ],
-      "responsibility": "读写 gw_model。",
-      "methods": [
-        [
-          "+",
-          "get(uuid) · by_name · list"
-        ],
-        [
-          "+",
-          "add · delete"
-        ]
-      ]
-    },
     {
       "id": "callers",
       "kind": "class",
-      "name": "管理接口 · 内部接口 · 运维命令行",
+      "name": "模型管理员 · 员工 · Agent 平台 · CLI",
       "external": true,
-      "source": "入口",
+      "source": "控制台 · Agent 服务 · __main__.py",
       "methods": [
         [
           "+",
-          "登记、修改、删除；列表；可调用的模型"
+          "HTTP /api/v1/models* · CLI model 子命令"
         ]
       ],
       "at": [
-        0.55,
-        -1.1
+        1.75,
+        -1.25
       ]
     },
     {
-      "id": "keys",
+      "id": "router",
       "kind": "class",
-      "name": "ApiKeys",
-      "external": true,
-      "source": "API Key 领域",
-      "methods": [
-        [
-          "+",
-          "callable：可选范围"
-        ]
-      ],
+      "name": "ModelsRouter",
+      "stereotype": "对外接口",
+      "source": "现状散在 api/admin.py 与 api/internal.py（待合入 api/models.py）",
       "at": [
-        2.75,
-        -1.1
-      ]
-    },
-    {
-      "id": "gw",
-      "kind": "interface",
-      "name": "LiteLLMAdmin",
-      "external": true,
-      "source": "LiteLLM 接入领域",
+        1.75,
+        0.25
+      ],
+      "responsibility": "统一的模型与线路 HTTP 路由：写操作要求管理员 model:manage；GET /api/v1/models 按调用主体（管理员 / 普通员工 / 受信任应用）投影返回全量管理视图、个人可选范围或应用可调用目录。",
       "methods": [
         [
           "+",
-          "deployments(*, fresh)"
+          "GET /api/v1/models（按主体投影）· GET /api/v1/models/caps-suggest"
         ],
         [
           "+",
-          "add_model · update_model · delete_model"
+          "POST|PUT|DELETE /api/v1/models/{id} · enable | disable"
+        ]
+      ]
+    },
+    {
+      "id": "reg",
+      "kind": "class",
+      "name": "ModelRegistry",
+      "stereotype": "应用服务",
+      "at": [
+        1.75,
+        1.9
+      ],
+      "responsibility": "模型与线路应用服务：创建、修改、启停、替换线路与删除模型；按首条线路预置规则带出默认能力并核验所有线路兼容性；变更可见性、启停或删除时通知授权与 KeyService 重算有效模型。",
+      "methods": [
+        [
+          "+",
+          "rows() · by_names() · callable_names() -> set[str]"
         ],
         [
           "+",
-          "test_connection"
+          "create(inp, *, actor) · update(uuid, inp, *, actor)"
+        ],
+        [
+          "+",
+          "delete(uuid, *, actor)"
         ]
-      ],
-      "at": [
-        -2.2,
-        2.3
       ]
     },
     {
-      "id": "accessH",
+      "id": "minp",
       "kind": "class",
-      "name": "ModelEventHandler",
-      "external": true,
-      "source": "授权领域",
-      "methods": [
+      "name": "ModelInput",
+      "stereotype": "值对象",
+      "at": [
+        -0.3,
+        2.35
+      ],
+      "responsibility": "创建或更新模型的入参：模型名、显示名、类型（chat / embedding / rerank）、公有或私有、启停状态、能力承诺、价格与线路列表。",
+      "attributes": [
         [
           "+",
-          "（实现 ModelEvents）"
+          "name · display_name · kind · visibility · enabled"
+        ],
+        [
+          "+",
+          "caps: ModelCaps | None · price: Price | None · routes"
         ]
-      ],
-      "at": [
-        5.35,
-        1.75
       ]
     },
     {
-      "id": "keysH",
+      "id": "rinp",
       "kind": "class",
-      "name": "KeySync",
-      "external": true,
-      "source": "API Key 领域",
-      "methods": [
+      "name": "RouteInput",
+      "stereotype": "值对象",
+      "at": [
+        -0.3,
+        3.65
+      ],
+      "responsibility": "单条线路入参：本租户供应商账号 UUID、供应商侧真实模型名、优先级（越小越先选）与同优先级权重（>0）。",
+      "attributes": [
         [
           "+",
-          "（实现 ModelEvents）"
+          "account_uuid · upstream_model · priority · weight"
         ]
-      ],
-      "at": [
-        5.35,
-        2.85
       ]
     },
     {
-      "id": "audit",
+      "id": "m_row",
       "kind": "class",
-      "name": "AuditLog",
+      "name": "GwModel",
+      "stereotype": "聚合根",
+      "at": [
+        1.45,
+        3.65
+      ],
+      "responsibility": "持久化在 gw_model 的模型聚合根：模型名同时是网关调用参数 model 与用户中心数据权限标识，创建后不可改名。",
+      "attributes": [
+        [
+          "+",
+          "uuid · tenant_uuid · name · kind · enabled"
+        ],
+        [
+          "+",
+          "visibility: public | private · caps · price"
+        ]
+      ]
+    },
+    {
+      "id": "r_row",
+      "kind": "class",
+      "name": "GwRoute",
+      "stereotype": "实体",
+      "at": [
+        3.35,
+        3.65
+      ],
+      "responsibility": "持久化在 gw_route 的线路实体：将模型关联到本租户某个供应商账号的上游模型。",
+      "attributes": [
+        [
+          "+",
+          "uuid · model_uuid · account_uuid · upstream_model · priority · weight"
+        ]
+      ]
+    },
+    {
+      "id": "preset",
+      "kind": "class",
+      "name": "PresetRules · ModelCaps · Price",
       "external": true,
-      "source": "共享内核",
+      "source": "共享基础层（shared.presets · kernel）",
       "methods": [
         [
           "+",
-          "record(actor, action, target, …)"
+          "caps_for(provider, upstream_model)"
         ]
       ],
       "at": [
-        4.3,
-        0.35
+        5.5,
+        0.25
+      ]
+    },
+    {
+      "id": "acct",
+      "kind": "class",
+      "name": "AccountService",
+      "external": true,
+      "source": "供应商账号组件",
+      "methods": [
+        [
+          "+",
+          "校验本租户账号存在且协议兼容"
+        ]
+      ],
+      "at": [
+        5.5,
+        1.65
+      ]
+    },
+    {
+      "id": "perms",
+      "kind": "class",
+      "name": "UCPermissions · KeyService",
+      "external": true,
+      "source": "授权与 API Key 组件",
+      "methods": [
+        [
+          "+",
+          "登记/删除数据权限 · refresh_for_model"
+        ]
+      ],
+      "at": [
+        5.5,
+        3.0
+      ]
+    },
+    {
+      "id": "notify",
+      "kind": "class",
+      "name": "ConfigNotifier · AuditLog",
+      "external": true,
+      "source": "跨领域基础（notify.py · audit.py）",
+      "methods": [
+        [
+          "+",
+          "mark(tenant_changed=True) · record"
+        ]
+      ],
+      "at": [
+        -2.15,
+        0.95
       ]
     }
   ],
   "relationships": [
     {
       "from": "callers",
-      "to": "cat",
-      "description": "登记、修改、删除、列表"
+      "to": "router",
+      "type": "uses",
+      "description": "HTTP 模型目录与管理请求"
     },
     {
-      "from": "keys",
-      "to": "cat",
-      "description": "callable"
+      "from": "router",
+      "to": "reg",
+      "type": "uses",
+      "description": "委派读写"
     },
     {
-      "from": "cat",
-      "to": "repo",
+      "from": "router",
+      "to": "preset",
+      "type": "uses",
+      "description": "caps-suggest 默认能力建议"
+    },
+    {
+      "from": "reg",
+      "to": "minp",
+      "type": "uses",
+      "description": "接收"
+    },
+    {
+      "from": "minp",
+      "to": "rinp",
+      "type": "aggregation",
+      "description": "routes",
+      "multiplicity": "1..*"
+    },
+    {
+      "from": "reg",
+      "to": "m_row",
       "type": "association",
-      "description": "读写"
+      "description": "读写 gw_model"
     },
     {
-      "from": "cat",
-      "to": "model",
-      "description": "creates、改"
+      "from": "m_row",
+      "to": "r_row",
+      "type": "composition",
+      "description": "拥有线路",
+      "multiplicity": "1..*"
     },
     {
-      "from": "cat",
-      "to": "view",
-      "description": "按模型名合并"
+      "from": "reg",
+      "to": "preset",
+      "type": "uses",
+      "description": "核验线路能力不缩水",
+      "labelAt": 0.55
     },
     {
-      "from": "cat",
-      "to": "route",
-      "description": "只交给 LiteLLM"
+      "from": "reg",
+      "to": "acct",
+      "type": "uses",
+      "description": "校验账号归属本租户"
     },
     {
-      "from": "cat",
-      "to": "gw",
-      "description": "部署"
+      "from": "reg",
+      "to": "perms",
+      "type": "uses",
+      "description": "同步数据对象并重算 Key"
     },
     {
-      "from": "cat",
-      "to": "events",
-      "type": "association",
-      "description": "发"
-    },
-    {
-      "from": "cat",
-      "to": "audit",
-      "description": "记"
-    },
-    {
-      "from": "view",
-      "to": "model",
-      "type": "association",
-      "description": "model"
-    },
-    {
-      "from": "model",
-      "to": "provider",
-      "type": "association",
-      "description": "provider"
-    },
-    {
-      "from": "model",
-      "to": "visibility",
-      "type": "association",
-      "description": "visibility"
-    },
-    {
-      "from": "accessH",
-      "to": "events",
-      "type": "implements"
-    },
-    {
-      "from": "keysH",
-      "to": "events",
-      "type": "implements"
+      "from": "reg",
+      "to": "notify",
+      "type": "uses",
+      "description": "递增租户版本、记审计",
+      "labelAt": 0.25
     }
   ],
   "capabilities": [
     {
-      "name": "合并列表",
-      "entry": "listing(*, fresh)",
-      "callers": "管理接口（管理员看全部；普通用户看能选的）、运维命令行",
-      "description": "平台登记的（可调用 / LiteLLM 中缺失）在前，LiteLLM 直配的（只读，可纳入）在后；LiteLLM 不可达时照样列出平台登记的，标明状态未知"
+      "name": "统一模型目录查询（多主体投影）",
+      "entry": "GET /api/v1/models -> ModelRegistry",
+      "callers": "模型管理员、员工、Agent 平台",
+      "description": "同一功能端点按调用主体返回全量管理视图、员工可选模型或内部应用可调用模型规格，消除重复的 /internal/models"
     },
     {
-      "name": "能放进 Key 的模型",
-      "entry": "callable()",
-      "callers": "API Key（可选范围、有效模型）、内部接口（还没分配时编辑器先列它们）",
-      "description": "平台登记的、LiteLLM 里存在的"
-    },
-    {
-      "name": "登记模型",
-      "entry": "test_connection · register(name, fields, route, *, actor)",
-      "callers": "管理接口、运维命令行（model add）",
-      "description": "先在 LiteLLM 登记部署，再写平台记录、发 model_registered（授权在用户中心登记，登记人成为所有者）；后两步失败撤回 LiteLLM。私有模型的初始授权由管理接口紧接着调授权"
-    },
-    {
-      "name": "纳入直配模型",
-      "entry": "adopt(name, fields, *, actor)",
-      "callers": "管理接口",
-      "description": "LiteLLM 里已经有的模型：只写平台记录和用户中心，不改 LiteLLM"
-    },
-    {
-      "name": "修改、重新登记、删除",
-      "entry": "update · reregister · delete",
-      "callers": "管理接口",
-      "description": "改显示名发 model_renamed；改公有私有发 visibility_changed；LiteLLM 中缺失时用新参数重建部署发 model_restored；删除时 LiteLLM、平台、用户中心一起删，发 model_removed"
+      "name": "模型与多账号线路编排",
+      "entry": "POST|PUT|DELETE /api/v1/models -> ModelRegistry",
+      "callers": "模型管理员、运维命令行",
+      "description": "校验预置能力承诺与单价，同步用户中心数据对象，变更后重算关联 Key 并递增本租户配置版本"
     }
   ],
   "decisions": [
     {
-      "decision": "模型名不能改、不能重名",
-      "reason": "它同时是 LiteLLM 的 model_name、应用调用时传的 model、用户中心里的数据标识；改名会让已分配的 Key、智能体配置、授权全部对不上。LiteLLM 里直配的模型也算在内，同名的只能纳入、不能再登记。"
+      "decision": "同一个 GET /api/v1/models 按调用主体投影，不另立 /internal/models",
+      "reason": "管理员、员工、Agent 平台要查的都是「本租户有哪些模型」，只是可见范围和附带管理字段不同；本来管理员和普通员工就已经共用该路由，把应用身份一并纳入即可消除重复接口。"
     },
     {
-      "decision": "平台只存基本信息，地址、凭据、规格价格只交给 LiteLLM",
-      "reason": "供应商凭据只有 LiteLLM 用得到（它用 salt key 加密存）；平台再存一份就多一处泄露面、多一处不一致。列表上的规格价格从 LiteLLM 的部署里读。"
+      "decision": "添加线路时强制校验模型承诺的能力",
+      "reason": "加线路时用同一份 PresetRules 拦住能力不足的上游，保证故障切到备用线路时不会突然看不见图片或不会调工具。"
     },
     {
-      "decision": "列表按模型名合并平台记录和 LiteLLM 部署",
-      "reason": "有人直接在 LiteLLM 里配了模型，平台要看得见、能纳入；平台登记了 LiteLLM 里却没了的，标「缺失」、不能放进 Key，可以重新登记。"
-    },
-    {
-      "decision": "先在 LiteLLM 登记，后两步失败就撤回",
-      "reason": "LiteLLM 登记最容易失败（凭据、地址不对），先做它；写平台记录、登记用户中心失败时删掉刚建的部署。撤回也失败只记日志，留下的部署会作为「LiteLLM 直配」出现在列表里，可以纳入或在 LiteLLM 里删。"
-    },
-    {
-      "decision": "纳入的直配模型，平台不改它在 LiteLLM 里的配置",
-      "reason": "它不是平台建的部署（可能来自配置文件），平台改了下次重启又被覆盖；平台只记基本信息、管公有私有和授权。"
-    },
-    {
-      "decision": "LiteLLM 不可达时按「存在」处理",
-      "reason": "不能因为 LiteLLM 抖一下就把所有 Key 的有效模型算空、全部停用；部署列表缓存 30 秒，不可达时沿用上一份，最终由 LiteLLM 自己校验。"
-    },
-    {
-      "decision": "公有模型也在用户中心登记",
-      "reason": "改成私有时不用补登记；公有只是不写授权、不判权。"
-    },
-    {
-      "decision": "对授权和 Key 只发事件",
-      "reason": "现在用户中心登记写在 registry 里，改可见性、重新登记、删除后由接口层手工调 keys.resync / drop_model。目录定义 ModelEvents，授权、API Key 各自实现，目录不认识用户中心和 Key，新的入口（命令行、以后的批量操作）也不会漏掉重算。同一个事务里同步分发：用户中心登记失败整个登记回滚、撤回 LiteLLM。"
+      "decision": "单价挂在模型上，支持可选独立缓存写入价",
+      "reason": "Price.cache_write 未填时默认等于 input，填了（如 Anthropic 1.25 倍写入价）则精确按实计费。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成 uuid7），接口和表间引用都用它，引用列叫 xxx_uuid。表间不建外键约束，引用由代码维护。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。LiteLLM 的表由 LiteLLM 自己建、自己管（atlas_litellm 库），不在这里。",
+  "schemaNote": "主键与租户约定：id 为库内自增主键；uuid 为对外与表间关联用的逻辑主键（Python 侧生成 UUIDv7），表间不建物理外键约束，由领域服务保证一致性。所有表均继承 TenantOwned（带 tenant_uuid），由 atlas_tenancy 在会话层自动附加当前租户过滤条件；每张表均含 created_at、updated_at（UTC timestamptz）。 gw_route.account_uuid 逻辑引用同租户的 gw_account.uuid（表结构见 code-accounts.html）。",
   "tables": [
     {
       "name": "gw_model",
-      "description": "对应聚合根 Model",
+      "description": "租户对外登记的模型、能力承诺与统一单价（对应聚合根 GwModel）。",
       "at": [
         0,
         0
@@ -531,57 +356,157 @@
       "columns": [
         {
           "name": "id",
-          "type": "bigint",
+          "type": "BigInteger",
           "key": "PK",
           "default": "自增",
           "description": "库内主键"
         },
         {
           "name": "uuid",
-          "type": "uuid",
+          "type": "UUIDType",
           "key": "UK",
+          "default": "uuid7",
           "description": "逻辑主键"
         },
         {
+          "name": "tenant_uuid",
+          "type": "UUIDType",
+          "description": "所属租户"
+        },
+        {
           "name": "name",
-          "type": "varchar(128)",
-          "key": "UK",
-          "description": "模型名 = LiteLLM 的 model_name = 调用时传的 model = 用户中心数据标识；不能改"
+          "type": "String(128)",
+          "description": "调用时传的模型名（租户内唯一，不可改）"
         },
         {
           "name": "display_name",
-          "type": "varchar(100)",
-          "default": "''"
+          "type": "String(100)",
+          "default": "''",
+          "description": "界面展示名称"
         },
         {
-          "name": "provider",
-          "type": "varchar(64)",
-          "description": "供应商 = LiteLLM 的 custom_llm_provider"
+          "name": "kind",
+          "type": "String(16)",
+          "default": "'chat'",
+          "description": "chat / embedding / rerank"
+        },
+        {
+          "name": "enabled",
+          "type": "Boolean",
+          "default": "true",
+          "description": "是否启用"
+        },
+        {
+          "name": "caps",
+          "type": "JSONType",
+          "description": "承诺能力 ModelCaps"
+        },
+        {
+          "name": "price",
+          "type": "JSONType",
+          "description": "单价 Price：input、cache_write?、cache_hit、output（元/百万 token）"
         },
         {
           "name": "visibility",
-          "type": "varchar(16)",
+          "type": "String(16)",
           "default": "'private'",
           "description": "public / private"
         },
         {
           "name": "description",
-          "type": "text",
-          "default": "''"
-        },
-        {
-          "name": "litellm_model_id",
-          "type": "varchar(128)",
-          "nullable": true,
-          "description": "平台在 LiteLLM 里建的部署（= 本行 uuid）；空 = 纳入的直配模型"
+          "type": "Text",
+          "default": "''",
+          "description": "模型说明"
         },
         {
           "name": "created_by",
-          "type": "varchar(64)"
+          "type": "String(64)",
+          "description": "创建人"
         },
         {
           "name": "updated_by",
-          "type": "varchar(64)"
+          "type": "String(64)",
+          "description": "最后修改人"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uq_gw_model_tenant_uuid_name",
+          "columns": [
+            "tenant_uuid",
+            "name"
+          ],
+          "unique": true,
+          "description": "同租户内模型名唯一"
+        }
+      ]
+    },
+    {
+      "name": "gw_route",
+      "description": "模型到供应商账号上游模型的线路配置（对应实体 GwRoute）。",
+      "at": [
+        1,
+        0
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "BigInteger",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键"
+        },
+        {
+          "name": "uuid",
+          "type": "UUIDType",
+          "key": "UK",
+          "default": "uuid7",
+          "description": "逻辑主键"
+        },
+        {
+          "name": "tenant_uuid",
+          "type": "UUIDType",
+          "description": "所属租户"
+        },
+        {
+          "name": "model_uuid",
+          "type": "UUIDType",
+          "references": "gw_model.uuid",
+          "description": "所属模型"
+        },
+        {
+          "name": "account_uuid",
+          "type": "UUIDType",
+          "description": "指向本租户的供应商账号 gw_account.uuid"
+        },
+        {
+          "name": "upstream_model",
+          "type": "String(200)",
+          "description": "供应商侧真实模型名"
+        },
+        {
+          "name": "priority",
+          "type": "Integer",
+          "default": "1",
+          "description": "优先级（越小越先选）"
+        },
+        {
+          "name": "weight",
+          "type": "Integer",
+          "default": "1",
+          "description": "同优先级分流权重（>0）"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uq_gw_route_target",
+          "columns": [
+            "model_uuid",
+            "account_uuid",
+            "upstream_model"
+          ],
+          "unique": true,
+          "description": "同一模型不重复挂同一账号的同一上游模型"
         }
       ]
     }

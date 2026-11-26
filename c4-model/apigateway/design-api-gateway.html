@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API 网关设计（OpenResty，经内部 Ingress）</title>
+<style>
+  body { margin: 0; background: #fff; color: #333; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { max-width: 1280px; padding: 24px 32px 64px; }
+  h1 { margin: 8px 0 12px; font-size: 22px; font-weight: 600; color: #222; }
+  h2 { margin: 40px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #e3e3e3; font-size: 17px; font-weight: 600; color: #222; }
+  h3 { margin: 28px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  p { max-width: 1100px; margin: 0 0 8px; font-size: 14px; line-height: 1.8; }
+  p.lead { padding: 10px 14px; border-left: 3px solid #1168bd; background: #f4f8fc; }
+  code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  a { color: #1168bd; }
+  table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  th, td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; }
+  ol.steps { margin: 8px 0 0; padding: 0; list-style: none; }
+  ol.steps li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  ol.steps li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  svg { display: block; max-width: 100%; height: auto; margin: 8px 0 4px; }
+  svg text { font-size: 13px; fill: #444; }
+  svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  svg .t-key { font-size: 12px; fill: #888; }
+  svg .t-lab { font-size: 12px; fill: #666; }
+  svg .t-hot { font-size: 12px; fill: #d9480f; }
+  svg .t-mute { font-size: 12px; fill: #aaa; }
+  svg .hot { fill: #d9480f; }
+  svg .mid { text-anchor: middle; }
+  svg .end { text-anchor: end; }
+  svg .b { font-weight: 700; }
+  svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  svg .node-hot { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.6; }
+  svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  svg .band-a { fill: #eef4fb; stroke: #1168bd; stroke-width: 1.2; }
+  svg .band-b { fill: #fff3ea; stroke: #d9480f; stroke-width: 1.2; }
+  svg .cell { fill: #fff; stroke: #bbb; stroke-width: 1.2; }
+  svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  svg .e-dash { fill: none; stroke: #444; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.2; }
+  svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .tick { stroke: #444; stroke-width: 1.2; }
+  svg .dot { fill: #fff; stroke: #888; stroke-width: 1.4; }
+  svg .dot-hot { fill: #d9480f; stroke: #d9480f; stroke-width: 1.4; }
+  svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
+</style>
+<body>
+<main>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <marker id="a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+      <marker id="h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+      <marker id="m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+    </defs>
+  </svg>
+
+  <h1>API 网关设计：跑在 K8s 外面的 OpenResty，按服务名经内部 Ingress 找服务</h1>
+  <p class="lead">一句话：<b>服务器上只留一个对外入口——宿主机上由 systemd 管的 OpenResty，直接占 80 / 443，替代 Traefik。它终结 TLS、按域名分站点；Atlas 站点用 Nginx 原生指令做路由和转发，只在三件事上写 Lua：本地验 JWT、校 CSRF、封登录失败太多的 IP。这一期不做限流。外部路径的第一段就是内部域名的第一段：<code>/mcp/…</code> 是 mcp 的接口（发往 mcp.internal.techstz.com），<code>/mcp-ui/…</code> 是 mcp 的页面（发往 mcp-ui.internal.techstz.com），网关把域名写进 Host、发给集群里的内部 Ingress。路由表只登记名字和规则、不写地址，部署时校验后渲染成配置文件、reload 生效；网关不连 Redis，请求路径上不调用户中心。</b></p>
+  <p>这份设计回答七个问题：一个请求在网关里依次经过哪几步；不问用户中心怎么知道「你是谁」；网关在 K8s 外面，怎么按服务名找到里面的服务；对外暴露哪些站点和路径由谁决定；证书谁来续；改配置时长连接怎么办；有人反复试密码时怎么封 IP。它接手两样东西：服务器上 Traefik 的对外职责（80 / 443、TLS、证书、按域名分流；Traefik 留在集群里只做内部 Ingress），以及 atlas-frontends Pod 里的静态 Nginx（<code>auth_request</code> 到用户中心校验会话）。前端的名字一律带 -ui；前端仍在一个 Deployment 里，一个 Service 挂多条 Ingress。JWT 的签发、刷新令牌和公钥集由用户中心提供。</p>
+
+  <h2>先认识几个词</h2>
+  <table>
+    <thead><tr><th style="width: 13%">词</th><th style="width: 47%">意思</th><th>例子</th></tr></thead>
+    <tbody>
+      <tr><td>OpenResty</td><td>打包好的 Nginx，加上 LuaJIT 和一组 Lua 库。原来的 Nginx 配置照样能用，另外可以在处理请求的某个阶段插一段 Lua。</td><td>本设计在三处插 Lua：auth 路由的 access 阶段（决定放不放行）验 JWT、校 CSRF；每个请求进 location 后查封禁表；登录接口的 log 阶段记失败。其余都是普通 Nginx。</td></tr>
+      <tr><td>站点</td><td>一个对外域名。Atlas 站点走完整规则；Langfuse、gitea 是透传站点：它们有自己的登录，网关只清身份头就转发。</td><td>atlas.techstz.com 是 Atlas 站点，运营中心也挂在这里（/opscenter-ui/、/opscenter/）；langfuse.techstz.com 是透传站点。</td></tr>
+      <tr><td>location</td><td>Nginx 里「哪些路径怎么处理」的一段配置。缓冲、请求体上限、超时、WebSocket 升级都写在这一级。</td><td><code>/atlas/</code> 开头的请求转给 Agent 服务（atlas），用默认档位。</td></tr>
+      <tr><td>访问 JWT</td><td>用户中心用私钥签的一小段文字，15 分钟有效，写着你是谁、属于哪个租户。谁都能用公钥验它是不是用户中心签的、有没有被改过，但只有用户中心能签。</td><td>浏览器的 Cookie uc_access 里就是它；手机放在 Authorization: Bearer 里。</td></tr>
+      <tr><td>刷新令牌</td><td>14 天有效的长令牌，只用来换新的访问 JWT，只发给用户中心的刷新接口。</td><td>访问 JWT 过期后，前端拿它换一个新的，用户感觉不到。</td></tr>
+      <tr><td>JWKS、kid</td><td>JWKS 是用户中心公开的公钥集，kid 是每把钥匙的编号。</td><td>换钥时 JWKS 里同时有 k-2026-10 和 k-2026-11 两把公钥。</td></tr>
+      <tr><td>服务名、内部域名</td><td>每个对外的后端或前端有一个名字，它既是外部路径的第一段，也是内部域名的第一段。前端的名字以 -ui 结尾。</td><td>/mcp/v1/servers 发往 mcp.internal.techstz.com；/mcp-ui/settings 发往 mcp-ui.internal.techstz.com，页面里调的接口是 /mcp/…。</td></tr>
+      <tr><td>内部 Ingress</td><td>集群里的 Traefik，只在集群内：按请求的 Host 把它转给对应服务的 Service。每个服务的 Ingress 规则写在它自己的部署清单里。网关只连它一个地址（固定的 ClusterIP，宿主机经 kube-proxy 直达）。</td><td>Host 是 mcp.internal.techstz.com的请求被转给 Service mcp。</td></tr>
+      <tr><td>认证模式、档位</td><td>认证模式：auth 验 JWT 并写身份头；passthrough 原样转给用户中心（登录、刷新）；self_auth 凭证由后面的子网关自己认；public 不验。转发档位说清怎么转（默认、SSE、WebSocket、大文件、流式大报文）。</td><td>atlas 的后端路由 /atlas/：auth 模式、默认转发档位。</td></tr>
+      <tr><td>reload</td><td>让 Nginx 换用新配置而不断服务：起新 worker 接新连接，旧 worker 做完手上的请求再退出。</td><td>改了路由或续了证书都 reload。</td></tr>
+      <tr><td>登录失败封禁</td><td>登录接口回 401（账号或密码错）时，网关给这个 IP 记一次；10 分钟内满 20 次，就把这个 IP 封 30 分钟，期间它的所有请求都返回 403。只数登录接口的 401。</td><td>同一个 IP 10:00 起连续登录失败，10:03:40 第 20 次 → 封到 10:33:40。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>原理 1　一个请求在网关里依次经过哪几步</h2>
+  <p>例子：张三在 Web 上发一条消息，浏览器发出 <code>POST https://atlas.techstz.com/atlas/v1/threads/42/runs</code>，自动带上 Cookie uc_access 和请求头 X-UC-CSRF。</p>
+  <svg width="1240" viewBox="0 0 1240 285" role="img" aria-label="一个请求在网关里的五步">
+    <rect class="node" x="20" y="50" width="150" height="90" rx="4"/>
+    <text class="t-name" x="95" y="82">TLS 与站点</text>
+    <text class="t-sub" x="95" y="104">按域名分站点</text>
+    <text class="t-sub" x="95" y="122">终结 TLS · 清身份头</text>
+    <path class="e-hot" d="M170 95 H198" marker-end="url(#h)"/>
+    <rect class="node" x="200" y="50" width="210" height="90" rx="4"/>
+    <text class="t-name" x="305" y="82">Atlas 站点的边界</text>
+    <text class="t-sub" x="305" y="104">畸形路径 → 400</text>
+    <text class="t-sub" x="305" y="122">禁区段 → 404</text>
+    <path class="e-hot" d="M410 95 H438" marker-end="url(#h)"/>
+    <rect class="node" x="440" y="50" width="180" height="90" rx="4"/>
+    <text class="t-name" x="530" y="82">匹配 location</text>
+    <text class="t-sub" x="530" y="104">路由表生成的白名单</text>
+    <text class="t-sub" x="530" y="122">没登记 404 · 被封 403</text>
+    <path class="e-hot" d="M620 95 H648" marker-end="url(#h)"/>
+    <rect class="node-hot" x="650" y="50" width="260" height="90" rx="4"/>
+    <text class="t-name" x="780" y="82">access 阶段（Lua）</text>
+    <text class="t-sub" x="780" y="104">取令牌 → 校 CSRF</text>
+    <text class="t-sub" x="780" y="122">→ 本地验签 → 写变量</text>
+    <path class="e-hot" d="M910 95 H938" marker-end="url(#h)"/>
+    <rect class="node" x="940" y="50" width="170" height="90" rx="4"/>
+    <text class="t-name" x="1025" y="82">转发档位</text>
+    <text class="t-sub" x="1025" y="104">写 X-Uid、X-Tenant-Id</text>
+    <text class="t-sub" x="1025" y="122">proxy_pass</text>
+    <path class="e-hot" d="M1110 95 H1138" marker-end="url(#h)"/>
+    <rect class="node" x="1140" y="50" width="80" height="90" rx="4"/>
+    <text class="t-name" x="1180" y="90">后端</text>
+    <text class="t-sub" x="1180" y="112">经内部 Ingress</text>
+    <path class="e-dash" d="M95 140 V168" marker-end="url(#a)"/>
+    <rect class="cell" x="20" y="170" width="150" height="34" rx="4"/>
+    <text class="t-lab mid" x="95" y="192">透传站点：直接转发</text>
+    <path class="e-dash" d="M305 140 V168" marker-end="url(#a)"/>
+    <rect class="gap" x="230" y="170" width="150" height="34" rx="4"/>
+    <text class="t-hot mid" x="305" y="192">400 / 404 JSON</text>
+    <path class="e-dash" d="M530 140 V168" marker-end="url(#a)"/>
+    <rect class="gap" x="465" y="170" width="130" height="34" rx="4"/>
+    <text class="t-hot mid" x="530" y="192">404 / 403 JSON</text>
+    <path class="e-dash" d="M780 140 V168" marker-end="url(#a)"/>
+    <rect class="gap" x="690" y="170" width="180" height="34" rx="4"/>
+    <text class="t-hot mid" x="780" y="192">401 / 403 / 503 JSON</text>
+    <text class="t-lab mid" x="1025" y="192">上游的错误原样透传</text>
+    <rect class="band-a" x="20" y="228" width="1200" height="40" rx="4"/>
+    <text class="t-lab" x="36" y="253">log 阶段：每个请求一行 JSON —— request_id、站点、路由 id、uid、租户、状态码、上游耗时；不记令牌和 Cookie。登录接口回 401 时给这个 IP 记一次失败（原理 7）</text>
+    <g class="badge"><circle cx="20" cy="50" r="10"/><text x="20" y="54">1</text></g>
+    <g class="badge"><circle cx="200" cy="50" r="10"/><text x="200" y="54">2</text></g>
+    <g class="badge"><circle cx="440" cy="50" r="10"/><text x="440" y="54">3</text></g>
+    <g class="badge"><circle cx="650" cy="50" r="10"/><text x="650" y="54">4</text></g>
+    <g class="badge"><circle cx="940" cy="50" r="10"/><text x="940" y="54">5</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>浏览器连到服务器的 443。网关按 SNI 和 Host 找到 Atlas 站点，用 certbot 续好的证书终结 TLS；不认识的域名在握手时就拒绝。所有站点都先清掉外部带来的 X-Uid、X-Tenant-Id、X-Auth-Uid、X-Caller-App 和运营接口的签名头——就算张三装的浏览器插件伪造了，也传不到后面。如果是 Langfuse、gitea 的域名，到这里就直接转给它们。网关是第一跳，<code>$remote_addr</code> 就是张三电脑的 IP。</li>
+    <li><span class="n">2</span>Atlas 站点在匹配路由之前再过一道边界：原始请求行里有双编码、反斜杠、控制字符就 400；路径里有 <code>/internal/</code>、<code>/ops/</code>、<code>/open/</code> 段就 404。这两条写在 server 级，对以后新加的路由也生效。</li>
+    <li><span class="n">3</span>路径第一段是 atlas，命中服务 atlas 的后端路由：auth 模式、默认转发档位。路由表里没登记的路径落到最后一条默认路由，404。进了 location 先查一次封禁表（所有站点都查，原理 7）：张三的 IP 没被封，往下走；被封的 IP 在这里就返回 403。</li>
+    <li><span class="n">4</span>只有 auth 路由进 Lua：从 Cookie 取访问 JWT，写请求先校 CSRF，再本地验签，得到 uid = 张三、租户 = 星河科技，写进 Nginx 变量。任何一步不通过，就返回 JSON 错误并结束，不会转发。passthrough、self_auth、public 路由不进这一步，直接转发。</li>
+    <li><span class="n">5</span>转发：写 X-Uid、X-Tenant-Id、X-Caller-App: gateway，去掉 Cookie；去掉路径里的 /atlas，Host 写 atlas.internal.techstz.com，发给内部 Ingress（原理 3），它再转给 Agent 服务的 <code>/v1/threads/42/runs</code>。Agent 服务照旧拿这两个头去用户中心取授权快照，它不知道入口换了。</li>
+  </ol>
+
+  <h2>原理 2　不问用户中心，怎么知道「你是谁」</h2>
+  <svg width="1240" viewBox="0 0 1240 315" role="img" aria-label="JWT 在网关本地验签">
+    <path class="e-dash" d="M120 40 V18 H1020 V38" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="570" y="13">JWKS：只有公钥，每 5 分钟拉一次，同时写一份缓存文件</text>
+    <rect class="node" x="20" y="40" width="200" height="110" rx="4"/>
+    <text class="t-name" x="120" y="74">用户中心</text>
+    <text class="t-sub" x="120" y="98">用私钥签发访问 JWT</text>
+    <text class="t-sub" x="120" y="118">把公钥放进 JWKS</text>
+    <path class="e-hot" d="M220 95 H258" marker-end="url(#h)"/>
+    <text class="t-key" x="262" y="34">访问 JWT = 头 . 载荷 . 签名（三段 base64url）</text>
+    <rect class="cell" x="260" y="40" width="150" height="110" rx="4"/>
+    <text class="t-head" x="274" y="64">头</text>
+    <text class="t-lab" x="274" y="90">alg: EdDSA</text>
+    <text class="t-lab" x="274" y="112">kid: k-2026-11</text>
+    <rect class="cell" x="420" y="40" width="200" height="110" rx="4"/>
+    <text class="t-head" x="434" y="64">载荷</text>
+    <text class="t-lab" x="434" y="90">sub: 张三的 uid</text>
+    <text class="t-lab" x="434" y="110">tid: 星河科技</text>
+    <text class="t-lab" x="434" y="130">exp: 10:15:00</text>
+    <rect class="cell" x="630" y="40" width="130" height="110" rx="4"/>
+    <text class="t-head" x="644" y="64">签名</text>
+    <text class="t-lab" x="644" y="90">私钥对「头.载荷」</text>
+    <text class="t-lab" x="644" y="110">算出来的</text>
+    <rect class="node" x="820" y="40" width="400" height="60" rx="4"/>
+    <text class="t-name" x="1020" y="66">公钥环（共享内存 + 缓存文件）</text>
+    <text class="t-sub" x="1020" y="88">kid → 公钥；所有 worker 共用</text>
+    <path class="e-hot" d="M760 140 H818" marker-end="url(#h)"/>
+    <path class="e" d="M1020 100 V118" marker-end="url(#a)"/>
+    <rect class="node-hot" x="820" y="120" width="400" height="60" rx="4"/>
+    <text class="t-name" x="1020" y="146">JWT 认证器（Lua）</text>
+    <text class="t-sub" x="1020" y="168">按 kid 取公钥，验「头.载荷」的签名</text>
+    <path class="e-hot" d="M1020 180 V198 H160 V218" marker-end="url(#h)"/>
+    <rect class="node" x="20" y="220" width="280" height="48" rx="4"/>
+    <text class="t-lab mid" x="160" y="249">alg 是 EdDSA，kid 认识</text>
+    <path class="e-hot" d="M300 244 H318" marker-end="url(#h)"/>
+    <rect class="node" x="320" y="220" width="280" height="48" rx="4"/>
+    <text class="t-lab mid" x="460" y="249">签名对得上（公钥验）</text>
+    <path class="e-hot" d="M600 244 H618" marker-end="url(#h)"/>
+    <rect class="node" x="620" y="220" width="300" height="48" rx="4"/>
+    <text class="t-lab mid" x="770" y="249">iss、aud 对，没过期（允许 30 秒偏差）</text>
+    <path class="e-hot" d="M920 244 H938" marker-end="url(#h)"/>
+    <rect class="node-hot" x="940" y="220" width="280" height="48" rx="4"/>
+    <text class="t-hot mid" x="1080" y="249">X-Uid = sub，X-Tenant-Id = tid</text>
+    <text class="t-hot mid" x="160" y="292">不对 → 401 TOKEN_INVALID</text>
+    <text class="t-hot mid" x="460" y="292">不对 → 401 TOKEN_INVALID</text>
+    <text class="t-hot mid" x="770" y="292">过期 → 401 TOKEN_EXPIRED</text>
+    <g class="badge"><circle cx="20" cy="40" r="10"/><text x="20" y="44">1</text></g>
+    <g class="badge"><circle cx="820" cy="40" r="10"/><text x="820" y="44">2</text></g>
+    <g class="badge"><circle cx="20" cy="220" r="10"/><text x="20" y="224">3</text></g>
+    <g class="badge"><circle cx="620" cy="220" r="10"/><text x="620" y="224">4</text></g>
+    <g class="badge"><circle cx="940" cy="220" r="10"/><text x="940" y="224">5</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>张三登录或刷新时，用户中心用私钥签一个 15 分钟的访问 JWT。头里写算法 EdDSA 和用的哪把钥匙（kid）；载荷里只有 uid、租户、是否须先改密、签发人、接收方和有效期，不放角色和权限（会过时，也会让令牌变大）。</li>
+    <li><span class="n">2</span>网关永远拿不到私钥。公钥环每 5 分钟从用户中心拉一次 JWKS，放进共享内存，同时写一份缓存文件。宿主机重启时网关常比 K8s 里的用户中心先起来，先读缓存文件就能马上验签。换钥时用户中心先把新公钥放进 JWKS，过一个周期再用新私钥签；真碰到不认识的 kid，本次 401，后台提前拉一次。一把公钥都没有时 auth 路由返回 503，而不是 401（免得前端以为要重新登录）。</li>
+    <li><span class="n">3</span>只接受 EdDSA，kid 必须在公钥环里。这样别人没法拿 <code>alg: none</code>，或者拿公钥当密钥签一个 HS256 令牌来冒充。</li>
+    <li><span class="n">4</span>签名对得上，说明载荷一个字都没被改过。再看有效期——算例：张三 10:00:00 登录，exp = 10:15:00。10:15:20 的请求仍放行（允许 30 秒时钟偏差）；10:15:31 的请求返回 401 TOKEN_EXPIRED，前端用刷新令牌换一个新 JWT 再重发，张三感觉不到。</li>
+    <li><span class="n">5</span>验过就把 sub、tid 写成 X-Uid、X-Tenant-Id。全程只花几十微秒 CPU，不连 Redis、不问用户中心。代价：张三 10:05 被停用，网关要到他的 JWT 过期（10:15）才拒绝；但 10:05 之后他请求到的每个后端都会向用户中心取授权快照，拿到的已经是无权限。</li>
+  </ol>
+
+  <h2>原理 3　网关在 K8s 外面，怎么按服务名找到里面的服务</h2>
+  <svg width="1240" viewBox="0 0 1240 325" role="img" aria-label="按服务名拼内部域名，经内部 Ingress 找到服务">
+    <rect class="node" x="20" y="40" width="240" height="70" rx="4"/>
+    <text class="t-name" x="140" y="70">/mcp/v1/servers</text>
+    <text class="t-sub" x="140" y="92">外部：atlas.techstz.com</text>
+    <path class="e-hot" d="M260 75 H298" marker-end="url(#h)"/>
+    <rect class="node-hot" x="300" y="40" width="300" height="70" rx="4"/>
+    <text class="t-name" x="450" y="70">后端路由 /mcp/</text>
+    <text class="t-sub" x="450" y="92">去掉 /mcp，Host: mcp.internal.techstz.com</text>
+    <path class="e-hot" d="M600 75 H638" marker-end="url(#h)"/>
+    <rect class="node" x="20" y="180" width="240" height="70" rx="4"/>
+    <text class="t-name" x="140" y="210">/mcp-ui/settings</text>
+    <text class="t-sub" x="140" y="232">外部：atlas.techstz.com</text>
+    <path class="e-hot" d="M260 215 H298" marker-end="url(#h)"/>
+    <rect class="node-hot" x="300" y="180" width="300" height="70" rx="4"/>
+    <text class="t-name" x="450" y="210">前端路由 /mcp-ui/</text>
+    <text class="t-sub" x="450" y="232">不去前缀，Host: mcp-ui.internal.techstz.com</text>
+    <path class="e-hot" d="M600 215 H638" marker-end="url(#h)"/>
+    <rect class="node" x="640" y="40" width="190" height="210" rx="4"/>
+    <text class="t-name" x="735" y="130">内部 Ingress</text>
+    <text class="t-sub" x="735" y="152">集群里的 Traefik</text>
+    <text class="t-sub" x="735" y="170">按 Host 分流</text>
+    <path class="e-hot" d="M830 75 H868" marker-end="url(#h)"/>
+    <path class="e-hot" d="M830 215 H868" marker-end="url(#h)"/>
+    <rect class="node" x="870" y="40" width="170" height="70" rx="4"/>
+    <text class="t-name" x="955" y="70">Service mcp</text>
+    <text class="t-sub" x="955" y="92">路径 /v1/servers</text>
+    <rect class="node" x="870" y="180" width="170" height="70" rx="4"/>
+    <text class="t-name" x="955" y="210">前端 Service</text>
+    <text class="t-sub" x="955" y="232">路径 /mcp-ui/settings</text>
+    <path class="e-hot" d="M1040 75 H1068" marker-end="url(#h)"/>
+    <path class="e-hot" d="M1040 215 H1068" marker-end="url(#h)"/>
+    <rect class="node" x="1070" y="40" width="150" height="70" rx="4"/>
+    <text class="t-name" x="1145" y="70">Pod</text>
+    <text class="t-sub" x="1145" y="92">mcp 网关</text>
+    <rect class="node" x="1070" y="180" width="150" height="70" rx="4"/>
+    <text class="t-name" x="1145" y="210">前端 Pod</text>
+    <text class="t-sub" x="1145" y="232">basePath /mcp-ui</text>
+    <rect class="band-a" x="20" y="272" width="1200" height="40" rx="4"/>
+    <text class="t-lab" x="36" y="297">网关只连一个地址：内部 Ingress 的固定 ClusterIP。内部域名只写在 Host 头里，网关不解析、不依赖 DNS；mcp 的 Ingress 写在 mcp 的清单里；mcp-ui、memory-ui 等都是前端 Service 上的 Ingress。</text>
+    <g class="badge"><circle cx="20" cy="40" r="10"/><text x="20" y="44">1</text></g>
+    <g class="badge"><circle cx="300" cy="40" r="10"/><text x="300" y="44">2</text></g>
+    <g class="badge"><circle cx="640" cy="40" r="10"/><text x="640" y="44">3</text></g>
+    <g class="badge"><circle cx="870" cy="40" r="10"/><text x="870" y="44">4</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>外部路径的第一段就是内部域名的第一段。mcp 在路由表里登记了两条：mcp（接口，种类 api）和 mcp-ui（页面，种类 ui）。打开 <code>/mcp-ui/</code> 拿到的是页面，页面里调的接口地址是 <code>/mcp/…</code>。</li>
+    <li><span class="n">2</span><code>/mcp/v1/servers</code> 落在 <code>/mcp/</code> 上：去掉 /mcp，Host 写 mcp.internal.techstz.com，mcp 服务收到的还是它自己的 <code>/v1/servers</code>。<code>/mcp-ui/settings</code> 落在 <code>/mcp-ui/</code> 上：路径原样，Host 写 mcp-ui.internal.techstz.com——前端是 Next.js，basePath 就是 /mcp-ui，去掉前缀页面里的静态资源就找不到了。前后端的名字不同，不会抢同一个前缀。</li>
+    <li><span class="n">3</span>网关只连一个地址：集群里内部 Ingress 的固定 ClusterIP（kube-proxy 在宿主机上也装了转发规则，宿主机直接连得到）。内部域名只出现在 Host 头里，网关不解析它们，K8s 的 DNS 出问题也不影响。内部 Ingress 是集群里的 Traefik，只在集群内、不占宿主机端口，读超时放到 1 小时以上、不缓冲；网络策略只让宿主机连它，沙箱 Pod 连不到。</li>
+    <li><span class="n">4</span>内部 Ingress 按 Host 找 Service。后端的 Ingress 写在各服务自己的清单里；前端不拆：仍是一个 Deployment、一个 Service，mcp-ui、memory-ui、atlas-ui……每个前端一条 Ingress，都指向这个 Service（一个前端一个 Next.js 时按端口分，几个前端在同一个应用里时靠路径分）。代价是多一跳（网关 → 内部 Ingress → Service），通常不到 1 毫秒。</li>
+    <li><span class="n">5</span>不是「第一段是什么就转到哪」：只有路由表里登记过的名字才有 location，没登记的一律 404。否则集群里所有带 Ingress 的服务（包括只该内部用的）都会被暴露出去。</li>
+  </ol>
+
+  <h2>原理 4　对外暴露哪些站点和路径：只有路由表说了算</h2>
+  <svg width="1240" viewBox="0 0 1240 205" role="img" aria-label="路由表渲染成配置文件">
+    <rect class="node" x="20" y="40" width="200" height="90" rx="4"/>
+    <text class="t-name" x="120" y="72">routes.yaml</text>
+    <text class="t-sub" x="120" y="94">站点：域名、种类、证书</text>
+    <text class="t-sub" x="120" y="112">服务：名字、种类、模式、档位</text>
+    <path class="e-hot" d="M220 85 H248" marker-end="url(#h)"/>
+    <rect class="node-hot" x="250" y="40" width="220" height="90" rx="4"/>
+    <text class="t-name" x="360" y="72">render.py 校验</text>
+    <text class="t-sub" x="360" y="94">几条硬规则</text>
+    <text class="t-sub" x="360" y="112">违反任何一条就不生成</text>
+    <path class="e-hot" d="M470 85 H498" marker-end="url(#h)"/>
+    <rect class="node" x="500" y="40" width="240" height="90" rx="4"/>
+    <text class="t-name" x="620" y="72">生成 location</text>
+    <text class="t-sub" x="620" y="94">名字拼内部域名写进 Host</text>
+    <text class="t-sub" x="620" y="112">写到 /etc/openresty/atlas/</text>
+    <path class="e-hot" d="M740 85 H768" marker-end="url(#h)"/>
+    <rect class="node" x="770" y="40" width="210" height="90" rx="4"/>
+    <text class="t-name" x="875" y="72">openresty -t</text>
+    <text class="t-sub" x="875" y="94">语法、证书文件、引用</text>
+    <text class="t-sub" x="875" y="112">都检查一遍</text>
+    <path class="e-hot" d="M980 85 H1008" marker-end="url(#h)"/>
+    <rect class="node" x="1010" y="40" width="210" height="90" rx="4"/>
+    <text class="t-name" x="1115" y="72">reload</text>
+    <text class="t-sub" x="1115" y="94">新配置接新连接</text>
+    <text class="t-sub" x="1115" y="112">旧连接做完再走（原理 6）</text>
+    <text class="t-hot mid" x="360" y="160">不生成 = 不生效</text>
+    <text class="t-hot mid" x="875" y="160">不过 = 还用旧配置</text>
+    <text class="t-lab mid" x="620" y="190">CI 里同样渲染一遍，再跑安全回归测试；不过不合并</text>
+    <g class="badge"><circle cx="20" cy="40" r="10"/><text x="20" y="44">1</text></g>
+    <g class="badge"><circle cx="250" cy="40" r="10"/><text x="250" y="44">2</text></g>
+    <g class="badge"><circle cx="500" cy="40" r="10"/><text x="500" y="44">3</text></g>
+    <g class="badge"><circle cx="770" cy="40" r="10"/><text x="770" y="44">4</text></g>
+    <g class="badge"><circle cx="1010" cy="40" r="10"/><text x="1010" y="44">5</text></g>
+  </svg>
+  <table>
+    <thead><tr><th style="width: 19%">名字 · 种类（示意）</th><th style="width: 20%">外部路径</th><th style="width: 22%">内部域名</th><th style="width: 16%">认证模式</th><th>转发档位</th></tr></thead>
+    <tbody>
+      <tr><td>uc · api，子路径 /api/v1/auth/login、/api/v1/auth/token</td><td>/uc/api/v1/auth/login、…/token</td><td>uc.internal.techstz.com</td><td>passthrough，登录接口（401 计入封禁）</td><td>DEFAULT</td></tr>
+      <tr><td>uc · api，子路径 /api/v1/auth/</td><td>/uc/api/v1/auth/…</td><td>uc.internal.techstz.com</td><td>passthrough</td><td>DEFAULT</td></tr>
+      <tr><td>uc · api</td><td>/uc/…</td><td>uc.internal.techstz.com</td><td>auth</td><td>DEFAULT</td></tr>
+      <tr><td>uc-ui · ui</td><td>/uc-ui/…（含登录页）</td><td>uc-ui.internal.techstz.com</td><td>public</td><td>DEFAULT</td></tr>
+      <tr><td>atlas · api</td><td>/atlas/…</td><td>atlas.internal.techstz.com</td><td>auth</td><td>DEFAULT（/v1/threads/*/events、/browser/view 各再登记一条 SSE、WEBSOCKET）</td></tr>
+      <tr><td>atlas-ui · ui</td><td>/atlas-ui/…（根路径 / 跳到这里）</td><td>atlas-ui.internal.techstz.com</td><td>public</td><td>DEFAULT</td></tr>
+      <tr><td>mcp · api</td><td>/mcp/…（含数据面 /mcp/mcp/&lt;服务&gt;）</td><td>mcp.internal.techstz.com</td><td>auth（数据面子路径 self_auth）</td><td>DEFAULT（数据面 STREAM）</td></tr>
+      <tr><td>mcp-ui · ui</td><td>/mcp-ui/…</td><td>mcp-ui.internal.techstz.com</td><td>public</td><td>DEFAULT</td></tr>
+      <tr><td>knowledge · api</td><td>/knowledge/…</td><td>knowledge.internal.techstz.com</td><td>auth</td><td>UPLOAD</td></tr>
+      <tr><td>llm · api</td><td>/llm/…</td><td>llm.internal.techstz.com</td><td>self_auth</td><td>STREAM</td></tr>
+      <tr><td>opscenter · api</td><td>/opscenter/…（系统代理 /opscenter/api/systems/&lt;系统&gt;/…，不含 /ops/ 段）</td><td>opscenter.internal.techstz.com</td><td>auth</td><td>DEFAULT</td></tr>
+      <tr><td>opscenter-ui · ui</td><td>/opscenter-ui/…</td><td>opscenter-ui.internal.techstz.com</td><td>public</td><td>DEFAULT</td></tr>
+      <tr><td>Langfuse 站点</td><td>langfuse.techstz.com 整站</td><td>langfuse.internal.techstz.com</td><td>—（透传站点）</td><td>DEFAULT</td></tr>
+    </tbody>
+  </table>
+  <ol class="steps">
+    <li><span class="n">1</span>加一个服务分两处：服务自己的清单里加 Ingress &lt;名&gt;.internal.techstz.com（有前端就在前端 Service 上再加一条 &lt;名&gt;-ui.internal.techstz.com）；routes.yaml 登记名字、种类、认证模式和转发档位（模式或档位不同的子路径另登记一条）。网关不写地址；禁区段、清身份头、默认拒绝、HTTPS 跳转也都不用再写。</li>
+    <li><span class="n">2</span>硬规则：名字是合法的域名标签，且不能是禁区段（internal、ops、open）——运营中心因此叫 opscenter；种类和名字一致（ui 以 -ui 结尾，api 不以 -ui 结尾）；子路径不得含 <code>/internal/</code>、<code>/ops/</code>、<code>/open/</code>；同一名字同一子路径只登记一次；WEBSOCKET 档位只给显式声明的路由；public 只能用在前端和预览；登录接口只能是 passthrough；每个站点都要有证书。</li>
+    <li><span class="n">3</span>渲染出站点、Atlas 路由两份文件，写到 <code>/etc/openresty/atlas/</code>：后端去掉 /&lt;名&gt;、前端原样，Host 都写 &lt;名&gt;.internal.techstz.com（前端的名字本身带 -ui）；同一服务里更长的子路径排在前面，最后加一条默认路由返回 404。所有 location 的上游都是内部 Ingress。</li>
+    <li><span class="n">4</span><code>openresty -t</code> 检查语法、证书文件和引用；不过就停在这里，线上继续用旧配置。</li>
+    <li><span class="n">5</span>通过就 reload。CI 里也渲染一遍并跑安全回归测试（伪造的身份头会被清掉、编码变形的 <code>/internal</code> 路径是 400 或 404、SSE 不被缓冲、未登录是 401），这组测试和实现无关，以后换实现也照跑。</li>
+  </ol>
+
+  <h2>原理 5　证书谁来续</h2>
+  <svg width="1240" viewBox="0 0 1240 220" role="img" aria-label="certbot 续期证书">
+    <rect class="node" x="20" y="60" width="220" height="80" rx="4"/>
+    <text class="t-name" x="130" y="92">certbot</text>
+    <text class="t-sub" x="130" y="114">systemd 定时器，每天两次</text>
+    <path class="e-hot" d="M240 85 H518" marker-end="url(#h)"/>
+    <text class="t-lab mid" x="380" y="78">申请：要签 atlas.techstz.com</text>
+    <path class="e" d="M518 118 H242" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="380" y="136">验证通过，签发 90 天证书</text>
+    <rect class="node" x="520" y="60" width="220" height="80" rx="4"/>
+    <text class="t-name" x="630" y="92">Let's Encrypt</text>
+    <text class="t-sub" x="630" y="114">先验证域名指向这台机器</text>
+    <path class="e-hot" d="M740 100 H998" marker-end="url(#h)"/>
+    <text class="t-lab mid" x="870" y="92">来 80 端口取验证文件</text>
+    <rect class="node-hot" x="1000" y="60" width="220" height="80" rx="4"/>
+    <text class="t-name" x="1110" y="92">网关 :80</text>
+    <text class="t-sub" x="1110" y="114">/.well-known/acme-challenge/</text>
+    <path class="e-dash" d="M130 140 V190 H1110 V142" marker-end="url(#a)"/>
+    <text class="t-lab mid" x="620" y="184">把验证文件放进 /var/www/acme；拿到证书写到 /etc/letsencrypt，再 openresty -t、reload</text>
+    <g class="badge"><circle cx="20" cy="60" r="10"/><text x="20" y="64">1</text></g>
+    <g class="badge"><circle cx="520" cy="60" r="10"/><text x="520" y="64">2</text></g>
+    <g class="badge"><circle cx="1000" cy="60" r="10"/><text x="1000" y="64">3</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>certbot 由 systemd 定时器每天跑两次；证书还有 30 天以上就什么都不做。要续时，它向 Let's Encrypt 说要签哪个域名，拿到一个随机文件名和内容，放进 <code>/var/www/acme</code>。</li>
+    <li><span class="n">2</span>Let's Encrypt 从公网访问 <code>http://域名/.well-known/acme-challenge/文件名</code>。网关的 80 端口只对这个路径不跳 HTTPS，直接从 <code>/var/www/acme</code> 返回文件——证明这个域名确实指向这台机器。</li>
+    <li><span class="n">3</span>验证通过就签发 90 天证书。certbot 写到 <code>/etc/letsencrypt</code>，执行 deploy hook：<code>openresty -t</code> 通过后 reload，新连接用新证书，旧连接不受影响。从 Traefik 切过来时证书不搬，由 certbot 重新申请（同一域名每周最多签 5 张，先用 staging 环境演练）。</li>
+  </ol>
+
+  <h2>原理 6　改配置、换证书时长连接怎么办</h2>
+  <svg width="1240" viewBox="0 0 1240 240" role="img" aria-label="reload 时的排空时间线">
+    <rect class="band-a" x="80" y="30" width="1100" height="36" rx="4"/>
+    <text class="t-lab mid" x="630" y="53">新 worker：从第 0 秒起用新配置接所有新连接</text>
+    <rect class="band-a" x="80" y="76" width="780" height="36" rx="4"/>
+    <text class="t-lab mid" x="470" y="99">旧 worker：不再接新连接，做完手上的请求；普通接口几秒内收尾，SSE、WebSocket 还连着</text>
+    <rect class="band-b" x="860" y="76" width="200" height="36" rx="4"/>
+    <text class="t-lab mid" x="960" y="99">关掉剩下的长连接</text>
+    <path class="e" d="M60 140 H1190" marker-end="url(#a)"/>
+    <line class="tick" x1="80" y1="132" x2="80" y2="148"/>
+    <line class="tick" x1="860" y1="132" x2="860" y2="148"/>
+    <text class="t-lab mid" x="80" y="168">0 秒 · systemctl reload</text>
+    <text class="t-lab mid" x="860" y="168">30 秒 · worker_shutdown_timeout</text>
+    <rect class="node" x="560" y="190" width="620" height="36" rx="4"/>
+    <text class="t-lab mid" x="870" y="213">前端 SSE 断开 → 立刻重连（落到新 worker），带 after_seq=89 续上，不丢事件</text>
+    <path class="e-dash" d="M960 112 V188" marker-end="url(#a)"/>
+    <g class="badge"><circle cx="80" cy="30" r="10"/><text x="80" y="34">1</text></g>
+    <g class="badge"><circle cx="80" cy="76" r="10"/><text x="80" y="80">2</text></g>
+    <g class="badge"><circle cx="860" cy="76" r="10"/><text x="860" y="80">3</text></g>
+    <g class="badge"><circle cx="560" cy="190" r="10"/><text x="560" y="194">4</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>改了路由（gateway.sh）或续了证书（certbot），都执行 <code>systemctl reload</code>：Nginx 先检查新配置，没问题才起新 worker，新 worker 立刻接所有新连接。配置有错就不切，继续用旧的。</li>
+    <li><span class="n">2</span>旧 worker 不再接新连接，把手上的请求做完——普通接口几秒内就结束。</li>
+    <li><span class="n">3</span>SSE 事件流和浏览器画面的 WebSocket 可能一直不结束：30 秒后旧 worker 主动关掉它们，然后退出。</li>
+    <li><span class="n">4</span>前端 SSE 断开后立刻重连，带着已经收到的最后一条序号；新连接落到新 worker，后端从下一条接着推，一条不丢。WebSocket 画面断了前端重新打开。只有升级 OpenResty 本身要 restart（中断约 1 秒），放在低峰做；systemd 设了 Restart=always，进程意外退出会被拉起来。</li>
+  </ol>
+
+  <h2>原理 7　有人反复试密码时，怎么封 IP</h2>
+  <p>例子：攻击者在 203.0.113.7 上拿一个常用密码，轮着试 200 个账号。同时，张三在公司里正常用 Atlas。</p>
+  <svg width="1240" viewBox="0 0 1240 330" role="img" aria-label="登录失败计数与封禁">
+    <rect class="node-hot" x="20" y="40" width="330" height="56" rx="4"/>
+    <text class="t-lab mid" x="185" y="63">POST /uc/api/v1/auth/login</text>
+    <text class="t-hot mid" x="185" y="84">登录接口 · 上游回 401（账号或密码错）</text>
+    <rect class="node" x="20" y="120" width="330" height="56" rx="4"/>
+    <text class="t-lab mid" x="185" y="143">POST /uc/api/v1/auth/login</text>
+    <text class="t-sub" x="185" y="164">登录接口 · 回 200（登录成功）</text>
+    <rect class="node" x="20" y="200" width="330" height="56" rx="4"/>
+    <text class="t-lab mid" x="185" y="223">GET /atlas/v1/threads/42/events</text>
+    <text class="t-sub" x="185" y="244">业务接口 · 401 TOKEN_EXPIRED（令牌过期）</text>
+    <rect class="node-hot" x="430" y="40" width="330" height="56" rx="4"/>
+    <text class="t-name" x="595" y="63">这个 IP 的失败计数</text>
+    <text class="t-sub" x="595" y="84">log 阶段 +1，从第一次失败起 10 分钟有效</text>
+    <path class="e-hot" d="M350 68 H428" marker-end="url(#h)"/>
+    <path class="e-mute" d="M350 148 H428" marker-end="url(#m)"/>
+    <text class="t-mute" x="438" y="152">不计数；登录成功也不清零</text>
+    <path class="e-mute" d="M350 228 H428" marker-end="url(#m)"/>
+    <text class="t-mute" x="438" y="232">不计数：前端拿它去刷新，是正常流程</text>
+    <rect class="node-hot" x="840" y="40" width="380" height="56" rx="4"/>
+    <text class="t-name" x="1030" y="63">封这个 IP 30 分钟</text>
+    <text class="t-sub" x="1030" y="84">到期自动解封；本机端口可提前解封</text>
+    <path class="e-hot" d="M760 68 H838" marker-end="url(#h)"/>
+    <text class="t-hot mid" x="799" y="60">满 20 次</text>
+    <rect class="gap" x="840" y="130" width="380" height="40" rx="4"/>
+    <text class="t-hot mid" x="1030" y="155">这个 IP 的所有请求（所有站点）→ 403 IP_BLOCKED</text>
+    <path class="e-hot" d="M1030 96 V128" marker-end="url(#h)"/>
+    <rect class="cell" x="840" y="200" width="380" height="56" rx="4"/>
+    <text class="t-lab mid" x="1030" y="223">白名单网段（如公司出口 IP、监控探针）</text>
+    <text class="t-lab mid" x="1030" y="244">不计数、不封</text>
+    <rect class="band-a" x="20" y="280" width="1200" height="36" rx="4"/>
+    <text class="t-lab" x="36" y="303">计数和封禁表都放在网关的共享内存里：所有 worker 共用，reload 不丢；网关每台机器一个实例，计数就是准的，不用 Redis</text>
+    <g class="badge"><circle cx="20" cy="40" r="10"/><text x="20" y="44">1</text></g>
+    <g class="badge"><circle cx="430" cy="40" r="10"/><text x="430" y="44">2</text></g>
+    <g class="badge"><circle cx="840" cy="40" r="10"/><text x="840" y="44">3</text></g>
+    <g class="badge"><circle cx="840" cy="130" r="10"/><text x="840" y="134">4</text></g>
+    <g class="badge"><circle cx="20" cy="200" r="10"/><text x="20" y="204">5</text></g>
+    <g class="badge"><circle cx="840" cy="200" r="10"/><text x="840" y="204">6</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>路由表里有两条标了「登录接口」：Web 登录 <code>/uc/api/v1/auth/login</code> 和手机令牌登录 <code>/uc/api/v1/auth/token</code>。账号或密码不对时，用户中心一律回 401：账号不存在、密码错误都是 401，触发账号锁定的那一次也是。网关在 log 阶段看状态码，这时响应已经发给浏览器了，不拖慢登录。是 401，就给这个 IP 记一次。</li>
+    <li><span class="n">2</span>计数从这个 IP 第一次失败算起，10 分钟后自动清掉。算例：攻击者每个账号只试一次，用户中心的账号锁定（同一账号错 5 次）一个都碰不到。10:00:00 开始试，10:03:40 第 20 次失败。登录成功不清零计数，否则攻击者夹一次正确的登录就能从头再来。</li>
+    <li><span class="n">3</span>满 20 次就封，封到 10:33:40，同时清掉计数，并打一行告警日志（IP、次数、到期时间）。30 分钟后自动解封。误封时，运维在服务器上通过本机端口 127.0.0.1:8081 查看封禁表、提前解封。</li>
+    <li><span class="n">4</span>封禁期间，这个 IP 的每个请求进 location 后都先查一次封禁表（读一次共享内存，微秒级）。命中就返回 403 IP_BLOCKED，消息里写「还剩 N 分钟」。不用 429，是因为前端把 429 当成「模型忙，换个模型」。</li>
+    <li><span class="n">5</span>别的 401 一律不数。张三的访问令牌 15 分钟过期，业务接口回 401 TOKEN_EXPIRED，前端靠它去刷新，这是正常流程。公司几百人共用一个出口 IP 时，这种 401 一小时就有上千次，数进去整个公司都会被封。刷新接口回的 401 也不数。</li>
+    <li><span class="n">6</span>白名单网段（公司出口 IP、监控探针）不计数也不封。阈值 20 次比账号锁定的 5 次宽，也是为了同一出口 IP 后面有人偶尔输错时，不至于连累别人。这一招只挡单个 IP 的反复尝试，攻击者不停换 IP 就挡不住。</li>
+  </ol>
+
+  <h2>和现在的入口比</h2>
+  <table>
+    <thead><tr><th style="width: 14%">方面</th><th style="width: 42%">现在（Traefik + atlas-frontends 里的 Nginx）</th><th>改成</th></tr></thead>
+    <tbody>
+      <tr><td>入口</td><td>Traefik 占 80 / 443、管证书、按域名分；后面 Nginx 再按路径分、做认证。</td><td>宿主机上的网关占 80 / 443，证书、域名、路径、认证都在这里；Traefik 退到集群里，只按 Host 做内部分流。</td></tr>
+      <tr><td>找服务</td><td>Nginx 配置里写死每个后端的 Service 地址。</td><td>按服务名拼内部域名，经内部 Ingress；服务的 Ingress 写在它自己的清单里，网关不写地址。</td></tr>
+      <tr><td>外部路径</td><td>各不相同：/atlas-api/、/atlas-knowledge-api/、/mcp-gateway-api/、/device-api/……</td><td>统一成 /&lt;名&gt;/…：接口 /atlas/、/knowledge/、/mcp/、/device/……，页面 /atlas-ui/、/uc-ui/、/teamflow-ui/；运营中心也一样，/opscenter/ 和 /opscenter-ui/；旧路径过渡期保留别名。</td></tr>
+      <tr><td>前后端</td><td>三个 Next.js 和 Nginx 挤在一个 Pod 里。</td><td>前端仍在一个 Deployment、一个 Service，每个前端一条 Ingress（&lt;名&gt;-ui.internal.techstz.com）；网关不再和前端挤在一个 Pod 里。</td></tr>
+      <tr><td>部署</td><td>Nginx 和前端在一个 Pod 里，前端发版网关跟着重启，长连接全断。</td><td>网关在 K8s 外面，systemd 管；前端发版、集群升级都不影响入口。</td></tr>
+      <tr><td>证书</td><td>Traefik 的 ACME，证书在 PVC 里。</td><td>certbot（webroot），证书在 /etc/letsencrypt，续期后 reload。</td></tr>
+      <tr><td>认证</td><td>每个请求 <code>auth_request</code> 到用户中心校验会话；手机端不能带 Bearer。</td><td>Lua 本地验 JWT，Cookie 和 Bearer 统一；请求路径上不调用户中心。</td></tr>
+      <tr><td>内部端点</td><td>每个服务手写两条 <code>return 404</code>，漏写就暴露。</td><td>server 级禁区段 + 默认拒绝 + 渲染时断言，三道。</td></tr>
+      <tr><td>身份头</td><td>靠每个 location include 清头的配置，漏 include 就透传。</td><td>所有站点统一清，任何路由都拿不到外部的值。</td></tr>
+      <tr><td>限流</td><td>没有。</td><td>这一期也不做。</td></tr>
+      <tr><td>防撞库</td><td>只有用户中心的账号锁定（同一账号错 5 次）。</td><td>账号锁定照旧；网关再按 IP 数登录失败，10 分钟 20 次就封 30 分钟。</td></tr>
+      <tr><td>真实 IP</td><td>经 Traefik 转一手，要从 X-Forwarded-For 里取。</td><td>网关就是第一跳，<code>$remote_addr</code> 就是客户端 IP；转给后端时照样写 X-Forwarded-For。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>设计决策</h2>
+  <table>
+    <thead><tr><th style="width: 30%">决策</th><th>理由</th><th style="width: 16%">详见</th></tr></thead>
+    <tbody>
+      <tr><td>网关接手 Traefik 的对外职责；Traefik 留在集群里只做内部 Ingress</td><td>TLS、证书、域名分流和 Atlas 的安全规则都在一处，拿到的就是真实客户端 IP；集群内部按 Host 分流仍交给 K8s 原生的 Ingress。Langfuse、gitea 有自己的登录，只清身份头，不套 Atlas 的规则。</td><td><a href="code-routing.html" target="_blank" rel="noopener">站点、路由表与边界防护</a></td></tr>
+      <tr><td>运营中心和其他系统一样挂在 Atlas 站点、走 auth 路由，名字叫 opscenter；清头逐个列出头名，不用通配符</td><td>运营人员是用户中心里系统租户的人，和别的系统一样统一登录、凭访问 JWT 访问（运营中心的登录与权限见<a href="../opscenter/design-opscenter.html" target="_blank" rel="noopener">运营中心设计</a>）。网关不为它开特例，也不需要知道谁是系统租户：能不能进运营中心由用户中心的授权快照判。名字不能叫 ops：/ops/ 是禁区段，整个服务都会被 404；运营中心自己的路径也不含 /ops/ 段，CSRF 用网关统一的那套。清头对所有站点生效，只列运营接口的签名头，不用 X-Ops-* 通配符误伤以后合法的同前缀头。代价：运营中心和租户业务共用一个站点和登录态，系统租户里有模块授权的人被盗号，攻击者也能进运营中心；靠只授必要的模块、不可恢复的操作要 Owner 来收窄。</td><td><a href="code-routing.html" target="_blank" rel="noopener">站点、路由表与边界防护</a></td></tr>
+      <tr><td>网关跑在宿主机上，systemd 管，不进 K8s</td><td>入口不跟着集群一起起停：集群升级、控制面出问题时，网关照常终结 TLS、回错误页，恢复后自动接上。代价：不是 K8s 的声明式管理，安装、配置、升级靠 gateway.sh 和官方 apt 包保证一致；每台机器一个实例，没有副本。</td><td><a href="container.html" target="_blank" rel="noopener">容器图</a></td></tr>
+      <tr><td>按服务名拼内部域名，经内部 Ingress 找服务；网关只写 Host、不解析</td><td>服务在集群里怎么被找到由它自己的 Ingress 负责，网关只管「对外叫什么、怎么认证」；加服务不用改网关的上游。网关只连内部 Ingress 一个固定地址，不依赖 DNS。代价：多一跳，内部 Ingress 的超时、缓冲要按长连接配。</td><td><a href="code-routing.html" target="_blank" rel="noopener">站点、路由表与边界防护</a></td></tr>
+      <tr><td>前端的名字带 -ui，外部路径也带：/mcp-ui/ 是页面，/mcp/ 是接口；前端不去前缀</td><td>路径第一段和内部域名第一段完全一致，一条规则看出请求去哪，前后端不抢前缀。Next.js 的 basePath 就是 /&lt;名&gt;-ui，去掉前缀静态资源会 404；后端去掉 /&lt;名&gt;，服务自己的路径不用变。</td><td><a href="code-proxy.html" target="_blank" rel="noopener">流式转发</a></td></tr>
+      <tr><td>外部路径统一成 /&lt;名&gt;/…，旧路径过渡期保留别名；前端不拆部署</td><td>一眼看出请求去哪个服务；但页面地址（/atlas → /atlas-ui）、接口地址都变了，书签、手机 App、已配对的本机连接器都记着旧路径，网关先把旧路径转到新目标，客户端都换完再删。前端保持一个 Deployment、一个 Service，靠多条 Ingress 区分，不增加部署单元。</td><td><a href="code-routing.html" target="_blank" rel="noopener">站点、路由表与边界防护</a></td></tr>
+      <tr><td>仍然是白名单，不按第一段自动转发</td><td>自动转发会把集群里所有带 Ingress 的服务都暴露出去；只有登记过的名字才有 location。</td><td><a href="dynamic/dynamic-routing-security.html" target="_blank" rel="noopener">边界防护时序</a></td></tr>
+      <tr><td>用 OpenResty：原生指令做转发，Lua 只做认证、CSRF 和登录失败封禁</td><td>转发、流式、WebSocket、大文件、证书是 Nginx 最成熟的部分；开源 Nginx 缺的是 JWT 验签和按登录结果封 IP，用 Lua 写一两百行就够。仓库里没有 Go，自研网关要多一套语言并重写 Nginx 已经做好的边角。</td><td><a href="component-gateway.html" target="_blank" rel="noopener">网关组件图</a></td></tr>
+      <tr><td>路由表 routes.yaml 是唯一来源，渲染成静态配置</td><td>缓冲、请求体上限、WebSocket 升级只能按 location 设；静态配置能被 <code>openresty -t</code> 和测试一次校验完。</td><td><a href="code-routing.html" target="_blank" rel="noopener">站点、路由表与边界防护</a></td></tr>
+      <tr><td>网关本地验 Ed25519 JWT，不在请求里调用户中心</td><td>热路径只花 CPU，用户中心短暂不可用时已登录的人照常用。代价是登出、停用最多晚 15 分钟在网关生效，期间下游取授权快照已经会拒绝。</td><td><a href="code-auth.html" target="_blank" rel="noopener">访问阶段、JWT 认证与登录失败封禁</a></td></tr>
+      <tr><td>公钥放共享内存并落盘；一把都没有时返回 503</td><td>没有 K8s 就绪探针替网关摘流；宿主机重启时网关常比用户中心先起来，读缓存文件就能马上验签。</td><td><a href="code-auth.html" target="_blank" rel="noopener">访问阶段、JWT 认证与登录失败封禁</a></td></tr>
+      <tr><td>证书交给 certbot，续期后 reload</td><td>Nginx 本身不会申请证书；certbot 是最常用的现成工具，网关只需在 80 端口提供验证文件。</td><td><a href="container.html" target="_blank" rel="noopener">容器图</a></td></tr>
+      <tr><td>改配置、换证书用 reload</td><td>单实例没法轮流换；reload 是 Nginx 自带的无损切换，长连接最多拖 30 秒，前端带游标重连。升级 OpenResty 本身才 restart。</td><td><a href="code-proxy.html" target="_blank" rel="noopener">流式转发</a></td></tr>
+      <tr><td>这一期不做限流</td><td>先把入口、认证和路由做稳。代价：单个用户或租户的失控脚本能打满共享的控制面；登录防撞库靠下一条的按 IP 封禁。以后要做时，在 access 阶段加一个 Lua 模块、路由表加档位即可，现有结构不用动。</td><td><a href="code-auth.html" target="_blank" rel="noopener">访问阶段、JWT 认证与登录失败封禁</a></td></tr>
+      <tr><td>登录失败按 IP 封禁：只数登录接口的 401，10 分钟 20 次封 30 分钟</td><td>撞库、密码喷洒每个账号只试一两次，绕得过账号锁定；按 IP 数，就挡得住单个 IP 的反复尝试。令牌过期的 401 是正常刷新流程，公司共用出口 IP，数进去会把整个办公室封掉，所以只数登录接口的。计数放共享内存、在 log 阶段记：单实例计数准确，不连 Redis，也不拖慢登录。被封返回 403，因为前端把 429 当「换个模型」。代价：换 IP 的攻击挡不住；同一出口 IP 里有人反复输错会连累别人，靠宽阈值、白名单和手动解封兜底；restart 会清空封禁表。</td><td><a href="code-auth.html" target="_blank" rel="noopener">访问阶段、JWT 认证与登录失败封禁</a></td></tr>
+      <tr><td>一组和实现无关的安全回归测试</td><td>伪造身份头、编码变形的内部路径、SSE 缓冲、未登录这些行为写成测试，CI 里对着真网关跑；以后换实现，用同一组测试验收。</td><td><a href="dynamic/dynamic-routing-security.html" target="_blank" rel="noopener">边界防护时序</a></td></tr>
+    </tbody>
+  </table>
+
+  <h2>图索引</h2>
+  <h3>系统、容器与组件</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="system-context.html" target="_blank" rel="noopener">API 网关 · 系统上下文</a></td><td>网关是服务器上唯一的入口：经内部 Ingress 到用户中心、前端、业务应用、数据面子网关，以及透传的 Langfuse、gitea；证书找 Let's Encrypt。</td></tr>
+      <tr><td><a href="container.html" target="_blank" rel="noopener">API 网关 · 容器</a></td><td>三个容器都在宿主机上：网关服务、路由表与配置生成器、证书续期；网关的上游只有集群里的内部 Ingress。</td></tr>
+      <tr><td><a href="component-gateway.html" target="_blank" rel="noopener">网关服务 · 组件</a></td><td>八个组件按请求阶段排：TLS 与站点、入口与边界防护、白名单路由表（Nginx）→ 登录失败封禁、访问阶段编排、JWT 认证器、公钥环（Lua）→ 流式转发（Nginx）。</td></tr>
+    </tbody>
+  </table>
+  <h3>时序图</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="dynamic/dynamic-web-jwt.html" target="_blank" rel="noopener">Web 登录与无感刷新</a></td><td>原理 1、2、7 的完整交互：先查封禁表；登录走 passthrough 直接转给用户中心，回 401 时给这个 IP 记一次失败；业务请求校 CSRF、本地验签；过期后单飞刷新。</td></tr>
+      <tr><td><a href="dynamic/dynamic-mobile-jwt.html" target="_blank" rel="noopener">手机登录与刷新令牌轮换</a></td><td>同一个认证器，载体换成 Bearer、不校 CSRF；令牌用 JSON 返回。</td></tr>
+      <tr><td><a href="dynamic/dynamic-routing-security.html" target="_blank" rel="noopener">边界防护</a></td><td>原理 4：畸形路径 400、禁区段 404、没登记 404；数据面子网关和预览站点不进 access 阶段。</td></tr>
+      <tr><td><a href="dynamic/dynamic-streaming-ws.html" target="_blank" rel="noopener">SSE、WebSocket 与 reload</a></td><td>原理 6：建连时验一次；SSE、WEBSOCKET 档位；reload 时旧 worker 排空、前端带游标续传。</td></tr>
+    </tbody>
+  </table>
+  <h3>类图</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="code-routing.html" target="_blank" rel="noopener">站点、路由表与边界防护</a></td><td>原理 3、4、5 的实现：SiteSpec、ServiceRoute、硬规则、ConfigRenderer、InternalHost（按名字拼内部域名）、TlsSites（证书、跳转、拒绝未知域名）；BoundaryGuard、HeaderScrub、默认拒绝；统一错误。</td></tr>
+      <tr><td><a href="code-auth.html" target="_blank" rel="noopener">访问阶段与 JWT 认证</a></td><td>原理 2、7 的实现：access.run、取令牌、CSRF、验签、Claims、公钥环（定时器、共享内存、缓存文件、没有公钥时 503）；登录失败封禁（log 阶段计数、每个请求查封禁表、403 IP_BLOCKED、阈值与白名单、本机端口解封）。</td></tr>
+      <tr><td><a href="code-proxy.html" target="_blank" rel="noopener">流式转发</a></td><td>原理 6 的实现：五个转发档位、身份头与 Host 改写、唯一的上游（内部 Ingress）、reload 排空、访问日志；全是 Nginx 配置。</td></tr>
+    </tbody>
+  </table>
+</main>
+</body>
+</html>

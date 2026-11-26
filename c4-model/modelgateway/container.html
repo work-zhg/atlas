@@ -21,7 +21,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "容器图：模型平台",
-  "description": "目标模型：自研模型网关取代 LiteLLM，方案见 agent-platform/doc/design/model-gateway-design.html。模型调用不经过管理平台：应用和员工拿着 Key 直连模型网关；网关从平台库只读加载配置放在内存里，靠网关状态里的配置版本号知道要重新加载。网关在 Atlas 同一个域名下只开放调用和模型清单。管理平台和网关共用「供应商」包（各家的认证、地址、报错和用量写法），测试连接和调用时对同一家供应商的理解一致",
+  "description": "管理平台与模型网关同仓分进程部署，共用只读的供应商方言包（provider）与共享基础层（shared），控制面与数据面解耦（由 import-linter 契约强制守护）。同一镜像内置 python -m atlas_modelgateway 运维子命令（migrate 迁移、account/model/client-key 管理、smoke 冒烟），部署时由 initContainer 执行迁移，不单列常驻容器。",
   "system": "模型平台",
   "elements": [
     {
@@ -30,10 +30,10 @@
       "tag": "员工",
       "name": "员工",
       "color": "#297e06",
-      "description": "申请自己的个人 Key，在 Claude Code、Cursor、脚本里用它调模型。",
+      "description": "在控制台申请并管理个人 Key，在研发工具或脚本中调用授权范围内的模型。",
       "at": [
-        1.3,
-        0
+        1.2,
+        0.0
       ]
     },
     {
@@ -42,32 +42,10 @@
       "tag": "模型管理员",
       "name": "模型管理员",
       "color": "#1a849c",
-      "description": "租户里管模型的人：登记供应商账号、模型和线路，设公有私有并授权，给智能体和平台服务的 Key 分配模型，看调用记录和花费。",
+      "description": "登记供应商账号、模型与线路，配置公有或私有可见性并授权，给客户端 Key 分配模型与限额，查看调用明细与费用。",
       "at": [
         0.0,
-        0
-      ]
-    },
-    {
-      "id": "agent",
-      "kind": "system",
-      "name": "Agent 平台",
-      "color": "#ed8609",
-      "description": "智能体的配置、会话与执行：跑每一轮对话，实时推送模型、工具和子智能体的执行过程。",
-      "at": [
-        2.7,
-        0
-      ]
-    },
-    {
-      "id": "kb",
-      "kind": "system",
-      "name": "知识库服务",
-      "color": "#8411bd",
-      "description": "文档入库与检索，按文档权限过滤结果。",
-      "at": [
-        4.1,
-        0
+        0.0
       ]
     },
     {
@@ -75,10 +53,32 @@
       "kind": "system",
       "name": "运营中心",
       "color": "#8a6d00",
-      "description": "管理平台本身的独立系统：租户的开通和关闭、系统参数、系统任务；看不到租户的业务内容。",
+      "description": "平台级运维系统：管理租户启用、停用与数据清理，配置全局运行参数并查看后台巡检任务状态。",
       "at": [
-        -1.3,
-        0
+        -1.25,
+        0.0
+      ]
+    },
+    {
+      "id": "agent",
+      "kind": "system",
+      "name": "Agent 平台",
+      "color": "#ed8609",
+      "description": "智能体与平台系统功能的编排与运行时，按智能体或系统用途获取客户端 Key 并调用对话模型。",
+      "at": [
+        2.6,
+        0.0
+      ]
+    },
+    {
+      "id": "kb",
+      "kind": "system",
+      "name": "知识库服务",
+      "color": "#8411bd",
+      "description": "企业文档解析、向量化入库与混合检索服务，调用对话、向量与重排模型。",
+      "at": [
+        3.95,
+        0.0
       ]
     },
     {
@@ -86,10 +86,10 @@
       "kind": "system",
       "name": "用户中心",
       "color": "#bf101d",
-      "description": "用户、组织与权限的唯一数据源，负责统一登录。",
+      "description": "用户、组织架构、在职状态与数据权限的唯一事实源，负责统一身份认证。",
       "at": [
-        -1.4,
-        3.0
+        -1.25,
+        1.65
       ]
     },
     {
@@ -97,10 +97,10 @@
       "kind": "system",
       "name": "模型供应商",
       "color": "#5b6770",
-      "description": "DeepSeek、Anthropic、MiniMax、Kimi、Gemini 等的模型接口，以及自部署的 vLLM。",
+      "description": "公有云商业大模型厂商以及企业内部私有化部署的模型推理服务。",
       "at": [
-        4.8,
-        3.0
+        4.6,
+        2.3
       ]
     },
     {
@@ -109,10 +109,10 @@
       "shape": "server",
       "technology": "Python / FastAPI",
       "name": "管理平台",
-      "description": "账号、模型、线路、Key 和授权的管理，给应用的内部接口和运营接口；改了配置就让配置版本号加一；每 5 分钟检查异常账号。不在模型调用的路径上。",
+      "description": "按业务功能提供供应商账号、模型与线路、私有授权、API Key、调用记录查询与租户管控服务，按调用主体（员工、管理员、受信任应用、运营中心）统一鉴权与脱敏；后台持分布式锁运行巡检任务。不在模型调用热路径上。",
       "at": [
-        1.3,
-        1.6
+        0.85,
+        1.65
       ]
     },
     {
@@ -121,22 +121,10 @@
       "shape": "server",
       "technology": "Python / FastAPI（asyncio + httpx 流式）",
       "name": "模型网关",
-      "description": "所有模型调用的入口：认 Key、查限额、按模型整理参数、按会话选线路，格式相同直通、不同才转换，提交点前失败换线路，记用量和调用记录。多实例，不存状态。",
+      "description": "无状态水平扩展的数据面：内存只读配置快照、Key 鉴权与软硬限额、能力门禁与参数规划、会话粘滞或加权随机选路、协议直通/转换、提交点前故障切换、流式透传与异步批量记账。",
       "at": [
-        3.2,
-        1.6
-      ]
-    },
-    {
-      "id": "cli",
-      "kind": "container",
-      "shape": "server",
-      "technology": "Python / argparse",
-      "name": "运维命令行",
-      "description": "迁移平台库、登记到用户中心；部署时运行。",
-      "at": [
-        -0.1,
-        1.6
+        2.95,
+        1.65
       ]
     },
     {
@@ -145,141 +133,121 @@
       "shape": "database",
       "technology": "PostgreSQL 16",
       "name": "平台库",
-      "description": "账号（密钥加密）、模型、线路、Key（个人 Key 只存哈希）、授权登记、调用记录、操作日志，都带租户。",
+      "description": "存租户的供应商账号（信封加密密钥）、模型与线路、API Key（个人 Key 仅存摘要，客户端 Key 加密存储）、操作审计及按月分区的调用记录表 gw_model_call。",
       "at": [
-        1.3,
-        3.0
+        0.85,
+        3.25
       ]
     },
     {
       "id": "redis",
       "kind": "container",
       "shape": "database",
-      "technology": "Redis 7",
+      "technology": "Redis 7（键值 + Pub/Sub）",
       "name": "网关状态",
-      "description": "几个网关实例共用的状态：线路冷却、账号异常、每分钟请求计数、Key 本月花费、配置版本号。丢了能重建。",
+      "description": "多实例共享状态：线路冷却与半开探测锁、账号异常标记、RPM 原子计数、Key 当月花费与 5h/24h 滑动窗口费用桶、按租户隔离的配置版本号及 Key 即时驱逐广播。丢失后可降级并从平台库懒重建。",
       "at": [
-        3.2,
-        3.0
+        2.95,
+        3.25
       ]
     }
   ],
   "relationships": [
     {
+      "from": "admin",
+      "to": "server",
+      "description": "管理账号、模型线路、私有授权与 Key，查调用明细",
+      "technology": "JSON/HTTPS（经前端网关鉴权）"
+    },
+    {
       "from": "employee",
       "to": "server",
-      "description": "申请、管理自己的个人 Key",
-      "technology": "JSON/HTTPS（控制台的模型页面，经 nginx 校验登录）"
+      "description": "申请、管理个人 Key，查个人用量",
+      "technology": "JSON/HTTPS（经前端网关鉴权）"
     },
     {
       "from": "employee",
       "to": "gateway",
       "description": "用个人 Key 调模型",
-      "labelAt": 0.72,
-      "technology": "Anthropic / OpenAI 格式，HTTPS"
-    },
-    {
-      "from": "admin",
-      "to": "server",
-      "description": "登记账号、模型、线路，授权，分配模型，看调用记录",
-      "technology": "JSON/HTTPS（同上）"
-    },
-    {
-      "from": "admin",
-      "to": "cli",
-      "description": "部署时迁移、登记应用",
-      "labelAt": 0.6
-    },
-    {
-      "from": "agent",
-      "to": "server",
-      "description": "申请、获取客户端 Key",
-      "labelAt": 0.28,
-      "technology": "JSON/HTTP（内部接口）"
-    },
-    {
-      "from": "agent",
-      "to": "gateway",
-      "description": "带客户端 Key 调模型，取模型清单和能力",
-      "labelAt": 0.68,
-      "technology": "Anthropic 格式，HTTP + SSE"
-    },
-    {
-      "from": "kb",
-      "to": "server",
-      "description": "取服务级 Key",
-      "labelAt": 0.28,
-      "technology": "JSON/HTTP（内部接口）"
-    },
-    {
-      "from": "kb",
-      "to": "gateway",
-      "description": "对话、向量、重排",
-      "technology": "Anthropic 格式 / 向量 / 重排，HTTP"
+      "technology": "Anthropic / OpenAI 格式，HTTPS + SSE",
+      "labelAt": 0.68
     },
     {
       "from": "ops",
       "to": "server",
-      "description": "改系统参数、看系统任务；关闭租户时删除它的数据",
-      "labelAt": 0.35,
-      "technology": "JSON/HTTP（运营接口，带运营凭据）"
+      "description": "改系统参数、查任务状态，停用/恢复或清理租户",
+      "technology": "JSON/HTTP（/ops/api/v1，HMAC 运营凭据）"
+    },
+    {
+      "from": "agent",
+      "to": "server",
+      "description": "幂等补建并读取客户端 Key、查可用模型规格",
+      "technology": "JSON/HTTP（/api/v1/keys · /models，应用身份）",
+      "labelAt": 0.32
+    },
+    {
+      "from": "agent",
+      "to": "gateway",
+      "description": "带客户端 Key 与会话头调对话模型、数 token",
+      "technology": "Anthropic Messages（/universal），HTTP + SSE"
+    },
+    {
+      "from": "kb",
+      "to": "server",
+      "description": "读取服务级客户端 Key",
+      "technology": "JSON/HTTP（/api/v1/keys，应用身份）",
+      "labelAt": 0.3
+    },
+    {
+      "from": "kb",
+      "to": "gateway",
+      "description": "调用对话、向量与重排模型",
+      "technology": "JSON/HTTP + SSE"
+    },
+    {
+      "from": "server",
+      "to": "usercenter",
+      "description": "私有模型数据权限登记/授权、查可用模型与在职状态",
+      "technology": "JSON/HTTP（/open/v1）"
     },
     {
       "from": "server",
       "to": "db",
-      "description": "读写",
+      "description": "读写配置表、审计日志，查询调用记录并维护月分区",
       "technology": "SQL/TCP（asyncpg）"
     },
     {
       "from": "server",
       "to": "redis",
-      "description": "配置版本号加一，解除账号异常",
-      "labelAt": 0.3,
-      "technology": "Redis 协议"
-    },
-    {
-      "from": "server",
-      "to": "usercenter",
-      "description": "私有模型授权，用户能用哪些模型、是否在职，操作码",
-      "technology": "JSON/HTTP（开放接口）"
+      "description": "递增租户/Key 版本、广播即时驱逐、巡检锁与清除异常",
+      "technology": "Redis 协议 + Pub/Sub",
+      "labelAt": 0.38
     },
     {
       "from": "server",
       "to": "provider",
-      "description": "测试连接、查余额、检查异常账号",
-      "labelAt": 0.78,
-      "technology": "HTTPS（各供应商的格式）"
+      "description": "测试账号连通性、查余额与拉模型列表",
+      "technology": "HTTPS（直连或经出网代理）",
+      "labelAt": 0.72
     },
     {
       "from": "gateway",
       "to": "db",
-      "description": "只读加载配置，批量写调用记录",
-      "labelAt": 0.3,
-      "technology": "SQL/TCP（asyncpg）"
+      "description": "按租户只读加载配置、懒回填月/24h 窗口花费、批量追加调用记录",
+      "technology": "SQL/TCP（asyncpg）",
+      "labelAt": 0.62
     },
     {
       "from": "gateway",
       "to": "redis",
-      "description": "冷却、异常、计数、花费、配置版本号",
-      "technology": "Redis 协议"
+      "description": "读写冷却/异常、RPM 与月/5h/24h 窗口花费，订阅并轮询租户配置版本",
+      "technology": "Redis 协议 + Lua + Pub/Sub"
     },
     {
       "from": "gateway",
       "to": "provider",
-      "description": "转发调用，带账号密钥",
-      "technology": "HTTPS + SSE（海外经出网代理）"
-    },
-    {
-      "from": "cli",
-      "to": "db",
-      "description": "迁移",
-      "technology": "SQL/TCP（asyncpg）"
-    },
-    {
-      "from": "cli",
-      "to": "usercenter",
-      "description": "登记应用、操作码和数据编码",
-      "technology": "JSON/HTTP（管理 API，管理员账号登录）"
+      "description": "转发模型请求，IP 绑定防 DNS 重绑定或经出网代理",
+      "technology": "HTTPS + SSE"
     }
   ]
 }

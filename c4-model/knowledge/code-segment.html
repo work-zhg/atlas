@@ -191,7 +191,7 @@
         1.95
       ],
       "source": "segment/enhance.py enhance / apply_llm_context",
-      "responsibility": "入库增强，按库开关、都可以失败：上下文补全给每个父块生成一句「这一段在全文中讲什么」拼进向量化前缀（文档正文作固定前缀，命中网关的前缀缓存）；行数达到阈值的大表生成摘要，作为 summary 子块挂到包含它单元格最多的分段上。结果按（模型、提示词版本、文档哈希、分段哈希）缓存在 Redis，改了提示词就换键，不会读到旧结果。",
+      "responsibility": "入库增强，按库开关、都可以失败：上下文补全给每个父块生成一句「这一段在全文中讲什么」拼进向量化前缀（文档正文作固定前缀，命中网关的前缀缓存）；行数达到阈值的大表生成摘要，作为 summary 子块挂到包含它单元格最多的分段上。结果按（模型、提示词版本、文档哈希、分段哈希）缓存在知识库的库里（kb_enhance_cache，带租户，留 30 天），开始前一次取回命中的，每次调用成功就存一条；改了提示词就换键，不会读到旧结果。",
       "methods": [
         [
           "+",
@@ -527,6 +527,10 @@
       "reason": "键要是只有（模型、文档哈希、分段哈希），改了提示词重新入库仍读到旧结果，看不出改动有没有效果。提示词版本取提示词文本的哈希，改提示词自动换键。"
     },
     {
+      "decision": "增强缓存放数据库，不放 Redis",
+      "reason": "读得少、对延迟不敏感（一次 LLM 调用要几秒），却要留 30 天、随入库量增长；平台的 Redis 是全平台共用的一个实例，还装着任务队列和锁，撑满了大家一起停。每次调用成功就存一条，worker 中途被杀做完的部分也不丢；过期的由每天一次的清理任务删。"
+    },
+    {
       "decision": "命中次数不存在分段上",
       "reason": "要是每次检索都 UPDATE kb_segment.hit_count，就会和入库、编辑抢同一批行；重新入库时分段整篇重建，计数还会清零。命中次数从检索记录汇总（检索领域）。"
     }
@@ -785,6 +789,55 @@
           "name": "ix_kb_child_chunk_document_uuid",
           "columns": [
             "document_uuid"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "kb_enhance_cache",
+      "description": "Enhancer 的结果缓存（上下文补全、大表摘要），保留 30 天",
+      "at": [
+        3.45,
+        0
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "bigint",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键"
+        },
+        {
+          "name": "uuid",
+          "type": "uuid",
+          "key": "UK",
+          "description": "逻辑主键"
+        },
+        {
+          "name": "cache_key",
+          "type": "varchar(512)",
+          "description": "种类、模型、提示词版本、内容哈希"
+        },
+        {
+          "name": "value",
+          "type": "text",
+          "description": "生成的上下文或表格摘要"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uq_kb_enhance_cache_tenant_uuid_cache_key",
+          "columns": [
+            "tenant_uuid",
+            "cache_key"
+          ],
+          "unique": true
+        },
+        {
+          "name": "ix_kb_enhance_cache_created_at",
+          "columns": [
+            "created_at"
           ]
         }
       ]

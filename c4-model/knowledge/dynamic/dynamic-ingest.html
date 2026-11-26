@@ -216,8 +216,8 @@
           ],
           [
             "attrs",
-            "表单（JSON）：元数据、ACL、生效区间、supersedes",
-            "{\"metadata\": {\"year\": 2026}, \"acl\": [\"d:12\"]}"
+            "表单（JSON）：元数据、生效区间、supersedes",
+            "{\"metadata\": {\"year\": 2026}}"
           ]
         ]
       }
@@ -256,7 +256,7 @@
       "description": "INSERT 处理规则、文档（waiting）；COMMIT",
       "technology": "SQL/TCP",
       "details": {
-        "note": "要求审核的库，新文档 review_status = pending，入库完成也不参与检索，直到审核通过。"
+        "note": "一个文档一行，状态 waiting；同一次上传的文档共用一个批次号，控制台按批次看进度。"
       }
     },
     {
@@ -311,7 +311,7 @@
       "to": "parse",
       "description": "解析成 DocIR",
       "details": {
-        "note": "质量报告 needs_review（扫描件、乱码）时文档先进待审核。"
+        "note": "质量报告有警告（扫描件、乱码）时只记下、控制台标出来，不卡入库和检索。"
       }
     },
     {
@@ -337,7 +337,7 @@
       "description": "上下文补全、表格摘要",
       "technology": "JSON/HTTP（LiteLLM chat/completions，服务级 Key）",
       "details": {
-        "note": "经模型接入组件（取 Key、退避重试），图中未单独画；结果按模型、提示词版本、文档和分段哈希缓存在 Redis。没配对话模型就不调用。"
+        "note": "经模型接入组件（取 Key、退避重试），图中未单独画；结果按模型、提示词版本、文档和分段哈希缓存在知识库的库里（kb_enhance_cache，留 30 天）。没配对话模型就不调用。"
       }
     },
     {
@@ -387,7 +387,7 @@
           [
             "标量字段",
             "EntityFields",
-            "{kind, segment_uuid, document_uuid, doc_ok, meta, acl, is_current, …}"
+            "{kind, segment_uuid, document_uuid, doc_ok, meta, is_current, …}"
           ]
         ]
       }
@@ -398,7 +398,7 @@
       "description": "completed；按文档同步文档级字段；新版本取代旧版本",
       "technology": "SQL/TCP",
       "details": {
-        "note": "记字数、耗时；完成时再按文档整体同步一次向量库里的文档级字段（防入库中途改 ACL 留下旧值），带 supersedes 的新版本让同组旧版本 is_current = false。"
+        "note": "记字数、耗时；完成时再按文档整体同步一次向量库里的文档级字段（防入库中途改元数据留下旧值），带 supersedes 的新版本让同组旧版本 is_current = false。"
       }
     }
   ]
@@ -445,7 +445,7 @@
       <rect class="head" x="226" y="160" width="170" height="86" rx="4"/>
       <text class="t-sub" x="311.0" y="187.0">OSS：docir.json、图片</text>
       <text class="t-sub" x="311.0" y="207.0">库：解析报告</text>
-      <text class="t-sub" x="311.0" y="227.0">质量差 → 先进待审核</text>
+      <text class="t-sub" x="311.0" y="227.0">质量差 → 记警告</text>
       <path class="e-hot" d="M396 76 H432" marker-end="url(#pr-h)"/>
       <rect class="node" x="432" y="44" width="170" height="64" rx="4"/>
       <text class="t-name" x="517.0" y="72.0">分段与增强</text>
@@ -453,7 +453,7 @@
       <path class="e" d="M517 108 V158" marker-end="url(#pr-a)"/>
       <rect class="head" x="432" y="160" width="170" height="86" rx="4"/>
       <text class="t-sub" x="517.0" y="187.0">分段只在内存里</text>
-      <text class="t-sub" x="517.0" y="207.0">增强结果缓存在 Redis</text>
+      <text class="t-sub" x="517.0" y="207.0">增强结果缓存在库里</text>
       <text class="t-sub" x="517.0" y="227.0">单段增强失败不影响</text>
       <path class="e-hot" d="M602 76 H638" marker-end="url(#pr-h)"/>
       <rect class="node" x="638" y="44" width="170" height="64" rx="4"/>
@@ -497,7 +497,7 @@
     </svg>
     <ol>
       <li><span class="n">1</span>上传在接口进程里：校验、存原文件、建文档行（waiting），提交之后才给每个文档投递一条入库任务（图 2）。</li>
-      <li><span class="n">2</span>解析：原文件 → DocIR，DocIR 和图片存回 OSS；解析质量差的文档先进待审核（图 3）。</li>
+      <li><span class="n">2</span>解析：原文件 → DocIR，DocIR 和图片存回 OSS；解析质量差的只在解析报告里记警告、控制台标出来，不卡检索（图 3）。</li>
       <li><span class="n">3</span>分段与增强：DocIR 切成父分段和子块，按库开关补上下文、写表格摘要；这一步的结果只在内存里（图 4）。</li>
       <li><span class="n">4</span>写分段：一个事务整篇替换这个文档的分段，记下 <code>splitting_completed_at</code>。这是入库唯一的续跑点（图 5）。</li>
       <li><span class="n">5</span>分批向量化：每批 64 个还没 completed 的分段，先写向量库、再在一个事务里标 completed（图 6）。</li>
@@ -536,8 +536,7 @@
       <text class="t-sub" x="550" y="148">库记下这次的规则</text>
       <text class="t-sub" x="550" y="166">下次上传沿用</text>
       <text class="t-sub" x="755" y="148">{前缀}/{库}/{文档}/{文件名}</text>
-      <text class="t-sub" x="955" y="148">要求审核的库：先待审核</text>
-      <text class="t-sub" x="955" y="166">supersedes：加入旧版本的版本组</text>
+      <text class="t-sub" x="955" y="148">supersedes：加入旧版本的版本组</text>
       <path class="e-hot" d="M1145 124 V214" marker-end="url(#pr-h)"/>
       <text class="t-hot" x="1153" y="206">每个文档一条</text>
       <text class="t-lab" x="20" y="238">接口立刻返回批次和文档（waiting），</text>
@@ -562,11 +561,11 @@
       <g class="badge"><circle cx="1070" cy="60" r="10"/><text x="1070" y="64">6</text></g>
     </svg>
     <ol>
-      <li><span class="n">1</span>控制台经网关上传一个或多个文件，带上处理规则（切法、长度、解析器）和文档属性（元数据、ACL、生效区间、supersedes）。接口先确认调用者能写这个库：库级权限问用户中心。</li>
-      <li><span class="n">2</span>校验：格式在支持列表里、单个文件不超过 50 MB、单库最多 5000 份文档；同一个库的文档必须用同一种分段结构；元数据按库定义的字段校验，ACL 规范化；上传新版本时一次只能传一个文件。</li>
+      <li><span class="n">1</span>控制台经网关上传一个或多个文件，带上处理规则（切法、长度、解析器）和文档属性（元数据、生效区间、supersedes）。接口先确认调用者能写这个库：库级权限问用户中心。</li>
+      <li><span class="n">2</span>校验：格式在支持列表里、单个文件不超过 50 MB、单库最多 5000 份文档；同一个库的文档必须用同一种分段结构；元数据按库定义的字段校验；上传新版本时一次只能传一个文件。</li>
       <li><span class="n">3</span>处理规则存一份，这一批文档都引用它；库记下最近一次用的规则，下次上传默认沿用。</li>
       <li><span class="n">4</span>原文件写进 OSS，key 是 <code>{前缀}/{库}/{文档}/{文件名}</code>。之后的 DocIR 和图片也放在这个前缀下，删文档时一起清掉。</li>
-      <li><span class="n">5</span>建文档行：waiting、同一个批次号、库里的位置。要求审核的库，新文档先待审核（照常入库，审核通过前不参与检索）；带 supersedes 的加入旧文档的版本组，入库完成时才取代它（图 7）。</li>
+      <li><span class="n">5</span>建文档行：waiting、同一个批次号、库里的位置。入库完成就参与检索，没有审核这道关；带 supersedes 的加入旧文档的版本组，入库完成时才取代它（图 7）。</li>
       <li><span class="n">6</span>提交之后才投递：每个文档一条 <code>indexing_task</code> 进 Redis 队列 dataset，各 worker 并发领取。先提交是因为 worker 可能比提交更早读库，读不到文档就直接退出。接口立刻返回批次和文档，控制台按批次轮询进度。</li>
     </ol>
 
@@ -624,8 +623,8 @@
       <text class="t-sub" x="1115.0" y="222.0">乱码比例、标题 / 表格 / 图片数</text>
       <path class="e-link" d="M1115 246 V272" marker-end="url(#pr-h)"/>
       <rect class="gap" x="1010" y="274" width="210" height="56" rx="4"/>
-      <text class="t-hot mid" x="1115.0" y="298.0">needs_review</text>
-      <text class="t-sub" x="1115.0" y="318.0">先进待审核，照常入库</text>
+      <text class="t-hot mid" x="1115.0" y="298.0">warnings</text>
+      <text class="t-sub" x="1115.0" y="318.0">控制台标出来，不卡检索</text>
       <g class="badge"><circle cx="190" cy="146" r="10"/><text x="190" y="150">1</text></g>
       <g class="badge"><circle cx="380" cy="40" r="10"/><text x="380" y="44">2</text></g>
       <g class="badge"><circle cx="380" cy="280" r="10"/><text x="380" y="284">3</text></g>
@@ -639,7 +638,7 @@
       <li><span class="n">3</span>处理规则可以指定 <code>parser = text</code>：每页一块纯文本、保留页码，分段时再识别结构。个别文档版面分析出错时，换它重新入库。</li>
       <li><span class="n">4</span>DocIR 是解析和分段之间唯一的契约：带类型、层级、页码和坐标的块序列。分段直接按块组装，不再从纯文本里猜标题和表格；页码和坐标一路带到分段上，用于引用定位。</li>
       <li><span class="n">5</span>DocIR 存成 <code>docir.json</code>，图片写到 <code>assets/</code>，都在原文件的前缀下。解析预览、换分段规则时直接读它，不用重新解析。</li>
-      <li><span class="n">6</span>解析报告记页数、扫描页、空页、双栏页、乱码比例和标题、表格、图片数。缺文字（扫描件）或乱码多时 needs_review：文档先进待审核，照常入库，人看过解析预览再放行，或换解析器重来。不做 OCR。</li>
+      <li><span class="n">6</span>解析报告记页数、扫描页、空页、双栏页、乱码比例和标题、表格、图片数。缺文字（扫描件）或乱码多时写进警告：照常入库、照常参与检索，控制台的文档列表和详情页标出来，人看过解析预览后决定换解析器重来、修原文件还是停用。不做 OCR。PDF 每页解析完就关掉（page.close），大文件不把整本的字符对象攒在内存里。</li>
     </ol>
 
     <h3>图 4　分段与增强：DocIR → 父分段和子块，再按库开关补上下文、写表格摘要</h3>
@@ -698,7 +697,7 @@
       <text class="t-name" x="610.0" y="334.0">大表摘要</text>
       <text class="t-sub" x="610.0" y="354.0">≥ 8 行的表写一段摘要 → summary 子块，汇总类问题靠它</text>
       <rect class="head" x="820" y="302" width="384" height="72" rx="4"/>
-      <text class="t-sub" x="1012.0" y="322.0">结果缓存在 Redis 30 天</text>
+      <text class="t-sub" x="1012.0" y="322.0">结果缓存在 kb_enhance_cache 30 天</text>
       <text class="t-sub" x="1012.0" y="342.0">键：模型、提示词版本、文档哈希、分段哈希</text>
       <text class="t-sub" x="1012.0" y="362.0">最多 4 个并发；失败只是少了增强</text>
       <g class="badge"><circle cx="240" cy="40" r="10"/><text x="240" y="44">1</text></g>
@@ -716,7 +715,7 @@
       <li><span class="n">4</span>正文存原文；标题路径、引用定位（页、框、图片）单独存。建向量时在前面拼上前缀：标题路径，表格行再加表头。表格是原子块，放得下就不拆。分段和子块的 uuid 在这里生成，之后就是向量库的主键。</li>
       <li><span class="n">5</span>上下文补全（库开了才做）：给每个父分段生成一句「这一段在全文中讲什么」，拼进向量化前缀。文档正文放在提示词前面作固定前缀（最多 3 万字，超长改用邻近内容），同一文档的调用前缀相同，能命中模型网关的前缀缓存。</li>
       <li><span class="n">6</span>大表摘要（库开了才做）：行数达到阈值（默认 8 行）的表格生成一段摘要（主题、维度、关键数字），作为 summary 子块挂到包含它单元格最多的分段上。「哪种假期最长」这类汇总问题匹配不到任何单行时，靠它召回。表格从 DocIR 取，不从分段里找：一张表可能被切进好几段。</li>
-      <li><span class="n">7</span>增强结果按模型、提示词版本、文档哈希、分段哈希缓存在 Redis 30 天，重跑不用再调模型；最多 4 个并发。单个调用失败只是那一段少了增强，失败数写进解析报告。</li>
+      <li><span class="n">7</span>增强结果按模型、提示词版本、文档哈希、分段哈希缓存在知识库的库里（kb_enhance_cache，带租户）30 天，重跑不用再调模型：开始前一次取回命中的，每次调用成功就存一条，worker 中途被杀做完的也不丢；过期的每天清一次。不放 Redis：Redis 全平台共用，还装着队列和锁。最多 4 个并发。单个调用失败只是那一段少了增强，失败数写进解析报告。</li>
     </ol>
 
     <h3>图 5　写分段：一个事务整篇替换，记下续跑点</h3>
@@ -789,7 +788,7 @@
       <text class="t-name" x="890.0" y="84.0">upsert entity</text>
       <text class="t-sub" x="890.0" y="104.0">主键 = 分段或子块 uuid</text>
       <text class="t-sub" x="770" y="146">dense 用这个版本的向量模型；BM25 由 Milvus 从检索文本生成</text>
-      <text class="t-sub" x="770" y="166">标量字段带上文档级字段：doc_ok、meta、acl、is_current…</text>
+      <text class="t-sub" x="770" y="166">标量字段带上文档级字段：doc_ok、meta、is_current…</text>
       <path class="e-hot" d="M1000 88 H1038" marker-end="url(#pr-h)"/>
       <rect class="node" x="1040" y="56" width="180" height="64" rx="4"/>
       <text class="t-name hot" x="1130.0" y="84.0">标记完成</text>
@@ -832,7 +831,7 @@
       <rect class="node" x="810" y="40" width="410" height="64" rx="4"/>
       <text class="t-name" x="1015.0" y="68.0">新版本取代旧版本</text>
       <text class="t-sub" x="1015.0" y="88.0">只有上传时带了 supersedes 的文档才有这一步</text>
-      <text class="t-sub" x="630" y="126">入库中途改过 ACL、元数据的，以这一次为准</text>
+      <text class="t-sub" x="630" y="126">入库中途改过元数据、时效的，以这一次为准</text>
       <path class="e-hot" d="M1015 104 V150" marker-end="url(#pr-h)"/>
       <text class="t-key" x="20" y="197">旧版本</text>
       <text class="t-key" x="20" y="239">新版本</text>
@@ -852,7 +851,7 @@
     </svg>
     <ol>
       <li><span class="n">1</span>汇总这个文档所有分段的字数，记下耗时，文档改成 completed、记完成时间。</li>
-      <li><span class="n">2</span>按文档把文档级字段（启用、审核、元数据、ACL、时效）再同步一次到向量库：按 document_uuid 查出主键，分批 partial upsert。入库中途有人改过 ACL、元数据时，正在写的那一批可能带着旧值；完成时整体覆盖一次就收敛了。</li>
+      <li><span class="n">2</span>按文档把文档级字段（启用、归档、元数据、时效）再同步一次到向量库：按 document_uuid 查出主键，分批 partial upsert。入库中途有人改过元数据、时效时，正在写的那一批可能带着旧值；完成时整体覆盖一次就收敛了。</li>
       <li><span class="n">3</span>上传时带了 supersedes 的新版本，入库完成这一刻才取代旧版本：同组其他当前版本 <code>is_current = false</code>，有效期截止到切换时刻；新版本从切换时刻起生效。切换时刻是新版本的生效时间，没写就是现在。新旧两版的文档级字段都同步到向量库。</li>
       <li><span class="n">4</span>默认检索只要当前版本；按时间点检索时，时间点落在哪个版本的有效期里就返回哪个版本。新版本入库完成之前，检索一直看到旧版本，不会出现「新的还没好、旧的已下线」的空窗。</li>
     </ol>
@@ -981,7 +980,7 @@
         <tr><td>提交之后才投递</td><td>worker 可能比提交更早读库，读不到文档就直接退出，文档永远停在 waiting。</td></tr>
         <tr><td>每个阶段一个短事务</td><td>大文件解析、向量化可能跑很久：状态要让控制台立刻看到，也不能长时间占着数据库连接。</td></tr>
         <tr><td>解析和分段之间只隔一个 DocIR，DocIR 存进 OSS</td><td>分段直接按块组装，不再从纯文本里猜结构，页码和坐标能带到引用定位；预览、换分段规则时不用重新解析，换解析器也不影响分段。</td></tr>
-        <tr><td>扫描件不做 OCR，只标记、进待审核</td><td>OCR 要额外的模型和算力，结果也要人核对；先把问题暴露在解析报告里，不让一堆空分段悄悄进库。</td></tr>
+        <tr><td>扫描件不做 OCR，只在报告里警告</td><td>OCR 要额外的模型和算力，结果也要人核对；先把问题暴露在解析报告里、控制台标出来。不卡检索：卡住的文档会在检索里悄悄消失，用户看不出原因。</td></tr>
         <tr><td>正文存原文，标题路径和前缀单独存</td><td>建向量时拼上标题路径、表头和上下文能明显提升召回；但返回给模型和用户看的、人工编辑的都应该是原文，混在一起改一次就乱了。</td></tr>
         <tr><td>增强失败只是少了增强</td><td>增强靠 LLM，会限流、超时；不能因为一句上下文生成失败就让整篇入库失败。失败数写进解析报告，看得到。</td></tr>
         <tr><td>「写完分段」是唯一的续跑点</td><td>解析和分段的中间结果不落库，它们之前中断了从头再来最简单；分段落库以后，向量化按段记完成，中断只补没做完的，大文件不用重新解析。</td></tr>
@@ -991,7 +990,7 @@
         <tr><td>恢复靠巡检，不靠 Celery 重新投递</td><td>acks_late 下整个 Pod 被杀，消息要等 visibility_timeout（7 天）才回到队列；它又不能设短，到期会重复投递。看「中间状态且没锁」，进程死后一两分钟就续上。</td></tr>
         <tr><td>暂停是一个 Redis 标记，在检查点停</td><td>不硬杀正在跑的任务：做完的阶段和批次都留着，恢复时从续跑点接着做。删除也借这个标记让正在跑的任务停下。</td></tr>
         <tr><td>不设到点结束的超时</td><td>慢就慢，用暂停、删除控制；锁的 TTL 不是工作时长上限。</td></tr>
-        <tr><td>完成时按文档再同步一次文档级字段</td><td>入库中途改 ACL、元数据，和正在写的那一批会竞态，个别 entity 留着旧值；完成时按文档整体覆盖一次就收敛了。</td></tr>
+        <tr><td>完成时按文档再同步一次文档级字段</td><td>入库中途改元数据、时效，和正在写的那一批会竞态，个别 entity 留着旧值；完成时按文档整体覆盖一次就收敛了。</td></tr>
       </tbody>
     </table>
   </section>

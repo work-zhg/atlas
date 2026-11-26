@@ -30,17 +30,17 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：Agent 平台 - Agent 服务 - 工具接入 - 知识库",
-  "description": "目标领域模型，只画期望的样子、不对照现状。把智能体绑定的知识库接到运行时：检索工具、auto 模式、CLI 的 MCP 令牌、主体能读哪些库。",
+  "description": "目标领域模型，只画期望的样子、不对照现状。把智能体绑定的知识库接到运行时：检索工具、auto 模式、CLI 经 MCP 网关检索、主体能读哪些库。",
   "component": "工具接入",
   "package": "工具接入 · 知识库（目标模型）",
-  "overview": "知识库领域把智能体绑定的知识库接到运行时，有四种方式：tool 模式给原生智能体一个只读的 knowledge_search 工具；auto 模式每轮先用提问检索，资料并入这一轮的输入；CLI 智能体开会话时拿到知识库的 MCP 地址和签名令牌；编辑器和保存时问某个主体能读哪些库。检索都按这一轮的主体判权限，由知识库执行；检索范围钉死在绑定的库上，模型改不了。\n\n它不做检索本身（召回、重排、阈值在知识库服务），也不决定智能体绑哪些库（智能体管理）。",
+  "overview": "知识库领域把智能体绑定的知识库接到运行时，有四种方式：tool 模式给原生智能体一个只读的 knowledge_search 工具；auto 模式每轮先用提问检索，资料并入这一轮的输入；CLI 智能体经 MCP 网关上的知识库平台服务检索，开会话时随网关的服务一起下发；编辑器和保存时问某个主体能读哪些库。检索都按这一轮的主体判权限，由知识库执行。原生智能体的检索范围钉死在智能体选的知识集上，模型改不了；CLI 智能体经网关按名称查，能查的是 auth-uid 能用的知识集（网关不认识知识集，钉不住），权限照样每次按 auth-uid 判。\n\n它不做检索本身（召回、重排、阈值在知识库服务），也不决定智能体绑哪些库（智能体管理）。",
   "elements": [
     {
       "id": "svc",
       "kind": "class",
       "name": "KnowledgeService",
       "stereotype": "应用服务",
-      "responsibility": "智能体绑定的知识库接到运行时的四种方式，入口都在这里：tool 模式给原生智能体一个 knowledge_search 工具；auto 模式在这一轮调模型之前先检索，参考资料并入这一轮的输入；CLI 智能体在开会话时拿到知识库的 MCP 地址和令牌；编辑器和保存时问「这个主体能读哪些库」。绑定了知识库但服务没接入或不可用，明确失败，不静默少一种能力。",
+      "responsibility": "智能体绑定的知识库接到运行时的四种方式，入口都在这里：tool 模式给原生智能体一个 knowledge_search 工具；auto 模式在这一轮调模型之前先检索，参考资料并入这一轮的输入；CLI 智能体在开会话时拿到 MCP 网关上的知识库平台服务（和网关上别的服务一样带智能体的 Key 和身份凭据）；编辑器和保存时问「这个主体能读哪些库」。绑定了知识库但服务没接入或不可用，明确失败，不静默少一种能力。",
       "methods": [
         [
           "+",
@@ -103,7 +103,7 @@
       "kind": "class",
       "name": "KnowledgeClient",
       "stereotype": "防腐层",
-      "responsibility": "知识库服务的内部接口。按谁判由调用方显式给出（subject → X-Auth-Uid 请求头），库级、文档级权限都由知识库按它判：绑定不是授权，读不到的库跳过并如实报出。带上调用链（traceparent），知识库那边的召回、重排挂到这次 run 下面。",
+      "responsibility": "知识库服务的检索接口。按谁判由调用方显式给出（subject → X-Auth-Uid 请求头），库级权限由知识库按它判：绑定不是授权，读不到的库跳过并如实报出。带上调用链（traceparent），知识库那边的召回、重排挂到这次 run 下面。",
       "methods": [
         [
           "+",
@@ -155,33 +155,6 @@
       "at": [
         1.6,
         6.3
-      ]
-    },
-    {
-      "id": "grant",
-      "kind": "class",
-      "name": "PodGrant",
-      "stereotype": "值对象",
-      "responsibility": "给会话 Pod（不可信代码）的能力凭据：HMAC(密钥, 绑定的库、会话、按谁判、发起人)。它只授予「读这几个已绑定的库」，换绑后新会话拿新令牌；不设过期——CLI 会话只在开会话时下发一次，可能挂起很久再恢复。内网去令牌之后它仍保留，因为持有它的是 Pod 里的 CLI。",
-      "attributes": [
-        [
-          "+",
-          "d: dataset_ids · t: thread"
-        ],
-        [
-          "+",
-          "u: auth_uid · o: 发起人"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "sign(secret) -> token"
-        ]
-      ],
-      "at": [
-        3.85,
-        0.75
       ]
     },
     {
@@ -261,11 +234,11 @@
       "methods": [
         [
           "+",
-          "/internal/v1/retrieve · /internal/v1/datasets/readable"
+          "/v1/retrieve · 能检索的知识集（检索接口）"
         ],
         [
           "+",
-          "/mcp/（Pod 凭令牌直连）"
+          "MCP 网关上的平台服务 knowledge（CLI 经网关调）"
         ]
       ],
       "at": [
@@ -313,12 +286,6 @@
     },
     {
       "from": "svc",
-      "to": "grant",
-      "type": "uses",
-      "description": "creates"
-    },
-    {
-      "from": "svc",
       "to": "client",
       "type": "uses",
       "description": "能读哪些库"
@@ -357,7 +324,7 @@
       "from": "client",
       "to": "kb",
       "type": "uses",
-      "description": "内网接口（带主体请求头）"
+      "description": "检索接口（带主体请求头）"
     }
   ],
   "capabilities": [
@@ -374,10 +341,10 @@
       "description": "用本轮提问检索，资料只进模型这一轮的输入；失败就这一轮明确失败；读不到的库经提示告诉用户"
     },
     {
-      "name": "CLI 的知识库 MCP",
+      "name": "CLI 的知识库服务项",
       "entry": "KnowledgeService.cli_entry(spec, ctx)",
       "callers": "CliToolHandoff（CLI 运行时开会话时）",
-      "description": "知识库 MCP 地址 + 签名令牌；Pod 里的 CLI 凭它调 knowledge_search"
+      "description": "MCP 网关上知识库平台服务的服务项（Key 和身份凭据由 MCP 工具统一带上）；Pod 里的 CLI 经网关调 search、list"
     },
     {
       "name": "主体能读哪些库",
@@ -408,8 +375,8 @@
       "reason": "用户消息照原文落库，历史里没有这段资料；下一轮按下一轮的提问重新检索，资料不会在上下文里越积越多，也不会把过期的资料当成对话的一部分。"
     },
     {
-      "decision": "Pod 用签名令牌，不用身份请求头",
-      "reason": "Pod 里跑的是不可信代码，请求头它想写什么都行；令牌只授予读这几个库，主体签在里面，改不了。"
+      "decision": "CLI 经 MCP 网关检索，不直连知识库",
+      "reason": "知识库只按请求头判权限，不区分调用方；会话 Pod 跑的是不可信代码，请求头它想写什么都行，不能让它直连知识库。CLI 走 MCP 网关：网关认智能体的 Key、验 Atlas 签发的身份凭据，再写好身份请求头调知识库的检索接口。凭据由 MCP 工具在下发网关服务时统一带上，知识库领域不再签令牌。"
     }
   ]
 }

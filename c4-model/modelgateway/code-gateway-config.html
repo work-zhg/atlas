@@ -30,38 +30,38 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：模型平台 - 模型网关 - 配置快照",
-  "description": "目标领域模型，只画期望的样子。账号、模型、线路、Key 的内存只读副本（按租户分开）和它的重新加载；表归管理平台，网关只读，领域总览见 code-gateway-domains.html",
+  "description": "按摘要单飞认 Key、按租户隔离版本号懒加载配置快照，以及基于 Pub/Sub 的 Key 吊销零窗口即时生效；领域总览见 code-gateway-domains.html。",
   "component": "配置快照",
-  "package": "atlas_modelgateway.gateway.config（目标模型）",
-  "overview": "配置快照让网关在调用路径上不查库：账号、模型、线路、Key 都在内存里，别的领域从这里读。认 Key 时按摘要只查那一行，查到就知道是哪个租户；租户的配置在第一次用到时进入这个租户加载。配置由管理平台写，写完把网关状态里的版本号加一；网关被读配置时顺带看一眼版本号，变了就在后台重新加载、整个替换。\n\n平台库暂时不可用时，网关用内存里最后一份继续服务；网关状态不可用时，退回按时间定期重新加载。",
+  "package": "atlas_modelgateway.gateway.config",
+  "overview": "配置快照使网关在稳态调用热路径上零数据库查询：Key 按 SHA-256 摘要缓存，租户的模型、线路与解密后的供应商账号按租户分槽缓存。\n\n版本同步采用「按租户隔离版本键 + Key 纪元键 + Pub/Sub 即时失效广播」双机制：租户 A 增删模型只递增 modelgw:config:tenant:<A>，网关后台只重拉租户 A 的表并解密租户 A 的账号，绝不惊群干扰租户 B；当管理员停用、删除或重置某把 Key 时，Pub/Sub 立即推送被淘汰摘要 evict_digests 踢出所有网关副本的内存缓存，且在观察到 Key 版本变化时按摘要单飞同步回源查库，实现零窗口吊销拦截。",
   "elements": [
     {
-      "id": "users",
+      "id": "adm",
       "kind": "class",
-      "name": "准入 · 能力与参数 · 线路 · 计量",
-      "at": [
-        1.4,
-        -1.2
-      ],
+      "name": "Admission",
+      "external": true,
+      "source": "准入领域（唯一读取配置快照的业务领域）",
       "methods": [
         [
           "+",
-          "key_by_digest · tenant · model"
+          "key_by_digest(digest) · tenant(uuid) · model(uuid, name)"
         ]
       ],
-      "external": true,
-      "source": "其他领域"
+      "at": [
+        2.25,
+        -1.2
+      ]
     },
     {
       "id": "snap",
       "kind": "class",
       "name": "ConfigSnapshot",
+      "stereotype": "应用服务",
       "at": [
-        1.4,
+        1.5,
         0.3
       ],
-      "stereotype": "应用服务",
-      "responsibility": "别的领域读配置的唯一入口，全从内存里读，不查库。认 Key 时按摘要只查那一行（系统原因：凭据），查到就知道是哪个租户；租户的模型、线路、账号在第一次用到时进入这个租户加载。每次被调用时顺手问 VersionWatch 版本号变没变（最多每秒问一次），变了就在后台重新加载，加载期间继续用旧的。",
+      "responsibility": "只读内存配置中心：key_by_digest 在 Key 版本变化时单飞同步回源验证（防停用窗口泄漏），对未知错 Key 做短时负缓存防穿透；tenant 按租户独立版本触发后台单飞刷新并整份原子替换；平台库故障时保留最后一份快照持续服务。",
       "methods": [
         [
           "+",
@@ -77,7 +77,7 @@
         ],
         [
           "+",
-          "forget()"
+          "apply_invalidation(inv: ConfigInvalidation) · forget()"
         ]
       ]
     },
@@ -85,112 +85,62 @@
       "id": "tc",
       "kind": "class",
       "name": "TenantConfig",
+      "stereotype": "值对象",
       "at": [
-        1.4,
+        1.5,
         2.05
       ],
-      "stereotype": "值对象",
-      "responsibility": "一个租户某一版的配置：模型按名字索引，线路已经连好账号；只整个替换，不修改。",
+      "responsibility": "单个租户在某一版本下的不可变配置快照：按模型名索引的 ModelEntry 字典，每条线路已关联好解密后的供应商账号。",
       "attributes": [
         [
           "+",
-          "tenant_uuid · version"
+          "tenant_uuid: UUID · version: str"
         ],
         [
           "+",
-          "models: dict[name, ModelEntry]"
+          "models: Mapping[str, ModelEntry]"
         ]
       ]
     },
     {
-      "id": "key",
+      "id": "key_entry",
       "kind": "class",
       "name": "KeyEntry",
+      "stereotype": "值对象",
       "at": [
-        -0.5,
+        -0.35,
         2.05
       ],
-      "stereotype": "值对象",
-      "responsibility": "一把 Key：租户、个人或客户端、状态、有效期、此刻能用的模型、限额。没有原文。按摘要缓存；认不出的摘要也记一会儿，防止错 Key 打满库。",
+      "responsibility": "内存中的单把 Key 投影（不含明文）：匹配 secret_digest 或仍在 prev_until 宽限期内的 prev_digest，携带 effective_models 与生效后的月/5h/24h 费用及 RPM 配额。",
       "attributes": [
         [
           "+",
-          "key_uuid · tenant_uuid · kind · status"
+          "key_uuid · tenant_uuid · kind · status · models: frozenset[str]"
         ],
         [
           "+",
-          "expires_at · models · monthly_budget · rpm"
+          "monthly_budget · budget_5h · budget_24h · rpm · expires_at"
         ]
       ]
     },
     {
-      "id": "model",
+      "id": "m_entry",
       "kind": "class",
-      "name": "ModelEntry",
+      "name": "ModelEntry · AccountRef",
+      "stereotype": "值对象",
       "at": [
-        1.4,
+        1.5,
         3.75
       ],
-      "stereotype": "值对象",
-      "responsibility": "一个模型：类型、是否启用、登记的能力、价格、它的线路（优先级、权重、账号、上游模型）。",
+      "responsibility": "模型与上游账号的内存只读对象：AccountRef 持有在加载阶段一次性解密好的上游密钥、各格式地址与出网模式。",
       "attributes": [
         [
           "+",
-          "uuid · tenant_uuid · name · kind · enabled"
+          "ModelEntry: uuid · name · kind · enabled · caps · price · routes"
         ],
         [
           "+",
-          "caps: ModelCaps · price: Price"
-        ],
-        [
-          "+",
-          "routes: list[Route]"
-        ]
-      ]
-    },
-    {
-      "id": "acct",
-      "kind": "class",
-      "name": "AccountRef",
-      "at": [
-        3.3,
-        3.75
-      ],
-      "stereotype": "值对象（共享内核）",
-      "responsibility": "线路指向的账号：供应商、按格式登记的地址（可以两种都有）、解密后的密钥、出网方式、等第一个字的超时、是否启用。",
-      "attributes": [
-        [
-          "+",
-          "uuid · provider · enabled"
-        ],
-        [
-          "+",
-          "endpoints: dict[Format, url]"
-        ],
-        [
-          "+",
-          "secret · egress · first_content_timeout_s"
-        ]
-      ]
-    },
-    {
-      "id": "watch",
-      "kind": "class",
-      "name": "VersionWatch",
-      "at": [
-        -0.5,
-        0.3
-      ],
-      "stereotype": "领域服务",
-      "responsibility": "读网关状态里的配置版本号，最多每秒一次。读不到（网关状态不可用）时退回按时间：每 30 秒重新加载一次。管理平台提交后调 bump 加一。",
-      "methods": [
-        [
-          "+",
-          "current() -> str"
-        ],
-        [
-          "+",
-          "bump()"
+          "AccountRef: uuid · provider · endpoints · secret · egress"
         ]
       ]
     },
@@ -198,12 +148,12 @@
       "id": "cipher",
       "kind": "class",
       "name": "SecretCipher",
+      "stereotype": "防腐层",
       "at": [
-        3.3,
+        3.5,
         2.05
       ],
-      "stereotype": "防腐层",
-      "responsibility": "用主密钥解开账号密钥（信封加密），主密钥来自 K8s Secret；和管理平台用同一个实现。",
+      "responsibility": "在加载租户快照时用主密钥解密 gw_account.secret_cipher，调用热路径上不再重复执行密码学运算。",
       "methods": [
         [
           "+",
@@ -212,121 +162,120 @@
       ]
     },
     {
-      "id": "pub",
+      "id": "watch",
       "kind": "class",
-      "name": "配置发布",
-      "at": [
-        -2.2,
-        0.3
-      ],
+      "name": "VersionWatch · ConfigInvalidation",
+      "external": true,
+      "source": "共享基础层（shared.sync）",
       "methods": [
         [
           "+",
-          "改账号、模型、线路、Key 并提交后版本号加一"
+          "key_version() · tenant_version(tenant)（单次 mget 批量拉取）"
+        ],
+        [
+          "+",
+          "invalidate_poll() · bump(redis, *, tenant, keys_changed, evict_digests)"
         ]
       ],
+      "at": [
+        -2.15,
+        0.3
+      ]
+    },
+    {
+      "id": "pub",
+      "kind": "class",
+      "name": "ConfigNotifier · PubSubHub",
       "external": true,
-      "source": "管理平台"
+      "source": "管理平台 notify.py 与网关 lifespan 订阅",
+      "methods": [
+        [
+          "+",
+          "发布/订阅 atlas:modelgw:config:changed"
+        ]
+      ],
+      "at": [
+        -0.25,
+        -1.2
+      ]
     }
   ],
   "relationships": [
     {
-      "from": "users",
+      "from": "adm",
       "to": "snap",
       "type": "uses",
-      "description": "读配置"
+      "description": "只读查询"
     },
     {
       "from": "snap",
       "to": "watch",
       "type": "uses",
-      "description": "版本变了吗"
+      "description": "按租户与 Key 纪元查版本"
+    },
+    {
+      "from": "pub",
+      "to": "snap",
+      "type": "uses",
+      "description": "Pub/Sub 推送 apply_invalidation"
+    },
+    {
+      "from": "pub",
+      "to": "watch",
+      "type": "uses",
+      "description": "递增对应版本键",
+      "labelAt": 0.65
     },
     {
       "from": "snap",
-      "to": "key",
+      "to": "key_entry",
       "type": "association",
-      "description": "keys（按摘要）",
+      "description": "按摘要缓存",
       "multiplicity": "0..*"
     },
     {
       "from": "snap",
       "to": "tc",
       "type": "association",
-      "description": "tenants（按租户）",
+      "description": "按租户分槽缓存",
       "multiplicity": "0..*"
     },
     {
       "from": "tc",
-      "to": "model",
+      "to": "m_entry",
       "type": "composition",
-      "description": "models",
+      "description": "包含模型与账号",
       "multiplicity": "0..*"
-    },
-    {
-      "from": "model",
-      "to": "acct",
-      "type": "association",
-      "description": "routes 的账号",
-      "multiplicity": "1..*"
     },
     {
       "from": "snap",
       "to": "cipher",
       "type": "uses",
-      "description": "加载时解密"
-    },
-    {
-      "from": "pub",
-      "to": "watch",
-      "type": "uses",
-      "description": "版本号（经网关状态）"
+      "description": "加载时解密账号凭据"
     }
   ],
   "capabilities": [
     {
-      "name": "认 Key",
-      "entry": "key_by_digest",
-      "callers": "准入",
-      "description": "按摘要从内存取；没有就只查这一行（系统原因：凭据），查到的租户决定后面在哪个租户里做"
+      "name": "按摘要认 Key 与零窗口吊销",
+      "entry": "ConfigSnapshot.key_by_digest / apply_invalidation",
+      "callers": "准入领域、网关 Pub/Sub 监听器",
+      "description": "正常命中内存 O(1) 返回；收到驱逐广播或发现 Key 版本前进时单飞回源重查，停用/删除立即拦截"
     },
     {
-      "name": "读租户配置",
-      "entry": "tenant · model",
-      "callers": "能力与参数、线路、计量",
-      "description": "第一次用到时进入这个租户加载它的模型、线路、账号；之后从内存读"
-    },
-    {
-      "name": "配置生效",
-      "entry": "VersionWatch.current / bump",
-      "callers": "自己（被读时顺带）、管理平台",
-      "description": "管理平台改完配置把版本号加一 → 网关最多一秒后发现 → 后台重新加载用到的那几份 → 整个替换"
+      "name": "租户级无感热更新",
+      "entry": "ConfigSnapshot.tenant / model",
+      "callers": "准入领域",
+      "description": "单租户配置变更只后台重拉该租户并整份替换，不影响在途请求与其他租户"
     }
   ],
   "decisions": [
     {
-      "decision": "网关只读，写配置只在管理平台",
-      "reason": "调用路径上不开写事务；管理平台是唯一改配置的地方，校验（比如线路做得到模型的能力）只写一份。"
+      "decision": "按租户拆分版本键（modelgw:config:tenant:<uuid>），单次 mget 批量轮询",
+      "reason": "多租户场景下全局单一版本号会让任一租户改配置引发全集群所有活跃租户同时查库与解密；拆分后完美隔离租户变更半径。"
     },
     {
-      "decision": "按租户分开加载，不整份加载全部租户",
-      "reason": "多租户的规则不许在系统范围里通读业务数据。认 Key 只按全局唯一的摘要查一行（系统原因：凭据），其余都在租户里读；只加载有人在用的租户，租户再多也不变慢。"
-    },
-    {
-      "decision": "整个替换，不改一半",
-      "reason": "一个租户的配置和一把 Key 都是整份换成新的，一次调用里读到的都是同一版，不会「半新半旧」。"
-    },
-    {
-      "decision": "版本号放网关状态，最多每秒看一次",
-      "reason": "既做到「保存后很快生效」（Key 停用一秒左右就拦住），又不用每个请求都查库；网关状态不可用时按时间兜底重载。"
-    },
-    {
-      "decision": "平台库不可用时用最后一份",
-      "reason": "调用不依赖平台库在线；新改的配置等平台库恢复后才生效。"
-    },
-    {
-      "decision": "密钥只在内存里是明文",
-      "reason": "库里是信封加密的密文，主密钥在 K8s Secret；网关只在加载时解密，不写日志、不进调用记录。"
+      "decision": "Key 版本变化时同步单飞重查，租户模型变化时后台异步重拉",
+      "reason": "Key 停用或收回权限属于安全边界，不能放行旧缓存里的失效凭据；而模型线路微调在后台毫秒级刷新即可，不阻塞在线对话延迟。"
     }
   ]
 }

@@ -30,133 +30,78 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：模型平台 - 管理平台 - 授权",
-  "description": "目标领域模型，只画期望的样子。私有模型的授权、用户能用哪些模型、管理员操作码；授权都在用户中心，本领域没有自己的表，领域总览见 code-domains.html",
+  "description": "目标模型：入站调用主体统一鉴别（员工、管理员、受信任应用）与私有模型数据权限管理；授权数据存于用户中心，本组件无自建表。",
   "component": "授权",
-  "package": "atlas_modelgateway.access（目标模型）",
-  "overview": "授权管私有模型「谁能选进自己的用户 Key」。公有模型谁都能选；私有模型要授权给本人或所在部门（可含下级），授权写在用户中心的数据权限里，一个人能用哪些也由用户中心算。管理端的操作码 model:manage 也从这里取。\n\n它是管理平台里唯一认识用户中心的地方。它不管 Key 分配了什么（API Key），也不管客户端 Key——那些由管理员直接分配，不看授权。模型登记、改名、删除时跟着模型事件改用户中心里的数据对象；授权变了发授权事件。",
+  "package": "atlas_modelgateway.auth · perms",
+  "overview": "授权组件承担两项职责：一是作为全平台的横切身份守卫（PrincipalGuard），把人的身份（X-Uid / X-Auth-Uid）和集群内受信任应用的身份（X-Caller-App）统一解析为调用主体 Principal，供各功能路由按需声明权限依赖——这正是管理平台能够按业务功能划分接口、而不必按调用方拆「管理接口 / 内部接口」的基础；二是通过 GrantsRouter（/api/v1/models/{id}/grants）与 UCPermissions 对接用户中心，管理私有模型的用户/部门授权及员工可用范围缓存。",
   "elements": [
     {
-      "id": "acc",
+      "id": "callers",
       "kind": "class",
-      "name": "ModelAccess",
-      "stereotype": "应用服务",
+      "name": "模型管理员 · 各功能路由",
+      "external": true,
+      "source": "控制台 · 账号 / 模型 / Key / 调用记录路由",
+      "methods": [
+        [
+          "+",
+          "横切鉴权依赖 · /api/v1/models/{id}/grants"
+        ]
+      ],
       "at": [
-        1.6,
+        0.55,
+        -1.25
+      ]
+    },
+    {
+      "id": "keys_ext",
+      "kind": "class",
+      "name": "KeyService · ModelRegistry · KeyRefresh",
+      "external": true,
+      "source": "API Key · 模型与线路 · 定时巡检",
+      "methods": [
+        [
+          "+",
+          "usable · subject · register_model · drop_model"
+        ]
+      ],
+      "at": [
+        2.85,
+        -1.25
+      ]
+    },
+    {
+      "id": "mw",
+      "kind": "class",
+      "name": "PrincipalGuard",
+      "stereotype": "入口守卫",
+      "source": "IdentityHeadersMiddleware（auth.py）+ _require_app（api/internal.py）",
+      "at": [
+        -0.65,
         0.35
       ],
-      "responsibility": "授权的唯一入口，回答三件事：一个人能用哪些私有模型、他是谁（还在不在职）；一个人能不能管理模型平台；给私有模型授权、收回、看实际能用的人。授权和收回之后发授权事件，让 API Key 重算受影响的用户 Key。",
+      "responsibility": "统一解析 X-Tenant-Id 建立 TenantScope，识别用户身份（X-Uid）或受信任应用身份（X-Caller-App，前端网关剥离外网伪造头），提供 require_user / require_manager / require_caller_app 依赖。",
       "methods": [
         [
           "+",
-          "usable(user, *, fresh) -> UsableModels"
-        ],
-        [
-          "+",
-          "person(uid, *, fresh) -> Person | None"
-        ],
-        [
-          "+",
-          "operator(uid, auth_uid) -> Operator"
-        ],
-        [
-          "+",
-          "grant(model, grants, *, operator) · revoke(model, acl_id, *, operator)"
-        ],
-        [
-          "+",
-          "grants(model) · holders(model)"
+          "require_user · require_manager · require_caller_app(client_type)"
         ]
       ]
     },
     {
-      "id": "usable",
+      "id": "op",
       "kind": "class",
-      "name": "UsableModels",
+      "name": "Principal",
       "stereotype": "值对象",
+      "source": "Operator（auth.py）+ CallerApp",
       "at": [
-        -0.55,
-        4.05
+        -0.65,
+        2.25
       ],
-      "responsibility": "一个人能用（≥ READ）的私有模型：授给本人 ∪ 授给所在部门 ∪ 授给上级部门且含下级，由用户中心算好。all_models = 有「全部模型」这类编码级授权（管理员）。",
+      "responsibility": "入站调用主体：区分个人用户、具备 model:manage 的模型管理员，以及按 client_types 白名单绑定的内部应用（如 atlas）。",
       "attributes": [
         [
           "+",
-          "names: set[模型名]"
-        ],
-        [
-          "+",
-          "all_models: bool"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "allows(model) -> bool"
-        ]
-      ]
-    },
-    {
-      "id": "person",
-      "kind": "class",
-      "name": "Person",
-      "stereotype": "值对象",
-      "at": [
-        0.85,
-        4.05
-      ],
-      "responsibility": "用户中心里的一个人：用户 Key 上记他的名字；被停用（离职）时，他的用户 Key 有效模型按空处理。",
-      "attributes": [
-        [
-          "+",
-          "uid · name · active"
-        ]
-      ]
-    },
-    {
-      "id": "grant",
-      "kind": "class",
-      "name": "Grant",
-      "stereotype": "值对象",
-      "at": [
-        -0.6,
-        0.35
-      ],
-      "responsibility": "一条授权：只有「使用」一级（READ），授给用户或部门，部门可以含下级。登记人是 OWNER（用户中心要求至少一个所有者）。",
-      "attributes": [
-        [
-          "+",
-          "level: READ"
-        ],
-        [
-          "+",
-          "subject_type: user | dept · subject_id"
-        ],
-        [
-          "+",
-          "include_sub: bool"
-        ]
-      ]
-    },
-    {
-      "id": "operator",
-      "kind": "class",
-      "name": "Operator",
-      "stereotype": "值对象",
-      "at": [
-        -0.6,
-        1.75
-      ],
-      "responsibility": "管理端的操作人：X-Uid 谁在用，X-Auth-Uid 按谁判。操作码 model:manage 管能不能登记模型、授权、管客户端 Key；能动哪些模型的授权看数据权限（管理员持有「全部模型 · Owner」）。",
-      "attributes": [
-        [
-          "+",
-          "uid · auth_uid · operations"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "can_manage -> bool"
+          "kind: user | app · uid_or_app · can_manage: bool"
         ]
       ]
     },
@@ -166,329 +111,213 @@
       "name": "SubjectsCache",
       "stereotype": "领域服务",
       "at": [
-        0.3,
-        2.45
+        1.1,
+        0.35
       ],
-      "responsibility": "「人 → 能用的私有模型」「人 → 是谁」缓存 30 秒。用户中心不可用时沿用上一次的结果（告警），最多 1 小时，超过才报暂时不可用。本进程改了授权立即清掉，别的副本等过期。",
+      "responsibility": "按（租户, 用户）缓存可用私有模型集合与员工在职信息（默认 30 秒，fresh=True 强制穿透）；用户中心不可达时沿用至多 1 小时旧值；授权变更时立即 forget。",
       "methods": [
         [
           "+",
-          "usable(user, *, fresh) · person(uid, *, fresh)"
+          "usable(uid, *, fresh=False) -> SubjectModels"
         ],
         [
           "+",
-          "forget()"
-        ]
-      ]
-    },
-    {
-      "id": "handler",
-      "kind": "class",
-      "name": "ModelEventHandler",
-      "stereotype": "领域服务",
-      "at": [
-        4.1,
-        4.05
-      ],
-      "responsibility": "接住模型事件，改用户中心里的数据对象（数据编码 Model，数据标识 = 模型名）：登记时登记人成为所有者（同名模型删了又登记，用户中心里还有，就沿用原来的授权、只改名）；改显示名同步改名；删除时删掉数据对象和全部授权。",
-      "methods": [
+          "subject(uid, *, fresh=False) -> SubjectInfo | None"
+        ],
         [
           "+",
-          "model_registered · model_renamed · model_removed"
+          "forget(uid=None)"
         ]
       ]
     },
     {
-      "id": "aevents",
+      "id": "perms",
       "kind": "interface",
-      "name": "AccessEvents",
+      "name": "Permissions",
       "stereotype": "扩展点",
       "at": [
-        3.35,
-        2.3
+        2.85,
+        0.35
       ],
-      "responsibility": "私有模型的授权变了，要 API Key 重算分配了这个模型的用户 Key。授权定义、API Key 实现，授权因此不依赖 API Key。",
+      "responsibility": "私有模型数据权限与员工状态抽象（挂接 GrantsRouter 处理 /api/v1/models/{id}/grants 与 /holders；单测注入 FakePermissions，生产用 UCPermissions）。",
       "methods": [
         [
           "+",
-          "grants_changed(model)"
+          "accessible(uid) · user_info(uid) · holders(model)"
+        ],
+        [
+          "+",
+          "register · grant · revoke · list_acl · drop"
         ]
       ]
     },
     {
-      "id": "uc",
+      "id": "uc_impl",
       "kind": "class",
-      "name": "UserCenterGateway",
+      "name": "UCPermissions",
       "stereotype": "防腐层",
       "at": [
-        2.55,
-        4.05
+        3.2,
+        2.25
       ],
-      "responsibility": "用户中心开放接口的唯一客户端：数据权限（accessible、batch、acl、revoke、drop、rename、holders）、用户、授权快照。带上本次请求的身份请求头；对账时没有入站请求，用户 Key 按持有人带 X-Uid（用户中心据此确定租户）。错误映射只有一份：OWNER_REQUIRED → 403，LAST_DATA_OWNER → 409，不可达和 5xx → 503。",
+      "responsibility": "用户中心 /open/v1 唯一客户端：维护数据编码 Model 的所有者与部门/个人 READ 授权，映射权限错误为 403/409/503。",
       "methods": [
         [
           "+",
-          "accessible(Model, user, READ)"
-        ],
-        [
-          "+",
-          "register · grant · revoke · acl · drop · rename · holders"
-        ],
-        [
-          "+",
-          "user(uid) · authz(uid)"
+          "accessible · user_info · register · grant · revoke · drop"
         ]
       ]
     },
     {
-      "id": "callers",
+      "id": "smodels",
       "kind": "class",
-      "name": "管理接口",
-      "external": true,
-      "source": "入口组件",
-      "methods": [
+      "name": "SubjectModels",
+      "stereotype": "值对象",
+      "at": [
+        0.55,
+        2.25
+      ],
+      "responsibility": "某位员工被授予 READ 权限的私有模型名集合（含部门继承与编码级全量授权 all_models）。",
+      "attributes": [
         [
           "+",
-          "操作码、授权、收回、实际能用的人"
+          "names: frozenset[str] · all_models: bool"
         ]
-      ],
-      "at": [
-        0.5,
-        -1.1
       ]
     },
     {
-      "id": "keys",
+      "id": "sinfo",
       "kind": "class",
-      "name": "ApiKeys",
-      "external": true,
-      "source": "API Key 领域",
-      "methods": [
+      "name": "SubjectInfo",
+      "stereotype": "值对象",
+      "at": [
+        1.85,
+        2.25
+      ],
+      "responsibility": "员工基本资料与在职状态：离职或停用（active=False）时，其所有个人 Key 的有效模型一律清空。",
+      "attributes": [
         [
           "+",
-          "usable · person：用户 Key 的可选范围"
+          "uid · name · active: bool"
         ]
-      ],
-      "at": [
-        2.75,
-        -1.1
       ]
     },
     {
-      "id": "catalog",
+      "id": "grant",
       "kind": "class",
-      "name": "ModelCatalog",
-      "external": true,
-      "source": "模型目录领域",
-      "methods": [
-        [
-          "+",
-          "get(uuid)：只给私有模型授权"
-        ]
-      ],
+      "name": "Grant",
+      "stereotype": "值对象",
       "at": [
-        5.75,
-        0.0
-      ]
-    },
-    {
-      "id": "audit",
-      "kind": "class",
-      "name": "AuditLog",
-      "external": true,
-      "source": "共享内核",
-      "methods": [
-        [
-          "+",
-          "record(actor, action, target, …)"
-        ]
+        4.55,
+        0.35
       ],
-      "at": [
-        5.75,
-        0.8
-      ]
-    },
-    {
-      "id": "keysH",
-      "kind": "class",
-      "name": "KeySync",
-      "external": true,
-      "source": "API Key 领域",
-      "methods": [
+      "responsibility": "一条私有模型使用授权：目标类型（user 或 dept）、目标 ID 与部门是否包含下级 include_sub。",
+      "attributes": [
         [
           "+",
-          "（实现 AccessEvents）"
+          "subject_type · subject_id · include_sub"
         ]
-      ],
-      "at": [
-        5.75,
-        2.3
-      ]
-    },
-    {
-      "id": "mevents",
-      "kind": "interface",
-      "name": "ModelEvents",
-      "external": true,
-      "source": "模型目录领域",
-      "methods": [
-        [
-          "+",
-          "model_registered · model_renamed"
-        ],
-        [
-          "+",
-          "model_removed"
-        ]
-      ],
-      "at": [
-        5.95,
-        4.05
       ]
     }
   ],
   "relationships": [
     {
       "from": "callers",
-      "to": "acc",
-      "description": "管理端"
+      "to": "mw",
+      "type": "uses",
+      "description": "统一主体鉴权"
     },
     {
-      "from": "keys",
-      "to": "acc",
-      "description": "usable · person"
-    },
-    {
-      "from": "acc",
-      "to": "grant",
-      "description": "grant"
-    },
-    {
-      "from": "acc",
-      "to": "operator",
-      "description": "creates"
-    },
-    {
-      "from": "acc",
+      "from": "callers",
       "to": "cache",
-      "type": "association",
-      "description": "能用的、是谁"
+      "type": "uses",
+      "description": "授权变更后清缓存",
+      "labelAt": 0.55
+    },
+    {
+      "from": "callers",
+      "to": "perms",
+      "type": "uses",
+      "description": "授权、撤回、查持有人",
+      "labelAt": 0.25
+    },
+    {
+      "from": "keys_ext",
+      "to": "cache",
+      "type": "uses",
+      "description": "查员工可用范围与在职",
+      "labelAt": 0.72
+    },
+    {
+      "from": "keys_ext",
+      "to": "perms",
+      "type": "uses",
+      "description": "登记/删除模型数据对象"
+    },
+    {
+      "from": "mw",
+      "to": "op",
+      "type": "uses",
+      "description": "解析出 Principal"
     },
     {
       "from": "cache",
-      "to": "usable",
+      "to": "perms",
+      "type": "uses",
+      "description": "回源查询"
+    },
+    {
+      "from": "cache",
+      "to": "smodels",
       "type": "association",
       "description": "缓存"
     },
     {
       "from": "cache",
-      "to": "person",
+      "to": "sinfo",
       "type": "association",
       "description": "缓存"
     },
     {
-      "from": "cache",
-      "to": "uc",
-      "description": "accessible · user"
-    },
-    {
-      "from": "acc",
-      "to": "uc",
-      "type": "association",
-      "description": "授权、收回、快照"
-    },
-    {
-      "from": "acc",
-      "to": "catalog",
-      "description": "只给私有模型授权"
-    },
-    {
-      "from": "acc",
-      "to": "audit",
-      "description": "记"
-    },
-    {
-      "from": "acc",
-      "to": "aevents",
-      "type": "association",
-      "description": "授权、收回后发"
-    },
-    {
-      "from": "keysH",
-      "to": "aevents",
+      "from": "uc_impl",
+      "to": "perms",
       "type": "implements"
     },
     {
-      "from": "handler",
-      "to": "mevents",
-      "type": "implements"
-    },
-    {
-      "from": "handler",
-      "to": "uc",
-      "description": "登记、改名、删除数据对象"
+      "from": "perms",
+      "to": "grant",
+      "type": "uses",
+      "description": "读写授权项"
     }
   ],
   "capabilities": [
     {
-      "name": "能用哪些私有模型",
-      "entry": "usable(user, *, fresh)",
-      "callers": "API Key（用户 Key 的可选范围、有效模型）、管理接口（普通用户的模型列表）",
-      "description": "用户中心展开部门和编码级授权；缓存 30 秒，用户中心不可用时最多沿用 1 小时"
+      "name": "跨功能路由的统一主体鉴别",
+      "entry": "PrincipalGuard（require_user / require_manager / require_caller_app）",
+      "callers": "供应商账号、模型与线路、API Key、调用记录查询全部路由",
+      "description": "将「谁在调、有没有权」从路由拆分中解耦成声明式依赖，使业务接口完全按功能组织"
     },
     {
-      "name": "是谁、在不在职",
-      "entry": "person(uid, *, fresh)",
-      "callers": "API Key（申请用户 Key、算有效模型）",
-      "description": "被停用的人，他的用户 Key 有效模型按空处理，在 LiteLLM 里停用"
+      "name": "私有模型授权管理",
+      "entry": "/api/v1/models/{id}/grants -> Permissions",
+      "callers": "模型管理员",
+      "description": "按个人或部门（含下级）授予或收回私有模型使用权，变更后立即清缓存并触发 KeyService 重算"
     },
     {
-      "name": "管理端身份",
-      "entry": "operator(uid, auth_uid)",
-      "callers": "管理接口（每个请求）",
-      "description": "授权快照里的操作码 model:manage；账号停用 → 401，没有权限 → 403"
-    },
-    {
-      "name": "给私有模型授权",
-      "entry": "grant · revoke · grants · holders",
-      "callers": "管理接口",
-      "description": "公有模型不接受授权；操作人交给用户中心（operator_id）校验；之后发 grants_changed"
-    },
-    {
-      "name": "跟随模型目录",
-      "entry": "ModelEvents（实现）",
-      "callers": "模型目录（同一个事务里同步分发）",
-      "description": "登记数据对象（失败则整个登记回滚）、改名、删除"
+      "name": "员工可用范围与在职查询",
+      "entry": "SubjectsCache.usable / subject",
+      "callers": "KeyService、KeyRefresh 定时巡检",
+      "description": "给出员工当前可选的私有模型集合与是否在职，支撑个人 Key 的有效模型收敛"
     }
   ],
   "decisions": [
     {
-      "decision": "私有模型的授权就是用户中心的数据权限",
-      "reason": "数据编码 Model 属于本服务这个应用，一个模型一条，「使用」= READ。复用用户中心的部门树、含下级和编码级授权，管理员靠「全部模型 · Owner」，本服务不存任何授权。"
+      "decision": "用 PrincipalGuard 统一人的身份与应用身份，支撑功能化接口",
+      "reason": "前端网关负责擦除公网入站伪造的 X-Caller-App 请求头（或拦截仅限内网的凭据子路径），服务内所有功能路由只需通过依赖声明允许哪些主体访问，无需按调用方复制一套 /internal 路由。"
     },
     {
-      "decision": "授权只管用户 Key，客户端 Key 不看授权",
-      "reason": "客户端 Key 由管理员直接分配；智能体能用哪个模型和谁在用它无关，使用者可能借智能体间接用到自己没被授权的私有模型，这是有意的。"
-    },
-    {
-      "decision": "用户中心不可用时沿用上次的结果，最多 1 小时",
-      "reason": "和 MCP 网关「过期即拒」不同：这里的结果用来重算 Key 的有效模型，拒绝就等于把用户 Key 的模型算空、在 LiteLLM 里停用；用户中心抖一下不该让所有人的 Key 停掉。模型调用本身由 LiteLLM 按上一次同步的模型放行。"
-    },
-    {
-      "decision": "授权变化发事件，API Key 去重算",
-      "reason": "现在接口层在 grant、revoke 之后手工调 keys.resync。授权定义 AccessEvents、API Key 实现，授权不依赖 API Key，两个领域之间没有环。"
-    },
-    {
-      "decision": "调部门、离职靠对账发现",
-      "reason": "用户中心没有变更通知；对账任务每 5 分钟强制刷新缓存重算一次，最多滞后这么久。"
-    },
-    {
-      "decision": "公有模型不接受授权",
-      "reason": "公有本来谁都能选，授权没有意义；改成私有后再授权。"
-    },
-    {
-      "decision": "用户中心的调用收在一个防腐层",
-      "reason": "现在操作码快照在 auth.py 里单独发请求、单独缓存，数据权限和用户在 perms.py；收在一处后，身份透传、错误映射和不可用时的口径只有一份。"
+      "decision": "授权事实只存用户中心，平台不建镜像 ACL 表",
+      "reason": "直接复用用户中心的部门树继承与在职状态，避免组织架构同步延迟与两套权限规则不一致。"
     }
   ]
 }

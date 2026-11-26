@@ -30,63 +30,55 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：模型平台 - 模型网关 - 供应商",
-  "description": "目标领域模型，只画期望的样子。供应商的数据和方言，是网关和管理平台共用的包；画了三个典型方言，各家具体写法以文档和实测为准。领域总览见 code-gateway-domains.html",
+  "description": "网关与管理平台共用的只读供应商包：声明式数据规格（ProviderSpec）与协议差异方言（ProviderDialect）；领域总览见 code-gateway-domains.html。",
   "component": "供应商",
-  "package": "atlas_modelgateway.provider（共享包 · 目标模型）",
-  "overview": "很多供应商说自己兼容 Anthropic 或 OpenAI 格式，但细节各有各的写法：认证头、地址、参数的字段名、用量和思考放在哪个字段、报错是什么意思。供应商领域把这些差异收在一处，分成能写成数据的（ProviderSpec）和要写代码的（ProviderDialect）。\n\n默认方言就是标准写法，大多数供应商只登记数据就能接；和标准不一样的，加一个子类只覆盖那几个方法。方言只做翻译：把报错归成统一的种类、把用量换算成四项、把参数改成这家的字段名，判断都在别的领域。网关（格式领域）和管理平台（测试连接、查余额、拉模型列表）用的是同一个包。",
+  "package": "atlas_modelgateway.provider（跨容器共享包）",
+  "overview": "各家模型厂商虽普遍兼容 Anthropic 或 OpenAI 接口，但在认证请求头、URL 路径拼接、思考开关字段名、缓存 token 字段位置、以及 429 究竟代表瞬时限流还是账户欠费等细节上各有差异。\n\natlas_modelgateway.provider 将这些知识集中在一处且不依赖任何网关或控制面内部模块：能用数据表达的（支持格式、默认地址模板、认证风格、余额接口、是否支持拉模型列表）放进 ProviderSpec；需要代码转换的放进 ProviderDialect 子类。模型网关转发与管理平台测试账号、巡检余额共用这一个包，保证两边对同一家供应商的行为完全一致。",
   "elements": [
     {
-      "id": "fmt",
+      "id": "gw_caller",
       "kind": "class",
-      "name": "FormatGateway · 读写器 · UpstreamClient",
-      "at": [
-        0.9,
-        -1.2
-      ],
+      "name": "FormatGateway · Codecs",
+      "external": true,
+      "source": "模型网关格式领域",
       "methods": [
         [
           "+",
-          "dialect(account.provider)"
-        ],
-        [
-          "+",
-          "auth · endpoint · adjust · usage · reasoning · classify"
+          "headers · url · adjust_request · parse_usage · classify"
         ]
       ],
-      "external": true,
-      "source": "格式领域（网关，每次尝试）"
+      "at": [
+        0.7,
+        -1.2
+      ]
     },
     {
-      "id": "probe",
+      "id": "mgmt_caller",
       "kind": "class",
-      "name": "账号管理与检查",
-      "at": [
-        3.1,
-        -1.2
-      ],
+      "name": "AccountService",
+      "external": true,
+      "source": "管理平台供应商账号领域",
       "methods": [
         [
           "+",
-          "providers() · 测试连接"
-        ],
-        [
-          "+",
-          "balance · list_models"
+          "spec · dialect · parse_balance · list_models"
         ]
       ],
-      "external": true,
-      "source": "管理平台"
+      "at": [
+        3.2,
+        -1.2
+      ]
     },
     {
       "id": "cat",
       "kind": "class",
       "name": "ProviderCatalog",
+      "stereotype": "应用服务",
       "at": [
-        2.0,
+        1.95,
         0.3
       ],
-      "stereotype": "应用服务",
-      "responsibility": "供应商的唯一入口：按名字给出数据（ProviderSpec）和方言（ProviderDialect）。网关和管理平台用同一个包，对同一家供应商的理解不会两边不一致。没登记方言的供应商给 StandardDialect。",
+      "responsibility": "供应商目录入口：按名称查找内置或通用的 ProviderSpec 与对应的 ProviderDialect 实例；未特化的供应商自动回退到 StandardDialect。",
       "methods": [
         [
           "+",
@@ -106,28 +98,24 @@
       "id": "spec",
       "kind": "class",
       "name": "ProviderSpec",
+      "stereotype": "值对象",
       "at": [
         -0.1,
-        1.9
+        2.0
       ],
-      "stereotype": "值对象",
-      "responsibility": "一家供应商能写成数据的部分：提供哪些格式、各格式的默认地址模板（可以带 {model}、{deployment} 这类占位）、认证方式、查余额和拉模型列表的接口（没有就是「不支持」）、上游模型名的填写提示。Azure、Gemini 这类只靠数据就够，不用写方言。",
+      "responsibility": "供应商声明式元数据：支持的格式集合、各操作（聊天、token 计数、向量、重排、模型列表）的 URL 路径模板、认证头风格、余额查询路径及是否支持拉模型列表。",
       "attributes": [
         [
           "+",
-          "name · formats · endpoint_templates"
+          "code · display_name · formats: tuple[Format, ...]"
         ],
         [
           "+",
-          "auth: AuthStyle"
+          "default_bases · paths · auth: AuthStyle"
         ],
         [
           "+",
-          "balance_api | None · models_api | None"
-        ],
-        [
-          "+",
-          "model_hint"
+          "balance_path: str | None · list_models: bool"
         ]
       ]
     },
@@ -135,20 +123,16 @@
       "id": "auth",
       "kind": "enum",
       "name": "AuthStyle",
+      "stereotype": "值对象",
       "at": [
         -0.1,
-        3.6
+        3.7
       ],
-      "stereotype": "值对象",
-      "responsibility": "认证方式：Bearer、x-api-key（加版本头）、api-key 头、x-goog-api-key。",
+      "responsibility": "四类标准上游凭据注入方式：Authorization Bearer、Anthropic x-api-key（附 anthropic-version）、Azure api-key 头、Google x-goog-api-key。",
       "attributes": [
         [
           "",
-          "BEARER · X_API_KEY"
-        ],
-        [
-          "",
-          "API_KEY_HEADER · GOOG_API_KEY"
+          "BEARER · X_API_KEY · API_KEY_HEADER · GOOG_API_KEY"
         ]
       ]
     },
@@ -156,40 +140,28 @@
       "id": "dialect",
       "kind": "interface",
       "name": "ProviderDialect",
-      "at": [
-        2.0,
-        1.9
-      ],
       "stereotype": "扩展点",
-      "responsibility": "同一种格式下，一家供应商和标准写法不一样的地方。只做翻译、不做决定：报错归成统一的种类，用量换算成四项，参数改成这家的字段名；换不换线路、怎么算钱由线路和计量决定。",
+      "at": [
+        1.95,
+        2.0
+      ],
+      "responsibility": "供应商协议方言抽象：只做协议细节翻译（拼 URL、注入特殊请求字段、换算四项 token 用量、把 HTTP 状态码和错误体归类为统一的 FailureKind），不做选路或计费决策。",
       "methods": [
         [
           "+",
-          "auth(secret) -> headers"
+          "headers(secret, fmt) · url(base, fmt, op, model)"
         ],
         [
           "+",
-          "endpoint(account, format, model) -> url"
+          "adjust_request(fmt, body, plan) -> dict"
         ],
         [
           "+",
-          "adjust(body, plan) -> body"
-        ],
-        [
-          "+",
-          "usage(raw) -> Usage"
-        ],
-        [
-          "+",
-          "reasoning(delta) -> str | None"
+          "parse_usage(fmt, raw) -> Usage | None"
         ],
         [
           "+",
           "classify(status, headers, body) -> UpstreamFailure"
-        ],
-        [
-          "+",
-          "balance(account) · list_models(account)"
         ]
       ]
     },
@@ -197,20 +169,16 @@
       "id": "std",
       "kind": "class",
       "name": "StandardDialect",
-      "at": [
-        2.0,
-        3.6
-      ],
       "stereotype": "策略",
-      "responsibility": "默认方言：全部按 ProviderSpec 和标准格式来——认证、地址按数据；用量、思考按标准字段读；报错按状态码和标准错误类型归类（400 请求有误、429 限流、5xx 和 529 过载、401 密钥失效、402 余额不足），有 Retry-After 就带上。大多数供应商只用它。",
+      "at": [
+        1.95,
+        3.7
+      ],
+      "responsibility": "默认标准方言：按 ProviderSpec 拼装认证头与保留查询串的 URL，按 Anthropic/OpenAI 标准字段解析缓存用量，将 401/403 归为密钥失效、402 归为余额不足、429 归为限流、529/5xx 归为过载或服务错误。",
       "methods": [
         [
           "+",
-          "auth · endpoint · adjust · usage"
-        ],
-        [
-          "+",
-          "reasoning · classify · balance · list_models"
+          "默认实现全部 ProviderDialect 方法"
         ]
       ]
     },
@@ -218,16 +186,16 @@
       "id": "ds",
       "kind": "class",
       "name": "DeepSeekDialect",
-      "at": [
-        0.6,
-        5.1
-      ],
       "stereotype": "策略",
-      "responsibility": "DeepSeek：OpenAI 格式接口的缓存命中在 prompt_cache_hit_tokens（输入要减掉它）。思考在 reasoning_content，标准写法已经认这个字段，不用另写；余额接口按数据配。",
+      "at": [
+        0.55,
+        5.2
+      ],
+      "responsibility": "DeepSeek 方言：识别 OpenAI 接口的 prompt_cache_hit_tokens / prompt_cache_miss_tokens，解析 user/balance 余额响应。",
       "methods": [
         [
           "+",
-          "usage(raw)"
+          "parse_usage · parse_balance"
         ]
       ]
     },
@@ -235,12 +203,12 @@
       "id": "oai",
       "kind": "class",
       "name": "OpenAIDialect",
-      "at": [
-        2.0,
-        5.1
-      ],
       "stereotype": "策略",
-      "responsibility": "OpenAI：429 带 insufficient_quota 归成「余额不足」，不是「限流」——否则会每分钟冷却一次再撞一次。",
+      "at": [
+        1.95,
+        5.2
+      ],
+      "responsibility": "OpenAI 方言：将 429 中 code/type 为 insufficient_quota 的响应精确归类为 NO_BALANCE（标账号异常），而非普通限流。",
       "methods": [
         [
           "+",
@@ -252,65 +220,61 @@
       "id": "qwen",
       "kind": "class",
       "name": "QwenDialect",
-      "at": [
-        3.4,
-        5.1
-      ],
       "stereotype": "策略",
-      "responsibility": "通义千问：思考开关的字段是 enable_thinking，按 ParamPlan 的思考决定改写。",
+      "at": [
+        3.35,
+        5.2
+      ],
+      "responsibility": "通义千问方言：将 ParamPlan 的思考开关改写为 DashScope 兼容接口要求的 enable_thinking 布尔字段。",
       "methods": [
         [
           "+",
-          "adjust(body, plan)"
+          "adjust_request(fmt, body, plan)"
         ]
       ]
     },
     {
       "id": "kernel",
       "kind": "class",
-      "name": "Usage · UpstreamFailure · ParamPlan",
-      "at": [
-        4.3,
-        1.9
-      ],
+      "name": "Usage · UpstreamFailure · Op",
+      "external": true,
+      "source": "共享基础层（shared.kernel）",
       "attributes": [
         [
           "+",
-          "failure.kind：请求有误、限流、过载、密钥失效、余额不足"
-        ],
-        [
-          "+",
-          "Usage：输入、缓存写入、缓存命中、输出"
+          "Op: CHAT · COUNT_TOKENS · EMBEDDINGS · RERANK · MODELS"
         ]
       ],
-      "external": true,
-      "source": "共享内核"
+      "at": [
+        4.95,
+        2.0
+      ]
     }
   ],
   "relationships": [
     {
-      "from": "fmt",
+      "from": "gw_caller",
       "to": "cat",
       "type": "uses",
-      "description": "dialect"
+      "description": "取方言"
     },
     {
-      "from": "probe",
+      "from": "mgmt_caller",
       "to": "cat",
       "type": "uses",
-      "description": "providers · dialect"
+      "description": "取规格与方言"
     },
     {
       "from": "cat",
       "to": "spec",
       "type": "uses",
-      "description": "数据"
+      "description": "管理数据规格"
     },
     {
       "from": "cat",
       "to": "dialect",
       "type": "uses",
-      "description": "方言"
+      "description": "分发方言"
     },
     {
       "from": "spec",
@@ -327,8 +291,7 @@
       "from": "std",
       "to": "spec",
       "type": "uses",
-      "description": "按数据",
-      "labelAt": 0.45
+      "description": "读取模板与认证风格"
     },
     {
       "from": "ds",
@@ -349,53 +312,27 @@
       "from": "dialect",
       "to": "kernel",
       "type": "uses",
-      "description": "产出 Usage、UpstreamFailure"
+      "description": "返回标准值对象"
     }
   ],
   "capabilities": [
     {
-      "name": "取一家供应商的方言",
-      "entry": "ProviderCatalog.dialect(provider)",
-      "callers": "格式领域（每次尝试，按账号的供应商）",
-      "description": "认证头、地址、改字段名、读用量和思考、给报错归类；没登记方言的给默认方言"
+      "name": "供应商规格与列表",
+      "entry": "ProviderCatalog.providers / spec",
+      "callers": "管理平台（GET /api/v1/providers、AccountService）",
+      "description": "给控制台提供各供应商支持的协议格式、默认地址与填写提示"
     },
     {
-      "name": "供应商清单",
-      "entry": "ProviderCatalog.providers()",
-      "callers": "管理平台（添加账号）",
-      "description": "每家提供哪些格式、默认地址、认证方式、能不能查余额和拉模型列表"
-    },
-    {
-      "name": "查余额、拉模型列表",
-      "entry": "ProviderDialect.balance · list_models",
-      "callers": "管理平台（测试连接、每 5 分钟检查异常账号、登记模型时选上游模型）",
-      "description": "接口地址来自数据；不提供的返回「不支持」，界面上就显示不支持"
+      "name": "请求适配与错误/用量归一",
+      "entry": "ProviderDialect",
+      "callers": "模型网关 FormatGateway、管理平台 AccountService",
+      "description": "屏蔽各家认证、参数名、缓存计费字段与错误码语义差异"
     }
   ],
   "decisions": [
     {
-      "decision": "三层：格式 → 供应商方言 → 上游模型规则",
-      "reason": "格式管整体结构，方言管这家和标准不一样的地方，上游模型规则管同一家不同模型的参数取值；每层只关心自己那一份差异。"
-    },
-    {
-      "decision": "能写成数据的不写代码",
-      "reason": "认证方式、地址模板、余额和模型列表接口都是数据；Azure（地址带部署名和 API 版本）、Gemini（模型名在地址里）只靠数据就能接。只有字段改名、用量换算、报错归类这类逻辑才写方言。"
-    },
-    {
-      "decision": "方言只翻译，不决定",
-      "reason": "classify 只说「这是余额不足」，换不换线路、冷却多久在线路领域；usage 只换算成四项，怎么算钱在计量。这样各家的差异不会散进别的领域。"
-    },
-    {
-      "decision": "默认方言就是标准写法，供应商只覆盖不一样的方法",
-      "reason": "新接一家先只登记数据；发现和标准不一样，再加一个子类覆盖那一两个方法，别的领域不动。不做「每个供应商一个完整适配器」：那样数量是供应商 × 格式，代码大多重复。"
-    },
-    {
-      "decision": "按账号的供应商选方言，不按模型",
-      "reason": "同一个上游模型，经官方接口和经转售平台（比如硅基流动），写法可能不同；方言跟着账号走。"
-    },
-    {
-      "decision": "网关和管理平台共用一个包",
-      "reason": "管理平台测试连接、查余额、拉模型列表，和网关调用时的认证、报错归类是同一份；不会出现「测试连接通过、调用却失败」这种两边理解不一致。"
+      "decision": "provider 只依赖 shared.kernel，严禁反向导入 gateway 或控制面",
+      "reason": "由 import-linter 契约静态把关，确保 provider 是纯粹的无状态规格与翻译层，管理平台进程无需加载任何网关运行时代码。"
     }
   ]
 }

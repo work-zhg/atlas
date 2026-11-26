@@ -79,7 +79,7 @@
         0.3
       ],
       "source": "index/index_versions.py IndexVersionService，事件订阅 on_dataset_created / on_dataset_deleted / on_field_defined；index/versions.py activate / active_version",
-      "responsibility": "换向量模型不停服：新建版本（building）→ 后台重建 → 构建完成（ready）后切换；切换是在一个事务里改 active，检索看到的要么是旧版本、要么是新版本。旧版本退役后 collection 保留并继续双写，回滚后数据是全的，直到手动删除。同时只能有一个构建中的版本。重建任务只带版本 id：按版本行进入它的租户，租户停用就过一会儿再投。订阅知识库的事件：建库登记第 1 版，删库删所有 collection，加字段给每个 collection 的 meta 建路径索引。",
+      "responsibility": "换向量模型不停服：新建版本（building）→ 后台重建 → 构建完成（ready）后切换；切换是在一个事务里改 active，检索看到的要么是旧版本、要么是新版本。旧版本退役后 collection 保留并继续双写，回滚后数据是全的，直到手动删除。同时只能有一个构建中的版本。重建任务只带版本 id：按版本行进入它的租户。订阅知识库的事件：建库登记第 1 版，删库删所有 collection，加字段给每个 collection 的 meta 建路径索引。",
       "methods": [
         [
           "+",
@@ -113,7 +113,7 @@
         1.95
       ],
       "source": "index/loader.py doc_payload / segment_meta；index/vdb/base 的 payload 约定",
-      "responsibility": "entity 的检索文本和标量字段：检索文本是标题路径 + 正文，交给 Milvus 生成 BM25 稀疏向量；标量字段是检索入口类型、命中后回到哪个分段、所属文档和库、分段开关，加文档级字段（可用、元数据、ACL、版本与时效）。没有 ACL 写 [\"public\"]；时间存 epoch 秒，没有就留空，检索按不限。meta 是一个 JSON 字段 = 文档元数据 + 分段覆盖。",
+      "responsibility": "entity 的检索文本和标量字段：检索文本是标题路径 + 正文，交给 Milvus 生成 BM25 稀疏向量；标量字段是检索入口类型、命中后回到哪个分段、所属文档和库、分段开关，加文档级字段（可用、元数据、版本与时效）。时间存 epoch 秒，没有就留空，检索按不限。meta 是一个 JSON 字段 = 文档元数据 + 分段覆盖。",
       "attributes": [
         [
           "+",
@@ -133,7 +133,7 @@
         ],
         [
           "+",
-          "meta（JSON）· acl（ARRAY）"
+          "meta（JSON）"
         ],
         [
           "+",
@@ -273,7 +273,7 @@
         5.25
       ],
       "source": "无：现在是 index/vdb/qdrant.QdrantVector",
-      "responsibility": "Milvus 实现：collection kb_{库}_v{版本}（库 uuid 去掉连字符，Milvus 的名字只能有字母、数字、下划线）。schema：主键 id（分段或子块 uuid）；dense 向量（COSINE）；text 用 chinese 分析器，经 BM25 Function 生成 sparse 向量（BM25）；标量字段 document_uuid、segment_uuid、kind、enabled、doc_ok、acl、is_current、valid_from、valid_to 和 meta。标量字段建倒排索引，meta 按元数据字段建路径索引。过滤用表达式模板传参；按条件改字段先查主键再 partial upsert。默认有界一致性，召回测试用 Strong；退役的版本开 mmap。",
+      "responsibility": "Milvus 实现：collection kb_{库}_v{版本}（库 uuid 去掉连字符，Milvus 的名字只能有字母、数字、下划线）。schema：主键 id（分段或子块 uuid）；dense 向量（COSINE）；text 用 chinese 分析器，经 BM25 Function 生成 sparse 向量（BM25）；标量字段 document_uuid、segment_uuid、kind、enabled、doc_ok、is_current、valid_from、valid_to 和 meta。标量字段建倒排索引，meta 按元数据字段建路径索引。过滤用表达式模板传参；按条件改字段先查主键再 partial upsert。默认有界一致性，召回测试用 Strong；退役的版本开 mmap。",
       "methods": [
         [
           "+",
@@ -479,7 +479,7 @@
     {
       "name": "同步文档级字段",
       "entry": "sync_document(doc) · sync_segment_meta(doc, seg)",
-      "callers": "文档与入库（启用、审核、元数据、ACL、时效变了；入库完成时）",
+      "callers": "文档与入库（启用、归档、元数据、时效变了；入库完成时）",
       "description": "按 document_uuid 查出主键，分批 partial upsert 整体覆盖，再把有分段级覆盖的分段补写回去"
     },
     {
@@ -522,7 +522,7 @@
     },
     {
       "decision": "文档级字段只改标量字段，不重新向量化",
-      "reason": "启用、审核、ACL、元数据、版本时效这些变化很频繁，内容没变。Milvus 不能按条件改字段，所以先按 document_uuid 查出主键，再分批 partial upsert，只带要改的字段；代价随分段数增长，但不用重算向量。"
+      "reason": "启用、归档、元数据、版本时效这些变化很频繁，内容没变。Milvus 不能按条件改字段，所以先按 document_uuid 查出主键，再分批 partial upsert，只带要改的字段；代价随分段数增长，但不用重算向量。"
     },
     {
       "decision": "元数据值放在一个 JSON 字段里",

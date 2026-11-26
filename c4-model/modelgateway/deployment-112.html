@@ -21,7 +21,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "部署图：模型平台 - 192.168.0.112",
-  "description": "按 11-04 的实际部署画（deploy/local/38-modelgateway.yaml、39-litellm.yaml、deploy/server/deploy.sh，kubectl 和库里核对）：管理平台、LiteLLM 各 1 个副本；LiteLLM 镜像没固定版本（main-stable，现在是 1.106.5）。master key 和 salt key 在 Secret atlas-litellm-creds，salt key 换了已存的供应商凭据就解不开。LiteLLM 只有 ClusterIP，用户 Key 在集群外用不了（还没定要不要经网关开放）；litellm_public_url 没配。Service 只有 ClusterIP，集群内全是明文 HTTP",
+  "description": "对应 deploy/local/38-modelgateway.yaml、deploy/server/10-infra.yaml 与 gateway-cutover.sh：自研管理平台（atlas-modelgateway:8090）与自研模型网关（atlas-llmgateway:8091）已在 K8s 集群独立部署，彻底下线第三方 LiteLLM。主密钥存 Secret atlas-modelgateway-secret，数据库名 atlas_modelgateway，Redis 用 5 号库；网关配置零中断滚动升级（maxUnavailable=0、preStop 5s、优雅停机 150s）。",
   "environment": "192.168.0.112",
   "nodes": [
     {
@@ -53,23 +53,24 @@
       "id": "podFront",
       "kind": "node",
       "name": "atlas-frontends",
-      "technology": "Deployment：nginx 1.27 + 三个 Next.js",
+      "technology": "Deployment · nginx 1.27 + Next.js 控制台",
+      "instances": "1",
       "in": "nsSystem"
     },
     {
       "id": "podMg",
       "kind": "node",
       "name": "atlas-modelgateway",
-      "technology": "Deployment：atlas-app:20261031-003410，initContainer migrate",
+      "technology": "Deployment · :8090 · initContainer migrate",
       "instances": "1",
       "in": "nsSystem"
     },
     {
-      "id": "podLite",
+      "id": "podGw",
       "kind": "node",
-      "name": "atlas-litellm",
-      "technology": "Deployment：ghcr.io/berriai/litellm:main-stable（实为 1.106.5）",
-      "instances": "1",
+      "name": "atlas-llmgateway",
+      "technology": "Deployment · :8091 · maxUnavailable=0 · preStop 5s",
+      "instances": "1..N",
       "in": "nsSystem"
     },
     {
@@ -84,20 +85,29 @@
       "kind": "node",
       "name": "postgres-0",
       "technology": "StatefulSet · postgres:16-alpine",
+      "instances": "1",
+      "in": "nsInfra"
+    },
+    {
+      "id": "podRedis",
+      "kind": "node",
+      "name": "redis-0",
+      "technology": "StatefulSet · redis:7-alpine（DB 5）",
+      "instances": "1",
       "in": "nsInfra"
     }
   ],
   "elements": [
     {
-      "id": "gateway",
+      "id": "front",
       "kind": "infrastructure",
-      "technology": "nginx（atlas-frontends 里）",
+      "technology": "nginx（atlas-frontends）",
       "name": "前端网关",
-      "description": "经 Traefik 进来。/model-gateway-api/ 先到用户中心校验登录再转发；/internal、/v1 返回 404。",
+      "description": "/model-gateway-api/ 经用户中心校验登录后转给管理平台；/llm/ 直接转给模型网关（开放给个人 Key 与外部客户端）；/internal 与 /ops 外网隔离返回 404。",
       "in": "podFront",
       "at": [
-        0.9,
-        -0.55
+        1.2,
+        0.0
       ]
     },
     {
@@ -105,36 +115,48 @@
       "kind": "system",
       "name": "用户中心",
       "color": "#bf101d",
-      "description": "用户、组织与权限的唯一数据源，负责统一登录。",
+      "description": "atlas-usercenter（:8030）：统一登录校验、数据权限与组织在职查询。",
+      "in": "nsSystem",
       "at": [
-        2.65,
-        -0.55
-      ],
-      "in": "nsSystem"
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "id": "ops",
+      "kind": "system",
+      "name": "运营中心",
+      "color": "#8a6d00",
+      "description": "atlas-opscenter：系统参数下发、定时任务观测与租户开通、关闭清理。",
+      "in": "nsSystem",
+      "at": [
+        -1.2,
+        1.55
+      ]
     },
     {
       "id": "agent",
       "kind": "system",
       "name": "Agent 平台",
       "color": "#ed8609",
-      "description": "atlas-server 按 ConfigMap atlas-model-platform 的地址：内部接口取 Key，直连 LiteLLM 调模型；会话 Pod（atlas-acp）里的 CLI 也直连 LiteLLM。",
+      "description": "atlas-server 与会话 Pod（atlas-acp）：经 :8090/internal 取客户端 Key，直连 :8091/universal 调模型。",
+      "in": "nsSystem",
       "at": [
-        -0.95,
-        1.0
-      ],
-      "in": "nsSystem"
+        2.75,
+        0.0
+      ]
     },
     {
       "id": "kb",
       "kind": "system",
       "name": "知识库服务",
       "color": "#8411bd",
-      "description": "atlas-knowledge：入库增强、查询理解用 Service:knowledge-chat 的 Key（deepseek-flash）；knowledge-embedding、knowledge-rerank 两把还是待分配。",
+      "description": "atlas-knowledge：经 :8090/internal 取服务级 Key，直连 :8091 调对话、向量与重排接口。",
+      "in": "nsSystem",
       "at": [
-        -0.95,
-        2.6
-      ],
-      "in": "nsSystem"
+        4.0,
+        0.0
+      ]
     },
     {
       "id": "server",
@@ -142,38 +164,25 @@
       "shape": "server",
       "technology": "Python / FastAPI",
       "name": "管理平台",
-      "description": "模型登记与授权，API Key 的管理并同步到 LiteLLM，给应用的内部接口；每 5 分钟对一次账。不在模型调用的路径上。",
+      "description": "监听 :8090；启动前 initContainer 跑 python -m atlas_modelgateway migrate 建表与当月/下月分区。",
+      "in": "podMg",
       "at": [
-        0.9,
-        1.0
-      ],
-      "in": "podMg"
+        0.85,
+        1.55
+      ]
     },
     {
-      "id": "cli",
+      "id": "gateway",
       "kind": "container",
       "shape": "server",
-      "technology": "Python / argparse",
-      "name": "运维命令行",
-      "description": "同一个镜像：initContainer 跑 migrate；model-cutover.sh、register.sh 用 kubectl exec 跑 register-uc、model add、client-key ensure。",
+      "technology": "Python / FastAPI（asyncio + httpx 流式）",
+      "name": "模型网关",
+      "description": "监听 :8091（atlas_modelgateway.gateway.app:create_app）；停机前排空流式连接并刷完内存里的调用记录队列。",
+      "in": "podGw",
       "at": [
-        2.35,
-        1.0
-      ],
-      "in": "podMg"
-    },
-    {
-      "id": "litellm",
-      "kind": "container",
-      "shape": "server",
-      "technology": "LiteLLM 1.106（第三方）",
-      "name": "LiteLLM",
-      "description": "1 个 worker，STORE_MODEL_IN_DB；只有 ClusterIP，没对集群外开放，管理界面 /ui 用 port-forward 访问。",
-      "at": [
-        0.9,
-        2.6
-      ],
-      "in": "podLite"
+        2.95,
+        1.55
+      ]
     },
     {
       "id": "db",
@@ -181,133 +190,148 @@
       "shape": "database",
       "technology": "PostgreSQL 16",
       "name": "平台库",
-      "description": "库 atlas_modelgateway，迁移到 m0002：2 个公有模型（deepseek-flash、deepseek-v4-pro）；47 把客户端 Key（42 把 Agent、5 把 Service，其中 2 把待分配），0 把用户 Key。",
+      "description": "数据库 atlas_modelgateway（:5432）：gw_account、gw_model、gw_route、gw_api_key、gw_audit 与分区表 gw_model_call。",
+      "in": "podPg",
       "at": [
-        2.35,
-        4.1
-      ],
-      "in": "podPg"
+        0.85,
+        3.2
+      ]
     },
     {
-      "id": "ldb",
+      "id": "redis",
       "kind": "container",
       "shape": "database",
-      "technology": "PostgreSQL 16",
-      "name": "LiteLLM 库",
-      "description": "库 atlas_litellm，表由 LiteLLM 启动时自己建（prisma）。",
+      "technology": "Redis 7（键值 + Pub/Sub）",
+      "name": "网关状态",
+      "description": "实例 :6379 的 5 号库：线路冷却、账号异常、RPM 与月/5h/24h 滑动窗口费用桶、租户版本及 Pub/Sub 失效通道。",
+      "in": "podRedis",
       "at": [
-        0.9,
-        4.1
-      ],
-      "in": "podPg"
+        2.95,
+        3.2
+      ]
     },
     {
-      "id": "deepseek",
+      "id": "provider",
       "kind": "system",
-      "name": "DeepSeek API",
+      "name": "模型供应商",
       "color": "#5b6770",
-      "description": "112 上两个模型都在这个供应商。",
+      "description": "DeepSeek、Anthropic、OpenAI、通义千问、Gemini 等外部接口。",
       "in": "internet",
       "at": [
-        4.1,
-        2.6
+        5.85,
+        2.3
       ]
     }
   ],
   "relationships": [
     {
-      "from": "gateway",
+      "from": "front",
       "to": "usercenter",
-      "description": "校验登录",
+      "description": "校验会话登录态",
       "technology": "HTTP（:8030）",
       "private": true
     },
     {
+      "from": "front",
+      "to": "server",
+      "description": "转发 /model-gateway-api/",
+      "technology": "JSON/HTTP（:8090）",
+      "private": true
+    },
+    {
+      "from": "front",
+      "to": "gateway",
+      "description": "转发 /llm/ 调用流量",
+      "technology": "HTTP + SSE（:8091）",
+      "private": true
+    },
+    {
+      "from": "ops",
+      "to": "server",
+      "description": "系统参数、任务与租户管控",
+      "technology": "JSON/HTTP（:8090/ops/api/v1）",
+      "private": true
+    },
+    {
+      "from": "agent",
+      "to": "server",
+      "description": "申请并获取客户端 Key",
+      "technology": "JSON/HTTP（:8090/internal）",
+      "private": true,
+      "labelAt": 0.32
+    },
+    {
+      "from": "agent",
+      "to": "gateway",
+      "description": "流式调用对话模型",
+      "technology": "HTTP + SSE（:8091/universal）",
+      "private": true
+    },
+    {
+      "from": "kb",
+      "to": "server",
+      "description": "获取服务级 Key",
+      "technology": "JSON/HTTP（:8090/internal）",
+      "private": true,
+      "labelAt": 0.3
+    },
+    {
+      "from": "kb",
+      "to": "gateway",
+      "description": "对话、向量与重排",
+      "technology": "JSON/HTTP（:8091）",
+      "private": true
+    },
+    {
+      "from": "server",
+      "to": "usercenter",
+      "description": "数据权限与用户查询",
+      "technology": "JSON/HTTP（:8030/open/v1）",
+      "private": true,
+      "labelAt": 0.55
+    },
+    {
+      "from": "server",
+      "to": "db",
+      "description": "读写配置、查询记录与维护分区",
+      "technology": "PostgreSQL/TCP（:5432）",
+      "private": true
+    },
+    {
+      "from": "server",
+      "to": "redis",
+      "description": "递增版本、Pub/Sub 驱逐、巡检锁",
+      "technology": "RESP/TCP（:6379/5）",
+      "private": true,
+      "labelAt": 0.38
+    },
+    {
+      "from": "server",
+      "to": "provider",
+      "description": "测试连接与查余额",
+      "technology": "HTTPS",
+      "labelAt": 0.72
+    },
+    {
       "from": "gateway",
-      "to": "server",
-      "description": "转发模型页面",
-      "technology": "HTTP（:8090）",
-      "private": true
-    },
-    {
-      "from": "agent",
-      "to": "server",
-      "description": "取 Key",
-      "technology": "JSON/HTTP（:8090/internal）",
-      "private": true
-    },
-    {
-      "from": "agent",
-      "to": "litellm",
-      "description": "调模型",
-      "technology": "Anthropic Messages/HTTP（:4000）",
-      "private": true,
-      "labelAt": 0.7
-    },
-    {
-      "from": "kb",
-      "to": "server",
-      "description": "取服务级 Key",
-      "technology": "JSON/HTTP（:8090/internal）",
-      "private": true,
-      "labelAt": 0.3
-    },
-    {
-      "from": "kb",
-      "to": "litellm",
-      "description": "对话",
-      "technology": "OpenAI 兼容 HTTP（:4000）",
-      "private": true
-    },
-    {
-      "from": "server",
-      "to": "litellm",
-      "description": "管理接口",
-      "technology": "HTTP（:4000，master key）",
-      "private": true
-    },
-    {
-      "from": "server",
-      "to": "usercenter",
-      "description": "数据权限、用户、快照",
-      "technology": "JSON/HTTP（:8030）",
-      "private": true
-    },
-    {
-      "from": "server",
       "to": "db",
-      "description": "读写",
-      "technology": "SQL/TCP（postgres.atlas-infra:5432）",
+      "description": "只读配置、懒回填花费、批量写记录",
+      "technology": "PostgreSQL/TCP（:5432）",
       "private": true,
-      "labelAt": 0.75
+      "labelAt": 0.62
     },
     {
-      "from": "cli",
-      "to": "db",
-      "description": "迁移",
-      "technology": "SQL/TCP（:5432）",
-      "private": true,
-      "labelAt": 0.3
-    },
-    {
-      "from": "cli",
-      "to": "usercenter",
-      "description": "登记应用",
-      "technology": "JSON/HTTP（管理 API）",
+      "from": "gateway",
+      "to": "redis",
+      "description": "冷却/异常、限额计数与版本订阅",
+      "technology": "RESP/TCP（:6379/5）",
       "private": true
     },
     {
-      "from": "litellm",
-      "to": "ldb",
-      "description": "部署、Key、日志",
-      "technology": "SQL/TCP（:5432）",
-      "private": true
-    },
-    {
-      "from": "litellm",
-      "to": "deepseek",
-      "description": "转发调用",
-      "technology": "HTTPS（api.deepseek.com）"
+      "from": "gateway",
+      "to": "provider",
+      "description": "转发模型调用",
+      "technology": "HTTPS + SSE"
     }
   ]
 }

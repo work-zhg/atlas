@@ -165,7 +165,7 @@
       "kind": "component",
       "name": "运营接口",
       "technology": "FastAPI Router + 运营接口库",
-      "description": "/ops/v1：技能市场的发布、默认安装、下架，给租户装；租户的停用、恢复、删除（先删对象再分批删行）；只给运营中心，先验签名。",
+      "description": "/ops/v1：技能市场的发布、默认安装、下架；租户的创建（开通时从市场装默认技能）、删除（先删对象再分批删行）；只给运营中心，先验签名。不知道租户状态，停用、恢复不经这里。",
       "at": [
         4.3,
         1.3
@@ -242,13 +242,13 @@
     {
       "from": "opscenter",
       "to": "ops",
-      "description": "市场发布、给租户装默认；停用、删除租户",
+      "description": "市场发布；开通时创建（装默认技能）、关闭时删除租户",
       "technology": "JSON/HTTP（运营接口，签名）"
     },
     {
       "from": "ops",
       "to": "market",
-      "description": "发布、下架、给租户装"
+      "description": "发布、下架；开通时装默认"
     },
     {
       "from": "mgmt",

@@ -30,49 +30,45 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：运营中心 - 运营服务 - 系统接入",
-  "description": "目标领域模型（运营中心是新系统，代码还没有）。运营中心和各业务系统之间唯一的通道：系统登记、运营接口契约、调用方凭据。整体设计见 design-tenant-isolation.html",
+  "description": "目标领域模型，每个元素下方的「现状」是现在承担它的代码。运营中心和各业务系统之间唯一的通道：系统登记、运营接口契约、调用方凭据。整体设计见 design-tenant-isolation.html",
   "component": "系统接入",
-  "package": "atlas_opscenter.gateway（目标模型）",
-  "overview": "系统接入是运营中心碰各业务系统的唯一通道，分两半。一半是契约：运营中心能对一个系统做什么，按能力分成五组接口——租户生命周期（挂起、恢复、删除，每个存租户数据的系统必选）、用户中心专有的租户与应用目录、容量（份额和用量）、系统设置（系统参数、系统任务）、运行环境（沙箱模板）。各业务系统在自己那一侧实现这些契约，运营中心也只能做这些事：契约里没有任何读租户内容的方法，「运营中心看不到租户内容」是靠这一点保证的，而不是靠权限挡。\n\n另一半是运营中心这一侧的客户端：系统登记（有哪些系统、地址、声明了哪几组能力）、按系统建客户端、每次调用带上运营人员和幂等键并用该系统的运营密钥签名、把失败归成「可重试」和「被拒绝」两类。租户、应用、容量、系统设置几个组件都经它调各系统，自己不直接发 HTTP。",
+  "package": "atlas_opscenter.gateway",
+  "overview": "系统接入是运营中心碰各业务系统的唯一通道，分两半。一半是契约：运营中心能对一个系统做什么，按能力分成五组接口——租户生命周期（创建、删除，每个存租户数据的系统必选；地址和要实现的类由运营接口库定好）、用户中心专有的租户与应用目录、容量（份额和用量）、系统设置（系统参数、系统任务）、运行环境（沙箱模板）。各业务系统在自己那一侧实现这些契约，运营中心也只能做这些事：契约里没有任何读租户内容的方法，「运营中心看不到租户内容」是靠这一点保证的，而不是靠权限挡。契约里也没有停用、恢复：业务系统不知道租户状态，停用只在用户中心挡住。\n\n另一半是运营中心这一侧的客户端：系统登记（有哪些系统、地址、声明了哪几组能力、对应的运营模块）、按系统建客户端、每次调用带上运营人员和幂等键并用该系统的运营密钥签名、把失败归成「可重试」和「被拒绝」两类。租户、应用目录、系统模块、权限与审计几个组件都经它调各系统，自己不直接发 HTTP。",
   "elements": [
     {
       "id": "life",
       "kind": "interface",
       "name": "TenantLifecycleApi",
       "stereotype": "对外接口",
-      "responsibility": "契约（必选）：每个存租户数据的系统都要实现。挂起、恢复、删除一个租户的数据。删除分批：每次删一批，返回还有没有剩，调用方重做到删完。都按幂等键去重。",
+      "responsibility": "契约（必选）：每个存租户数据的系统都要实现，地址和要实现的类由运营接口库定好。创建：开通租户（或给新登记的系统补建）时，让系统为这个租户准备它要用的东西，参数是开通时给这个系统填的（如份额、是否装默认技能）。删除：分批，每次删一批，返回还有没有剩，调用方重做到删完。两个都能重做。没有挂起、恢复：业务系统不知道租户状态。",
       "attributes": [],
       "methods": [
         [
           "+",
-          "suspend(tenant_uuid, stamp)"
+          "create(tenant_uuid, params, stamp)"
         ],
         [
           "+",
-          "resume(tenant_uuid, stamp)"
-        ],
-        [
-          "+",
-          "purge(tenant_uuid, stamp) -> PurgeReport"
+          "delete(tenant_uuid, stamp) -> PurgeReport"
         ]
       ],
       "at": [
         0,
         0
       ],
-      "source": "无：新建（各系统现在都没有按租户挂起、删除的能力）"
+      "source": "运营接口库：PUT / DELETE /ops/v1/tenants/{id}（各系统实现 TenantLifecycle）"
     },
     {
       "id": "uc",
       "kind": "interface",
       "name": "UserCenterOpsApi",
       "stereotype": "对外接口",
-      "responsibility": "契约：只有用户中心实现。租户目录和应用目录：列租户、按 uuid 幂等建租户（含根部门、首个管理员、开通的应用）、挡住或放开一个租户的入口、删除租户、补发首个管理员的临时密码、查已过期的租户、管应用目录。",
+      "responsibility": "契约：只有用户中心实现。租户目录和应用目录：列租户（带是不是系统租户）、按 uuid 幂等建租户（含根部门、首个管理员、开通的应用）、挡住或放开一个租户（停用、恢复只在这里做：挡住后这个租户的人登录不了，取角色权限、数据权限一律无权限；到期同样算作挡住）、删除租户、补发首个管理员的临时密码、管应用目录。系统租户不能挡住、删除，也不能经这里建；标了「仅系统租户」的应用只能开给系统租户。运营中心自己的应用目录按编码幂等写入。",
       "attributes": [],
       "methods": [
         [
           "+",
-          "tenants() -> list[TenantInfo]"
+          "tenants() -> list[TenantInfo]  # 含 is_system"
         ],
         [
           "+",
@@ -92,15 +88,15 @@
         ],
         [
           "+",
-          "expired(now) -> list[UUID]"
-        ],
-        [
-          "+",
           "apps() -> list[AppInfo]"
         ],
         [
           "+",
           "set_app(app_uuid, changes, stamp)"
+        ],
+        [
+          "+",
+          "upsert_app(spec, stamp)  # 运营中心自己的目录"
         ],
         [
           "+",
@@ -111,7 +107,7 @@
         1.55,
         0
       ],
-      "source": "无：新建（现在由用户中心 /api/v1/tenants、/api/v1/apps 提供，只认平台租户里的人）"
+      "source": "用户中心 /ops/v1/tenants、/ops/v1/apps …（api/ops.py）"
     },
     {
       "id": "cap",
@@ -146,7 +142,7 @@
         3.2,
         0
       ],
-      "source": "无：新建"
+      "source": "Atlas、知识库的 /ops/v1/capacity、/quotas、/usage"
     },
     {
       "id": "set",
@@ -173,7 +169,7 @@
         4.6,
         0
       ],
-      "source": "无：新建（现在是各系统的 /v1/configs、/v1/jobs，按 config:manage、job:manage 判）"
+      "source": "各系统的 /ops/v1/configs、/ops/v1/jobs（应用配置库、定时任务库的管理接口）"
     },
     {
       "id": "env",
@@ -200,7 +196,7 @@
         5.9,
         0
       ],
-      "source": "无：新建（现在是 Atlas 的 /v1/sandbox-templates，按 sandbox:manage 判）"
+      "source": "Atlas 的 /ops/v1/sandbox-templates"
     },
     {
       "id": "purge",
@@ -223,14 +219,14 @@
         -1.25,
         0
       ],
-      "source": "无：新建"
+      "source": "删除接口的返回 {deleted, remaining}（atlas_tenancy.PurgeReport）"
     },
     {
       "id": "gw",
       "kind": "class",
       "name": "OpsGateway",
       "stereotype": "应用服务",
-      "responsibility": "领域对内的入口，给租户、应用、容量、系统设置几个组件用：按系统编码取客户端，列出声明了某种能力的系统（如关闭租户时要调哪些系统）。客户端按系统建一次、缓存复用。",
+      "responsibility": "领域对内的入口，给租户、应用目录、系统模块、权限与审计几个组件用：按系统编码取客户端，列出声明了某种能力的系统（如关闭租户时要调哪些系统）。客户端按系统建一次、缓存复用。",
       "attributes": [],
       "methods": [
         [
@@ -262,7 +258,7 @@
         0,
         2.7
       ],
-      "source": "无：新建"
+      "source": "没有单独拆出来：OpsClient 按系统编码调；契约之外的读写经系统代理（api/systems.py，白名单 proxy_allowed）"
     },
     {
       "id": "client",
@@ -290,21 +286,21 @@
         2.9,
         2.7
       ],
-      "source": "无：新建"
+      "source": "gateway.py OpsClient"
     },
     {
       "id": "endpoint",
       "kind": "class",
       "name": "OpsEndpoint",
       "stereotype": "对外接口",
-      "responsibility": "业务系统一侧的运营接口：核对签名和时间窗，只接受运营中心；在系统范围里执行；把运营人员和操作记进本系统的审计。",
+      "responsibility": "业务系统一侧的运营接口，由运营接口库提供：核对签名和时间窗，只接受运营中心；创建在这个租户的上下文里执行，删除和其他运营接口在系统范围里执行。",
       "attributes": [],
       "methods": [],
       "at": [
         6.6,
         2.7
       ],
-      "source": "共用租户组件（各业务系统）",
+      "source": "运营接口库（各业务系统）",
       "external": true
     },
     {
@@ -324,18 +320,22 @@
         1.75,
         4.6
       ],
-      "source": "无：新建"
+      "source": "运营接口库 atlas_opsapi.sign（和业务系统验签的是同一份实现）"
     },
     {
       "id": "stamp",
       "kind": "class",
       "name": "OperatorStamp",
       "stereotype": "值对象",
-      "responsibility": "写进每个请求的「谁、为了哪次操作」：运营人员、租户操作的 uuid（有的话）、幂等键（步骤 uuid）。业务系统据此记审计、去重。",
+      "responsibility": "写进每个请求的「谁、为了哪次操作」：运营人员（用户中心里系统租户的人，uuid 和名字）、租户操作的 uuid（有的话）、幂等键（步骤 uuid）。业务系统据此写日志，和运营中心的审计对上。",
       "attributes": [
         [
           "+",
-          "operator_uuid: UUID | None"
+          "operator_uuid: UUID | None  # 用户中心的用户"
+        ],
+        [
+          "+",
+          "operator_name: str | None"
         ],
         [
           "+",
@@ -351,7 +351,7 @@
         3.1,
         4.6
       ],
-      "source": "无：新建"
+      "source": "gateway.py stamp_of → atlas_opsapi.OperatorStamp"
     },
     {
       "id": "err",
@@ -378,14 +378,14 @@
         4.4,
         4.6
       ],
-      "source": "无：新建"
+      "source": "gateway.py CallFailed（retryable = 可重试，否则被拒绝）"
     },
     {
       "id": "reg",
       "kind": "class",
       "name": "SystemRegistry",
       "stereotype": "仓储",
-      "responsibility": "系统登记：有哪些系统、地址、声明了哪几组能力。来自部署配置，不进库；启动时校验每个登记的系统都声明了 TenantLifecycleApi（用户中心除外）。",
+      "responsibility": "系统登记：有哪些系统、地址、声明了哪几组能力、运营模块的数据编码。来自部署配置，不进库；启动时校验每个登记的系统都声明了 TenantLifecycleApi（用户中心除外）、都写了模块数据编码且不重复。登记顺序就是开通、关闭时调各系统的顺序。",
       "attributes": [],
       "methods": [
         [
@@ -401,14 +401,14 @@
         -0.1,
         4.6
       ],
-      "source": "无：新建（部署配置）"
+      "source": "gateway.py SystemRegistry（部署配置 ATLAS_OPS_SYSTEMS）"
     },
     {
       "id": "entry",
       "kind": "class",
       "name": "SystemEntry",
       "stereotype": "值对象",
-      "responsibility": "一个系统的登记项：编码、名字、运营接口地址、能力。",
+      "responsibility": "一个系统的登记项：编码、名字、运营接口地址、能力，以及这个系统在运营中心里那个模块的数据编码（权限与审计按它判谁能运营这个系统）。",
       "attributes": [
         [
           "+",
@@ -425,6 +425,10 @@
         [
           "+",
           "capabilities: set[Capability]"
+        ],
+        [
+          "+",
+          "module_code: str  # 如 OpsMcp"
         ]
       ],
       "methods": [],
@@ -432,14 +436,14 @@
         -0.1,
         6.3
       ],
-      "source": "无：新建"
+      "source": "gateway.py SystemEntry"
     },
     {
       "id": "capab",
       "kind": "enum",
       "name": "Capability",
       "stereotype": "值对象",
-      "responsibility": "系统能声明的能力，各对应一组契约。新增一个系统 = 实现 TENANT_LIFECYCLE（必选）和 SETTINGS，再在部署配置里登记。",
+      "responsibility": "系统能声明的能力，各对应一组契约。新增一个系统 = 用运营接口库实现 TENANT_LIFECYCLE（必选）和 SETTINGS，在部署配置里登记（写上模块的数据编码），再由运营中心给已有租户补建一次。",
       "attributes": [
         [
           "",
@@ -467,7 +471,7 @@
         1.6,
         6.3
       ],
-      "source": "无：新建"
+      "source": "gateway.py Capability（LIFECYCLE、USER_CENTER、CAPACITY、SETTINGS、JOBS、RUNTIME_ENV、SKILL_MARKET、MEMORY_SCOPES）"
     }
   ],
   "relationships": [
@@ -557,52 +561,52 @@
     {
       "name": "列出有某种能力的系统",
       "entry": "systems(capability)",
-      "callers": "租户（排关闭、停用的步骤）、系统设置（列各系统的参数和任务）",
-      "description": "按部署配置里的登记；关闭租户时调的就是声明了 TENANT_LIFECYCLE 的全部系统"
+      "callers": "租户（排开通、关闭、补建的步骤）、系统模块（列各系统的参数和任务）",
+      "description": "按部署配置里的登记；开通、关闭租户时调的就是声明了 TENANT_LIFECYCLE 的全部系统"
     },
     {
       "name": "租户生命周期",
-      "entry": "lifecycle(system) → suspend / resume / purge",
+      "entry": "lifecycle(system) → create / delete",
       "callers": "租户（StepRunner）",
-      "description": "按步骤 uuid 幂等；purge 分批，返回还有没有剩"
+      "description": "create 带上开通时给这个系统填的参数；delete 分批，返回还有没有剩；都能重做"
     },
     {
       "name": "租户与应用目录",
       "entry": "user_center() → UserCenterOpsApi",
-      "callers": "租户、应用",
-      "description": "建租户、挡住或放开入口、删除租户、补发临时密码、查到期；应用目录和给租户开通应用"
+      "callers": "租户、应用目录、权限与审计（同步自己的目录）",
+      "description": "建租户、挡住或放开（停用、恢复）、删除租户、补发临时密码；应用目录和给租户开通应用；系统租户不能挡住、删除"
     },
     {
       "name": "份额与用量",
       "entry": "capacity(system) → CapacityApi",
-      "callers": "容量、租户（开通时设份额）",
+      "callers": "系统模块",
       "description": "只有数字：份额、用量、总容量"
     },
     {
       "name": "系统参数与系统任务",
       "entry": "settings(system) → SettingsApi",
-      "callers": "系统设置",
+      "callers": "系统模块",
       "description": "改参数带修订号，冲突时对方拒绝"
     },
     {
       "name": "沙箱模板",
       "entry": "runtime_env() → RuntimeEnvApi",
-      "callers": "系统设置",
+      "callers": "系统模块",
       "description": "修订只改库，发布才生效"
     }
   ],
   "decisions": [
     {
       "decision": "契约里只有「管平台」的动作，没有读取租户内容的方法",
-      "reason": "运营中心看不到租户内容，靠的是根本没有这条路：就算运营账号被盗、运营中心有漏洞，也只能做这几类事，读不到会话、文件、知识库、凭据。"
+      "reason": "运营中心看不到租户内容，靠的是根本没有这条路：就算运营人员的账号被盗、运营中心有漏洞，也只能做这几类事，读不到会话、文件、知识库、凭据。"
     },
     {
       "decision": "契约按能力分组，系统在登记里声明自己实现哪几组",
-      "reason": "不是每个系统都有份额、沙箱模板；运营中心按声明决定界面显示什么、关闭租户时调谁。新增一个存租户数据的系统，实现租户生命周期和系统设置两组、在部署配置里登记即可，运营中心不用改代码。"
+      "reason": "不是每个系统都有份额、沙箱模板；运营中心按声明决定界面显示什么、开通和关闭租户时调谁。新增一个存租户数据的系统，用运营接口库实现租户生命周期和系统设置两组、在部署配置里登记即可，运营中心不用改代码；已有租户由运营中心补建一次。"
     },
     {
       "decision": "租户生命周期是必选，启动时校验",
-      "reason": "关闭租户要删干净：有一个存租户数据的系统删不了，就会留下孤儿数据。启动时就拦住漏实现的系统，而不是等到关闭租户时才发现。"
+      "reason": "开通时每个系统都要为新租户准备好，关闭时都要删干净：有一个系统没实现，新租户在它那里就缺配置，关闭后就留下孤儿数据。启动时就拦住漏实现的系统，而不是等到开通、关闭时才发现。"
     },
     {
       "decision": "系统登记放部署配置，不进库",
@@ -614,7 +618,11 @@
     },
     {
       "decision": "请求上写明运营人员、操作 uuid 和幂等键",
-      "reason": "业务系统记审计时能和运营中心的审计对上；步骤重做时对方按幂等键去重，不会做两遍。"
+      "reason": "业务系统写日志时能和运营中心的审计对上。重做靠的是对方这一步本身能重做：用户中心按租户 uuid 幂等建，各系统的创建再建一次结果一样、删除每次删剩下的。"
+    },
+    {
+      "decision": "业务系统的契约里没有停用、恢复",
+      "reason": "租户归用户中心管：停用只在用户中心挡住，这个租户的人取角色权限、数据权限一律无权限。业务系统不知道租户状态，也就不存在「某个系统没通知到、半停用」的问题。"
     },
     {
       "decision": "删除分批，返回还有没有剩",
@@ -623,6 +631,10 @@
     {
       "decision": "失败只分两类：可重试、被拒绝",
       "reason": "调用方只需要决定「过一会儿再试」还是「要人看」；被拒绝的退避更长、界面标红，不会对着一个永远不满足的前置条件反复打。"
+    },
+    {
+      "decision": "每个系统在登记里写一个运营模块的数据编码",
+      "reason": "运营按系统分工授权：管 MCP 网关的人只该碰 MCP 网关的运营接口。编码跟着登记走，新接入一个系统不用改运营中心的代码，重启后自动同步进用户中心。"
     }
   ]
 }

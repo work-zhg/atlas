@@ -21,7 +21,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "组件图：知识库服务 - 知识库接口",
-  "description": "目标模型。各组件读写自己的表（PostgreSQL，除向量缓存外都带租户，按当前租户自动过滤），图中不画数据库；查询向量、查询理解的 Redis 缓存未画。分段预览也会调解析（同 worker 里的解析组件），图中未画。运营接口删租户时还会分批删各领域的表（运营接口库），图中未画。代码按组件分包（access/、dataset/、document/、index/、models/、ops/、parse/、retrieval/、segment/），api/ 是 HTTP 接入层；各组件的代码图见 code-*.html",
+  "description": "目标模型。各组件读写自己的表（PostgreSQL，除向量缓存外都带租户，按当前租户自动过滤），图中不画数据库；查询向量、查询理解的 Redis 缓存未画。分段预览也会调解析（同 worker 里的解析组件），图中未画。运营接口删租户数据时还会分批删各领域的表（运营接口库），图中未画。入口按功能分成管理和检索两个，不按调用方分：浏览器经网关、Atlas、MCP 网关调的是同一套 /v1，身份一律取请求头。代码按组件分包（access/、dataset/、document/、index/、models/、ops/、parse/、retrieval/、segment/），api/ 是 HTTP 接入层；各组件的代码图见 code-*.html",
   "system": "知识库服务",
   "container": "知识库接口",
   "elements": [
@@ -50,7 +50,7 @@
       "id": "usercenter",
       "kind": "system",
       "name": "用户中心",
-      "description": "用户、组织与权限的唯一数据源，负责统一登录。",
+      "description": "用户、组织、租户与权限的唯一数据源，负责统一登录。",
       "at": [
         5.4,
         2.6
@@ -107,32 +107,21 @@
       "kind": "component",
       "name": "管理接口",
       "technology": "FastAPI Router",
-      "description": "/v1：知识集、知识库、文档、分段、共享、索引版本、元数据、召回测试、检索记录和存储用量，给控制台用。",
+      "description": "/v1：知识集、知识库、文档、分段、共享、索引版本、元数据和存储用量。",
       "at": [
         0.9,
         1.3
       ]
     },
     {
-      "id": "internal",
+      "id": "search",
       "kind": "component",
-      "name": "内部接口",
+      "name": "检索接口",
       "technology": "FastAPI Router",
-      "description": "/internal/v1：智能体运行时检索、列能用的知识集（每个带上能读的库）；网关不转发。",
+      "description": "/v1：能检索哪些知识集和库、检索（按库或按知识集）、召回测试、检索记录与漏斗。",
       "at": [
         2.7,
         1.3
-      ]
-    },
-    {
-      "id": "mcp",
-      "kind": "component",
-      "name": "MCP 端点",
-      "technology": "MCP（streamable HTTP）",
-      "description": "/mcp：会话 Pod 里 CLI 智能体的 knowledge_list、knowledge_search；只认签名令牌（知识集、身份和租户都在里面），不认身份请求头。",
-      "at": [
-        3.8,
-        1.1
       ]
     },
     {
@@ -140,7 +129,7 @@
       "kind": "component",
       "name": "知识库",
       "technology": "SQLAlchemy 异步",
-      "description": "知识集（名称、介绍、维护人、取几条）与知识库：建库、改设置（可见性、检索、增强、审核）、移库、删库、共享，元数据字段定义。",
+      "description": "知识集（名称、介绍、维护人、取几条）与知识库：建库、改设置（可见性、检索、增强）、移库、删库、共享，元数据字段定义。",
       "at": [
         1.6,
         3.95
@@ -151,7 +140,7 @@
       "kind": "component",
       "name": "文档与入库",
       "technology": "SQLAlchemy 异步 + Celery 投递",
-      "description": "上传、文档状态（暂停、恢复、重试、启用、审核、删除）、文档属性与版本；入库编排在 worker。",
+      "description": "上传、文档状态（暂停、恢复、重试、启用、归档、删除）、文档属性与版本；入库编排在 worker。",
       "at": [
         -0.4,
         2.6
@@ -195,7 +184,7 @@
       "kind": "component",
       "name": "访问控制",
       "technology": "FastAPI 依赖 + httpx",
-      "description": "调用身份与租户核对、操作码、库级权限（公有库本地判，私有按用户中心数据权限）、文档级主体标签、MCP 令牌。",
+      "description": "调用身份与租户核对（身份取请求头）、操作码、库级权限（公有库本地判，私有只按用户中心数据权限；没有文档级权限）。",
       "at": [
         4.25,
         2.7
@@ -228,36 +217,53 @@
       "kind": "component",
       "name": "运营接口",
       "technology": "FastAPI Router + 运营接口库",
-      "description": "/ops/v1：租户的停用、恢复、删除，知识库文件的存储份额与用量，系统参数和系统任务；只给运营中心，先验签名。",
+      "description": "/ops/v1：实现运营接口库的租户创建（开通时记存储份额）和删除（关闭时），知识库文件的存储份额与用量，系统参数和系统任务；只给运营中心，先验签名。不知道租户状态，停用、恢复不经这里。",
       "at": [
         -1.15,
         3.5
       ]
+    },
+    {
+      "id": "mcpgw",
+      "kind": "system",
+      "name": "MCP 网关",
+      "description": "所有 MCP 调用的唯一入口：代理已有的 MCP Server，把 REST、gRPC 接口转换成 MCP 工具；知识库作为平台服务登记在它上面。",
+      "at": [
+        4.4,
+        0.0
+      ],
+      "color": "#1a7f64"
     }
   ],
   "relationships": [
     {
       "from": "employee",
       "to": "mgmt",
-      "description": "管理知识库和文档，做召回测试",
+      "description": "管理知识集、知识库和文档",
+      "technology": "JSON/HTTPS（经网关）"
+    },
+    {
+      "from": "employee",
+      "to": "search",
+      "description": "召回测试、看检索记录",
       "technology": "JSON/HTTPS（经网关）"
     },
     {
       "from": "agent",
-      "to": "internal",
-      "description": "运行时检索、查可绑定的库",
+      "to": "search",
+      "description": "运行时检索、查能用的知识集",
       "technology": "JSON/HTTP"
     },
     {
-      "from": "agent",
-      "to": "mcp",
-      "description": "会话 Pod 里的 CLI 检索",
-      "technology": "MCP/HTTP"
+      "from": "mcpgw",
+      "to": "search",
+      "description": "替 CLI 智能体列库、检索",
+      "technology": "JSON/HTTP"
     },
     {
       "from": "opscenter",
       "to": "ops",
-      "description": "停用、恢复、删除租户，存储份额",
+      "description": "创建、删除租户，存储份额",
       "technology": "JSON/HTTP（运营接口，签名）"
     },
     {
@@ -273,7 +279,7 @@
     {
       "from": "mgmt",
       "to": "document",
-      "description": "上传、改状态、审核"
+      "description": "上传、改状态"
     },
     {
       "from": "mgmt",
@@ -286,35 +292,20 @@
       "description": "索引版本"
     },
     {
-      "from": "mgmt",
-      "to": "retrieval",
-      "description": "召回测试、检索记录"
-    },
-    {
-      "from": "internal",
+      "from": "search",
       "to": "access",
-      "description": "列可读的库",
-      "labelAt": 0.35
+      "description": "调用身份"
     },
     {
-      "from": "internal",
+      "from": "search",
       "to": "retrieval",
-      "description": "检索"
-    },
-    {
-      "from": "mcp",
-      "to": "access",
-      "description": "验令牌"
-    },
-    {
-      "from": "mcp",
-      "to": "retrieval",
-      "description": "检索"
+      "description": "检索、召回测试、检索记录",
+      "labelAt": 0.68
     },
     {
       "from": "retrieval",
       "to": "access",
-      "description": "逐库校验、主体标签"
+      "description": "逐库校验"
     },
     {
       "from": "retrieval",
@@ -370,7 +361,7 @@
     {
       "from": "access",
       "to": "usercenter",
-      "description": "授权快照、数据权限、主体展开",
+      "description": "授权快照、数据权限、用户姓名",
       "technology": "JSON/HTTP（开放接口）"
     },
     {
@@ -399,15 +390,9 @@
       "technology": "gRPC（pymilvus）"
     },
     {
-      "from": "internal",
+      "from": "search",
       "to": "dataset",
-      "description": "列能用的知识集"
-    },
-    {
-      "from": "mcp",
-      "to": "dataset",
-      "description": "列知识集里的库",
-      "labelAt": 0.3
+      "description": "能检索的知识集和库"
     },
     {
       "from": "document",

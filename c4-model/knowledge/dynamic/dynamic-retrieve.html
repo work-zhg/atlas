@@ -98,7 +98,7 @@
     {
       "id": "internal",
       "kind": "component",
-      "name": "内部接口",
+      "name": "检索接口",
       "technology": "FastAPI Router",
       "in": "apiB"
     },
@@ -164,9 +164,9 @@
       "from": "agent",
       "to": "internal",
       "description": "检索绑定的知识库",
-      "technology": "JSON/HTTP（POST /internal/v1/retrieve）",
+      "technology": "JSON/HTTP（POST /v1/retrieve）",
       "details": {
-        "note": "原生智能体 auto 模式在每轮开始时检索、把结果并入本轮输入；tool 模式由模型调 knowledge_search 工具。库 id 来自智能体配置，不进工具参数。/internal 网关不转发，只有集群内能调。",
+        "note": "原生智能体 auto 模式在每轮开始时检索、把结果并入本轮输入；tool 模式由模型调 knowledge_search 工具。库 id 来自智能体配置，不进工具参数。和控制台、MCP 网关调的是同一个检索接口，身份都取请求头。",
         "items": [
           [
             "X-Uid",
@@ -206,10 +206,10 @@
     {
       "from": "access",
       "to": "usercenter",
-      "description": "逐库查级别（并发，不缓存）",
+      "description": "私有库逐库查级别（并发，不缓存）",
       "technology": "JSON/HTTP（GET /open/v1/data-permissions/check）",
       "details": {
-        "note": "绑定不是授权：撤权立即生效。读不到的库进 skipped，一个都读不到就直接返回空结果。用户中心不可用 → 503。",
+        "note": "公有的库任何人可读，不问用户中心；私有的只看数据权限，不按角色、部门、本人另外推断。绑定不是授权：撤权立即生效。读不到的库进 skipped，一个都读不到就直接返回空结果。用户中心不可用 → 503。",
         "items": [
           [
             "data_code",
@@ -222,20 +222,6 @@
             "atlas"
           ]
         ]
-      }
-    },
-    {
-      "from": "retrieval",
-      "to": "access",
-      "description": "subject 的主体标签"
-    },
-    {
-      "from": "access",
-      "to": "usercenter",
-      "description": "授权快照（角色）、用户（部门）、部门树",
-      "technology": "JSON/HTTP（开放接口）",
-      "details": {
-        "note": "展开成 u:用户、r:角色、d:部门及各级上级，进程内短时缓存；失败只用 u:用户（只会少看到），不缓存。"
       }
     },
     {
@@ -260,7 +246,7 @@
       "to": "index",
       "description": "每个库、每个表述召回",
       "details": {
-        "note": "检索范围编译成过滤：acl 与主体标签有交集或 public、is_current、生效区间、元数据表达式，再加 enabled = doc_ok = true。权限和版本由服务端强制附加。"
+        "note": "检索范围编译成过滤：is_current、生效区间、元数据表达式，再加 enabled = doc_ok = true。版本由服务端强制附加。没有文档级权限：能读库就能检索库里全部文档。"
       }
     },
     {
@@ -361,7 +347,6 @@
         <tr><td>名次融合（RRF）</td><td>把几份排好序的名单合成一份：只看每条在各名单里排第几，不看原来的分数（图 4）。</td></tr>
         <tr><td>门槛（阈值）</td><td>分数低于它的候选直接丢掉。默认不开。</td></tr>
         <tr><td>top_k</td><td>最后交回几段，默认 4，最多 20。</td></tr>
-        <tr><td>主体标签</td><td>把「谁在查」展开成一组标签：本人、角色、所在部门和上级部门。文档的可见范围里写的也是这种标签（图 2）。</td></tr>
         <tr><td>漏斗</td><td>每一步进来多少候选、留下多少、谁在哪一步被淘汰，存成一条检索记录（图 5）。</td></tr>
       </tbody>
     </table>
@@ -392,16 +377,13 @@
       <text class="t-lab" x="170" y="256">属于哪份文档（还有 dataset_uuid：哪个库）</text>
       <path class="sep" d="M30 266 H610"/>
       <text class="t-lab b" x="36" y="284">enabled · doc_ok</text>
-      <text class="t-lab" x="170" y="284">这一段开着吗；文档能不能被检索（启用、未归档、审核通过）</text>
+      <text class="t-lab" x="170" y="284">这一段开着吗；文档能不能被检索（启用、未归档）</text>
       <path class="sep" d="M30 294 H610"/>
-      <text class="t-lab b" x="36" y="312">acl</text>
-      <text class="t-lab" x="170" y="312">谁能看：如 [d:研发部, r:hr]；没设就是 public（公开）</text>
+      <text class="t-lab b" x="36" y="312">is_current · 有效期</text>
+      <text class="t-lab" x="170" y="312">是不是当前版本；valid_from ~ valid_to</text>
       <path class="sep" d="M30 322 H610"/>
-      <text class="t-lab b" x="36" y="340">is_current · 有效期</text>
-      <text class="t-lab" x="170" y="340">是不是当前版本；valid_from ~ valid_to</text>
-      <path class="sep" d="M30 350 H610"/>
-      <text class="t-lab b" x="36" y="368">meta</text>
-      <text class="t-lab" x="170" y="368">业务元数据，如 {"year": 2026, "类别": "制度"}</text>
+      <text class="t-lab b" x="36" y="340">meta</text>
+      <text class="t-lab" x="170" y="340">业务元数据，如 {"year": 2026, "类别": "制度"}</text>
       <rect class="node" x="660" y="30" width="560" height="50" rx="4"/>
       <text class="t-name" x="940.0" y="60.0">问题：年假可以分几次休？</text>
       <path class="e-hot" d="M790 80 V108" marker-end="url(#pr-h)"/>
@@ -434,14 +416,14 @@
       <g class="badge"><circle cx="660" cy="352" r="10"/><text x="660" y="356">4</text></g>
     </svg>
     <ol>
-      <li><span class="n">1</span>向量库里每一条记录对应一个子块（通用模式下对应一个分段，表格摘要也单独一条），入库时写进去。检索真正拿来比的是 dense 和 sparse 两个字段；其余字段一部分用来筛选（acl、is_current、有效期、enabled、doc_ok、meta），一部分用来找回原文（segment_uuid、document_uuid）。</li>
+      <li><span class="n">1</span>向量库里每一条记录对应一个子块（通用模式下对应一个分段，表格摘要也单独一条），入库时写进去。检索真正拿来比的是 dense 和 sparse 两个字段；其余字段一部分用来筛选（is_current、有效期、enabled、doc_ok、meta），一部分用来找回原文（segment_uuid、document_uuid）。</li>
       <li><span class="n">2</span>按意思找（语义检索）：用同一个向量模型把问题也算成一串数字，叫查询向量，再和每条记录的 dense 比有多像（余弦相似度），意思越接近，分数越接近 1。「年假能休几次」和「年假可以分两次休」用词不同，但意思近，分数也高。</li>
       <li><span class="n">3</span>按关键词找（BM25）：Milvus 把问题切成词，和每条记录的 sparse 比。问题里的词在这条记录里出现得越多、这个词在整个库里越少见，分越高：「年假」到处都有，权重低；「几次」少见一些，权重高。它擅长找专有名词和编号，比如「GB/T 7714」。</li>
       <li><span class="n">4</span>两种分数的尺度不一样：语义分在 0~1 之间，关键词分没有上限，常见十几、几十。所以后面不能把它们直接加起来比，只能按名次合并，或者统一重新打分（图 4）。</li>
     </ol>
 
     <h3>图 2　第一步：先确定能看什么</h3>
-    <svg width="1240" viewBox="0 0 1240 360" role="img" aria-label="先确定能看什么：库、文档两道关，都由服务端加上">
+    <svg width="1240" viewBox="0 0 1240 280" role="img" aria-label="先确定能看什么：只按库判断，由服务端加上">
       <rect class="node" x="20" y="40" width="200" height="64" rx="4"/>
       <text class="t-name" x="120.0" y="68.0">这一轮的请求</text>
       <text class="t-sub" x="120.0" y="88.0">要查的库来自智能体配置</text>
@@ -451,7 +433,7 @@
       <path class="e-hot" d="M220 72 H268" marker-end="url(#pr-h)"/>
       <rect class="node" x="270" y="40" width="230" height="64" rx="4"/>
       <text class="t-name" x="385.0" y="68.0">能不能看这个库</text>
-      <text class="t-sub" x="385.0" y="88.0">每个库都问用户中心，不留缓存</text>
+      <text class="t-sub" x="385.0" y="88.0">公有：直接能看；私有：问数据权限</text>
       <path class="e-hot" d="M500 60 H525 V44 H548" marker-end="url(#pr-h)"/>
       <path class="e-hot" d="M500 84 H525 V100 H548" marker-end="url(#pr-h)"/>
       <rect class="node" x="550" y="24" width="150" height="40" rx="4"/>
@@ -459,40 +441,26 @@
       <rect class="gap" x="550" y="80" width="150" height="40" rx="4"/>
       <text class="t-hot mid" x="625.0" y="105.0">库 B：不能看</text>
       <text class="t-hot" x="712" y="104">→ 跳过，提示「另有 1 个知识库没有访问权限」</text>
-      <path class="e-hot" d="M120 172 V202 H268" marker-end="url(#pr-h)"/>
-      <rect class="node" x="270" y="170" width="230" height="64" rx="4"/>
-      <text class="t-name" x="385.0" y="198.0">能看库里哪些文档</text>
-      <text class="t-sub" x="385.0" y="218.0">把身份展开成一组标签</text>
-      <path class="e-hot" d="M500 202 H548" marker-end="url(#pr-h)"/>
-      <rect class="node" x="550" y="186" width="80" height="32" rx="4"/>
-      <text class="t-lab mid" x="590.0" y="207">u:本人</text>
-      <rect class="node" x="640" y="186" width="80" height="32" rx="4"/>
-      <text class="t-lab mid" x="680.0" y="207">r:角色</text>
-      <rect class="node" x="730" y="186" width="100" height="32" rx="4"/>
-      <text class="t-lab mid" x="780.0" y="207">d:所在部门</text>
-      <rect class="node" x="840" y="186" width="130" height="32" rx="4"/>
-      <text class="t-lab mid" x="905.0" y="207">d:各级上级部门</text>
-      <path class="e-hot" d="M700 44 H1180 V260" marker-end="url(#pr-h)"/>
-      <text class="t-hot end" x="1172" y="150">只给能看的库生成</text>
-      <path class="e-hot" d="M905 218 V260" marker-end="url(#pr-h)"/>
-      <rect class="bnd" x="20" y="262" width="1200" height="86" rx="6"/>
-      <text class="t-head" x="36" y="284">给每个能看的库生成一个筛选条件，向量库只在这个范围里找</text>
-      <rect class="gap" x="36" y="296" width="760" height="40" rx="4"/>
-      <text class="t-hot" x="48" y="321">必须满足（服务端加上）：可见范围里有你的标签或是公开的 · 当前版本 · 在有效期内 · 已启用、审核通过</text>
-      <rect class="ghost" x="810" y="296" width="394" height="40" rx="4"/>
-      <text class="t-mute mid" x="1007" y="321">只能再缩小（可选）：调用方给的筛选、从问题里抽出的条件</text>
+      <text class="t-lab" x="550" y="146">能看这个库 = 能检索库里的全部文档：不再按文档分谁能看，</text>
+      <text class="t-lab" x="550" y="164">也不把身份展开成角色、部门</text>
+      <path class="e-hot" d="M700 44 H1180 V178" marker-end="url(#pr-h)"/>
+      <text class="t-hot end" x="1172" y="120">只给能看的库生成</text>
+      <rect class="bnd" x="20" y="180" width="1200" height="86" rx="6"/>
+      <text class="t-head" x="36" y="202">给每个能看的库生成一个筛选条件，向量库只在这个范围里找</text>
+      <rect class="gap" x="36" y="214" width="760" height="40" rx="4"/>
+      <text class="t-hot" x="48" y="239">必须满足（服务端加上）：当前版本 · 在有效期内 · 已启用、未归档</text>
+      <rect class="ghost" x="810" y="214" width="394" height="40" rx="4"/>
+      <text class="t-mute mid" x="1007" y="239">只能再缩小（可选）：调用方给的筛选、从问题里抽出的条件</text>
       <g class="badge"><circle cx="20" cy="40" r="10"/><text x="20" y="44">1</text></g>
       <g class="badge"><circle cx="270" cy="40" r="10"/><text x="270" y="44">2</text></g>
       <g class="badge"><circle cx="550" cy="80" r="10"/><text x="550" y="84">3</text></g>
-      <g class="badge"><circle cx="270" cy="170" r="10"/><text x="270" y="174">4</text></g>
-      <g class="badge"><circle cx="20" cy="262" r="10"/><text x="20" y="266">5</text></g>
+      <g class="badge"><circle cx="20" cy="180" r="10"/><text x="20" y="184">4</text></g>
     </svg>
     <ol>
       <li><span class="n">1</span>智能体能查哪些库，是在它的配置里绑定好的，模型不能自己指定库；否则被诱导的模型就能去查没绑定的库。「按谁的身份查」是这一轮的使用者；如果智能体设成「以 Agent 为权限」，就按它的数字员工查。</li>
-      <li><span class="n">2</span>第一道关：能不能看这个库。每次检索都逐个库去问用户中心，不留缓存，所以收回权限后下一次检索立刻生效。用户中心连不上时，一律当作不能看。</li>
-      <li><span class="n">3</span>不能看的库直接跳过，只把库 id 告诉智能体，不透露库里有什么；智能体会提示用户「另有 N 个知识库没有访问权限」。一个库都看不了，就直接返回空结果。</li>
-      <li><span class="n">4</span>第二道关：能看库里的哪些文档。每份文档可以设可见范围（ACL），写的是一组标签，比如「研发部」「HR 角色」。检索时把查询的人展开成同样格式的标签：<code>u:</code> 本人、<code>r:</code> 角色、<code>d:</code> 所在部门以及各级上级部门（研发三组 → 研发部 → 公司），两边有交集就能看。展开失败时只用本人标签，结果只会更少，不会多看。</li>
-      <li><span class="n">5</span>最后给每个能看的库生成一个筛选条件，交给向量库：只在满足条件的记录里找。前一半由服务端强制加上，谁也去不掉；后一半是可选的，只能把范围再缩小。条件里的值用参数传进去，不直接拼进字符串，防止被注入。</li>
+      <li><span class="n">2</span>只有一道关：能不能看这个库。每个库有一个属性：公有还是私有。公有的库本租户里谁都能看，不用问用户中心；私有的库逐个去问用户中心的数据权限（库可以授给人，也可以授给部门，由用户中心算出这个人能不能读），不留缓存，所以收回权限后下一次检索立刻生效。用户中心连不上时，私有库一律当作不能看。</li>
+      <li><span class="n">3</span>不能看的库直接跳过，只把库 id 告诉智能体，不透露库里有什么；智能体会提示用户「另有 N 个知识库没有访问权限」。一个库都看不了，就直接返回空结果。能看的库，库里的文档全部能检索：要分开授权的文档，放进不同的库。</li>
+      <li><span class="n">4</span>最后给每个能看的库生成一个筛选条件，交给向量库：只在满足条件的记录里找。前一半由服务端强制加上，谁也去不掉；后一半是可选的，只能把范围再缩小。条件里的值用参数传进去，不直接拼进字符串，防止被注入。</li>
     </ol>
 
     <h3>图 3　第二步：把问题理解清楚，换几种问法</h3>
@@ -550,7 +518,7 @@
       <li><span class="n">1</span>「理解问题」是一次大模型调用，只把需要做的事放进去：问题里有「它」「这个」「上面」这类指代、或者不到 8 个字时，结合最近的对话把它补全；换几种说法、写假设答案、拆小问题，要看库的设置开没开；库里定义了可以从问题里抽取的字段（比如年份），才抽筛选条件；绑的库超过 5 个，才先挑库。</li>
       <li><span class="n">2</span>大模型交回一份查询计划：补全后的主问题、几种问法（原问题排第一个；假设答案只用来按意思找，不按关键词找）、拆出来的小问题、校验过的筛选条件、挑中的库。</li>
       <li><span class="n">3</span>一件都不需要做（或者没配大模型）就不调用，直接用原问题。同样的问题和前文，结果缓存 1 小时。</li>
-      <li><span class="n">4</span>大模型出错、超时（20 秒）、回答格式不对，都退回用原问题检索，不让检索失败。从问题里抽出的筛选条件只能缩小范围，碰不到图 2 里服务端强制加的权限和版本。</li>
+      <li><span class="n">4</span>大模型出错、超时（20 秒）、回答格式不对，都退回用原问题检索，不让检索失败。从问题里抽出的筛选条件只能缩小范围，碰不到图 2 里服务端强制加的版本、有效期和启用条件。</li>
       <li><span class="n">5</span>自动补救：库设了门槛时，如果第一轮最好的结果分数都低于门槛、而且只用了一种问法，就换几种说法再查一次。漏斗里只留第二轮，免得同一段「被淘汰了又回来」。</li>
     </ol>
 

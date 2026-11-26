@@ -33,7 +33,7 @@
   "description": "目标模型，每个元素下方的「现状」是现在承担它的代码。知识集与知识库：分组、可见性、配置、共享和元数据字段",
   "component": "知识库",
   "package": "atlas_knowledge.dataset",
-  "overview": "知识库管「一个库是什么样的」和「库编在哪一组」。知识集把同一主题的库编成一组，智能体按知识集使用知识：名称和介绍由维护人写，进智能体提示词里的「可查的知识」，每次最多带回几段也由维护人定。知识库记着所属知识集、可见性（公有大家都能读；私有按用户中心数据权限）、所有者、分段结构、默认检索设置、入库增强和审核开关、文件目录，以及库里文档可以带哪些元数据字段。建私有库时按预设在用户中心写初始授权，之后的共享也直接改用户中心；删库、加字段只发事件，由各领域处理自己的数据。\n\n知识集只是分组，不改变权限：集里的库谁能用仍按库的可见性和数据权限。表都带租户，名字、公有都只在本租户内。\n\n它不判断谁能访问（访问控制），不管文档和分段（文档与入库、分段），也不管向量模型和 collection（向量索引的索引版本）。",
+  "overview": "知识库管「一个库是什么样的」和「库编在哪一组」。知识集把同一主题的库编成一组，智能体按知识集使用知识：名称和介绍由维护人写，进智能体提示词里的「可查的知识」，每次最多带回几段也由维护人定。知识库记着所属知识集、可见性（公有大家都能读；私有按用户中心数据权限）、所有者、分段结构、默认检索设置、入库增强开关、文件目录，以及库里文档可以带哪些元数据字段。建私有库时按预设在用户中心写初始授权，之后的共享也直接改用户中心；删库、加字段只发事件，由各领域处理自己的数据。\n\n知识集只是分组，不改变权限：集里的库谁能用仍按库的可见性和数据权限。表都带租户，名字、公有都只在本租户内。\n\n它不判断谁能访问（访问控制），不管文档和分段（文档与入库、分段），也不管向量模型和 collection（向量索引的索引版本）。",
   "elements": [
     {
       "id": "svc",
@@ -111,7 +111,7 @@
         1.95
       ],
       "source": "db.models.Dataset",
-      "responsibility": "一个知识库：所属知识集、可见性、名称、所有者、分段结构、检索设置、入库增强开关、是否要求审核、文件目录。公有任何人至少可读，写和管理照旧按数据权限。不存向量模型和 collection（active 索引版本在向量索引里）。已有文档后分段结构不能改。文件目录第一层是租户：{租户}/_knowledge/{库}（多租户之前建的库是 _knowledge/{库}）。",
+      "responsibility": "一个知识库：所属知识集、可见性、名称、所有者、分段结构、检索设置、入库增强开关、文件目录。公有任何人至少可读，写和管理照旧按数据权限。不存向量模型和 collection（active 索引版本在向量索引里）。已有文档后分段结构不能改。文件目录第一层是租户：{租户}/_knowledge/{库}（多租户之前建的库是 _knowledge/{库}）。",
       "attributes": [
         [
           "+",
@@ -139,7 +139,7 @@
         ],
         [
           "+",
-          "enhancements: {contextual, table_summary} · review_required"
+          "enhancements: {contextual, table_summary}"
         ],
         [
           "+",
@@ -149,7 +149,7 @@
       "methods": [
         [
           "+",
-          "rename(name) · configure(retrieval, enhancements, review_required)"
+          "rename(name) · configure(retrieval, enhancements)"
         ],
         [
           "+",
@@ -314,13 +314,13 @@
     {
       "id": "routes",
       "kind": "class",
-      "name": "DatasetRoutes · InternalRoutes",
+      "name": "管理接口 · 检索接口",
       "external": true,
-      "source": "管理接口、内部接口组件",
+      "source": "管理接口、检索接口组件",
       "methods": [
         [
           "+",
-          "/v1/knowledge-sets · /v1/datasets · /grants · /metadata-fields"
+          "/v1/knowledge-sets · /v1/datasets · /grants · /metadata-fields · 能检索的知识集"
         ]
       ],
       "at": [
@@ -410,7 +410,7 @@
         0.3
       ],
       "source": "dataset/sets.py KnowledgeSetService",
-      "responsibility": "知识集的全部入口。谁能看到：维护人、其中至少有一个库能读的人、有「全部知识库」授权的人；谁能改：维护人或「全部知识库 · Owner」；任何人都能建，建的人是维护人；只能删空的。readable 给智能体用：按 auth-uid 列能用的知识集，每个带上其中能读的库（名称、介绍、文档数、最近入库时间），一个能读的库都没有的知识集不返回。",
+      "responsibility": "知识集的全部入口。谁能看到：维护人、其中至少有一个库能读的人、有「全部知识库」授权的人；谁能改：维护人或「全部知识库 · Owner」；任何人都能建，建的人是维护人；只能删空的。readable 给检索用：按 auth-uid 列能用的知识集（可以按 id 或名称指定），每个带上其中能读的库（名称、介绍、文档数、最近入库时间），一个能读的库都没有的知识集不返回。",
       "methods": [
         [
           "+",
@@ -430,7 +430,7 @@
         ],
         [
           "+",
-          "readable(principal, set_ids | None) -> list[SetCard]"
+          "readable(principal, sets: ids | 名称 | None) -> list[SetCard]"
         ]
       ]
     },
@@ -602,9 +602,9 @@
     },
     {
       "name": "能用的知识集",
-      "entry": "KnowledgeSetService.readable(principal, set_ids | None)",
-      "callers": "内部接口（智能体编辑时列可选的知识集、运行时展开智能体选的知识集）",
-      "description": "set_ids 为空 = 使用者能读的全部；每个知识集带上其中 auth-uid 能读的库的名片（名称、介绍、文档数、最近入库时间）；一个能读的库都没有的不返回"
+      "entry": "KnowledgeSetService.readable(principal, sets)",
+      "callers": "检索接口：Atlas（智能体编辑时列可选的知识集、运行时展开智能体选的知识集）、MCP 网关（CLI 智能体的列库工具，按知识集名称）",
+      "description": "不指定 = 使用者能读的全部；每个知识集带上其中 auth-uid 能读的库的名片（名称、介绍、文档数、最近入库时间）；一个能读的库都没有的不返回"
     },
     {
       "name": "列出可见的库",
@@ -622,7 +622,7 @@
       "name": "改设置",
       "entry": "update(access, changes)",
       "callers": "管理接口（要读写；可见性、移库要 Owner）",
-      "description": "名称（同步改用户中心里的数据名）、描述、可见性、检索设置、增强开关、审核开关；移到别的知识集还要是目标知识集的维护人；分段结构只在没有文档时能改；换向量模型不在这里，走索引版本"
+      "description": "名称（同步改用户中心里的数据名）、描述、可见性、检索设置、增强开关；移到别的知识集还要是目标知识集的维护人；分段结构只在没有文档时能改；换向量模型不在这里，走索引版本"
     },
     {
       "name": "删库",
@@ -808,12 +808,6 @@
           "type": "jsonb",
           "nullable": true,
           "description": "Enhancements"
-        },
-        {
-          "name": "review_required",
-          "type": "boolean",
-          "default": "false",
-          "description": "新文档要审核后才参与检索"
         },
         {
           "name": "storage_prefix",

@@ -35,8 +35,8 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "动态图：模型平台 - 跨格式调用",
-  "description": "目标模型（代码还没有），方案见 agent-platform/doc/design/model-gateway-design.html。Atlas 用 Anthropic 格式调一个挂在自部署 vLLM（只有 OpenAI 格式）上的模型：请求转过去，流式回答逐段转回来",
+  "title": "动态图：模型平台 - 跨格式流式调用（Anthropic 入口转 OpenAI 上游）",
+  "description": "Agent 平台以 Anthropic 格式调用 /universal/v1/messages，选中的自部署推理账号仅支持 OpenAI Chat Completions：网关剥离异源思考块、转换请求并将流式增量实时还原为 Anthropic SSE。",
   "boundaries": [
     {
       "id": "mp",
@@ -68,35 +68,35 @@
       "id": "orch",
       "kind": "component",
       "name": "调用编排",
-      "technology": "Python 模块",
+      "technology": "gateway.invocation",
       "in": "gw"
     },
     {
       "id": "cap",
       "kind": "component",
       "name": "能力与参数",
-      "technology": "Python 模块",
+      "technology": "gateway.capability",
       "in": "gw"
     },
     {
       "id": "route",
       "kind": "component",
       "name": "线路",
-      "technology": "Python 模块",
+      "technology": "gateway.routing",
       "in": "gw"
     },
     {
       "id": "fmt",
       "kind": "component",
       "name": "格式",
-      "technology": "Python 模块",
+      "technology": "gateway.format",
       "in": "gw"
     },
     {
       "id": "met",
       "kind": "component",
       "name": "计量",
-      "technology": "Python 模块",
+      "technology": "gateway.metering",
       "in": "gw"
     },
     {
@@ -110,141 +110,97 @@
     {
       "from": "agent",
       "to": "chat",
-      "description": "流式对话请求（历史里有思考块、工具结果、缓存标记）",
-      "technology": "Anthropic 格式，HTTP + SSE"
+      "description": "POST /universal/v1/messages（含历史 thinking / redacted_thinking 与工具结果）",
+      "technology": "Anthropic Messages，HTTP + SSE"
     },
     {
       "from": "chat",
       "to": "orch",
-      "description": "chat(anthropic, Key, 请求原文, stream=True)",
-      "details": {
-        "note": "准入、查能力和 dynamic-stream-call.html 一样，这里略过。"
-      }
+      "description": "chat(anthropic, secret, headers, body, universal=True)"
     },
     {
       "from": "orch",
       "to": "fmt",
-      "description": "read：Anthropic 读写器读出共同信息"
+      "description": "read 读摘要 + routes_for 确认不含仅 Anthropic/Gemini 支持的二进制 PDF",
+      "details": {
+        "note": "若请求携带 base64 PDF document 块而模型仅配了 OpenAI 线路，routes_for 在选路和扣 RPM 之前即返回 400 BEYOND_CAPABILITY，绝不静默丢弃文档。"
+      }
     },
     {
       "from": "orch",
       "to": "route",
-      "description": "pick → 线路 3（自部署 vLLM 账号，只登记了 OpenAI 格式）"
+      "description": "pick → 线路 3（仅登记了 OpenAI 格式地址的推理账号）"
     },
     {
       "from": "orch",
       "to": "cap",
-      "description": "plan(线路 3) → ParamPlan",
-      "details": {
-        "items": [
-          [
-            "历史思考块",
-            "来源标记是别的上游模型，换了上游",
-            "去掉（正文、工具调用保留）"
-          ],
-          [
-            "最大输出",
-            "上游模型的上限",
-            "64000 → 32768"
-          ],
-          [
-            "思考",
-            "这个上游模型不支持思考参数",
-            "不传"
-          ]
-        ]
-      }
+      "description": "plan(线路 3) → ParamPlan（标记剥离异源历史思考块、截断 max_tokens）"
     },
     {
       "from": "orch",
       "to": "fmt",
-      "description": "open(anthropic, 线路 3, ParamPlan)"
+      "description": "open(anthropic, 线路 3, ParamPlan, stream=True)"
     },
     {
       "from": "fmt",
       "to": "fmt",
-      "description": "选路：入口 Anthropic，账号只有 OpenAI 格式 → 用 Anthropic→OpenAI 转换器"
-    },
-    {
-      "from": "fmt",
-      "to": "fmt",
-      "description": "读写器按 ParamPlan 改参数，转换器转请求",
+      "description": "AnthropicCodec 剥离异源 thinking/redacted_thinking → anthropic_to_openai 转请求",
       "details": {
-        "note": "缓存标记、思考块的签名在 OpenAI 格式里没有位置，去掉是事先写清楚的；system 变成第一条 system 消息，工具结果块拆成 tool 消息；要求上游在最后一段带用量。",
-        "example": "转换前（Anthropic 格式，已按 ParamPlan 改过参数）：\n{\n  \"model\": \"qwen3-coder\",\n  \"max_tokens\": 64000,\n  \"stream\": true,\n  \"system\": [{\"type\": \"text\", \"text\": \"你是编程助手……\",\n              \"cache_control\": {\"type\": \"ephemeral\"}}],\n  \"messages\": [\n    {\"role\": \"assistant\", \"content\": [\n      {\"type\": \"thinking\", \"thinking\": \"……\", \"signature\": \"<来源标记>\"},\n      {\"type\": \"tool_use\", \"id\": \"toolu_1\", \"name\": \"read_file\",\n       \"input\": {\"path\": \"/data/a.py\"}}]},\n    {\"role\": \"user\", \"content\": [\n      {\"type\": \"tool_result\", \"tool_use_id\": \"toolu_1\", \"content\": \"……\"}]}\n  ]\n}\n\n转换后（OpenAI 格式）：\n{\n  \"model\": \"Qwen/Qwen3-Coder\",\n  \"max_tokens\": 32768,\n  \"stream\": true,\n  \"stream_options\": {\"include_usage\": true},\n  \"messages\": [\n    {\"role\": \"system\", \"content\": \"你是编程助手……\"},\n    {\"role\": \"assistant\", \"content\": null, \"tool_calls\": [\n      {\"id\": \"toolu_1\", \"type\": \"function\",\n       \"function\": {\"name\": \"read_file\", \"arguments\": \"{\\\"path\\\": \\\"/data/a.py\\\"}\"}}]},\n    {\"role\": \"tool\", \"tool_call_id\": \"toolu_1\", \"content\": \"……\"}\n  ]\n}"
+        "note": "system 数组合并为 system 消息，tool_use / tool_result 转为 tool_calls / tool 消息，注入 stream_options.include_usage=true。"
       }
     },
     {
       "from": "fmt",
       "to": "provider",
-      "description": "发出",
-      "technology": "OpenAI 格式（chat/completions），HTTPS + SSE"
+      "description": "POST /v1/chat/completions",
+      "technology": "OpenAI 格式，HTTPS + SSE"
     },
     {
       "from": "provider",
       "to": "fmt",
-      "description": "delta.content：「你」「好」",
-      "technology": "SSE"
-    },
-    {
-      "from": "fmt",
-      "to": "fmt",
-      "description": "状态机：消息开始，开一个文字块，逐段转"
+      "description": "SSE 增量：delta.content 文本片段",
+      "technology": "OpenAI SSE"
     },
     {
       "from": "fmt",
       "to": "orch",
-      "description": "Anthropic 格式的段：消息开始 + 文字「你」（第一段内容）"
+      "description": "StreamTranscoder 产出 message_start + content_block_start + text_delta"
     },
     {
       "from": "orch",
       "to": "chat",
-      "description": "提交，之后读一段写一段"
+      "description": "首段文本到达确立提交点，放行写出"
     },
     {
       "from": "chat",
       "to": "agent",
-      "description": "回答一段段写回",
-      "technology": "Anthropic 格式，SSE"
+      "description": "收到标准 Anthropic SSE 文本块",
+      "technology": "Anthropic Messages SSE"
     },
     {
       "from": "provider",
       "to": "fmt",
-      "description": "delta.tool_calls 参数片段……最后一段：finish_reason、usage",
-      "technology": "SSE",
+      "description": "SSE 增量：长工具调用 arguments 分片……尾帧 finish_reason + usage",
+      "technology": "OpenAI SSE",
       "details": {
-        "items": [
-          [
-            "finish_reason",
-            "上游最后一段",
-            "tool_calls"
-          ],
-          [
-            "usage",
-            "上游最后一段（OpenAI 口径：输入包含缓存命中）",
-            "prompt_tokens 12,000（cached 0）· completion_tokens 300"
-          ]
-        ]
+        "note": "拼接工具参数期间若上游慢但未断，StreamCommitPump 周期性向客户端发 `: keepalive` 防反代超时；单工具参数超 2MB 时安全截断兜底。"
       }
     },
     {
       "from": "fmt",
       "to": "orch",
-      "description": "关文字块、开工具调用块、参数片段、关块；停止原因 tool_use、用量四项",
-      "details": {
-        "note": "用量在这里统一成四项：输入 12,000 · 缓存写入 0 · 缓存命中 0 · 输出 300。之后都是 Anthropic 口径，计量不用再区分上游是哪种格式。"
-      }
+      "description": "关闭文本块、输出完整 tool_use 块、停止原因 tool_use 及折算后的四项 Usage"
     },
     {
       "from": "chat",
       "to": "agent",
-      "description": "工具调用块、停止原因 tool_use",
-      "technology": "Anthropic 格式，SSE"
+      "description": "写回工具调用块与 message_stop",
+      "technology": "Anthropic Messages SSE"
     },
     {
       "from": "orch",
       "to": "met",
-      "description": "record：记下「转换」、去掉的字段和用量"
+      "description": "record：记下 mode='convert'、notes（参数改写与转换说明）及四项用量"
     }
   ]
 }

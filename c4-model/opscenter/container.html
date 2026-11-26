@@ -21,7 +21,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "容器图：运营中心",
-  "description": "运营中心自带运营账号和登录，入口和租户的网关分开；沙箱模板、份额、系统参数等数据留在各业务系统里，运营库只存运营账号、运营审计和租户操作的进度。整体设计见 design-tenant-isolation.html",
+  "description": "运营人员用用户中心的账号统一登录，请求和其他系统一样经 API 网关验 JWT；运营服务按用户中心里的授权判断能进哪些模块。沙箱模板、份额、系统参数等数据留在各业务系统里，运营库只存运营审计和租户操作的进度。整体设计见 design-opscenter.html、design-tenant-isolation.html",
   "system": "运营中心",
   "elements": [
     {
@@ -32,7 +32,7 @@
         0
       ],
       "name": "运营人员",
-      "description": "运营管理员和运营观察员：用运营账号登录，不属于任何租户。"
+      "description": "系统租户里被授了运营模块的人：用用户中心的账号统一登录，能进哪些模块、什么级别由用户中心里的授权决定。"
     },
     {
       "id": "usercenter",
@@ -42,7 +42,7 @@
         0.5
       ],
       "name": "用户中心",
-      "description": "用户、组织与权限的唯一数据源，负责统一登录；按租户隔离。"
+      "description": "用户、组织与权限的唯一数据源，负责统一登录；按租户隔离。标出哪些租户是系统租户：只有它们能开通运营中心。"
     },
     {
       "id": "agent",
@@ -119,7 +119,7 @@
         1.2
       ],
       "name": "运营控制台",
-      "description": "运营人员的界面：租户、应用、运行环境、容量、系统参数、系统任务、运营账号和审计。"
+      "description": "运营人员的界面，按模块组织：租户，以及每个系统一个模块（应用目录、运行环境、份额、系统参数、系统任务）；只显示有权限的模块，没有级别的按钮置灰；另有运营审计。"
     },
     {
       "id": "server",
@@ -131,7 +131,7 @@
         2.4
       ],
       "name": "运营服务",
-      "description": "运营账号登录（双因素）和角色判断；编排租户的开通、停用、关闭，失败的步骤后台重试；经各系统的运营接口做事；记运营审计。"
+      "description": "从网关写的身份头取运营人员，向用户中心取授权，按模块和级别判断；编排租户的开通、停用、关闭，失败的步骤后台重试；经各系统的运营接口做事；记运营审计。"
     },
     {
       "id": "db",
@@ -143,67 +143,72 @@
         2.4
       ],
       "name": "运营库",
-      "description": "运营账号、角色、登录会话、运营审计、租户操作的进度。"
+      "description": "运营审计、租户操作的进度。不存账号、角色和授权。"
     }
   ],
   "relationships": [
     {
       "from": "operator",
+      "to": "usercenter",
+      "description": "登录（系统租户的账号）"
+    },
+    {
+      "from": "operator",
       "to": "console",
-      "description": "开通、停用、关闭租户；分份额；维护运行环境和系统参数"
+      "description": "开通、停用、关闭租户；在被授权的模块里维护运行环境、份额、系统参数"
     },
     {
       "from": "console",
       "to": "server",
-      "description": "登录，调用运营接口",
-      "technology": "JSON/HTTPS"
+      "description": "调用运营服务（未登录时跳到统一登录页）",
+      "technology": "JSON/HTTPS（经 API 网关，访问 JWT）"
     },
     {
       "from": "server",
       "to": "db",
-      "description": "读写运营账号、审计和租户操作进度",
+      "description": "读写审计和租户操作进度",
       "technology": "SQL/TCP"
     },
     {
       "from": "server",
       "to": "usercenter",
-      "description": "建租户和它的管理员，停用、恢复、关闭租户；管理应用目录，给租户开通应用",
-      "technology": "JSON/HTTP（运营接口，带运营凭据）"
+      "description": "取运营人员的授权快照和各模块的级别；建租户和它的管理员，停用、恢复、删除租户；同步运营中心自己的应用目录，管理应用目录，给租户开通应用",
+      "technology": "JSON/HTTP（开放接口；运营接口，带运营凭据）"
     },
     {
       "from": "server",
       "to": "agent",
-      "description": "维护沙箱模板、可用镜像、系统参数和租户份额，查看用量；停用时挂起 run、回收沙箱；关闭时删除租户数据",
+      "description": "维护沙箱模板、可用镜像、系统参数和租户份额，查看用量；开通时为租户创建、关闭时删除租户数据",
       "technology": "JSON/HTTP（运营接口，带运营凭据）"
     },
     {
       "from": "server",
       "to": "knowledge",
-      "description": "改系统参数、看系统任务；关闭租户时删除它的数据",
+      "description": "改系统参数、看系统任务；开通时为租户创建、关闭时删除它的数据",
       "technology": "JSON/HTTP（运营接口，带运营凭据）"
     },
     {
       "from": "server",
       "to": "skill",
-      "description": "改系统参数、看系统任务；关闭租户时删除它的数据",
+      "description": "改系统参数、看系统任务；开通时为租户创建、关闭时删除它的数据",
       "technology": "JSON/HTTP（运营接口，带运营凭据）"
     },
     {
       "from": "server",
       "to": "mcp",
-      "description": "改系统参数、看系统任务；关闭租户时删除它的数据",
+      "description": "改系统参数、看系统任务；开通时为租户创建、关闭时删除它的数据",
       "technology": "JSON/HTTP（运营接口，带运营凭据）"
     },
     {
       "from": "server",
       "to": "model",
-      "description": "改系统参数、看系统任务；关闭租户时删除它的数据",
+      "description": "改系统参数、看系统任务；开通时为租户创建、关闭时删除它的数据",
       "technology": "JSON/HTTP（运营接口，带运营凭据）"
     },
     {
       "from": "server",
       "to": "memory",
-      "description": "改系统参数、看系统任务；关闭租户时删除它的数据",
+      "description": "改系统参数、看系统任务；开通时为租户创建、关闭时删除它的数据",
       "technology": "JSON/HTTP（运营接口，带运营凭据）"
     }
   ]

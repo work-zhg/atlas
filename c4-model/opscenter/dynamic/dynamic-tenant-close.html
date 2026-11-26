@@ -36,7 +36,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "动态图：运营中心 - 关闭租户",
-  "description": "目标模型。只能关已停用的租户：各系统分批删完这个租户的数据，最后删用户中心里的租户。技能、MCP 网关、模型平台、记忆服务和知识库服务一样，图中省略。整体设计见 ../design-tenant-isolation.html",
+  "description": "目标模型。只能关已停用的租户：各系统分批删完这个租户的数据，最后删用户中心里的租户。技能、MCP 网关、模型平台、记忆服务和知识库服务一样，图中省略。整体设计见 ../design-tenant-isolation.html；运营人员怎么登录、按模块授权见 ../design-opscenter.html",
   "boundaries": [
     {
       "id": "ops",
@@ -116,20 +116,26 @@
       "from": "console",
       "to": "tenants",
       "description": "关闭",
-      "technology": "JSON/HTTPS",
+      "technology": "JSON/HTTPS（经 API 网关）",
       "details": {
         "items": [
           [
             "请求",
-            "运营服务接口",
-            "POST /api/tenants/{tenant_uuid}/close"
+            "运营服务接口（网关去掉 /opscenter 后转发）",
+            "POST /opscenter/api/tenants/{tenant_uuid}/close"
           ],
           [
             "确认",
             "运营人员输入",
             "{\"confirm_code\": \"xinghe\"}"
+          ],
+          [
+            "身份",
+            "网关验过访问 JWT 后写的头（浏览器带来的早被清掉）",
+            "X-Uid: <小周>、X-Tenant-Id: <系统租户>"
           ]
-        ]
+        ],
+        "note": "接口层的依赖先判：关闭不可恢复，要租户模块 Owner，不够 403；记一条「发起」审计（图中不画）。"
       }
     },
     {
@@ -146,10 +152,10 @@
     {
       "from": "uc",
       "to": "gateway",
-      "description": "已停用",
+      "description": "已停用，不是系统租户",
       "technology": "JSON/HTTP（运营接口，签名）",
       "details": {
-        "note": "不是已停用就拒绝：先停用，保证删数据时没有人、也没有后台任务还在写。企业代码输错也拒绝。"
+        "note": "不是已停用就拒绝：先停用，这个租户的人就拿不到任何权限，删数据时不会有人再往里写。系统租户也拒绝：运营人员靠它登录运营中心。这些前置条件只在运营中心查：业务系统不知道租户状态，删除时也不查。企业代码输错也拒绝。"
       }
     },
     {
@@ -158,14 +164,14 @@
       "description": "保存操作和步骤",
       "technology": "SQL/TCP",
       "details": {
-        "note": "步骤：① Atlas 删数据 ② 知识库删数据 ③ 技能 … ⑥ 记忆服务删数据 ⑦ 用户中心删租户。用户中心放最后：各系统删除时可能还要靠它核对、清掉自己登记的数据权限。"
+        "note": "步骤：① Atlas 删除 ② 知识库删除 ③ 技能 … ⑥ 记忆服务删除 ⑦ 用户中心删租户。用户中心放最后：各系统删除时可能还要靠它核对、清掉自己登记的数据权限，租户也要在列表里留到删完。"
       }
     },
     {
       "from": "tenants",
       "to": "console",
       "description": "返回操作（进行中）",
-      "technology": "JSON/HTTPS"
+      "technology": "JSON/HTTPS（经 API 网关）"
     },
     {
       "from": "gateway",
@@ -176,16 +182,16 @@
         "items": [
           [
             "请求",
-            "Atlas 的运营接口（运营接口库）",
-            "POST /ops/v1/tenants/{tenant_uuid}/purge"
+            "Atlas 的运营接口（地址由运营接口库定好）",
+            "DELETE /ops/v1/tenants/{tenant_uuid}"
           ],
           [
             "幂等键",
-            "步骤 uuid",
+            "步骤 uuid（对方用来写日志）",
             "Idempotency-Key: <step_uuid>"
           ]
         ],
-        "note": "Atlas 先删数据库之外的：剩下的沙箱和会话 Pod → 本机设备令牌 → 对象存储里的租户目录；都删完再按表依赖倒序删数据库里的行。每次一批，有条数和时长的预算。"
+        "note": "运营接口库调 Atlas 实现的 TenantLifecycle：先 delete_external 删数据库之外的——这个租户的沙箱和会话 Pod → 对象存储里这个租户的人的文件；都删完再按 purge_order 分批删数据库里的行（本机设备的令牌随设备行一起删）。每次一批，有条数和时长的预算。不查租户状态。"
       }
     },
     {
@@ -206,8 +212,11 @@
     {
       "from": "gateway",
       "to": "agent",
-      "description": "接着删（同一个幂等键，下一批）",
-      "technology": "JSON/HTTP（运营接口，签名）"
+      "description": "接着删（下一批）",
+      "technology": "JSON/HTTP（运营接口，签名）",
+      "details": {
+        "note": "删除本身能重做：Atlas 删的是剩下的，不按幂等键去重。"
+      }
     },
     {
       "from": "agent",
@@ -224,7 +233,14 @@
       "description": "删除这个租户的数据",
       "technology": "JSON/HTTP（运营接口，签名）",
       "details": {
-        "note": "知识库：向量集合、对象存储里的原文件 → 数据库里的知识库、文档、分段。"
+        "items": [
+          [
+            "请求",
+            "知识库的运营接口",
+            "DELETE /ops/v1/tenants/{tenant_uuid}"
+          ]
+        ],
+        "note": "KnowledgeTenantLifecycle：向量集合、对象存储里的原文件 → 数据库里的知识库、文档、分段。见 ../../knowledge/code-ops.html"
       }
     },
     {

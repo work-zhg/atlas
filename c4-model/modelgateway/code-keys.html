@@ -30,533 +30,346 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：模型平台 - 管理平台 - API Key",
-  "description": "目标领域模型，只画期望的样子。用户 Key、客户端 Key 的生命周期，有效模型，同步到 LiteLLM 与对账；领域总览见 code-domains.html",
+  "description": "目标模型：API Key 功能组件（内聚统一的 /api/v1/keys* 路由与 KeyService），统一管理个人 Key 与客户端 Key 生命周期；领域总览见 code-domains.html。",
   "component": "API Key",
-  "package": "atlas_modelgateway.keys（目标模型）",
-  "overview": "调模型一律带 LiteLLM 的 Key，Key 由这里管。用户 Key 由本人申请，从公有的和授权给自己的私有模型里选；客户端 Key 由应用申请（Atlas 每个智能体一把，平台服务按用途各一把），管理员从全部已登记的模型里分配。平台算出每把 Key 的有效模型推给 LiteLLM，LiteLLM 在调用时据此放行；模型、授权变了跟着重算，再定期对账兜底。\n\n它不决定有哪些模型（模型目录）、谁能用私有模型（授权），也不直接调 LiteLLM 的 HTTP 接口（LiteLLM 接入）。调用日志、花费、预算限流在 LiteLLM，平台不管。",
+  "package": "atlas_modelgateway.keys",
+  "overview": "API Key 组件统一管理所有调用模型网关的凭据（gw_api_key）并对外提供 /api/v1/keys* 功能接口，不再把客户端 Key 拆到独立的「内部接口」组件。\n\n同一组 Key 资源接口通过主体鉴权区分操作权限与响应脱敏：员工在 /api/v1/keys/me 管理自己的多把个人 Key（库里仅存 SHA-256 摘要，明文只返回一次）；模型管理员在 /api/v1/keys 管理全租户个人 Key 限额与客户端 Key 的模型分配、配额与启停（响应仅含末 4 位，不暴露明文）；所属受信任应用（携带匹配的 X-Caller-App）在 /api/v1/keys/clients/{type}/{code} 幂等补建、改名、删除并读取解密后的客户端 Key 明文与有效模型（外网网关禁止访问 /credential 并剥离伪造应用头）。\n\n按 Key 配额除自然月预算（monthly_budget）、每分钟请求数（rpm）和有效期外，新增 5 小时与 24 小时滑动窗口费用上限（budget_5h、budget_24h，按元计量，与 monthly_budget 统一按模型对内单价折算）。管理员为个人 Key 设定的窗口上限同步记录在 admin_budget_caps 中作为硬上限：员工可设置更低的自限值或在不高于管理员硬上限的范围内调整，但不可调高或清除；客户端 Key 的所有限额仅管理员可配。停用、删除、重置或改限额均经 Pub/Sub 零窗口驱逐全部网关副本缓存。",
   "elements": [
-    {
-      "id": "keys",
-      "kind": "class",
-      "name": "ApiKeys",
-      "stereotype": "应用服务",
-      "at": [
-        1.75,
-        0.35
-      ],
-      "responsibility": "API Key 的唯一入口：本人申请用户 Key，应用（或管理员）建客户端 Key，分配模型，重置、停用、启用、改名、删除；给内部接口一把客户端 Key 此刻的样子。每次改动后交给 KeySync 推到 LiteLLM。管理动作记操作日志，不记原文。",
-      "methods": [
-        [
-          "+",
-          "apply(uid, models) -> (ApiKey, secret)"
-        ],
-        [
-          "+",
-          "ensure_client(type, code, *, name, app) -> (ApiKey, created)"
-        ],
-        [
-          "+",
-          "assign(key, models, *, actor) -> secret | None"
-        ],
-        [
-          "+",
-          "reset · block · unblock · rename · delete"
-        ],
-        [
-          "+",
-          "view(key)  # 待分配 / 停用 / 无可用模型 / 可用 + 原文"
-        ],
-        [
-          "+",
-          "user_key · client_key · client_keys"
-        ]
-      ]
-    },
-    {
-      "id": "key",
-      "kind": "class",
-      "name": "ApiKey",
-      "stereotype": "聚合根",
-      "at": [
-        0.2,
-        3.0
-      ],
-      "responsibility": "一把 API Key 和它在 LiteLLM 里的同步状态。分配的模型原样保留，失效的（授权收回、模型缺失）在页面上标出来、下次保存时去掉，不悄悄改。原文存在这里（LiteLLM 只存哈希）；用户 Key 只在申请、重置时返回一次，客户端 Key 只经内部接口给所属应用。",
-      "attributes": [
-        [
-          "+",
-          "owner: KeyOwner · name · models"
-        ],
-        [
-          "+",
-          "status: KeyStatus"
-        ],
-        [
-          "-",
-          "secret · litellm_token"
-        ],
-        [
-          "+",
-          "synced_models · synced_blocked · sync_error"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "assign(models) · rotate(generated)"
-        ],
-        [
-          "+",
-          "block() · unblock()"
-        ]
-      ]
-    },
-    {
-      "id": "owner",
-      "kind": "class",
-      "name": "KeyOwner",
-      "stereotype": "值对象",
-      "at": [
-        -0.65,
-        4.65
-      ],
-      "responsibility": "Key 归谁：用户 Key 是持有人，一人一把；客户端 Key 是客户端类型 + 编码（Agent + 智能体 id，Service + 用途），一个客户端一把。还给出审计标识和 LiteLLM 里的别名——别名要全局唯一，重置时新旧两把同时存在，所以带上生成时间和随机串。",
-      "attributes": [
-        [
-          "+",
-          "user(user_uuid)"
-        ],
-        [
-          "+",
-          "client(client_type, client_code)"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "target() · alias(at)"
-        ]
-      ]
-    },
-    {
-      "id": "status",
-      "kind": "enum",
-      "name": "KeyStatus",
-      "stereotype": "值对象",
-      "at": [
-        0.8,
-        4.75
-      ],
-      "responsibility": "待分配：客户端 Key 刚建、还没分配模型，LiteLLM 里还没有 Key（不给模型 = 能用全部模型）。「没有可用模型」不是一种状态：有效模型算下来为空时在 LiteLLM 里停用，恢复后自动解除。",
-      "attributes": [
-        [
-          "",
-          "pending：还没分配模型"
-        ],
-        [
-          "",
-          "active"
-        ],
-        [
-          "",
-          "blocked：管理员或本人停用"
-        ]
-      ]
-    },
-    {
-      "id": "eff",
-      "kind": "class",
-      "name": "EffectiveModels",
-      "stereotype": "策略",
-      "at": [
-        2.25,
-        4.15
-      ],
-      "responsibility": "可选范围：客户端 Key 是全部可调用的模型；用户 Key 是公有的 + 授权给本人或所在部门的私有的，人被停用就是空。有效模型 = 分配的 ∩ 可选范围，同步到 LiteLLM 的就是它。",
-      "methods": [
-        [
-          "+",
-          "allowed(key, *, fresh) -> dict[模型名, Model]"
-        ],
-        [
-          "+",
-          "effective(key, *, fresh) -> list[模型名]"
-        ]
-      ]
-    },
-    {
-      "id": "sync",
-      "kind": "class",
-      "name": "KeySync",
-      "stereotype": "领域服务",
-      "at": [
-        2.95,
-        2.3
-      ],
-      "responsibility": "平台是事实源，LiteLLM 跟随：把有效模型和停用状态推给 LiteLLM，记下推了什么；失败记 sync_error、不抛。有效模型为空时只停用、不推空列表（空列表在 LiteLLM 里是全部模型）。接住模型和授权事件，重算分配了那个模型的 Key；对账时先问 LiteLLM 现在的样子再比，找不到的 Key 只记错误、不自动重建。",
-      "methods": [
-        [
-          "+",
-          "sync(key, *, verify, fresh) -> changed"
-        ],
-        [
-          "+",
-          "resync(model) · drop(model)"
-        ],
-        [
-          "+",
-          "reconcile_all() -> Report"
-        ]
-      ]
-    },
-    {
-      "id": "policy",
-      "kind": "class",
-      "name": "ClientTypePolicy",
-      "stereotype": "策略",
-      "at": [
-        -0.6,
-        0.35
-      ],
-      "responsibility": "客户端类型 → 能建、取、删这一类 Key 的应用（按 X-Caller-App 认）：Agent、Service 都只给 atlas。管理员在页面上可以给任何已登记的类型建 Key。",
-      "attributes": [
-        [
-          "-",
-          "client_types: {Agent: [atlas], Service: [atlas]}"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "require(client_type, app)"
-        ]
-      ]
-    },
-    {
-      "id": "repo",
-      "kind": "class",
-      "name": "ApiKeyRepository",
-      "stereotype": "仓储",
-      "at": [
-        -0.6,
-        1.75
-      ],
-      "responsibility": "读写 gw_api_key。找分配了某个模型的 Key 用 JSON 包含查询，不把全部 Key 读出来再过滤。",
-      "methods": [
-        [
-          "+",
-          "get · user_key · client_key · list(filter)"
-        ],
-        [
-          "+",
-          "containing(model) · syncable()"
-        ]
-      ]
-    },
     {
       "id": "callers",
       "kind": "class",
-      "name": "管理接口 · 内部接口 · 对账任务",
+      "name": "员工 · 管理员 · Agent 平台 · 知识库 · 巡检",
       "external": true,
-      "source": "入口组件",
+      "source": "控制台 · Agent/知识库服务 · KeyRefresh（jobs.py）",
       "methods": [
         [
           "+",
-          "申请、分配、重置、停用、删除；对账"
+          "HTTP /api/v1/keys* · refresh_user_keys()"
         ]
       ],
       "at": [
-        1.75,
-        -1.15
+        2.25,
+        -1.25
       ]
     },
     {
-      "id": "gw",
-      "kind": "interface",
-      "name": "LiteLLMAdmin",
-      "external": true,
-      "source": "LiteLLM 接入领域",
+      "id": "router",
+      "kind": "class",
+      "name": "KeysRouter",
+      "stereotype": "对外接口",
+      "source": "现状散在 api/admin.py 与 api/internal.py（待收口至 api/keys.py）",
+      "at": [
+        0.85,
+        0.25
+      ],
+      "responsibility": "统一的 API Key 功能路由：按 Principal 控制权限与字段可见性——管理端列表/详情一律脱敏末 4 位并聚合展示 spent_month / spent_5h / spent_24h 及管理员硬上限；仅通过 require_caller_app 白名单校验的所属内部应用可调 credential 端点取客户端 Key 明文。",
       "methods": [
         [
           "+",
-          "generate_key · delete_key"
+          "GET|POST|PUT|DELETE /api/v1/keys/me（员工个人 Key，受硬上限约束）"
         ],
         [
           "+",
-          "update_key · block_key · unblock_key"
+          "GET|PUT|POST|DELETE /api/v1/keys（管理员分配模型与硬上限，脱敏）"
         ],
         [
           "+",
-          "key_info"
+          "PUT|PATCH|DELETE /api/v1/keys/clients/{type}/{code} · GET .../credential（所属应用）"
         ]
-      ],
+      ]
+    },
+    {
+      "id": "svc",
+      "kind": "class",
+      "name": "KeyService",
+      "stereotype": "应用服务",
       "at": [
-        5.15,
-        1.2
+        2.25,
+        1.95
+      ],
+      "responsibility": "API Key 应用服务：创建个人与客户端 Key、更新勾选模型与限额（校验 budget_5h <= budget_24h 及个人 Key 不超 admin_budget_caps 硬上限）、旋转密钥（客户端 Key 保留 10 分钟 prev_digest 宽限期）、启停与删除；按「勾选 ∩ 可选范围」重算 effective_models。",
+      "methods": [
+        [
+          "+",
+          "create_user_key · ensure_client · reveal(key)"
+        ],
+        [
+          "+",
+          "update_key(*, limits, by_admin) · rotate · block · unblock · delete"
+        ],
+        [
+          "+",
+          "refresh_for_model(name) · refresh_user_keys() -> int"
+        ]
+      ]
+    },
+    {
+      "id": "limits",
+      "kind": "class",
+      "name": "KeyLimits",
+      "stereotype": "值对象",
+      "source": "目标设计新增 budget_5h · budget_24h（现状仅 monthly_budget · rpm · expires_at）",
+      "at": [
+        -0.25,
+        2.55
+      ],
+      "responsibility": "一把 Key 的费用与速率配额：月度软上限 monthly_budget、5h/24h 滑动窗口费用上限 budget_5h / budget_24h（元，满足 budget_5h <= budget_24h）、每分钟请求数 rpm 与有效期 expires_at。",
+      "attributes": [
+        [
+          "+",
+          "monthly_budget · budget_5h · budget_24h"
+        ],
+        [
+          "+",
+          "rpm · expires_at"
+        ]
+      ]
+    },
+    {
+      "id": "notify",
+      "kind": "class",
+      "name": "ConfigNotifier",
+      "stereotype": "基础设施",
+      "at": [
+        -0.35,
+        3.85
+      ],
+      "responsibility": "Key 状态、模型列表、配额或摘要变化时标记 keys_changed=True 并附带 evict_digests，提交后广播给全部网关实例。",
+      "methods": [
+        [
+          "+",
+          "mark(session, *, keys_changed=True, evict_digests) · flush"
+        ]
+      ]
+    },
+    {
+      "id": "row",
+      "kind": "class",
+      "name": "GwApiKey",
+      "stereotype": "聚合根",
+      "at": [
+        1.35,
+        3.85
+      ],
+      "responsibility": "gw_api_key 聚合根：保存原勾选 models 与算好的 effective_models（网关唯一放行依据）、月与 5h/24h 窗口费用上限、个人 Key 的管理员硬上限 admin_budget_caps，以及摘要与客户端加密密文。",
+      "attributes": [
+        [
+          "+",
+          "uuid · key_type · status · models · effective_models"
+        ],
+        [
+          "+",
+          "monthly_budget · budget_5h · budget_24h · admin_budget_caps"
+        ],
+        [
+          "-",
+          "secret（仅 client 密文）· secret_digest · prev_digest"
+        ]
       ]
     },
     {
       "id": "audit",
       "kind": "class",
       "name": "AuditLog",
-      "external": true,
-      "source": "共享内核",
-      "methods": [
-        [
-          "+",
-          "record(actor, action, target, …)"
-        ]
-      ],
+      "stereotype": "仓储",
       "at": [
-        5.15,
-        0.2
-      ]
-    },
-    {
-      "id": "mevents",
-      "kind": "interface",
-      "name": "ModelEvents",
-      "external": true,
-      "source": "模型目录领域",
-      "methods": [
-        [
-          "+",
-          "visibility_changed · model_restored"
-        ],
-        [
-          "+",
-          "model_removed"
-        ]
-      ],
-      "at": [
-        5.15,
-        2.3
-      ]
-    },
-    {
-      "id": "aevents",
-      "kind": "interface",
-      "name": "AccessEvents",
-      "external": true,
-      "source": "授权领域",
-      "methods": [
-        [
-          "+",
-          "grants_changed(model)"
-        ]
-      ],
-      "at": [
-        5.15,
-        3.1
-      ]
-    },
-    {
-      "id": "catalog",
-      "kind": "class",
-      "name": "ModelCatalog",
-      "external": true,
-      "source": "模型目录领域",
-      "methods": [
-        [
-          "+",
-          "callable()"
-        ]
-      ],
-      "at": [
-        5.15,
+        2.95,
         3.85
+      ],
+      "responsibility": "在同一数据库事务里记录 Key 的创建、分配、重置、停用与删除审计日志至 gw_audit（只记末 4 位，不记原文）。",
+      "methods": [
+        [
+          "+",
+          "record(session, actor, action, target, detail)"
+        ]
+      ]
+    },
+    {
+      "id": "cipher",
+      "kind": "class",
+      "name": "SecretCipher",
+      "stereotype": "防腐层",
+      "at": [
+        4.35,
+        3.85
+      ],
+      "responsibility": "对客户端 Key 的明文做信封加密存储与读取解密；个人 Key 不存密文或明文，仅存 SHA-256 摘要。",
+      "methods": [
+        [
+          "+",
+          "encrypt(secret) · decrypt(cipher)"
+        ]
+      ]
+    },
+    {
+      "id": "reg",
+      "kind": "class",
+      "name": "ModelRegistry",
+      "external": true,
+      "source": "模型与线路组件",
+      "methods": [
+        [
+          "+",
+          "callable_names() · by_names()"
+        ]
+      ],
+      "at": [
+        5.85,
+        0.9
       ]
     },
     {
       "id": "access",
       "kind": "class",
-      "name": "ModelAccess",
+      "name": "PrincipalGuard · SubjectsCache",
       "external": true,
-      "source": "授权领域",
+      "source": "授权组件",
       "methods": [
         [
           "+",
-          "usable(user) · person(uid)"
+          "require_* · usable(uid) · subject(uid)"
         ]
       ],
       "at": [
-        5.15,
-        4.6
+        5.85,
+        2.25
+      ]
+    },
+    {
+      "id": "digest",
+      "kind": "class",
+      "name": "key_digest",
+      "external": true,
+      "source": "共享基础层（shared.kernel）",
+      "methods": [
+        [
+          "+",
+          "key_digest(secret) -> sha256_hex"
+        ]
+      ],
+      "at": [
+        -2.15,
+        1.15
       ]
     }
   ],
   "relationships": [
     {
       "from": "callers",
-      "to": "keys",
-      "description": "申请、分配、改状态、对账"
+      "to": "router",
+      "type": "uses",
+      "description": "HTTP Key 请求"
     },
     {
-      "from": "keys",
-      "to": "policy",
-      "description": "只给所属应用"
+      "from": "callers",
+      "to": "svc",
+      "type": "uses",
+      "description": "定时巡检刷新",
+      "labelAt": 0.3
     },
     {
-      "from": "keys",
-      "to": "repo",
-      "type": "association",
-      "description": "读写"
+      "from": "router",
+      "to": "svc",
+      "type": "uses",
+      "description": "委派业务处理"
     },
     {
-      "from": "keys",
-      "to": "key",
-      "description": "creates、改"
-    },
-    {
-      "from": "keys",
-      "to": "sync",
-      "type": "association",
-      "description": "改动后同步"
-    },
-    {
-      "from": "keys",
-      "to": "eff",
-      "description": "校验选的模型"
-    },
-    {
-      "from": "keys",
-      "to": "gw",
-      "description": "生成、删除 Key"
-    },
-    {
-      "from": "keys",
-      "to": "audit",
-      "description": "记"
-    },
-    {
-      "from": "key",
-      "to": "owner",
-      "type": "association",
-      "description": "owner"
-    },
-    {
-      "from": "key",
-      "to": "status",
-      "type": "association",
-      "description": "status"
-    },
-    {
-      "from": "sync",
-      "to": "eff",
-      "description": "有效模型"
-    },
-    {
-      "from": "sync",
-      "to": "gw",
-      "description": "改模型、停用、查 Key"
-    },
-    {
-      "from": "sync",
-      "to": "repo",
-      "description": "受影响的 Key"
-    },
-    {
-      "from": "sync",
-      "to": "mevents",
-      "type": "implements"
-    },
-    {
-      "from": "sync",
-      "to": "aevents",
-      "type": "implements"
-    },
-    {
-      "from": "eff",
-      "to": "catalog",
-      "description": "可调用的"
-    },
-    {
-      "from": "eff",
+      "from": "router",
       "to": "access",
-      "description": "能用的私有模型、在不在职"
+      "type": "uses",
+      "description": "校验用户/管理员/所属应用身份",
+      "labelAt": 0.35
+    },
+    {
+      "from": "svc",
+      "to": "limits",
+      "type": "uses",
+      "description": "校验配额"
+    },
+    {
+      "from": "svc",
+      "to": "row",
+      "type": "association",
+      "description": "读写 gw_api_key"
+    },
+    {
+      "from": "svc",
+      "to": "cipher",
+      "type": "uses",
+      "description": "加解密客户端 Key"
+    },
+    {
+      "from": "svc",
+      "to": "digest",
+      "type": "uses",
+      "description": "计算 SHA-256 摘要"
+    },
+    {
+      "from": "svc",
+      "to": "reg",
+      "type": "uses",
+      "description": "查本租户启用模型",
+      "labelAt": 0.55
+    },
+    {
+      "from": "svc",
+      "to": "access",
+      "type": "uses",
+      "description": "查个人可用私有模型与在职",
+      "labelAt": 0.6
+    },
+    {
+      "from": "svc",
+      "to": "notify",
+      "type": "uses",
+      "description": "递增 Key 版本并广播驱逐"
+    },
+    {
+      "from": "svc",
+      "to": "audit",
+      "type": "uses",
+      "description": "记操作审计"
     }
   ],
   "capabilities": [
     {
-      "name": "申请用户 Key",
-      "entry": "apply(uid, models)",
-      "callers": "管理接口（本人）",
-      "description": "一人一把，申请即生成；只能选公有的和授权给自己或所在部门的私有模型；原文只返回这一次"
+      "name": "个人 Key 自助管理（受管理员硬上限约束）",
+      "entry": "/api/v1/keys/me -> KeyService",
+      "callers": "员工",
+      "description": "一人多把按 label 区分工具，仅存摘要，明文仅创建或重置时返回一次；可查看实时 5h/24h/月度花费，自设窗口上限不得超过管理员硬上限且不可清除已设硬上限"
     },
     {
-      "name": "客户端 Key",
-      "entry": "ensure_client · view · rename · delete",
-      "callers": "内部接口（Atlas 建、改名、删智能体；平台服务）、管理接口（管理员新建）",
-      "description": "按类型 + 编码幂等；建出来是「待分配」；view 给内部接口：待分配 / 停用 / 无可用模型 / 可用（带原文和有效模型）"
+      "name": "全租户 Key 分配与硬上限管控（脱敏）",
+      "entry": "/api/v1/keys -> KeyService",
+      "callers": "模型管理员",
+      "description": "分配客户端 Key 模型，为任意 Key 设定月预算、5h/24h 滑动窗口费用硬上限与 RPM，停用/启用或重置，永不向浏览器返回客户端 Key 明文"
     },
     {
-      "name": "分配模型",
-      "entry": "assign(key, models, *, actor)",
-      "callers": "管理接口（本人改用户 Key；管理员给客户端 Key 分配）、运维命令行",
-      "description": "客户端 Key 第一次分配时在 LiteLLM 生成；之后只同步"
-    },
-    {
-      "name": "重置、停用、启用、删除",
-      "entry": "reset · block · unblock · delete",
-      "callers": "管理接口、内部接口（智能体删除时）",
-      "description": "重置：先生成新的再删旧的，旧的删不掉就撤回新的；删除连 LiteLLM 里的一起删"
-    },
-    {
-      "name": "跟着模型和授权重算",
-      "entry": "ModelEvents、AccessEvents（实现）",
-      "callers": "模型目录、授权（同一个事务里同步分发）",
-      "description": "可见性变了、重新登记了、授权变了：重算分配了这个模型的 Key；模型删了：先从分配里去掉再重算"
-    },
-    {
-      "name": "对账",
-      "entry": "reconcile_all()",
-      "callers": "对账任务（每 5 分钟）、运维命令行",
-      "description": "逐把非待分配的 Key 刷新授权缓存、问 LiteLLM 现在的样子，不一致以平台为准修正"
+      "name": "所属应用客户端 Key 补建与读凭据",
+      "entry": "/api/v1/keys/clients/{type}/{code} -> KeyService",
+      "callers": "Agent 平台、知识库服务",
+      "description": "经 require_caller_app 校验客户端类型归属后幂等补建、同步名称并读取解密明文与可用模型规格"
     }
   ],
   "decisions": [
     {
-      "decision": "平台是事实源，LiteLLM 跟随",
-      "reason": "Key 分配了什么、能不能用由平台算，推给 LiteLLM，记下上一次推了什么；推失败记 sync_error，对账重试。LiteLLM 只存 Key 的哈希，原文因此只能在平台存。"
+      "decision": "个人 Key 与客户端 Key 收口在同一个功能组件与路由前缀下",
+      "reason": "消除过去管理端与内部接口两处重复定义客户端 Key 创建/删除逻辑的问题；「管理端不回明文、所属应用可取明文」通过主体权限与子资源端点隔离即可安全实现。"
     },
     {
-      "decision": "有效模型 = 分配的 ∩ 可选范围，分配本身不悄悄改",
-      "reason": "授权收回、模型缺失、人离职时只让它在 LiteLLM 里失效，页面标出来、下次保存时去掉；恢复后自动生效，不用重新分配。"
+      "decision": "个人 Key 只存摘要，客户端 Key 信封加密 + 10 分钟重置宽限期",
+      "reason": "既防止拖库泄露凭据，又保证管理员旋转客户端 Key 时正在运行的对话在 10 分钟宽限期内平滑过渡不断流。"
     },
     {
-      "decision": "有效模型为空时停用，不推空列表",
-      "reason": "LiteLLM 里 Key 的 models 为空表示全部模型；推空列表等于放开所有模型。"
-    },
-    {
-      "decision": "客户端 Key 先「待分配」，第一次分配模型才在 LiteLLM 生成",
-      "reason": "生成时不给模型就是全部模型；先占住类型 + 编码，管理员分配后才有 Key。这期间智能体不能运行，Atlas 开始前说明缺哪个模型、该找谁。"
-    },
-    {
-      "decision": "先在 LiteLLM 生成，写库失败就撤回",
-      "reason": "不留没人管的 Key；撤回也失败只记日志，要在 LiteLLM 里手工删。重置同理：新旧两把只会留下一把。"
-    },
-    {
-      "decision": "对账先问 LiteLLM，再比",
-      "reason": "平时和上一次推的比就够；对账要补上的是同步失败、用户中心那边的变化（调部门、离职没有通知）和有人在 LiteLLM 界面改了平台管的 Key，只能问 LiteLLM 现在的样子。LiteLLM 里找不到的 Key 不自动重建，要人看一眼是不是被手工删了。多副本各自跑，同步是幂等的。"
-    },
-    {
-      "decision": "接住模型和授权的事件",
-      "reason": "现在接口层在改可见性、重新登记、删模型、授权、收回之后各自手工调 resync / drop_model；收进 KeySync 后，入口不用记着调。"
-    },
-    {
-      "decision": "找分配了某个模型的 Key 用 JSON 包含查询",
-      "reason": "现在 containing 把全部 Key 读出来在 Python 里过滤；Key 随智能体增长（112 上已经 47 把），每次改授权都要全表读一遍。"
-    },
-    {
-      "decision": "原文存库",
-      "reason": "应用要取原文去调 LiteLLM，LiteLLM 只存哈希；加密等安全问题后续统一设计。"
+      "decision": "5h / 24h 窗口用量统一按费用（元）计量，并独立保存管理员硬上限 admin_budget_caps",
+      "reason": "按费用与现有 monthly_budget 统一口径，跨不同单价模型（快模型 vs 旗舰推理模型）按模型统一价折算最公平；单独保存管理员设定的硬上限快照后，员工既可为自己设更严的自限值并自由微调，又绝无法把管理员下发的窗口上限调高或清空，同时网关热路径只需读取生效后的 budget_5h / budget_24h。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成 uuid7），接口和表间引用都用它，引用列叫 xxx_uuid。表间不建外键约束，引用由代码维护。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。LiteLLM 的表由 LiteLLM 自己建、自己管（atlas_litellm 库），不在这里。",
+  "schemaNote": "主键与租户约定：id 为库内自增主键；uuid 为对外与表间关联用的逻辑主键（Python 侧生成 UUIDv7），表间不建物理外键约束，由领域服务保证一致性。所有表均继承 TenantOwned（带 tenant_uuid），由 atlas_tenancy 在会话层自动附加当前租户过滤条件；每张表均含 created_at、updated_at（UTC timestamptz）。",
   "tables": [
     {
       "name": "gw_api_key",
-      "description": "对应聚合根 ApiKey；CHECK 约束：user 必有 user_uuid、没有客户端，client 必有类型和编码、没有 user_uuid",
+      "description": "个人 Key 与客户端 Key 及其预计算有效模型与配额（对应聚合根 GwApiKey）。",
       "at": [
         0,
         0
@@ -564,128 +377,234 @@
       "columns": [
         {
           "name": "id",
-          "type": "bigint",
+          "type": "BigInteger",
           "key": "PK",
           "default": "自增",
           "description": "库内主键"
         },
         {
           "name": "uuid",
-          "type": "uuid",
+          "type": "UUIDType",
           "key": "UK",
+          "default": "uuid7",
           "description": "逻辑主键"
         },
         {
+          "name": "tenant_uuid",
+          "type": "UUIDType",
+          "description": "所属租户"
+        },
+        {
           "name": "key_type",
-          "type": "varchar(16)",
+          "type": "String(16)",
           "description": "user / client"
         },
         {
           "name": "user_uuid",
-          "type": "uuid",
+          "type": "UUIDType",
           "nullable": true,
-          "description": "用户 Key 的持有人（用户中心 uid）"
+          "description": "个人 Key 持有人 uid"
         },
         {
           "name": "client_type",
-          "type": "varchar(64)",
+          "type": "String(64)",
           "nullable": true,
-          "description": "Agent / Service"
+          "description": "客户端类型（Agent / Service）"
         },
         {
           "name": "client_code",
-          "type": "varchar(128)",
+          "type": "String(128)",
           "nullable": true,
-          "description": "智能体 id、平台服务的用途"
+          "description": "客户端编码（如智能体 id）"
         },
         {
           "name": "name",
-          "type": "varchar(200)",
+          "type": "String(200)",
           "default": "''",
-          "description": "展示用：持有人姓名或对象名称（随改名同步）"
+          "description": "持有人或客户端对象名称"
+        },
+        {
+          "name": "label",
+          "type": "String(100)",
+          "default": "''",
+          "description": "用途标签（如 Claude Code）"
         },
         {
           "name": "models",
-          "type": "jsonb",
-          "default": "'[]'",
-          "description": "分配的模型名"
+          "type": "JSONType",
+          "description": "勾选的模型名列表"
+        },
+        {
+          "name": "effective_models",
+          "type": "JSONType",
+          "description": "当前生效可调用的模型名列表（网关唯一依据）"
         },
         {
           "name": "status",
-          "type": "varchar(16)",
+          "type": "String(16)",
           "description": "pending / active / blocked"
         },
         {
           "name": "secret",
-          "type": "varchar(128)",
+          "type": "Text",
           "nullable": true,
-          "description": "Key 原文（sk-…）；pending 时为空"
+          "description": "客户端 Key 加密密文（个人 Key 为空）"
         },
         {
-          "name": "litellm_token",
-          "type": "varchar(128)",
+          "name": "secret_digest",
+          "type": "String(64)",
           "nullable": true,
-          "description": "LiteLLM 里的标识（哈希）"
+          "description": "SHA-256 十六进制摘要"
         },
         {
-          "name": "synced_models",
-          "type": "jsonb",
-          "default": "'[]'",
-          "description": "上一次成功推给 LiteLLM 的可用模型"
+          "name": "secret_tail",
+          "type": "String(8)",
+          "description": "原文末 4 位"
         },
         {
-          "name": "synced_blocked",
-          "type": "boolean",
+          "name": "prev_digest",
+          "type": "String(64)",
           "nullable": true,
-          "description": "上一次推过去的停用状态"
+          "description": "重置宽限期内的上一把摘要"
         },
         {
-          "name": "synced_at",
-          "type": "timestamptz",
-          "nullable": true
-        },
-        {
-          "name": "sync_error",
-          "type": "text",
+          "name": "prev_until",
+          "type": "UTCDateTime",
           "nullable": true,
-          "description": "上一次同步失败的原因；成功后清空，对账据此重试"
+          "description": "宽限期截止时间"
+        },
+        {
+          "name": "monthly_budget",
+          "type": "Numeric(18,4)",
+          "nullable": true,
+          "description": "自然月费用软上限（元）"
+        },
+        {
+          "name": "budget_5h",
+          "type": "Numeric(18,4)",
+          "nullable": true,
+          "description": "【目标设计】5 小时滑动窗口费用上限（元，软上限）"
+        },
+        {
+          "name": "budget_24h",
+          "type": "Numeric(18,4)",
+          "nullable": true,
+          "description": "【目标设计】24 小时滑动窗口费用上限（元，软上限，须 >= budget_5h）"
+        },
+        {
+          "name": "admin_budget_caps",
+          "type": "JSONType",
+          "default": "'{}'",
+          "description": "【目标设计】管理员为个人 Key 设定的窗口硬上限（如 {\"5h\":\"50\",\"24h\":\"150\"}），本人不可调高或清除"
+        },
+        {
+          "name": "rpm",
+          "type": "Integer",
+          "nullable": true,
+          "description": "每分钟请求上限"
+        },
+        {
+          "name": "expires_at",
+          "type": "UTCDateTime",
+          "nullable": true,
+          "description": "过期时间"
+        },
+        {
+          "name": "block_reason",
+          "type": "String(200)",
+          "default": "''",
+          "description": "停用说明"
         },
         {
           "name": "created_by",
-          "type": "varchar(64)",
-          "description": "申请人；应用建的是 app:atlas"
+          "type": "String(64)",
+          "description": "创建人"
         },
         {
           "name": "rotated_at",
-          "type": "timestamptz",
+          "type": "UTCDateTime",
           "nullable": true,
-          "description": "最近一次生成原文"
+          "description": "最近生成密钥时间"
         }
       ],
       "indexes": [
         {
-          "name": "uq_gw_api_key_user",
-          "columns": [
-            "user_uuid"
-          ],
-          "unique": true,
-          "description": "WHERE key_type = 'user'：一人一把"
-        },
-        {
           "name": "uq_gw_api_key_client",
           "columns": [
+            "tenant_uuid",
             "client_type",
             "client_code"
           ],
           "unique": true,
-          "description": "WHERE key_type = 'client'：一个客户端一把"
+          "description": "同租户内客户端 Key 唯一（WHERE key_type='client'）"
         },
         {
-          "name": "ix_gw_api_key_models",
+          "name": "uq_gw_api_key_digest",
           "columns": [
-            "models"
+            "secret_digest"
           ],
-          "description": "GIN（jsonb_path_ops）：找分配了某个模型的 Key"
+          "unique": true,
+          "description": "全局摘要唯一（网关按摘要单行定位 Key 与租户）"
+        }
+      ]
+    },
+    {
+      "name": "gw_audit",
+      "description": "管理面写操作审计日志（对应仓储 AuditLog），只追加不修改。",
+      "at": [
+        1,
+        0
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "BigInteger",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键"
+        },
+        {
+          "name": "uuid",
+          "type": "UUIDType",
+          "key": "UK",
+          "default": "uuid7",
+          "description": "逻辑主键"
+        },
+        {
+          "name": "tenant_uuid",
+          "type": "UUIDType",
+          "description": "所属租户"
+        },
+        {
+          "name": "actor",
+          "type": "String(64)",
+          "description": "操作人 uid 或应用标识"
+        },
+        {
+          "name": "action",
+          "type": "String(64)",
+          "description": "动作编码（如 key.create、model.update）"
+        },
+        {
+          "name": "target",
+          "type": "String(200)",
+          "description": "操作对象标识"
+        },
+        {
+          "name": "detail",
+          "type": "JSONType",
+          "description": "脱敏后的变更详情"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "ix_gw_audit_target_at",
+          "columns": [
+            "target",
+            "created_at"
+          ],
+          "unique": false,
+          "description": "按目标与时间倒序查审计轨迹"
         }
       ]
     }

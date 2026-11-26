@@ -35,8 +35,8 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "动态图：模型平台 - 提交点前换线路",
-  "description": "目标模型（代码还没有），方案见 agent-platform/doc/design/model-gateway-design.html。上游先回 200，接着在流里报过载；还没到提交点，网关换下一条线路，调用方只看到保活注释",
+  "title": "动态图：模型平台 - 提交点前故障切换线路",
+  "description": "上游账号 A 先回 HTTP 200 与 message_start，随后在流里返回 overloaded_error；因尚未吐出任何实质内容（未过提交点），网关透明冷却线路 1 并切至备用线路 2。",
   "boundaries": [
     {
       "id": "mp",
@@ -68,35 +68,35 @@
       "id": "orch",
       "kind": "component",
       "name": "调用编排",
-      "technology": "Python 模块",
+      "technology": "gateway.invocation",
       "in": "gw"
     },
     {
       "id": "route",
       "kind": "component",
       "name": "线路",
-      "technology": "Python 模块",
+      "technology": "gateway.routing",
       "in": "gw"
     },
     {
       "id": "fmt",
       "kind": "component",
       "name": "格式",
-      "technology": "Python 模块",
+      "technology": "gateway.format",
       "in": "gw"
     },
     {
       "id": "met",
       "kind": "component",
       "name": "计量",
-      "technology": "Python 模块",
+      "technology": "gateway.metering",
       "in": "gw"
     },
     {
       "id": "redis",
       "kind": "container",
       "name": "网关状态",
-      "technology": "Redis 7",
+      "technology": "Redis 7（键值 + Pub/Sub）",
       "shape": "database",
       "in": "mp"
     },
@@ -111,21 +111,18 @@
     {
       "from": "agent",
       "to": "chat",
-      "description": "流式对话请求",
-      "technology": "Anthropic 格式，HTTP + SSE"
+      "description": "POST /universal/v1/messages（stream=true）",
+      "technology": "Anthropic Messages，HTTP + SSE"
     },
     {
       "from": "chat",
       "to": "orch",
-      "description": "chat(anthropic, Key, 请求原文, stream=True)",
-      "details": {
-        "note": "读共同信息、准入、查能力和 dynamic-stream-call.html 一样，这里略过；每次尝试前的 plan 也略过。"
-      }
+      "description": "chat(...)：已完成读摘要、两阶段准入与能力校验"
     },
     {
       "from": "orch",
       "to": "route",
-      "description": "pick(模型, 会话) → 线路 1（账号 A）"
+      "description": "pick(routes, session_key) → 线路 1（账号 A）"
     },
     {
       "from": "orch",
@@ -135,34 +132,30 @@
     {
       "from": "fmt",
       "to": "provider",
-      "description": "发出（账号 A）",
-      "technology": "Anthropic 格式，HTTPS + SSE"
+      "description": "向账号 A 发起流式请求",
+      "technology": "HTTPS + SSE"
     },
     {
       "from": "provider",
       "to": "fmt",
-      "description": "200 + 消息开始（不含内容，压着不发）",
+      "description": "200 + event: message_start（不含实质内容，暂存在网关内存）",
       "technology": "SSE"
     },
     {
       "from": "orch",
       "to": "chat",
-      "description": "等得久了：保活注释（不含内容）"
+      "description": "等待首段内容超过保活间隔：生成注释保活帧"
     },
     {
       "from": "chat",
       "to": "agent",
-      "description": "保活注释，接收方忽略",
-      "technology": "SSE 注释行",
-      "details": {
-        "note": "SSE 规定以冒号开头的行是注释，接收方忽略；它只是让中间的代理别因为太久没动静断开连接。调用方到这时还没看到任何内容。",
-        "example": ": keepalive"
-      }
+      "description": ": keepalive（SSE 注释行，保活反代连接且不触发客户端消息解析）",
+      "technology": "SSE 注释行"
     },
     {
       "from": "provider",
       "to": "fmt",
-      "description": "流里来了错误：过载",
+      "description": "event: error（overloaded_error）",
       "technology": "SSE",
       "details": {
         "example": "event: error\ndata: {\"type\": \"error\", \"error\": {\"type\": \"overloaded_error\", \"message\": \"Overloaded\"}}"
@@ -171,70 +164,70 @@
     {
       "from": "fmt",
       "to": "orch",
-      "description": "提交前失败：UpstreamFailure(过载)"
+      "description": "识别为提交前失败 UpstreamFailure(OVERLOADED)"
     },
     {
       "from": "orch",
       "to": "route",
-      "description": "report(线路 1, 过载) → 换，线路 1 冷却 60 秒"
+      "description": "report(线路 1, OVERLOADED) → Verdict(switch=True, cool=60s)"
     },
     {
       "from": "route",
       "to": "redis",
-      "description": "线路 1 冷却到 60 秒后（所有实例都看得到）",
+      "description": "SET modelgw:cool:<线路 1> EX 60（全集群网关实例立即避开）",
       "technology": "Redis SET EX"
     },
     {
       "from": "orch",
       "to": "route",
-      "description": "pick(模型, 会话, 已试：线路 1) → 线路 2（账号 B）",
+      "description": "pick(routes, session_key, tried={线路 1}) → 线路 2（备用账号 B）",
       "details": {
-        "note": "会话的落点是线路 1；它不可用，就按同一会话的排序取下一条。同一优先级的都不行才轮到下一优先级。"
+        "note": "同时受 total_first_content_s 总首字截止时间保护，防止多条慢线路叠加拖死客户端。"
       }
     },
     {
       "from": "orch",
       "to": "fmt",
-      "description": "open(线路 2, ParamPlan)"
+      "description": "按线路 2 重新生成 ParamPlan 并调 open(线路 2)"
     },
     {
       "from": "fmt",
       "to": "provider",
-      "description": "发出（账号 B）",
-      "technology": "Anthropic 格式，HTTPS + SSE"
+      "description": "向备用账号 B 发起请求",
+      "technology": "HTTPS + SSE"
     },
     {
       "from": "provider",
       "to": "fmt",
-      "description": "200 + 消息开始 + 第一段内容",
+      "description": "200 + message_start + 首段正文内容",
       "technology": "SSE"
     },
     {
       "from": "orch",
       "to": "chat",
-      "description": "提交：消息开始连同第一段一起交出"
+      "description": "确立提交点：丢弃账号 A 的暂存头，输出账号 B 的完整事件流"
     },
     {
       "from": "chat",
       "to": "agent",
-      "description": "内容一段段写回",
+      "description": "连续流式返回完整回答（调用方对中途换账号完全无感）",
       "technology": "SSE"
     },
     {
       "from": "orch",
       "to": "met",
-      "description": "record：两次尝试都记下",
+      "description": "record：一条调用记录内完整保存两次尝试轨迹 attempts",
       "details": {
         "items": [
           [
             "尝试 1",
             "线路 1 · 账号 A",
-            "过载，提交前失败，耗时 1.8 秒"
+            "outcome=overloaded（提交前失败）"
           ],
           [
             "尝试 2",
             "线路 2 · 账号 B",
-            "成功"
+            "outcome=ok（成功提交并计费）"
           ]
         ]
       }

@@ -30,59 +30,63 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：模型平台 - 模型网关 - 准入",
-  "description": "目标领域模型，只画期望的样子。认 Key 和限额；本领域没有自己的表（Key 的登记在管理平台，计数和花费在网关状态），领域总览见 code-gateway-domains.html",
+  "description": "目标模型：两阶段准入（静态认 Key 与动态配额分离）、月度软预算 + 5h/24h 滑动窗口费用守卫（5 分钟分桶 Redis Hash + 整型微元 Lua）、Lua 原子 RPM 计数，以及 Redis 丢失后的单飞懒回填；领域总览见 code-gateway-domains.html。",
   "component": "准入",
-  "package": "atlas_modelgateway.gateway.admission（目标模型）",
-  "overview": "准入回答「这个请求能不能放进来」：Key 是不是真的、还有没有效、能不能用这个模型、限额够不够。它从配置快照里按摘要找到 Key，判断都在内存里做；限额的计数和本月花费放在网关状态里，几个网关实例共用。\n\n它不管私有模型的授权（管理平台在授权收回时把模型从 Key 里去掉），也不管费用怎么算（计量算好后交给它累加）。",
+  "package": "atlas_modelgateway.gateway.admission",
+  "overview": "准入领域把守网关大门，回答「谁在调、能不能用这个模型、预算和速率配额够不够」。\n\n为防止本地参数错误或能力不匹配白白消耗用户的 RPM 配额，准入拆成两步：admit_static 只读内存配置快照，按 SHA-256 摘要定位 Key（支持旋转后 10 分钟内的 prev_digest 宽限期），校验启用状态、有效期、模型是否在 effective_models 中且类型匹配；待调用编排完成能力与格式可达检查后，admit_quota 依次检查自然月预算（monthly_budget）、5h 与 24h 滑动窗口费用（budget_5h / budget_24h），全部放行后最后经 Redis Lua 原子递增每分钟请求数（rpm）。\n\n5h/24h 滑动窗口由 RollingWindowSpend 以每 5 分钟一桶（5h=60 桶、24h=288 桶）存于单个 Redis Hash modelgw:spend_win:{key_uuid}，金额按整型微元（1 元=10^6 微元）HINCRBY 消除浮点漂移；单条 Lua 原子完成过期桶清理、5h/24h 同步求和及按最老桶滑出时间反算精确 Retry-After。若 Redis 重启或首次为 Key 开启窗口限额（_init 哨兵缺失），SpendBackfill 按 Key 单飞查询平台库 gw_model_call 当月或近 24h 分桶汇总，并用 SET NX / Lua HSETNX 写回 Redis。",
   "elements": [
     {
       "id": "inv",
       "kind": "class",
       "name": "Invocation",
-      "at": [
-        0.2,
-        -1.2
-      ],
+      "external": true,
+      "source": "调用编排领域（gateway/invocation.py）",
       "methods": [
         [
           "+",
-          "admit · settle"
+          "admit_static · admit_quota · settle"
         ]
       ],
-      "external": true,
-      "source": "调用编排领域"
+      "at": [
+        0.5,
+        -1.2
+      ]
     },
     {
-      "id": "list",
+      "id": "list_api",
       "kind": "class",
       "name": "模型清单入口",
-      "at": [
-        2.4,
-        -1.2
-      ],
+      "external": true,
+      "source": "入口组件（GET /v1/models）",
       "methods": [
         [
           "+",
           "models_of(secret)"
         ]
       ],
-      "external": true,
-      "source": "入口组件"
+      "at": [
+        2.8,
+        -1.2
+      ]
     },
     {
       "id": "adm",
       "kind": "class",
       "name": "Admission",
+      "stereotype": "应用服务",
       "at": [
-        1.3,
+        1.65,
         0.3
       ],
-      "stereotype": "应用服务",
-      "responsibility": "每个请求的第一道关：按摘要找 Key → 没停用、没过期 → 模型在这把 Key 里且已启用 → 每分钟请求数 → 本月预算。任何一步不过就抛 GatewayError：Key 无效（401）、不能用这个模型（403）、Key 限额用完（429，说明是哪个限额、什么时候恢复）。调用结束后把费用加到本月花费。只读内存和网关状态，不查库。",
+      "responsibility": "准入主服务：admit_static 完成零副作用的身份、过期、模型授权与类型核验并构造 Grant；admit_quota 依次校验月预算、5h/24h 滑动窗口费用并扣 RPM；settle 在调用完成后异步累加月花费与当前 5 分钟窗口桶。",
       "methods": [
         [
           "+",
-          "admit(secret, model) -> Grant"
+          "admit_static(secret, model, *, expected_kind) -> Grant"
+        ],
+        [
+          "+",
+          "admit_quota(grant) · admit(secret, model, ...) -> Grant"
         ],
         [
           "+",
@@ -95,32 +99,15 @@
       ]
     },
     {
-      "id": "digest",
-      "kind": "class",
-      "name": "KeyDigest",
-      "at": [
-        -0.6,
-        1.9
-      ],
-      "stereotype": "策略",
-      "responsibility": "Key 的摘要：sha256 的十六进制。Key 是随机生成的长串，普通摘要就够，不用慢哈希——每个请求都要算一次，慢哈希会拖慢每一次调用。",
-      "methods": [
-        [
-          "+",
-          "of(secret) -> str"
-        ]
-      ]
-    },
-    {
       "id": "grant",
       "kind": "class",
       "name": "Grant",
+      "stereotype": "值对象",
       "at": [
-        1.3,
+        -0.3,
         2.05
       ],
-      "stereotype": "值对象",
-      "responsibility": "认过的一次调用方：哪个租户、哪把 Key（个人或客户端）、限额多少、调的哪个模型。后面的领域只认它，不再看 Key 原文；调用编排从它拿模型的能力、线路、价格交给别的领域。",
+      "responsibility": "一次合法调用的通行证：携带匹配到的 KeyEntry 与本租户的 ModelEntry（含能力、线路、单价快照），后续领域只认 Grant 不再接触明文密钥。",
       "attributes": [
         [
           "+",
@@ -128,49 +115,7 @@
         ],
         [
           "+",
-          "tenant_uuid（= key 的租户）"
-        ]
-      ]
-    },
-    {
-      "id": "limits",
-      "kind": "class",
-      "name": "KeyEntry",
-      "at": [
-        1.3,
-        3.6
-      ],
-      "stereotype": "值对象（配置快照）",
-      "responsibility": "一把 Key：租户、个人或客户端、状态、此刻能用的模型；限额都可以不设：月预算（元）、每分钟请求数、有效期。",
-      "attributes": [
-        [
-          "+",
-          "key_uuid · tenant_uuid · kind · status · models"
-        ],
-        [
-          "+",
-          "monthly_budget | None · rpm | None · expires_at | None"
-        ]
-      ]
-    },
-    {
-      "id": "mref",
-      "kind": "class",
-      "name": "ModelEntry",
-      "at": [
-        -0.6,
-        3.6
-      ],
-      "stereotype": "值对象（配置快照）",
-      "responsibility": "本租户里的一个模型。准入只看类型（对话入口只认对话模型）和是否启用；能力、线路、价格由调用编排交给别的领域。",
-      "attributes": [
-        [
-          "+",
-          "tenant_uuid · name · kind · enabled"
-        ],
-        [
-          "+",
-          "caps · routes · price"
+          "tenant_uuid: UUID"
         ]
       ]
     },
@@ -178,58 +123,85 @@
       "id": "quota",
       "kind": "class",
       "name": "QuotaGuard",
+      "stereotype": "领域服务",
       "at": [
-        3.2,
+        1.7,
         2.05
       ],
+      "responsibility": "配额总控：先核对自然月预算与 5h/24h 滑动窗口费用（任一超限均不扣 RPM），最后经单条 Lua 原子完成 INCR + EXPIRE 扣减 RPM；结算时同步累加月花费与（若已配置窗口限额的）5 分钟窗口桶；Redis 不可达时 Fail-Open 退回进程内最后观测值。",
+      "methods": [
+        [
+          "+",
+          "check_budget(key) · consume_rpm(key)"
+        ],
+        [
+          "+",
+          "charge(key, cost) · spent(key_uuid) -> Decimal"
+        ]
+      ]
+    },
+    {
+      "id": "win",
+      "kind": "class",
+      "name": "RollingWindowSpend",
       "stereotype": "领域服务",
-      "responsibility": "限额的判断和累加。每分钟请求数按一分钟的固定窗口计数；预算是软上限：调用前看「本月已花 < 预算」，结束后再加，同时放行的几个调用可能一起超出一点。网关状态不可用时不挡业务：每分钟请求数不限，预算按进程里最后一次读到的花费判断。",
+      "source": "目标设计（待实现于 gateway/admission.py + atlas_redis Lua）",
+      "at": [
+        3.85,
+        2.05
+      ],
+      "responsibility": "5h/24h 滑动窗口费用引擎：单 Hash modelgw:spend_win:{key} 存 5 分钟分桶（60 桶=5h、288 桶=24h，整型微元 HINCRBY，25h TTL + _init 哨兵）；Lua 一次往返完成清旧桶、双窗口求和与按最老桶滑出时间计算精确 Retry-After；Redis 故障时退回本进程桶快照。",
       "methods": [
         [
           "+",
-          "check(grant)"
+          "check(key, now) -> WindowVerdict(allowed, retry_after_s)"
         ],
         [
           "+",
-          "charge(grant, cost)"
+          "add(key, cost_micro, now) · seed_buckets(key, buckets)"
         ]
       ]
     },
     {
-      "id": "rate",
+      "id": "backfill",
       "kind": "class",
-      "name": "RateCounter",
+      "name": "SpendBackfill",
+      "stereotype": "策略",
+      "source": "月花费回填已实现；load_window_buckets 为目标设计",
       "at": [
-        2.6,
-        3.75
+        2.75,
+        3.95
       ],
-      "stereotype": "仓储",
-      "responsibility": "每分钟请求数的计数，按 Key 加分钟存在网关状态里，两分钟后自动过期；所有网关实例共用。",
+      "responsibility": "双轨账本懒重建器：Redis 缺失月花费键或滑动窗口 _init 哨兵（Redis 重启或首次开启窗口限额）时，按 Key 单飞查 gw_model_call 聚合本月 SUM(cost) 或近 24h 按 5 分钟分桶 SUM(cost)，分别以 SET NX / Lua HSETNX 安全写回 Redis。",
       "methods": [
         [
           "+",
-          "hit(key_uuid, minute) -> int"
+          "load_month_spend(tenant, key, month_start) -> Decimal"
+        ],
+        [
+          "+",
+          "load_window_buckets(tenant, key, since_24h) -> dict[int, int]"
         ]
       ]
     },
     {
-      "id": "spend",
+      "id": "key_vo",
       "kind": "class",
-      "name": "SpendLedger",
+      "name": "KeyEntry · ModelEntry",
+      "stereotype": "值对象",
       "at": [
-        3.9,
-        3.75
+        -0.3,
+        3.95
       ],
-      "stereotype": "仓储",
-      "responsibility": "Key 的本月花费，按 Key 加月份存在网关状态里，下个月自然换成新的计数。网关状态丢了，由管理平台从调用记录按月汇总重建。",
-      "methods": [
+      "responsibility": "来自配置快照的只读投影：KeyEntry 含有效模型集合与生效后的限额（monthly_budget、budget_5h、budget_24h、rpm、expires_at）；ModelEntry 含模型类型、启用标志、ModelCaps、Route 列表与 Price。",
+      "attributes": [
         [
           "+",
-          "spent(key_uuid, month) -> Decimal"
+          "KeyEntry: key_uuid · models · monthly_budget · budget_5h · budget_24h · rpm"
         ],
         [
           "+",
-          "add(key_uuid, month, cost)"
+          "ModelEntry: name · kind · enabled · caps · routes · price"
         ]
       ]
     },
@@ -237,39 +209,56 @@
       "id": "cfg",
       "kind": "class",
       "name": "ConfigSnapshot",
-      "at": [
-        5.4,
-        0.3
-      ],
+      "external": true,
+      "source": "配置快照领域（gateway/config.py）",
       "methods": [
         [
           "+",
-          "key_by_digest(digest) -> KeyEntry"
+          "key_by_digest(digest) · model(tenant, name)"
+        ]
+      ],
+      "at": [
+        5.8,
+        0.3
+      ]
+    },
+    {
+      "id": "db_ext",
+      "kind": "class",
+      "name": "GwModelCall（只读汇总）",
+      "external": true,
+      "source": "平台库（PostgreSQL 16，索引 ix_gw_model_call_key_time）",
+      "methods": [
+        [
+          "+",
+          "SUM(cost) WHERE key_uuid & started_at >= month_start"
         ],
         [
           "+",
-          "model(tenant, name) -> ModelEntry"
+          "GROUP BY floor(epoch(started_at)/300) WHERE started_at >= now-24h"
         ]
       ],
-      "external": true,
-      "source": "配置快照领域"
+      "at": [
+        5.8,
+        3.95
+      ]
     },
     {
       "id": "ge",
       "kind": "class",
-      "name": "GatewayError",
-      "at": [
-        -2.2,
-        0.3
-      ],
-      "attributes": [
+      "name": "key_digest · GatewayError",
+      "external": true,
+      "source": "共享基础层（shared.kernel）",
+      "methods": [
         [
           "+",
-          "category · status · message"
+          "401 AUTH_INVALID · 403 MODEL_FORBIDDEN · 429 KEY_LIMIT"
         ]
       ],
-      "external": true,
-      "source": "共享内核"
+      "at": [
+        -2.1,
+        0.3
+      ]
     }
   ],
   "relationships": [
@@ -277,113 +266,101 @@
       "from": "inv",
       "to": "adm",
       "type": "uses",
-      "description": "admit · settle"
+      "description": "两阶段准入与结算"
     },
     {
-      "from": "list",
+      "from": "list_api",
       "to": "adm",
       "type": "uses",
-      "description": "models_of"
-    },
-    {
-      "from": "adm",
-      "to": "digest",
-      "type": "uses",
-      "description": "算摘要"
+      "description": "查可用模型"
     },
     {
       "from": "adm",
       "to": "cfg",
       "type": "uses",
-      "description": "Key、模型"
-    },
-    {
-      "from": "adm",
-      "to": "grant",
-      "type": "uses",
-      "description": "creates"
-    },
-    {
-      "from": "adm",
-      "to": "quota",
-      "type": "uses",
-      "description": "check · charge"
+      "description": "查 Key 与租户模型"
     },
     {
       "from": "adm",
       "to": "ge",
       "type": "uses",
-      "description": "抛"
+      "description": "算摘要、抛标准错误"
+    },
+    {
+      "from": "adm",
+      "to": "grant",
+      "type": "uses",
+      "description": "构造"
     },
     {
       "from": "grant",
-      "to": "limits",
+      "to": "key_vo",
       "type": "association",
-      "description": "key"
+      "description": "聚合快照项"
     },
     {
-      "from": "grant",
-      "to": "mref",
-      "type": "association",
-      "description": "model"
+      "from": "adm",
+      "to": "quota",
+      "type": "uses",
+      "description": "check_budget · consume_rpm · charge"
     },
     {
       "from": "quota",
-      "to": "rate",
+      "to": "win",
       "type": "uses",
-      "description": "计数"
+      "description": "查/加 5h·24h 滑动窗口桶"
     },
     {
       "from": "quota",
-      "to": "spend",
+      "to": "backfill",
       "type": "uses",
-      "description": "读、加花费"
+      "description": "月花费缺失时单飞回填"
+    },
+    {
+      "from": "win",
+      "to": "backfill",
+      "type": "uses",
+      "description": "_init 缺失时单飞回填近 24h 桶"
+    },
+    {
+      "from": "backfill",
+      "to": "db_ext",
+      "type": "uses",
+      "description": "汇总当月与近 24h 5 分钟分桶"
     }
   ],
   "capabilities": [
     {
-      "name": "准入",
-      "entry": "admit(secret, model)",
-      "callers": "调用编排（每个请求）",
-      "description": "Key 存在、没停用、没过期 → 模型在 Key 里且启用、类型对 → 每分钟请求数 → 本月预算；返回 Grant"
+      "name": "零损耗静态准入",
+      "entry": "Admission.admit_static",
+      "callers": "调用编排（chat、count_tokens、embed、rerank）",
+      "description": "纯内存校验 Key、宽限期、模型权限与类型，不改动任何配额计数器"
     },
     {
-      "name": "累加花费",
-      "entry": "settle(grant, cost)",
-      "callers": "调用编排（调用结束后，按计量算出的费用）",
-      "description": "加到这把 Key 本月的花费上；失败只记日志，不影响已经给出的回答"
+      "name": "月预算 + 5h/24h 滑动窗口与原子 RPM 门禁",
+      "entry": "Admission.admit_quota -> QuotaGuard · RollingWindowSpend",
+      "callers": "调用编排（能力与格式检查通过后）",
+      "description": "依次核验自然月花费与 5h/24h 滚动窗口费用，超限时按最老 5 分钟桶滑出时刻返回精确 Retry-After 且不扣 RPM；全部通过再执行 RPM Lua 原子计数"
     },
     {
-      "name": "这把 Key 能用的模型",
-      "entry": "models_of(secret)",
-      "callers": "模型清单入口",
-      "description": "Key 里勾选的、已启用的模型；停用的不列"
+      "name": "双轨费用累加与 Redis 丢失自愈",
+      "entry": "Admission.settle · SpendBackfill",
+      "callers": "调用编排（结束后）、QuotaGuard / RollingWindowSpend（未命中时）",
+      "description": "异步累加月花费与当前 5 分钟桶（整型微元）；Redis 重启或首次开启窗口限额时自动从 gw_model_call 单飞重建当月账本与近 24h 桶"
     }
   ],
   "decisions": [
     {
-      "decision": "只认摘要，调用路径上不解密",
-      "reason": "个人 Key 只存摘要；客户端 Key 加密存是为了让应用取回原文，认 Key 时也只用摘要，网关内存里没有 Key 原文。"
+      "decision": "先判月预算、5h/24h 滑动窗口、能力与格式可达，最后才 INCR 每分钟请求数",
+      "reason": "避免已经被任一费用预算拦下或因请求参数不合法在网关本地 400 拒绝的调用白白烧干用户的 RPM 额度。"
     },
     {
-      "decision": "私有模型的授权不在网关判",
-      "reason": "授权在用户中心；授权收回时管理平台把模型从 Key 里去掉，网关只看「模型在不在 Key 里」，调用路径上不调用户中心。"
+      "decision": "5h/24h 滑动窗口采用「5 分钟分桶单 Redis Hash + 整型微元 + 单条 Lua」",
+      "reason": "单 Key 仅占 1 个 Redis 键、最多 289 个字段（< 8 KB），彻底消除整点固定窗口的双倍突发毛刺与 ZSET 成员随请求数无限膨胀的内存风险；金额用微元整数 HINCRBY 与 Numeric(18,6) 精确对齐零浮点误差，单次 Lua 即可同时校验 5h/24h 并反算出最早释放额度的精确 Retry-After。"
     },
     {
-      "decision": "Key 停用靠配置版本号生效",
-      "reason": "停用、删除、改模型都会让配置版本号加一，网关最多一秒后重新加载；不再另做一套撤销通知。"
-    },
-    {
-      "decision": "预算是软上限",
-      "reason": "要一分不超，得在调用前按最大输出预扣、结束后多退少补，并发时额度会被大量预占；月预算是防脚本跑飞的，超一点可以接受。"
-    },
-    {
-      "decision": "计数和花费放网关状态，调用记录是事实来源",
-      "reason": "几个网关实例要共用同一个计数；网关状态丢了，花费能从调用记录重建，计数丢了只是少拦几次。"
-    },
-    {
-      "decision": "网关状态不可用时放行",
-      "reason": "限额是保护，不是业务本身；为了它把所有调用挡掉代价更大。"
+      "decision": "仅对配了窗口预算的 Key 实时写桶，配合 _init 哨兵与单飞懒回填",
+      "reason": "未开窗口预算的 Key 零额外 Redis 写入开销；管理员随时为运行中的 Key 补加 5h/24h 预算或 Redis 重启后，因 _init 缺失首次请求即从 gw_model_call（走 ix_gw_model_call_key_time 索引与月分区裁剪）单飞精确回填近 24h 历史桶，且 0 花费也会写 _init='1' 防止缓存穿透。"
     }
   ]
 }

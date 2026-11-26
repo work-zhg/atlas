@@ -35,8 +35,8 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "动态图：模型平台 - 收回私有模型授权",
-  "description": "目标模型（参与者按组件图拆）。管理员收回研发部对 qwen-max 的授权：用户中心收回 → 授权事件 → 重算分配了它的用户 Key 的有效模型 → 推给 LiteLLM。授权、改可见性、重新登记、删除模型也走这条重算",
+  "title": "动态图：模型平台 - 收回私有模型授权并零窗口拦截",
+  "description": "目标模型（按业务功能组件交互）：管理员直接调用「授权」撤回研发部对私有模型 qwen-max 的 ACL → 联动「API Key」重算受影响个人 Key 的 effective_models → Pub/Sub 即时驱逐网关缓存。",
   "boundaries": [
     {
       "id": "mpsys",
@@ -59,38 +59,31 @@
       "color": "#1a849c"
     },
     {
-      "id": "mgmt",
-      "kind": "component",
-      "name": "管理接口",
-      "technology": "FastAPI Router",
-      "in": "srvB"
+      "id": "employee",
+      "kind": "person",
+      "name": "员工",
+      "tag": "员工",
+      "color": "#297e06"
     },
     {
       "id": "access",
       "kind": "component",
       "name": "授权",
-      "technology": "httpx",
+      "technology": "FastAPI Router + UCPermissions",
       "in": "srvB"
     },
     {
       "id": "keys",
       "kind": "component",
       "name": "API Key",
-      "technology": "SQLAlchemy 异步",
+      "technology": "FastAPI Router + KeyService",
       "in": "srvB"
     },
     {
       "id": "catalog",
       "kind": "component",
-      "name": "模型目录",
-      "technology": "SQLAlchemy 异步",
-      "in": "srvB"
-    },
-    {
-      "id": "gw",
-      "kind": "component",
-      "name": "LiteLLM 接入",
-      "technology": "httpx",
+      "name": "模型与线路",
+      "technology": "FastAPI Router + ModelRegistry",
       "in": "srvB"
     },
     {
@@ -102,10 +95,18 @@
       "in": "mpsys"
     },
     {
-      "id": "litellm",
+      "id": "redis",
       "kind": "container",
-      "name": "LiteLLM",
-      "technology": "LiteLLM 1.106（第三方）",
+      "name": "网关状态",
+      "technology": "Redis 7（键值 + Pub/Sub）",
+      "shape": "database",
+      "in": "mpsys"
+    },
+    {
+      "id": "gateway",
+      "kind": "container",
+      "name": "模型网关",
+      "technology": "Python / FastAPI（asyncio + httpx 流式）",
       "in": "mpsys"
     },
     {
@@ -118,109 +119,91 @@
   "messages": [
     {
       "from": "admin",
-      "to": "mgmt",
-      "description": "DELETE /api/v1/models/{id}/grants/{acl}",
-      "technology": "JSON/HTTPS（经 nginx，校验登录后写 X-Uid）",
-      "details": {
-        "note": "要有 model:manage（授权领域判，图中省略）。"
-      }
-    },
-    {
-      "from": "mgmt",
       "to": "access",
-      "description": "revoke(qwen-max, acl, operator)"
+      "description": "DELETE /api/v1/models/{model_uuid}/grants/{acl_id}",
+      "technology": "JSON/HTTPS"
     },
     {
       "from": "access",
       "to": "usercenter",
-      "description": "收回",
-      "technology": "JSON/HTTP（DELETE /open/v1/data-permissions/acl/{acl}?operator_id）",
-      "details": {
-        "note": "用户中心再按操作人校验一遍：他得是这条数据的 Owner（管理员靠「全部模型 · Owner」）。"
-      }
+      "description": "删除该条部门授权记录",
+      "technology": "JSON/HTTP（DELETE /open/v1/data-permissions/acl/{acl_id}）"
     },
     {
       "from": "access",
       "to": "access",
-      "description": "清掉本进程的授权缓存",
-      "details": {
-        "note": "别的副本等缓存过期，最多 30 秒——不过 Key 的有效模型下面马上就重算推给 LiteLLM，以 LiteLLM 为准。"
-      }
+      "description": "forget()：清空本进程 SubjectsCache 授权缓存"
     },
     {
       "from": "access",
       "to": "keys",
-      "description": "grants_changed(qwen-max)",
-      "details": {
-        "note": "AccessEvents，同一个事务里同步分发。"
-      }
+      "description": "refresh_for_model('qwen-max')"
     },
     {
       "from": "keys",
       "to": "db",
-      "description": "分配了 qwen-max 的 Key",
-      "technology": "SQL/TCP",
-      "details": {
-        "note": "JSON 包含查询。只有用户 Key 的有效模型会变（客户端 Key 不看授权），一律重算，没变就不推。"
-      }
+      "description": "查询勾选了 qwen-max 的个人 Key",
+      "technology": "SQL/TCP"
     },
     {
       "from": "keys",
       "to": "access",
-      "description": "usable(持有人, fresh) · person(持有人, fresh)",
-      "details": {
-        "note": "逐把用户 Key：人被停用就按空处理。"
-      }
+      "description": "usable(持有人, fresh=True) · subject(持有人, fresh=True)"
     },
     {
       "from": "access",
       "to": "usercenter",
-      "description": "这个人能用哪些私有模型",
-      "technology": "JSON/HTTP（GET /open/v1/data-permissions/accessible）",
-      "details": {
-        "note": "授给本人 ∪ 所在部门 ∪ 上级部门且含下级 ∪ 编码级授权，由用户中心算。"
-      }
+      "description": "穿透缓存实时拉取持有人最新可用私有模型集合",
+      "technology": "JSON/HTTP（GET /open/v1/data-permissions/accessible）"
     },
     {
       "from": "keys",
       "to": "catalog",
-      "description": "callable()"
-    },
-    {
-      "from": "keys",
-      "to": "keys",
-      "description": "有效模型 = 分配的 ∩ 可选范围",
-      "details": {
-        "note": "例：分配了 [qwen-max, deepseek-flash]，收回后有效的只剩 [deepseek-flash]。分配本身不改，页面把 qwen-max 标成「已失效」，下次保存时去掉；以后重新授权，自动恢复。"
-      }
-    },
-    {
-      "from": "keys",
-      "to": "gw",
-      "description": "update_key(key, [deepseek-flash])",
-      "details": {
-        "note": "算下来为空时不推空列表（空 = 全部模型），改成 block_key。"
-      }
-    },
-    {
-      "from": "gw",
-      "to": "litellm",
-      "description": "POST /key/update",
-      "technology": "JSON/HTTP（管理接口，master key）"
+      "description": "callable_names()：取当前启用模型"
     },
     {
       "from": "keys",
       "to": "db",
-      "description": "记同步状态，提交",
+      "description": "重算 effective_models（移除 qwen-max，保留原勾选 models）并提交",
       "technology": "SQL/TCP",
       "details": {
-        "note": "synced_models、synced_at，清掉 sync_error。LiteLLM 不可达：记 sync_error、不报错，对账重试。"
+        "note": "models 保留员工原勾选，控制台显示 qwen-max 权限已收回；日后若重新授权可自动恢复进 effective_models。"
       }
     },
     {
-      "from": "mgmt",
+      "from": "keys",
+      "to": "redis",
+      "description": "INCR modelgw:config:keys + PUBLISH 受影响 Key 的摘要列表",
+      "technology": "Redis INCR + Pub/Sub"
+    },
+    {
+      "from": "redis",
+      "to": "gateway",
+      "description": "推送 ConfigInvalidation(keys_changed=True, evict_digests=[…])",
+      "technology": "Redis Pub/Sub（atlas:modelgw:config:changed）"
+    },
+    {
+      "from": "access",
       "to": "admin",
-      "description": "200 收回了，改动了几把 Key",
+      "description": "200 返回授权已撤回及受影响 Key 数量",
+      "technology": "JSON/HTTPS"
+    },
+    {
+      "from": "employee",
+      "to": "gateway",
+      "description": "持原个人 Key 请求 model='qwen-max'",
+      "technology": "HTTPS"
+    },
+    {
+      "from": "gateway",
+      "to": "db",
+      "description": "缓存已驱逐，按摘要单行重读最新 effective_models",
+      "technology": "SQL/TCP"
+    },
+    {
+      "from": "gateway",
+      "to": "employee",
+      "description": "403 model_forbidden（且不扣减该 Key 的 RPM 配额）",
       "technology": "JSON/HTTPS"
     }
   ]

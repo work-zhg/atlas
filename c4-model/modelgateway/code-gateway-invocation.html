@@ -30,93 +30,56 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：模型平台 - 模型网关 - 调用编排",
-  "description": "目标领域模型，只画期望的样子。一次调用的流程、换线路、提交点、流式转发和错误归类；本领域没有自己的表，领域总览见 code-gateway-domains.html",
+  "description": "一次调用的数据面编排：两阶段准入顺序、提交点守卫、跨尝试首字总超时、提交后空闲保活与统一错误映射；领域总览见 code-gateway-domains.html。",
   "component": "调用编排",
-  "package": "atlas_modelgateway.gateway.invocation（目标模型）",
-  "overview": "调用编排是网关的数据面流程。对话入口把原样的请求交进来，它先请格式领域读出共同信息（模型名、会话标识、意图、有没有图片和工具），再找准入认 Key、查限额，找能力与参数看模型做不做得到；然后交给 AttemptLoop：选线路、按这条线路的上游模型算参数、发出、等第一段内容。提交点之前失败就换下一条线路，之后就由 StreamPump 读一段写一段，直到结束或出错。最后请计量算费用、写调用记录，再请准入把费用累加到本月花费。\n\n它不含规则：每一步「怎么判断」都在别的领域，这里只决定先后顺序、什么时候还能换线路、出错时怎么归类。",
+  "package": "atlas_modelgateway.gateway.invocation",
+  "overview": "调用编排只负责数据面步骤的先后顺序与流式生命周期，业务判断全部委托给各领域。\n\n对话请求进来后：1）FormatGateway 读出共同信息 RequestSummary；2）Admission.admit_static 认 Key 与模型启用态；3）CapabilityGate.check 校验模型承诺能力，FormatGateway.routes_for 过滤出协议可达（且兼容二进制 PDF 等特殊块）的线路；4）确认本地完全可服务后，Admission.admit_quota 校验月度预算与 5h/24h 滑动窗口费用软上限，并经 Redis Lua 脚本原子扣减 RPM；5）进入选路重试循环，受单次首字超时与跨尝试总首字超时（total_first_content_s）双重约束：提交点前失败自动上报冷却并切换下一条线路；第一段内容到达即提交放行，后续透传期间若遇超大工具参数慢生成，按 keepalive_s 周期发送 SSE 注释保活防反代断连；结束后交由 Metering 计费入队并由 Admission 异步累加当月花费与当前 5 分钟窗口桶。",
   "elements": [
     {
       "id": "entry",
       "kind": "class",
       "name": "对话入口 · 向量与重排入口",
-      "at": [
-        1.2,
-        -1.25
-      ],
+      "external": true,
+      "source": "入口组件（gateway/app.py）",
       "methods": [
         [
           "+",
-          "按入口格式解析请求、写回每一段"
-        ],
-        [
-          "+",
-          "把 GatewayError 按入口格式写成错误体"
+          "校验租户启用态 · 调用 chat / count_tokens / embed / rerank"
         ]
       ],
-      "external": true,
-      "source": "入口组件"
+      "at": [
+        2.25,
+        -1.25
+      ]
     },
     {
       "id": "inv",
       "kind": "class",
       "name": "Invocation",
+      "stereotype": "应用服务",
       "at": [
-        1.2,
+        2.25,
         0.3
       ],
-      "stereotype": "应用服务",
-      "responsibility": "一次调用的编排，自己不含规则：请格式领域读出共同信息 → 准入 → 查能力 → 交给 AttemptLoop 选线路、算参数、发出、等提交 → 提交后交给 StreamPump 转发 → 计量算费用、写记录 → 准入累加花费。任何一步的失败都交给 ErrorMapper 变成 GatewayError。一个调用不开数据库事务。",
-      "methods": [
-        [
-          "+",
-          "chat(entry, secret, body, *, stream) -> Answer"
-        ],
-        [
-          "+",
-          "embed(secret, body) -> bytes"
-        ],
-        [
-          "+",
-          "rerank(secret, body) -> bytes"
-        ]
-      ]
-    },
-    {
-      "id": "call",
-      "kind": "class",
-      "name": "Call",
-      "at": [
-        1.75,
-        2.15
-      ],
-      "stereotype": "实体",
-      "responsibility": "一次调用从进门到结束的全部事实：谁调的、读出的共同信息、每次尝试、是否已提交、用量。提交之后不再换线路；计量按它算费用、写调用记录。",
+      "responsibility": "数据面编排入口：串联静态准入、能力/格式前置检查、配额扣减、流式或非流式尝试循环，以及最终的费用结算与异步调用记录落盘。",
       "attributes": [
         [
           "+",
-          "call_uuid · entry · grant · summary"
-        ],
-        [
-          "+",
-          "attempts: list[Attempt]"
-        ],
-        [
-          "+",
-          "committed: bool · usage · started_at"
+          "first_content_s · total_first_content_s · idle_s · keepalive_s"
         ]
       ],
       "methods": [
         [
           "+",
-          "attempt(route) -> Attempt"
+          "chat(entry, secret, headers, body, *, universal=False) -> Answer"
         ],
         [
           "+",
-          "commit()"
+          "count_tokens(entry, secret, headers, body) -> dict"
         ],
         [
           "+",
-          "finish(usage | error)"
+          "embed(secret, body) · rerank(secret, body) -> Answer"
         ]
       ]
     },
@@ -124,81 +87,62 @@
       "id": "att",
       "kind": "class",
       "name": "Attempt",
-      "at": [
-        1.75,
-        3.9
-      ],
       "stereotype": "值对象",
-      "responsibility": "一次尝试：哪条线路、什么时候开始、第一段内容用了多久、结果（成功或上游失败）。",
+      "at": [
+        0.0,
+        2.25
+      ],
+      "responsibility": "单次线路尝试轨迹：记录命中的线路与账号 UUID、上游模型名、直通或转换模式、首字耗时、总耗时及最终结果（ok 或失败分类）。",
       "attributes": [
         [
           "+",
-          "route · started_at · first_content_ms"
+          "route_uuid · account_uuid · upstream_model · mode"
         ],
         [
           "+",
-          "outcome: ok | UpstreamFailure"
-        ]
-      ]
-    },
-    {
-      "id": "loop",
-      "kind": "class",
-      "name": "AttemptLoop",
-      "at": [
-        -0.1,
-        2.15
-      ],
-      "stereotype": "领域服务",
-      "responsibility": "换线路的循环：选线路 → 按这条线路算参数 → 发出 → 等提交。提交前失败就报给线路，按它的判断换下一条（试过的不再选）或者放弃；全部冷却时线路会给出冷却最早结束的那条。",
-      "methods": [
-        [
-          "+",
-          "run(call, body) -> UpstreamCall"
+          "first_content_ms · duration_ms · outcome · status_code"
         ]
       ]
     },
     {
       "id": "gate",
       "kind": "class",
-      "name": "CommitGate",
+      "name": "StreamCommitPump",
+      "stereotype": "领域服务",
       "at": [
-        -0.1,
-        3.9
+        1.55,
+        2.25
       ],
-      "stereotype": "策略",
-      "responsibility": "提交点：压住上游开头不含内容的段（消息开始、ping），等第一段内容（文字、思考或工具调用）到了才放行，连同压着的一起交出去；在这之前读到错误就算提交前失败。压着的时候定期给调用方发保活注释（接收方会忽略），防止中间的代理断开连接。",
+      "responsibility": "流式提交点守卫与背压透传（Invocation._stream）：提交前暂存 message_start 等非内容帧并按周期发 `: keepalive`；受单次与跨尝试总首字截止时间保护；收到首段正文/思考/工具调用即确立提交点，提交后空闲等待时继续发送 `: keepalive` 保活直至结束或中断。",
       "methods": [
         [
           "+",
-          "first_content(upstream) -> list[Frame]"
+          "_wait_before_commit(call, deadline) -> list[bytes]"
         ],
         [
           "+",
-          "keepalive() -> bytes"
+          "_pump_after_commit(call, idle_s, keepalive_s) -> AsyncIterator[bytes]"
         ]
       ]
     },
     {
-      "id": "pump",
+      "id": "ans",
       "kind": "class",
-      "name": "StreamPump",
+      "name": "Answer",
+      "stereotype": "值对象",
       "at": [
-        3.35,
-        2.15
+        3.1,
+        2.25
       ],
-      "stereotype": "领域服务",
-      "responsibility": "提交之后读一段、写一段，中间不放队列：调用方读得慢写就等，读上游也跟着慢，压力传回供应商。调用方断开（写失败或断开通知）立刻关上游，不再计费。超时只有两种：等第一段内容（按账号设）和两段之间，不限总时长。提交后出错只能在流里报错结束，标记中途中断。",
+      "responsibility": "编排交给 HTTP 入口层的统一返回：非流式直接携带完整 JSON 字节与状态码，流式携带已过提交点（或转成错误体）的 SSE 字节异步迭代器及附加响应头（如 Retry-After、x-should-retry）。",
       "attributes": [
         [
           "+",
-          "first_content_s（按账号）· idle_s"
-        ]
-      ],
-      "methods": [
+          "status: int · media_type: str · headers: dict[str, str]"
+        ],
         [
           "+",
-          "pump(call, upstream, write)"
+          "body: bytes | None · stream: AsyncIterator[bytes] | None"
         ]
       ]
     },
@@ -206,16 +150,16 @@
       "id": "err",
       "kind": "class",
       "name": "ErrorMapper",
-      "at": [
-        3.35,
-        3.9
-      ],
       "stereotype": "策略",
-      "responsibility": "把各种失败归成统一的类别和给用户的话：准入、能力的拒绝原样带过来；所有线路都被限流是「模型繁忙」429，账号都异常或停用是「没有可用线路」503，5xx 换完是「上游出错」；供应商的 402 不原样转出。网关已经换过线路的失败都带「不要再重试」标记，官方 SDK 认它，不会再放大请求。",
+      "at": [
+        4.65,
+        2.25
+      ],
+      "responsibility": "将耗尽所有可用线路后的失败集合映射为标准 GatewayError：全冷却或半开探测受阻归为 429 MODEL_BUSY（附精确 Retry-After 秒数），账号全异常归为 503 NO_ROUTE，并打上 no_retry 禁止客户端 SDK 二次风暴重试。",
       "methods": [
         [
           "+",
-          "from_failures(attempts) -> GatewayError"
+          "from_attempts(attempts, retry_after_s?) -> GatewayError"
         ],
         [
           "+",
@@ -227,123 +171,86 @@
       "id": "fmt",
       "kind": "class",
       "name": "FormatGateway",
-      "at": [
-        -1.65,
-        0.3
-      ],
+      "external": true,
+      "source": "格式领域（gateway/format）",
       "methods": [
         [
           "+",
-          "read(entry, body) -> RequestSummary"
-        ],
-        [
-          "+",
-          "open(entry, body, route, plan)"
+          "read · routes_for · open · error_body"
         ]
       ],
-      "external": true,
-      "source": "格式领域"
+      "at": [
+        -1.95,
+        -0.4
+      ]
     },
     {
       "id": "cap",
       "kind": "class",
       "name": "CapabilityGate",
-      "at": [
-        -1.65,
-        1.35
-      ],
+      "external": true,
+      "source": "能力与参数领域（gateway/capability.py）",
       "methods": [
         [
           "+",
-          "check(model, summary)"
-        ],
-        [
-          "+",
-          "plan(model, route, summary)"
+          "check(model, caps, summary) · plan(caps, route, summary)"
         ]
       ],
-      "external": true,
-      "source": "能力与参数领域"
+      "at": [
+        -1.95,
+        0.55
+      ]
     },
     {
       "id": "route",
       "kind": "class",
       "name": "RouteSelector",
-      "at": [
-        -1.65,
-        2.5
-      ],
+      "external": true,
+      "source": "线路领域（gateway/routing.py）",
       "methods": [
         [
           "+",
-          "pick(model, session, *, tried)"
-        ],
-        [
-          "+",
-          "report(route, failure) -> Verdict"
+          "pick(..., sticky) · report(route, failure) · min_cooling_remaining"
         ]
       ],
-      "external": true,
-      "source": "线路领域"
+      "at": [
+        -1.95,
+        1.5
+      ]
     },
     {
       "id": "adm",
       "kind": "class",
       "name": "Admission",
-      "at": [
-        4.3,
-        0.3
-      ],
+      "external": true,
+      "source": "准入领域（gateway/admission.py）",
       "methods": [
         [
           "+",
-          "admit(secret, model) -> Grant"
-        ],
-        [
-          "+",
-          "settle(grant, cost)"
+          "admit_static · admit_quota · settle"
         ]
       ],
-      "external": true,
-      "source": "准入领域"
+      "at": [
+        6.45,
+        0.0
+      ]
     },
     {
       "id": "met",
       "kind": "class",
       "name": "Metering",
-      "at": [
-        4.3,
-        1.2
-      ],
+      "external": true,
+      "source": "计量领域（gateway/metering.py）",
       "methods": [
         [
           "+",
-          "settle(call) -> Cost"
-        ],
-        [
-          "+",
-          "record(call, cost)"
+          "settle · record"
         ]
       ],
-      "external": true,
-      "source": "计量领域"
-    },
-    {
-      "id": "ge",
-      "kind": "class",
-      "name": "GatewayError",
       "at": [
-        3.35,
-        5.3
-      ],
-      "attributes": [
-        [
-          "+",
-          "category · status · message · no_retry"
-        ]
-      ],
-      "external": true,
-      "source": "共享内核"
+        6.45,
+        1.15
+      ]
     }
   ],
   "relationships": [
@@ -351,140 +258,96 @@
       "from": "entry",
       "to": "inv",
       "type": "uses",
-      "description": "chat · embed · rerank"
+      "description": "转发请求并写回响应"
     },
     {
       "from": "inv",
-      "to": "fmt",
+      "to": "ans",
       "type": "uses",
-      "description": "读共同信息"
+      "description": "返回"
     },
     {
       "from": "inv",
-      "to": "cap",
+      "to": "att",
       "type": "uses",
-      "description": "check"
+      "description": "记录每次尝试"
     },
     {
       "from": "inv",
-      "to": "adm",
+      "to": "gate",
       "type": "uses",
-      "description": "准入；结束后 settle"
-    },
-    {
-      "from": "inv",
-      "to": "met",
-      "type": "uses",
-      "description": "算费用、写记录"
-    },
-    {
-      "from": "inv",
-      "to": "call",
-      "type": "uses",
-      "description": "creates"
-    },
-    {
-      "from": "inv",
-      "to": "loop",
-      "type": "uses",
-      "description": "跑尝试"
-    },
-    {
-      "from": "inv",
-      "to": "pump",
-      "type": "uses",
-      "description": "提交后转发"
+      "description": "流式守卫与透传"
     },
     {
       "from": "inv",
       "to": "err",
       "type": "uses",
-      "description": "归类失败",
-      "labelAt": 0.62
+      "description": "归类终端错误"
     },
     {
-      "from": "loop",
-      "to": "route",
-      "type": "uses",
-      "description": "pick · report"
-    },
-    {
-      "from": "loop",
-      "to": "cap",
-      "type": "uses",
-      "description": "plan"
-    },
-    {
-      "from": "loop",
+      "from": "inv",
       "to": "fmt",
       "type": "uses",
-      "description": "open",
-      "labelAt": 0.7
+      "description": "读摘要、筛线路、打开连接"
     },
     {
-      "from": "loop",
-      "to": "gate",
+      "from": "inv",
+      "to": "cap",
       "type": "uses",
-      "description": "等第一段内容"
+      "description": "前置检查与参数规划"
     },
     {
-      "from": "loop",
-      "to": "call",
+      "from": "inv",
+      "to": "route",
       "type": "uses",
-      "description": "attempt · commit"
+      "description": "选路与故障上报",
+      "labelAt": 0.6
     },
     {
-      "from": "call",
-      "to": "att",
-      "type": "composition",
-      "description": "attempts",
-      "multiplicity": "0..*"
-    },
-    {
-      "from": "err",
-      "to": "ge",
+      "from": "inv",
+      "to": "adm",
       "type": "uses",
-      "description": "creates"
+      "description": "两阶段准入与花费累加"
+    },
+    {
+      "from": "inv",
+      "to": "met",
+      "type": "uses",
+      "description": "算费用并异步记账"
     }
   ],
   "capabilities": [
     {
-      "name": "一次对话调用",
-      "entry": "chat(entry, secret, body, *, stream)",
+      "name": "流式与非流式对话编排",
+      "entry": "Invocation.chat",
       "callers": "对话入口",
-      "description": "流式时返回一个异步迭代器，入口逐段写回；非流式时等全部结束再返回。失败抛 GatewayError，由入口按入口格式写成错误体"
+      "description": "保证提交前可无感跨账号/跨格式切换，提交后背压直传且慢工具调用不断连"
     },
     {
-      "name": "向量、重排",
-      "entry": "embed(secret, body) · rerank(secret, body)",
+      "name": "零配额损耗 Token 计数",
+      "entry": "Invocation.count_tokens",
+      "callers": "对话入口（count_tokens）",
+      "description": "只做静态准入校验，不扣对话 RPM，兼容 Claude Code 等高频预估调用"
+    },
+    {
+      "name": "向量与重排编排",
+      "entry": "Invocation.embed / rerank",
       "callers": "向量与重排入口",
-      "description": "同一套准入、选线路、换线路、记用量；没有流式，也就没有提交点"
+      "description": "sticky=False 按权重随机均衡流量，失败自动切换备用线路并记账"
     }
   ],
   "decisions": [
     {
-      "decision": "只编排，不含规则",
-      "reason": "谁能调、模型能做什么、走哪个账号、长什么样、花多少，各在一个领域里；这里只决定先后顺序，改规则不用动它。"
+      "decision": "单次首字超时 + 跨尝试总首字超时（total_first_content_s）双保险",
+      "reason": "若某个模型挂了 4 条线路且依次首字超时，没有总截止时间会让客户端挂起数分钟；总超时到期立即终止后续重试。"
     },
     {
-      "decision": "提交点是第一段内容，不是上游返回 200",
-      "reason": "有的供应商先回 200，紧接着在流里发「过载」错误；压到第一段内容才提交，这类错误照样能换线路，调用方看不到。"
+      "decision": "提交点之后在空闲等待窗口继续发 `: keepalive` 注释帧",
+      "reason": "跨格式流式转换在拼接几十 KB 的工具参数 JSON 时不会向下游吐内容帧，持续发送 SSE 注释可防止 Nginx 或云 LB 空闲超时断流。"
     },
     {
-      "decision": "提交前先选线路再算参数",
-      "reason": "参数怎么写取决于线路上的上游模型（同一个模型的两条线路可能是不同供应商），所以 plan 放在每次尝试里，不在进门时算一次。"
-    },
-    {
-      "decision": "读一段写一段，不经中继",
-      "reason": "一个回答只有一个调用方，调用方断了就该停，两种格式也都不支持续传；不放队列，背压一路传回供应商，内存里最多只压着提交点前的几段。能恢复的能力放在调用方（比如 Atlas 重跑这一轮）。"
-    },
-    {
-      "decision": "不限总时长，只限等第一段内容和两段之间",
-      "reason": "长上下文、冷启动的模型可能要几分钟才出第一个字，按账号设；只要还在持续输出就一直等。"
-    },
-    {
-      "decision": "重试只在网关做一层",
-      "reason": "网关换过线路还失败时告诉 SDK 不要再重试；否则 SDK 再试 3 次、每次网关又换 3 条线路，一次失败会被放大成十几次上游请求。"
+      "decision": "网关重试耗尽后返回 x-should-retry: false",
+      "reason": "网关已经在多条线路间做完故障切换，通知 Anthropic / OpenAI 官方 SDK 不要再做指数退避重试，消除级联重试风暴。"
     }
   ]
 }

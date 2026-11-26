@@ -30,71 +30,46 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：模型平台 - 模型网关 - 计量",
-  "description": "目标领域模型，只画期望的样子。用量、费用、估算、调用记录；领域总览见 code-gateway-domains.html",
+  "description": "四项 token 计费（支持独立缓存写入单价）、中断流估算、毒丸隔离的异步批量写队列与按月分区表 gw_model_call；领域总览见 code-gateway-domains.html。",
   "component": "计量",
-  "package": "atlas_modelgateway.gateway.metering（目标模型）",
-  "overview": "计量在调用结束后做两件事：算这次花了多少钱，记一条调用记录。用量来自供应商的回答，已经由格式领域统一成四项（输入、缓存写入、缓存命中、输出）；最后一段没收到时估算并标出来。价格挂在模型上，记录里存下当时的单价。\n\n算出的费用交回调用编排，由准入累加到 Key 的本月花费。调用记录先放进内存队列，后台批量写库，不让调用方多等。",
+  "package": "atlas_modelgateway.gateway.metering",
+  "overview": "计量领域在每次调用结束（无论成功、报错或客户端中途断流）后计算费用并异步持久化调用记录。\n\n四项用量（未命中缓存输入、缓存写入、缓存命中、输出）以上游返回为准；若流式回答在收到尾帧前中断，UsageEstimator 保留已拿到的精确输入数并按已吐出字符折算输出，打上 estimated=True。CostCalculator 支持模型可选配置的独立 cache_write 单价（未配时默认按 input 单价计费）。CallRecord 先放入有界内存队列 RecordQueue：入队与写库前递归剥离非法 NUL 字节，若批量 INSERT 遇单条脏数据错误（DataError / IntegrityError）自动降级逐条隔离毒丸行，瞬时连接错误则整批回塞队列重试，绝不因一条异常记录拖垮整批账单。",
   "elements": [
     {
       "id": "inv",
       "kind": "class",
       "name": "Invocation",
-      "at": [
-        1.3,
-        -1.2
-      ],
+      "external": true,
+      "source": "调用编排领域（gateway/invocation.py）",
       "methods": [
         [
           "+",
-          "settle(usage, price) · record(CallRecord)"
-        ],
-        [
-          "+",
-          "单价来自准入的 Grant"
+          "settle(...) -> (Usage, Decimal) · record(CallRecord)"
         ]
       ],
-      "external": true,
-      "source": "调用编排领域"
+      "at": [
+        1.6,
+        -1.2
+      ]
     },
     {
       "id": "met",
       "kind": "class",
       "name": "Metering",
+      "stereotype": "应用服务",
       "at": [
-        1.3,
+        1.6,
         0.3
       ],
-      "stereotype": "应用服务",
-      "responsibility": "调用结束后：拿到四项用量（最后一段没收到就估算），按调用编排给的单价算出费用，返回给调用编排去累加本月花费；调用编排把这次调用写成一条调用记录交进来，放进队列。不在调用路径上等数据库。",
+      "responsibility": "计量门面：用量完整时直接计费，缺失时先调 UsageEstimator 估算再调 CostCalculator 算钱，将费用交回调用编排去累加配额，并把 CallRecord 推入异步队列。",
       "methods": [
         [
           "+",
-          "settle(usage, price) -> Decimal"
+          "settle(usage, price, *, est_in, out_chars) -> (Usage, Decimal)"
         ],
         [
           "+",
-          "record(record)"
-        ]
-      ]
-    },
-    {
-      "id": "price",
-      "kind": "class",
-      "name": "Price",
-      "at": [
-        -0.6,
-        1.9
-      ],
-      "stereotype": "值对象（共享内核）",
-      "responsibility": "这次调用时模型的单价（元 / 百万 token）：输入、缓存命中、输出；缓存写入按输入价。不计费的模型（比如自部署）全为 0。跟着调用记录存下来，以后改价不影响已经记下的费用。",
-      "attributes": [
-        [
-          "+",
-          "input · cache_hit · output"
-        ],
-        [
-          "+",
-          "billable: bool"
+          "record(rec: CallRecord)"
         ]
       ]
     },
@@ -102,16 +77,16 @@
       "id": "calc",
       "kind": "class",
       "name": "CostCalculator",
-      "at": [
-        1.3,
-        1.9
-      ],
       "stereotype": "策略",
-      "responsibility": "费用 =（输入 + 缓存写入）× 输入价 + 缓存命中 × 命中价 + 输出 × 输出价，再除以 100 万，保留 6 位小数。用量以供应商回答里给的数字为准，网关不自己数 token。",
+      "at": [
+        -0.3,
+        2.0
+      ],
+      "responsibility": "精确十进制计费：缓存写入按 price.effective_cache_write（配了独立价用独立价，否则用 input 价）计算，总费用保留 6 位小数。",
       "methods": [
         [
           "+",
-          "cost(usage, price) -> Decimal"
+          "cost(usage: Usage, price: Price) -> Decimal"
         ]
       ]
     },
@@ -119,16 +94,16 @@
       "id": "est",
       "kind": "class",
       "name": "UsageEstimator",
-      "at": [
-        3.2,
-        1.9
-      ],
       "stereotype": "策略",
-      "responsibility": "最后一段（带用量的那段）没收到时估算：Anthropic 格式的上游一开头就给了输入用量，只估输出；OpenAI 格式的上游输入、输出都估。按已收到的字符数折算，记录标「估算」。",
+      "at": [
+        1.6,
+        2.0
+      ],
+      "responsibility": "中断兜底估算器：若上游开头已给输入 token（如 Anthropic message_start）则保留精确输入、仅按已输出字符数折算输出；否则输入输出一并估算并标记 estimated=True。",
       "methods": [
         [
           "+",
-          "estimate(call) -> Usage"
+          "estimate(partial_usage, *, est_input, out_chars) -> Usage"
         ]
       ]
     },
@@ -136,28 +111,28 @@
       "id": "rec",
       "kind": "class",
       "name": "CallRecord",
-      "at": [
-        -0.6,
-        3.55
-      ],
       "stereotype": "实体",
-      "responsibility": "一次调用的事实，只追加、不修改：谁调的、什么模型、哪个会话、走过哪些线路和每次的结果、最终状态和错误类别、第一段内容和总耗时、四项用量、单价、费用、是否估算、去掉了哪些不认识的字段。不存请求和回答的内容。",
+      "at": [
+        -0.3,
+        3.7
+      ],
+      "responsibility": "单次调用的不可变账单事实（不含提示词和回答正文）：记录租户、Key、模型、入口格式、各次尝试详情、耗时、四项 token、单价快照、费用与参数整理说明 notes。",
       "attributes": [
         [
           "+",
-          "call_uuid · tenant_uuid · key_uuid · model"
+          "call_uuid · started_at · tenant_uuid · key_uuid · key_kind"
         ],
         [
           "+",
-          "session_key · attempts · status · error_category"
+          "model · session_key · entry_format · status · error_category"
         ],
         [
           "+",
-          "first_content_ms · duration_ms"
+          "attempts · first_content_ms · duration_ms"
         ],
         [
           "+",
-          "usage · price · cost · estimated"
+          "usage: Usage · price: Price · cost: Decimal · notes: dict"
         ]
       ]
     },
@@ -165,60 +140,56 @@
       "id": "queue",
       "kind": "class",
       "name": "RecordQueue",
-      "at": [
-        3.2,
-        3.55
-      ],
       "stereotype": "领域服务",
-      "responsibility": "内存里的有界队列，后台任务每秒或攒满 200 条批量写一次；写不进去就留在队列里重试，攒满了丢最旧的并记下丢了多少（指标）；进程退出前尽量写完。",
+      "at": [
+        3.5,
+        2.0
+      ],
+      "responsibility": "有界异步批量写库队列：清洗字符串/JSON 中的 \\x00 字节；每秒或攒满 200 条批量 INSERT gw_model_call；遇单行数据异常逐条重试隔离毒丸行，遇数据库瞬断放回队首等待重连，进程停机前优雅刷空。",
       "methods": [
         [
           "+",
-          "put(record)"
+          "put(record) · start() · stop()"
         ],
         [
           "+",
-          "flush()"
+          "flush() -> int"
         ]
       ]
     },
     {
-      "id": "repo",
+      "id": "pk",
       "kind": "class",
-      "name": "CallRecordRepository",
-      "at": [
-        3.2,
-        5.0
-      ],
-      "stereotype": "仓储",
-      "responsibility": "写 model_call 表，只追加；按月分区。",
+      "name": "PartitionKeeper",
+      "external": true,
+      "source": "共享基础层（shared.partitions）",
       "methods": [
         [
           "+",
-          "insert_many(records)"
+          "ensure_for(timestamps)：自动补建目标月份分区"
         ]
+      ],
+      "at": [
+        5.55,
+        2.0
       ]
     },
     {
-      "id": "usage",
+      "id": "price_vo",
       "kind": "class",
-      "name": "Usage",
-      "at": [
-        -2.2,
-        0.3
-      ],
+      "name": "Usage · Price",
+      "external": true,
+      "source": "共享基础层（shared.kernel）",
       "attributes": [
         [
           "+",
-          "input · cache_write · cache_hit · output"
-        ],
-        [
-          "+",
-          "estimated"
+          "Price: input · cache_write: Decimal | None · cache_hit · output"
         ]
       ],
-      "external": true,
-      "source": "共享内核"
+      "at": [
+        -2.0,
+        0.3
+      ]
     }
   ],
   "relationships": [
@@ -238,92 +209,63 @@
       "from": "met",
       "to": "est",
       "type": "uses",
-      "description": "用量缺了"
+      "description": "尾帧缺失时估算"
     },
     {
       "from": "met",
       "to": "queue",
       "type": "uses",
-      "description": "放进队列"
+      "description": "异步入队"
     },
     {
       "from": "met",
-      "to": "usage",
+      "to": "price_vo",
       "type": "uses",
-      "description": "读"
-    },
-    {
-      "from": "calc",
-      "to": "price",
-      "type": "uses",
-      "description": "按"
-    },
-    {
-      "from": "rec",
-      "to": "price",
-      "type": "association",
-      "description": "price",
-      "labelAt": 0.5
-    },
-    {
-      "from": "queue",
-      "to": "repo",
-      "type": "uses",
-      "description": "批量写"
+      "description": "读用量与单价"
     },
     {
       "from": "queue",
       "to": "rec",
       "type": "aggregation",
-      "description": "攒着",
+      "description": "缓冲待写记录",
       "multiplicity": "0..*"
+    },
+    {
+      "from": "queue",
+      "to": "pk",
+      "type": "uses",
+      "description": "写入前确保月分区就绪"
     }
   ],
   "capabilities": [
     {
-      "name": "算费用",
-      "entry": "settle(usage, price)",
-      "callers": "调用编排（调用结束后）",
-      "description": "四项用量 × 当时的单价；用量缺了先估算。返回的费用由调用编排交给准入累加"
+      "name": "精确计费与中断估算",
+      "entry": "Metering.settle",
+      "callers": "调用编排",
+      "description": "兼容三档或四档单价（含独立缓存写入价），客户端提前断连也不漏记成本"
     },
     {
-      "name": "写调用记录",
-      "entry": "record(record)",
-      "callers": "调用编排",
-      "description": "放进内存队列就返回，后台批量写库；成功、失败、中途中断的调用都记"
+      "name": "高可靠异步批量落盘",
+      "entry": "RecordQueue.put / flush",
+      "callers": "Metering、网关生命周期钩子",
+      "description": "清洗非法字符、单行毒丸隔离、瞬断重排队与停机排空，零阻塞调用热路径"
     }
   ],
   "decisions": [
     {
-      "decision": "以供应商给的用量为准",
-      "reason": "自己数 token 和供应商对不上账，各家分词也不一样；只有最后一段没收到时才估，并且标出来。"
+      "decision": "Price 支持可选 cache_write，默认回退 input 单价",
+      "reason": "DeepSeek 等无缓存写入附加费的模型只需填三项；Claude 等缓存写入按输入 1.25 倍计费的模型可配置独立 cache_write，避免平台倒贴差价。"
     },
     {
-      "decision": "价格挂模型，记录存单价",
-      "reason": "对内统一价，走哪条线路都按它算；改价只影响以后的调用，已记下的费用不跟着变。"
-    },
-    {
-      "decision": "缓存写入单独记数，按输入价算钱",
-      "reason": "数量单独记，以后要按供应商的真实价格对账也有依据；对内价格只有三档，保持简单。"
-    },
-    {
-      "decision": "记录异步批量写",
-      "reason": "写库不能让调用方多等；丢记录只影响记录本身（会记下丢了多少），不影响已经给出的回答。"
-    },
-    {
-      "decision": "不存请求和回答的内容",
-      "reason": "内容里可能有敏感信息，截图也很大；排查靠线路、状态、耗时这些数字和 Trace。"
-    },
-    {
-      "decision": "按月分区，带租户",
-      "reason": "调用记录量大、按时间查；租户管理员只看本租户，运营中心只看各租户的汇总数字。旧分区按保留期整块删除。"
+      "decision": "批量写失败时区分「数据毒丸」与「连接瞬断」",
+      "reason": "PostgreSQL 拒绝含 \\x00 或超长字段的单行时若整批重塞会导致队列永久卡死并撑爆丢单；自动清洗 NUL 并在 DataError 时逐行隔离坏行，其余 199 条正常入库。"
     }
   ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；xxx_uuid 是逻辑主键（Python 侧生成 uuid7），接口和表间引用都用它。表间不建外键约束，连线是逻辑引用。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。每张表都带 tenant_uuid，按多租户方案由数据访问层自动加过滤条件。model_call 按 started_at 按月分区，保留期由系统参数定，到期整块删除分区。",
+  "schemaNote": "gw_model_call 按 started_at 做 PostgreSQL 原生月度 RANGE 分区（如 gw_model_call_2026_11），主键为 (id, started_at)，唯一索引为 (call_uuid, started_at)。带 tenant_uuid 支持租户隔离过滤；key_uuid 逻辑关联 gw_api_key.uuid（删 Key 后历史账单保留）。",
   "tables": [
     {
-      "name": "model_call",
-      "description": "对应实体 CallRecord；只追加",
+      "name": "gw_model_call",
+      "description": "每次模型调用的计量与切换轨迹记录（对应实体 CallRecord），只追加、按月分区。",
       "at": [
         0,
         0
@@ -331,156 +273,148 @@
       "columns": [
         {
           "name": "id",
-          "type": "bigint",
+          "type": "BigInteger",
           "key": "PK",
           "default": "自增",
-          "description": "库内主键（和 started_at 一起作分区主键）"
+          "description": "库内自增（与 started_at 组成复合分区主键）"
+        },
+        {
+          "name": "started_at",
+          "type": "UTCDateTime",
+          "key": "PK",
+          "description": "请求开始时间（月度 RANGE 分区键）"
         },
         {
           "name": "call_uuid",
-          "type": "uuid",
+          "type": "UUIDType",
           "key": "UK",
-          "description": "一次调用的逻辑主键，也写进 Trace"
+          "description": "单次调用逻辑标识（与 Trace 关联）"
         },
         {
           "name": "tenant_uuid",
-          "type": "uuid",
-          "description": "租户"
+          "type": "UUIDType",
+          "description": "所属租户"
         },
         {
           "name": "key_uuid",
-          "type": "uuid",
-          "description": "哪把 Key（管理平台的 Key 表）"
+          "type": "UUIDType",
+          "nullable": true,
+          "description": "调用使用的 API Key UUID"
         },
         {
           "name": "key_kind",
-          "type": "varchar(16)",
-          "description": "personal / client"
+          "type": "String(16)",
+          "description": "user / client"
         },
         {
           "name": "model",
-          "type": "varchar(128)",
-          "description": "调用时的模型名"
+          "type": "String(128)",
+          "description": "调用方传入的模型名"
         },
         {
           "name": "session_key",
-          "type": "varchar(128)",
+          "type": "String(128)",
           "nullable": true,
-          "description": "会话标识；没带就空"
+          "description": "X-Session-Id 会话标识"
         },
         {
           "name": "entry_format",
-          "type": "varchar(16)",
-          "description": "anthropic / openai"
+          "type": "String(16)",
+          "description": "universal / anthropic / openai"
         },
         {
           "name": "status",
-          "type": "varchar(16)",
+          "type": "String(16)",
           "description": "ok / error / interrupted"
         },
         {
           "name": "error_category",
-          "type": "varchar(32)",
+          "type": "String(32)",
           "nullable": true,
-          "description": "统一的错误类别"
+          "description": "失败时的统一错误类别"
         },
         {
           "name": "attempts",
-          "type": "jsonb",
-          "description": "每次尝试：route_uuid、account_uuid、上游模型、直通或转换、结果、耗时"
+          "type": "JSONType",
+          "description": "每次线路尝试的账号、上游模型、模式、耗时与结果"
         },
         {
           "name": "first_content_ms",
-          "type": "integer",
+          "type": "Integer",
           "nullable": true,
-          "description": "第一段内容用了多久"
+          "description": "首段内容延迟（毫秒）"
         },
         {
           "name": "duration_ms",
-          "type": "integer",
-          "description": "总耗时"
+          "type": "Integer",
+          "description": "端到端总耗时（毫秒）"
         },
         {
           "name": "input_tokens",
-          "type": "bigint",
-          "description": "没命中缓存的输入"
+          "type": "BigInteger",
+          "default": "0",
+          "description": "未命中缓存的输入 token"
         },
         {
           "name": "cache_write_tokens",
-          "type": "bigint"
+          "type": "BigInteger",
+          "default": "0",
+          "description": "缓存写入 token"
         },
         {
           "name": "cache_hit_tokens",
-          "type": "bigint"
+          "type": "BigInteger",
+          "default": "0",
+          "description": "缓存命中 token"
         },
         {
           "name": "output_tokens",
-          "type": "bigint",
-          "description": "含思考"
+          "type": "BigInteger",
+          "default": "0",
+          "description": "输出 token（含思考）"
         },
         {
           "name": "estimated",
-          "type": "boolean",
+          "type": "Boolean",
           "default": "false",
-          "description": "用量是不是估算的"
+          "description": "用量是否为中断估算"
         },
         {
           "name": "price",
-          "type": "jsonb",
-          "description": "单价快照：input、cache_hit、output（元 / 百万 token）"
+          "type": "JSONType",
+          "description": "调用当时的单价快照 Price"
         },
         {
           "name": "cost",
-          "type": "numeric(18,6)",
-          "description": "费用（元）"
+          "type": "Numeric(18,6)",
+          "default": "0",
+          "description": "本次调用费用（元）"
         },
         {
-          "name": "dropped_fields",
-          "type": "jsonb",
-          "nullable": true,
-          "description": "转换时去掉的不认识的字段名"
-        },
-        {
-          "name": "started_at",
-          "type": "timestamptz",
-          "description": "开始时间，分区键"
+          "name": "notes",
+          "type": "JSONType",
+          "description": "参数改写与跨格式转换丢弃字段说明"
         }
       ],
       "indexes": [
         {
-          "name": "uk_model_call_uuid",
-          "columns": [
-            "call_uuid",
-            "started_at"
-          ],
-          "unique": true,
-          "description": "分区表的唯一约束要带分区键"
-        },
-        {
-          "name": "ix_model_call_tenant_time",
+          "name": "ix_gw_model_call_tenant_time",
           "columns": [
             "tenant_uuid",
             "started_at"
           ],
-          "description": "按租户查最近的调用"
+          "unique": false,
+          "description": "租户时间窗口查询与汇总索引"
         },
         {
-          "name": "ix_model_call_key_time",
+          "name": "ix_gw_model_call_key_time",
           "columns": [
             "tenant_uuid",
             "key_uuid",
             "started_at"
           ],
-          "description": "按 Key 查、汇总本月花费"
-        },
-        {
-          "name": "ix_model_call_model_time",
-          "columns": [
-            "tenant_uuid",
-            "model",
-            "started_at"
-          ],
-          "description": "按模型汇总"
+          "unique": false,
+          "description": "按 Key 查询明细与 Redis 丢失后回填当月花费及近 24h 滑动窗口分桶索引"
         }
       ]
     }

@@ -36,7 +36,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "动态图：基础设施平台 - Redis 中间件运行时协作（拦截、防击穿与 PubSub 断线自愈）",
-  "description": "展示 atlas_redis 在高并发读防击穿、受保护写命令拦截，以及跨副本广播与断线重订阅自愈中的运行时交互；体现短命令池与单连接 PubSubHub 的舱壁隔离。",
+  "description": "展示 atlas_redis 在高并发读防击穿、受保护写命令拦截，以及跨副本广播与断线重订阅自愈中的运行时交互；体现短命令池与单连接 PubSubHub 的舱壁隔离。读的例子是一份按租户的配置快照：现在没有业务方用 CoalescedCache（模型网关原来用它缓存租户状态，业务系统不再存租户状态后去掉了），图示的是它的用法。",
   "boundaries": [
     {
       "id": "gw",
@@ -100,9 +100,9 @@
     {
       "from": "caller",
       "to": "cache",
-      "description": "并发请求查询租户状态 get_or_load(key)",
+      "description": "并发请求读同一个热点 key：get_or_load(key)",
       "details": {
-        "note": "5 秒本地 TTL 刚过期时，同一瞬间可能有数十个推理请求到达；CoalescedCache 用 key 级 Future 合并，只放 1 个协程回源。",
+        "note": "本地 TTL 刚过期时，同一瞬间可能有数十个请求到达；CoalescedCache 用 key 级 Future 合并，只放 1 个协程回源。例子是一份按租户的配置快照（授权快照同理）。",
         "items": [
           [
             "key",
@@ -120,19 +120,19 @@
     {
       "from": "cache",
       "to": "pg",
-      "description": "仅首协程回源查 app_tenant_state（其余并发共享 Future）",
+      "description": "仅首协程回源查库（其余并发共享 Future）",
       "technology": "SQL / TCP"
     },
     {
       "from": "pg",
       "to": "cache",
-      "description": "返回状态（若 DB 闪断且在 stale_ttl_s 内，降级返回旧缓存并告警）",
+      "description": "返回最新值（若 DB 闪断且在 stale_ttl_s 内，降级返回旧缓存并告警）",
       "technology": "SQL / TCP"
     },
     {
       "from": "cache",
       "to": "caller",
-      "description": "返回租户是否可用（不击穿 DB、不因瞬断 500）"
+      "description": "返回结果（不击穿 DB、不因瞬断 500）"
     },
     {
       "from": "caller",
@@ -174,7 +174,7 @@
     {
       "from": "cache",
       "to": "pubsub",
-      "description": "启动时向单连接中心订阅租户状态变更频道",
+      "description": "启动时向单连接中心订阅这份配置的变更频道",
       "details": {
         "note": "所有订阅者共用进程内唯一 1 条 PubSub TCP 连接；仅首个本地订阅者触发对 Redis 的 SUBSCRIBE。",
         "items": [
@@ -195,13 +195,13 @@
     {
       "from": "redis",
       "to": "pubsub",
-      "description": "运营中心停用租户，推送 tenant_uuid 失效消息",
+      "description": "别的副本改了这份配置，推送失效消息",
       "technology": "RESP3 Pub/Sub"
     },
     {
       "from": "pubsub",
       "to": "cache",
-      "description": "按本地路由表投递给订阅队列，立刻驱逐该租户旧缓存"
+      "description": "按本地路由表投递给订阅队列，立刻驱逐对应的旧缓存"
     },
     {
       "from": "pubsub",

@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>运营中心设计：登录与模块权限</title>
+<style>
+  body { margin: 0; background: #fff; color: #333; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { max-width: 1280px; padding: 24px 32px 64px; }
+  h1 { margin: 8px 0 12px; font-size: 22px; font-weight: 600; color: #222; }
+  h2 { margin: 40px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #e3e3e3; font-size: 17px; font-weight: 600; color: #222; }
+  h3 { margin: 28px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  p { max-width: 1100px; margin: 0 0 8px; font-size: 14px; line-height: 1.8; }
+  p.lead { padding: 10px 14px; border-left: 3px solid #1168bd; background: #f4f8fc; }
+  code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  a { color: #1168bd; }
+  table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  th, td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; }
+  ol.steps { margin: 8px 0 0; padding: 0; list-style: none; }
+  ol.steps li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  ol.steps li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  svg { display: block; max-width: 100%; height: auto; margin: 8px 0 4px; }
+  svg text { font-size: 13px; fill: #444; }
+  svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  svg .t-key { font-size: 12px; fill: #888; }
+  svg .t-lab { font-size: 12px; fill: #666; }
+  svg .t-hot { font-size: 12px; fill: #d9480f; }
+  svg .t-mute { font-size: 12px; fill: #aaa; }
+  svg .hot { fill: #d9480f; }
+  svg .mid { text-anchor: middle; }
+  svg .end { text-anchor: end; }
+  svg .b { font-weight: 700; }
+  svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  svg .node-hot { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.6; }
+  svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  svg .band-a { fill: #eef4fb; stroke: #1168bd; stroke-width: 1.2; }
+  svg .band-b { fill: #fff3ea; stroke: #d9480f; stroke-width: 1.2; }
+  svg .cell { fill: #fff; stroke: #bbb; stroke-width: 1.2; }
+  svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  svg .e-dash { fill: none; stroke: #444; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.2; }
+  svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  svg .tick { stroke: #444; stroke-width: 1.2; }
+  svg .dot { fill: #fff; stroke: #888; stroke-width: 1.4; }
+  svg .dot-hot { fill: #d9480f; stroke: #d9480f; stroke-width: 1.4; }
+  svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
+</style>
+<body>
+<main>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs>
+      <marker id="a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+      <marker id="h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+      <marker id="m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+    </defs>
+  </svg>
+
+  <h1>运营中心设计：运营人员在系统租户里，按模块授权</h1>
+  <p class="lead">一句话：<b>运营中心不再有自己的账号。运营人员是用户中心里「系统租户」的人，和用别的系统一样统一登录、请求经 API 网关验访问 JWT；能不能进运营中心，看用户中心的授权快照（运营中心这个应用只能开给系统租户）；进来之后能做什么，按模块判——运营中心分成租户模块和每个系统一个模块，每个模块在用户中心里是一个数据编码，授「只读 / 读写 / Owner」。角色只管不属于任何模块的功能，现在只有看运营审计。</b></p>
+  <p>这份设计回答四个问题：运营人员是谁、怎么登录；一个人能运营哪些模块、到什么程度，在哪里授；一个请求进来后依次判什么；「系统租户」这个特殊的租户在哪里被认出来、怎么防止把自己锁在门外。运营中心怎么经运营接口开通、停用、关闭租户，见<a href="design-tenant-isolation.html" target="_blank" rel="noopener">多租户隔离设计</a>；网关怎么验 JWT、怎么路由，见<a href="../apigateway/design-api-gateway.html" target="_blank" rel="noopener">API 网关设计</a>。下面只讲原理，具体的类、表和交互见文末各图。</p>
+
+  <h2>先认识几个词</h2>
+  <table>
+    <thead><tr><th style="width: 13%">词</th><th style="width: 47%">意思</th><th>例子</th></tr></thead>
+    <tbody>
+      <tr><td>系统租户</td><td>用户中心里打了「系统租户」标记的租户。它在 Atlas、知识库这些业务系统里和别的租户完全一样；唯一的不同是：只有它的人能被开通运营中心。用户中心部署时用命令建，运营中心不能停用、关闭它。</td><td>「平台运营」，企业代码 platform。小周、老李都是它的员工。</td></tr>
+      <tr><td>仅系统租户的应用</td><td>用户中心应用目录里的一个标记：这个应用只能开给系统租户。运营中心就是这样一个应用（编码 opscenter）。</td><td>星河科技的管理员在用户中心里找不到「开通运营中心」；就算硬建了同名角色，取授权快照也是不可访问。</td></tr>
+      <tr><td>运营模块</td><td>运营中心按「管哪个系统」分的块：租户模块，加上每个登记的系统一个（用户中心、Atlas、知识库、技能、MCP 网关、模型平台、记忆服务）。每个模块在用户中心里是一个数据编码。</td><td>MCP 网关模块的数据编码是 OpsMcp，里面是 MCP 网关的系统参数、系统任务。</td></tr>
+      <tr><td>模块授权</td><td>在用户中心给人（或部门）授某个模块数据编码的「全部」级别：只读能看，读写能改，Owner 还能做不可恢复的操作。和给人授「全部智能体 · Owner」是同一个功能。</td><td>小周：MCP 网关 · 读写，模型平台 · 只读。</td></tr>
+      <tr><td>ops:audit</td><td>运营中心唯一的操作码：看全部模块的运营审计。放在内置角色「运营审计员」里。</td><td>审计员小陈没有任何模块授权，只有这个角色：看得到谁改过什么，自己什么都改不了。</td></tr>
+      <tr><td>运营接口</td><td>各业务系统专门开给运营中心的一组接口（<code>/ops/v1</code>），网关不转发，每个请求验运营中心的签名。运营中心判完模块权限，才经它去改业务系统。</td><td>MCP 网关的 <code>PUT /ops/v1/configs/{key}</code>：改一个系统参数，请求上写明是小周改的。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>原理 1　运营人员是系统租户里的人，统一登录</h2>
+  <p>小周早上打开 <code>/opscenter-ui/</code>。运营控制台和 Atlas 控制台一样，发现没登录就跳到用户中心的统一登录页；登录之后，请求经 API 网关验访问 JWT、写上身份头，才到运营服务。运营服务再问用户中心「这个人能不能用运营中心」：</p>
+  <svg width="1240" viewBox="0 0 1240 300" role="img" aria-label="运营人员登录运营中心">
+    <rect class="node" x="20" y="40" width="190" height="76" rx="4"/>
+    <text class="t-name" x="115" y="70">运营人员小周</text>
+    <text class="t-sub" x="115" y="92">打开 /opscenter-ui/</text>
+    <path class="e" d="M210 78 H248" marker-end="url(#a)"/>
+    <rect class="node" x="250" y="40" width="210" height="76" rx="4"/>
+    <text class="t-name" x="355" y="70">统一登录页</text>
+    <text class="t-sub" x="355" y="92">企业代码 platform · 账号 · 密码</text>
+    <path class="e" d="M460 78 H498" marker-end="url(#a)"/>
+    <rect class="node" x="500" y="40" width="210" height="76" rx="4"/>
+    <text class="t-name" x="605" y="70">用户中心</text>
+    <text class="t-sub" x="605" y="92">发访问 JWT（Cookie）</text>
+    <path class="e" d="M710 78 H748" marker-end="url(#a)"/>
+    <rect class="node" x="750" y="40" width="210" height="76" rx="4"/>
+    <text class="t-name" x="855" y="70">API 网关</text>
+    <text class="t-sub" x="855" y="92">验 JWT · 写 X-Uid、X-Tenant-Id</text>
+    <path class="e" d="M960 78 H998" marker-end="url(#a)"/>
+    <rect class="node" x="1000" y="40" width="220" height="76" rx="4"/>
+    <text class="t-name" x="1110" y="70">运营服务</text>
+    <text class="t-sub" x="1110" y="92">/opscenter/api/me</text>
+    <path class="e" d="M1110 116 V158" marker-end="url(#a)"/>
+    <rect class="band-a" x="560" y="160" width="660" height="120" rx="6"/>
+    <text class="t-head" x="580" y="186">用户中心的授权快照：运营中心这个应用，小周能不能用？</text>
+    <text class="t-lab" x="580" y="212">· 小周的租户是系统租户吗？（运营中心是「仅系统租户」的应用）</text>
+    <text class="t-lab" x="580" y="234">· 这个租户开通了运营中心、小周在可访问范围内吗？租户没被挡住吗？</text>
+    <text class="t-lab" x="580" y="256">都是 → 进来，下一步按模块判（原理 2）；任何一条不是 → 403</text>
+    <rect class="node-hot" x="20" y="180" width="480" height="76" rx="4"/>
+    <text class="t-name" x="260" y="210" style="fill:#d9480f">星河科技的张三也登录了，也打开 /opscenter-ui/</text>
+    <text class="t-sub" x="260" y="232">网关照样放行（它不认系统租户），快照不可访问 → 403</text>
+    <path class="e-hot" d="M500 218 H558" marker-end="url(#h)"/>
+    <g class="badge"><circle cx="250" cy="40" r="10"/><text x="250" y="44">1</text></g>
+    <g class="badge"><circle cx="750" cy="40" r="10"/><text x="750" y="44">2</text></g>
+    <g class="badge"><circle cx="560" cy="160" r="10"/><text x="560" y="164">3</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>登录页、登录接口、访问 JWT、刷新令牌都和登录 Atlas 是同一套。密码错几次锁定、首次登录改密码、停用账号，都由用户中心处理；运营中心没有自己的账号表和会话。</li>
+    <li><span class="n">2</span>运营中心和其他系统一样挂在 Atlas 站点：页面 <code>/opscenter-ui/</code>，接口 <code>/opscenter/</code>（auth 路由）。网关只验 JWT、写身份头，不知道谁是系统租户——它对运营中心没有任何特例。</li>
+    <li><span class="n">3</span>「能不能进」由用户中心一处判，运营中心照用别的系统都在用的授权快照。普通租户开不了运营中心这个应用，它的人怎么授角色都拿不到「可访问」。快照在运营服务里缓存 30 秒。</li>
+  </ol>
+
+  <h2>原理 2　每个模块一个数据编码，级别决定能做什么</h2>
+  <p>运营的活按系统分工：管 MCP 网关的人只该碰 MCP 网关。所以运营中心分成模块，每个模块在用户中心里是一个数据编码；系统租户的管理员在用户中心的「数据权限」里给人授这个编码的「全部」级别——和给人授「全部智能体 · Owner」是同一个功能。下面是平台运营里四个人的授权：</p>
+  <svg width="1240" viewBox="0 0 1240 290" role="img" aria-label="四个人在各模块的级别">
+    <text class="t-key" x="20" y="36">人 \ 模块（数据编码）</text>
+    <text class="t-head mid" x="245" y="30">租户</text><text class="t-key mid" x="245" y="48">OpsTenant</text>
+    <text class="t-head mid" x="375" y="30">用户中心</text><text class="t-key mid" x="375" y="48">OpsUserCenter</text>
+    <text class="t-head mid" x="505" y="30">Atlas</text><text class="t-key mid" x="505" y="48">OpsAtlas</text>
+    <text class="t-head mid" x="635" y="30">知识库</text><text class="t-key mid" x="635" y="48">OpsKnowledge</text>
+    <text class="t-head mid" x="765" y="30">技能</text><text class="t-key mid" x="765" y="48">OpsSkill</text>
+    <text class="t-head mid" x="895" y="30">MCP 网关</text><text class="t-key mid" x="895" y="48">OpsMcp</text>
+    <text class="t-head mid" x="1025" y="30">模型平台</text><text class="t-key mid" x="1025" y="48">OpsModel</text>
+    <text class="t-head mid" x="1155" y="30">记忆服务</text><text class="t-key mid" x="1155" y="48">OpsMemory</text>
+    <text class="b" x="20" y="90">小周（MCP 与模型）</text>
+    <rect class="node-hot" x="840" y="68" width="110" height="34" rx="4"/><text class="t-hot mid" x="895" y="90">读写</text>
+    <rect class="node" x="970" y="68" width="110" height="34" rx="4"/><text class="mid" x="1025" y="90">只读</text>
+    <text class="b" x="20" y="142">老李（租户开通）</text>
+    <rect class="node-hot" x="190" y="120" width="110" height="34" rx="4"/><text class="t-hot mid" x="245" y="142">读写</text>
+    <rect class="node" x="450" y="120" width="110" height="34" rx="4"/><text class="mid" x="505" y="142">只读</text>
+    <rect class="node" x="580" y="120" width="110" height="34" rx="4"/><text class="mid" x="635" y="142">只读</text>
+    <text class="b" x="20" y="194">小王（运营负责人）</text>
+    <rect class="node-hot" x="190" y="172" width="110" height="34" rx="4"/><text class="t-hot mid b" x="245" y="194">Owner</text>
+    <rect class="node-hot" x="320" y="172" width="110" height="34" rx="4"/><text class="t-hot mid b" x="375" y="194">Owner</text>
+    <rect class="node-hot" x="450" y="172" width="760" height="34" rx="4"/><text class="t-hot mid" x="830" y="194">六个系统模块都是读写</text>
+    <text class="b" x="20" y="246">小陈（审计员）</text>
+    <rect class="gap" x="190" y="224" width="1020" height="34" rx="4"/><text class="t-hot mid" x="700" y="246">没有任何模块授权；只有角色「运营审计员」（ops:audit）：看全部模块的运营审计，什么都改不了</text>
+  </svg>
+  <table>
+    <thead><tr><th style="width: 16%">模块</th><th style="width: 24%">只读：看</th><th style="width: 34%">读写：日常变更</th><th>Owner：再加不可恢复的操作</th></tr></thead>
+    <tbody>
+      <tr><td>租户</td><td>租户列表、详情、操作进度</td><td>开通、停用、恢复租户；给租户开通或关闭应用；给新登记的系统补建；立即重试</td><td>关闭租户（删掉它在所有系统里的数据）；补发首个管理员的临时密码</td></tr>
+      <tr><td>用户中心</td><td>应用目录</td><td>接入应用、启停；维护应用的操作码、菜单、数据编码、内置角色</td><td>轮换应用凭据（接入方会立刻断开）；删除应用</td></tr>
+      <tr><td>每个业务系统</td><td>份额与用量、系统参数、系统任务、运行资源</td><td>改份额和系统参数；修订、发布沙箱模板；上架、下架市场技能；改记忆作用域</td><td>目前没有</td></tr>
+    </tbody>
+  </table>
+  <ol class="steps">
+    <li><span class="n">1</span>一个人在不同模块可以是不同级别，这是选数据权限而不选角色的原因：角色按人授，「MCP 能改、模型只能看」这种按模块不同的事，角色表达不了；用操作码表达「哪个模块」，又违反了「操作码只表达能不能做某类事」的约定。</li>
+    <li><span class="n">2</span>控制台只显示有级别的模块；级别不够的按钮置灰、不隐藏。小周登录后只看得到 MCP 网关、模型平台两个模块。</li>
+    <li><span class="n">3</span>授给部门也行，取本人和所在部门里最高的那个级别。收回授权、停用账号都在用户中心做，最长 30 秒后在运营中心生效。</li>
+  </ol>
+
+  <h2>原理 3　一个请求依次判什么</h2>
+  <p>以小周改 MCP 网关的一个系统参数为例（完整交互见<a href="dynamic/dynamic-operator-access.html" target="_blank" rel="noopener">登录并运营一个模块</a>）：</p>
+  <svg width="1240" viewBox="0 0 1240 250" role="img" aria-label="一个请求依次判什么">
+    <rect class="node" x="20" y="40" width="180" height="80" rx="4"/>
+    <text class="t-name" x="110" y="68">API 网关</text>
+    <text class="t-sub" x="110" y="90">验 JWT、校 CSRF</text>
+    <text class="t-sub" x="110" y="108">写身份头</text>
+    <path class="e" d="M200 80 H222" marker-end="url(#a)"/>
+    <rect class="node" x="224" y="40" width="190" height="80" rx="4"/>
+    <text class="t-name" x="319" y="68">授权快照</text>
+    <text class="t-sub" x="319" y="90">能进运营中心吗</text>
+    <text class="t-sub" x="319" y="108">（原理 1）</text>
+    <path class="e" d="M414 80 H436" marker-end="url(#a)"/>
+    <rect class="node" x="438" y="40" width="200" height="80" rx="4"/>
+    <text class="t-name" x="538" y="68">哪个模块</text>
+    <text class="t-sub" x="538" y="90">路径 /systems/mcp/… </text>
+    <text class="t-sub" x="538" y="108">→ OpsMcp；PUT 要读写</text>
+    <path class="e" d="M638 80 H660" marker-end="url(#a)"/>
+    <rect class="node" x="662" y="40" width="180" height="80" rx="4"/>
+    <text class="t-name" x="752" y="68">够不够</text>
+    <text class="t-sub" x="752" y="90">小周在 OpsMcp：读写</text>
+    <text class="t-sub" x="752" y="108">读写 ≥ 读写 ✓</text>
+    <path class="e" d="M842 80 H864" marker-end="url(#a)"/>
+    <rect class="node" x="866" y="40" width="160" height="80" rx="4"/>
+    <text class="t-name" x="946" y="68">记审计</text>
+    <text class="t-sub" x="946" y="90">模块 OpsMcp</text>
+    <text class="t-sub" x="946" y="108">谁、改了什么</text>
+    <path class="e" d="M1026 80 H1048" marker-end="url(#a)"/>
+    <rect class="node" x="1050" y="40" width="170" height="80" rx="4"/>
+    <text class="t-name" x="1135" y="68">运营接口</text>
+    <text class="t-sub" x="1135" y="90">签名调 MCP 网关</text>
+    <text class="t-sub" x="1135" y="108">写明是小周改的</text>
+    <path class="e-hot" d="M752 120 V168" marker-end="url(#h)"/>
+    <rect class="node-hot" x="560" y="170" width="384" height="60" rx="4"/>
+    <text class="t-hot mid" x="752" y="196">同样的请求发给 /systems/model/…：</text>
+    <text class="t-hot mid" x="752" y="216">小周在 OpsModel 只有只读 → 403</text>
+    <g class="badge"><circle cx="438" cy="40" r="10"/><text x="438" y="44">1</text></g>
+    <g class="badge"><circle cx="662" cy="40" r="10"/><text x="662" y="44">2</text></g>
+    <g class="badge"><circle cx="1050" cy="40" r="10"/><text x="1050" y="44">3</text></g>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>每个接口都声明自己属于哪个模块、要什么级别：看要只读，改要读写，不可恢复的要 Owner。系统模块的接口是一个通用的「系统代理」，模块就是路径里那个系统的模块，GET 要只读、其余要读写。运营中心自己的路径里不出现 <code>/ops/</code> 段，否则网关会当成内部端点 404。</li>
+    <li><span class="n">2</span>判权限只有一条规则：这个人在这个模块的级别 ≥ 这个动作要的级别。跨模块的功能只有查运营审计，要操作码 ops:audit。</li>
+    <li><span class="n">3</span>业务系统不再判小周的权限：它只认运营中心的签名，请求上写的运营人员只用来记日志、和运营中心的审计对上。运营中心契约里没有读租户内容的接口，判权限之前和之后都碰不到租户内容。</li>
+  </ol>
+
+  <h2>原理 4　系统租户只在两处被认出来</h2>
+  <p>系统租户不是原来的「平台租户」：它在业务系统里没有任何跨租户的能力。认得它的只有用户中心和运营中心，各自只为一件事：</p>
+  <svg width="1240" viewBox="0 0 1240 340" role="img" aria-label="谁认系统租户，以及开局的四步">
+    <rect class="band-b" x="20" y="20" width="390" height="120" rx="6"/>
+    <text class="t-head" x="36" y="46" style="fill:#d9480f">用户中心：认</text>
+    <text class="t-lab" x="36" y="72">· 「仅系统租户」的应用只开给系统租户</text>
+    <text class="t-lab" x="36" y="94">· 系统租户不能被挡住、删除</text>
+    <text class="t-lab" x="36" y="116">· 标记只能用部署命令设，运营接口改不了</text>
+    <rect class="band-b" x="425" y="20" width="390" height="120" rx="6"/>
+    <text class="t-head" x="441" y="46" style="fill:#d9480f">运营中心：认</text>
+    <text class="t-lab" x="441" y="72">· 系统租户不能停用、关闭（先挡一次，说清原因）</text>
+    <text class="t-lab" x="441" y="94">· 开通租户开出来的都是普通租户</text>
+    <text class="t-lab" x="441" y="116">· 启动时给系统租户开通运营中心</text>
+    <rect class="band-a" x="830" y="20" width="390" height="120" rx="6"/>
+    <text class="t-head" x="846" y="46">Atlas、知识库等业务系统：不认</text>
+    <text class="t-lab" x="846" y="72">· 系统租户就是一个普通租户</text>
+    <text class="t-lab" x="846" y="94">· 平台运营的人在这里只看得到自己租户的东西</text>
+    <text class="t-lab" x="846" y="116">· 代码里没有「是不是系统租户」的判断</text>
+    <text class="t-head" x="20" y="186">开局：第一次怎么进得去</text>
+    <rect class="node" x="20" y="204" width="280" height="76" rx="4"/>
+    <text class="t-name" x="160" y="234">① 用户中心的部署命令</text>
+    <text class="t-sub" x="160" y="256">建系统租户和它的管理员</text>
+    <path class="e" d="M300 242 H328" marker-end="url(#a)"/>
+    <rect class="node" x="330" y="204" width="290" height="76" rx="4"/>
+    <text class="t-name" x="475" y="234">② 运营服务启动</text>
+    <text class="t-sub" x="475" y="256">同步自己的应用目录，给系统租户开通</text>
+    <path class="e" d="M620 242 H648" marker-end="url(#a)"/>
+    <rect class="node" x="650" y="204" width="290" height="76" rx="4"/>
+    <text class="t-name" x="795" y="234">③ 系统租户的管理员</text>
+    <text class="t-sub" x="795" y="256">在用户中心开账号、授模块、授角色</text>
+    <path class="e" d="M940 242 H968" marker-end="url(#a)"/>
+    <rect class="node" x="970" y="204" width="250" height="76" rx="4"/>
+    <text class="t-name" x="1095" y="234">④ 运营人员</text>
+    <text class="t-sub" x="1095" y="256">统一登录，进运营中心</text>
+    <text class="t-key" x="20" y="316">② 同步的只是目录（应用 opscenter、每个模块一个数据编码、操作码 ops:audit、内置角色「运营审计员」），不写任何授权。</text>
+  </svg>
+  <ol class="steps">
+    <li><span class="n">1</span>不能停用、关闭系统租户，是为了不把自己锁在门外：运营人员都靠它登录，停了它就只能改库恢复。用户中心和运营中心各挡一次。</li>
+    <li><span class="n">2</span>别的应用的目录由运营人员在运营中心录入，代码里只留判断用的编码；运营中心自己的目录是例外，随代码同步——第一个人登录之前目录里就得有它，而且模块来自系统登记，新接入一个系统时在登记里写上它的数据编码，重启后用户中心里就多一个编码。</li>
+    <li><span class="n">3</span>系统租户的管理员是平台上权限最大的人：他能在用户中心给任何人（包括自己）授任何模块的 Owner。所以系统租户里只放运营团队，不放业务数据，也不要拿原来的平台租户改成系统租户（它有业务数据，而系统租户永远关不掉）。</li>
+  </ol>
+
+  <h2>设计决策</h2>
+  <table>
+    <thead><tr><th style="width: 32%">决策</th><th style="width: 50%">理由</th><th>详见</th></tr></thead>
+    <tbody>
+      <tr><td>运营人员是用户中心里系统租户的人；运营中心不再有自己的账号、会话和登录</td><td>和其他系统一样统一登录，密码、锁定、改密、停用都在用户中心一处，少一套账号体系。代价：用户中心不可用时运营中心也登不了；原来「运营账号和任何租户都无关」的隔离，改由「只有系统租户能开通运营中心」来保证。</td><td><a href="code-access.html" target="_blank" rel="noopener">权限与审计</a></td></tr>
+      <tr><td>系统租户只是一个标记，只有用户中心和运营中心认它</td><td>业务系统不用写「是不是系统租户」的判断，系统租户在那里拿不到任何跨租户的能力；用户中心用它决定运营中心开给谁，运营中心用它保护自己。</td><td><a href="code-access.html" target="_blank" rel="noopener">权限与审计</a>、<a href="code-tenants.html" target="_blank" rel="noopener">租户</a></td></tr>
+      <tr><td>能不能进运营中心由用户中心判：运营中心应用标「仅系统租户」</td><td>判断只在用户中心一处，网关和运营中心都不判租户；普通租户怎么授角色、建同名编码都拿不到「可访问」。</td><td><a href="dynamic/dynamic-operator-access.html" target="_blank" rel="noopener">登录并运营一个模块</a></td></tr>
+      <tr><td>每个模块一个数据编码，授「全部」级别；级别决定能做什么</td><td>和 Atlas 按智能体授只读 / 读写 / Owner 同一套，模块就是运营中心的「数据」；同一个人在不同模块可以是不同级别，角色表达不了。</td><td><a href="code-access.html" target="_blank" rel="noopener">权限与审计</a></td></tr>
+      <tr><td>不可恢复的操作要 Owner</td><td>关闭租户删掉它在所有系统里的数据，补发临时密码等于拿到一个租户的管理员，轮换凭据让接入方立刻断开；和 Atlas「只有 Owner 能删」一致，日常运营给读写就够。</td><td><a href="code-tenants.html" target="_blank" rel="noopener">租户</a></td></tr>
+      <tr><td>角色只管跨模块的功能，现在只有 ops:audit</td><td>操作码只表达「能不能做某类事」；看审计不属于任何模块，审计员要看全部、却不该改任何东西。</td><td><a href="code-access.html" target="_blank" rel="noopener">权限与审计</a></td></tr>
+      <tr><td>模块 = 租户 + 每个登记的系统；数据编码写在系统登记里</td><td>运营按系统分工；新接入一个系统只在登记里写上编码，运营中心不用改代码。</td><td><a href="code-gateway.html" target="_blank" rel="noopener">系统接入</a></td></tr>
+      <tr><td>运营中心自己的应用目录随代码同步进用户中心（和用户中心自己的目录一样，是例外）</td><td>第一个人登录之前目录里就得有它；模块来自系统登记，手工录入会对不上。只同步目录，授权始终由人在用户中心做。</td><td><a href="code-access.html" target="_blank" rel="noopener">权限与审计</a></td></tr>
+      <tr><td>系统租户不能停用、关闭，也不能在运营中心开通</td><td>运营人员都靠它登录，停了就把自己锁在门外；它由用户中心部署时的命令建。</td><td><a href="code-tenants.html" target="_blank" rel="noopener">租户</a></td></tr>
+      <tr><td>运营中心挂在 Atlas 站点（/opscenter/、/opscenter-ui/），走 auth 路由；名字不叫 ops</td><td>网关对它没有特例；/ops/ 是网关的禁区段，叫 ops 会整个 404，运营中心自己的路径也不含 /ops/ 段。代价：和租户业务共用站点和登录态，有模块授权的人被盗号就能进运营中心，靠只授必要的模块、不可恢复的要 Owner 收窄。</td><td><a href="../apigateway/code-routing.html" target="_blank" rel="noopener">网关路由表</a></td></tr>
+      <tr><td>授权按（用户，租户）缓存 30 秒</td><td>每个请求都问用户中心太慢；运营权限大，收回授权最长 30 秒生效，比 Atlas 的 5 分钟短。</td><td><a href="code-access.html" target="_blank" rel="noopener">权限与审计</a></td></tr>
+    </tbody>
+  </table>
+
+  <h2>图索引</h2>
+  <p>原理在上面，各图里是具体的交互、类和数据。链接在新标签页打开。</p>
+  <h3>系统、容器与组件</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="system-context.html" target="_blank" rel="noopener">运营中心 · 系统上下文</a></td><td>运营人员先在用户中心登录；运营中心读用户中心的授权，经运营接口连各系统。</td></tr>
+      <tr><td><a href="container.html" target="_blank" rel="noopener">运营中心 · 容器</a></td><td>运营控制台经 API 网关调运营服务；运营库只剩审计和租户操作进度。</td></tr>
+      <tr><td><a href="component-server.html" target="_blank" rel="noopener">运营服务 · 组件</a></td><td>五个组件：权限与审计、租户、应用目录、系统模块、系统接入。</td></tr>
+    </tbody>
+  </table>
+  <h3>时序图</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="dynamic/dynamic-operator-access.html" target="_blank" rel="noopener">登录并运营一个模块</a></td><td>原理 1–3 的完整交互：401 跳统一登录（第 3–6 步）、授权快照（第 10 步）、各模块级别（第 12 步）、按模块判权限（第 17 步）、签名调 MCP 网关（第 19 步）。</td></tr>
+      <tr><td><a href="dynamic/dynamic-tenant-open.html" target="_blank" rel="noopener">开通租户</a>、<a href="dynamic/dynamic-tenant-suspend.html" target="_blank" rel="noopener">停用</a>、<a href="dynamic/dynamic-tenant-close.html" target="_blank" rel="noopener">关闭</a></td><td>租户模块的三个操作：开通、停用要读写，关闭要 Owner；系统租户不能停用、关闭。</td></tr>
+    </tbody>
+  </table>
+  <h3>类图</h3>
+  <table>
+    <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="code-access.html" target="_blank" rel="noopener">运营中心 · 权限与审计</a></td><td>原理 1–4 的实现：解析运营人员、模块目录、级别判断、同步自己的应用目录、只追加的运营审计；一张表。</td></tr>
+      <tr><td><a href="code-tenants.html" target="_blank" rel="noopener">运营中心 · 租户</a></td><td>租户模块：每个入口要的级别、系统租户的保护、给租户开通应用。</td></tr>
+      <tr><td><a href="code-gateway.html" target="_blank" rel="noopener">运营中心 · 系统接入</a></td><td>系统登记里每个系统的模块数据编码；用户中心运营接口里的系统租户规则；OperatorStamp 里的运营人员。</td></tr>
+    </tbody>
+  </table>
+  <h3>相关设计</h3>
+  <table>
+    <thead><tr><th style="width: 28%">设计</th><th>看什么</th></tr></thead>
+    <tbody>
+      <tr><td><a href="design-tenant-isolation.html" target="_blank" rel="noopener">多租户隔离设计</a></td><td>运营中心只经运营接口做事、租户操作怎么拆步骤、份额怎么分。</td></tr>
+      <tr><td><a href="../apigateway/design-api-gateway.html" target="_blank" rel="noopener">API 网关设计</a></td><td>访问 JWT 怎么验、禁区段、运营中心的两条路由。</td></tr>
+    </tbody>
+  </table>
+</main>
+</body>
+</html>

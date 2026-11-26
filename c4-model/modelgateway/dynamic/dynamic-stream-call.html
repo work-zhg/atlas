@@ -36,7 +36,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "动态图：模型平台 - 流式调用（同格式直通）",
-  "description": "目标模型（代码还没有），方案见 agent-platform/doc/design/model-gateway-design.html。Atlas 原生智能体用 Anthropic 格式调一个挂在 Anthropic 格式账号上的模型：格式相同，直通；参数按上游模型的规则整理",
+  "description": "Agent 平台携带客户端 Key 与会话头调用 /universal/v1/messages：先过静态准入、能力与可达性校验，再扣预算与 RPM，按会话粘滞选路并绑定公网 IP 直通上游。",
   "boundaries": [
     {
       "id": "mp",
@@ -68,56 +68,56 @@
       "id": "orch",
       "kind": "component",
       "name": "调用编排",
-      "technology": "Python 模块",
+      "technology": "gateway.invocation",
       "in": "gw"
     },
     {
       "id": "adm",
       "kind": "component",
       "name": "准入",
-      "technology": "Python 模块",
+      "technology": "gateway.admission",
       "in": "gw"
     },
     {
       "id": "cfg",
       "kind": "component",
       "name": "配置快照",
-      "technology": "Python 模块",
+      "technology": "gateway.config",
       "in": "gw"
     },
     {
       "id": "cap",
       "kind": "component",
       "name": "能力与参数",
-      "technology": "Python 模块",
+      "technology": "gateway.capability",
       "in": "gw"
     },
     {
       "id": "route",
       "kind": "component",
       "name": "线路",
-      "technology": "Python 模块",
+      "technology": "gateway.routing",
       "in": "gw"
     },
     {
       "id": "fmt",
       "kind": "component",
       "name": "格式",
-      "technology": "Python 模块",
+      "technology": "gateway.format",
       "in": "gw"
     },
     {
       "id": "met",
       "kind": "component",
       "name": "计量",
-      "technology": "Python 模块",
+      "technology": "gateway.metering",
       "in": "gw"
     },
     {
       "id": "redis",
       "kind": "container",
       "name": "网关状态",
-      "technology": "Redis 7",
+      "technology": "Redis 7（键值 + Pub/Sub）",
       "shape": "database",
       "in": "mp"
     },
@@ -140,180 +140,114 @@
     {
       "from": "agent",
       "to": "chat",
-      "description": "流式对话请求（带客户端 Key、会话标识）",
-      "technology": "Anthropic 格式，HTTP + SSE",
+      "description": "POST /universal/v1/messages（带 x-api-key 与 X-Session-Id）",
+      "technology": "Anthropic Messages，HTTP + SSE",
       "details": {
-        "note": "Atlas 原生智能体按统一的含义说意图：思考自动、温度 0.2、最大输出 64K；它不知道这个模型背后是哪个供应商。",
-        "example": "POST <网关地址>/v1/messages\nx-api-key: <智能体的客户端 Key>\n<会话标识请求头>: <会话 uuid>\n\n{\n  \"model\": \"deepseek-v4-pro\",\n  \"max_tokens\": 64000,\n  \"stream\": true,\n  \"thinking\": {\"type\": \"adaptive\"},\n  \"temperature\": 0.2,\n  \"system\": [ ... ],\n  \"messages\": [ ... ]\n}"
+        "example": "POST /universal/v1/messages\nx-api-key: sk-mgw-…\nX-Session-Id: 01938a…\n\n{\"model\": \"deepseek-v4-pro\", \"max_tokens\": 64000, \"stream\": true,\n \"thinking\": {\"type\": \"adaptive\"}, \"temperature\": 0.2, \"messages\": […]}"
       }
     },
     {
       "from": "chat",
       "to": "orch",
-      "description": "chat(anthropic, Key, 请求原文, stream=True)"
+      "description": "chat(anthropic, secret, headers, body, universal=True)"
     },
     {
       "from": "orch",
       "to": "fmt",
-      "description": "read：Anthropic 读写器读出共同信息"
+      "description": "read：AnthropicCodec 提取模型名、会话头、意图与多模态摘要"
     },
     {
       "from": "orch",
       "to": "adm",
-      "description": "admit(Key, 模型)"
+      "description": "admit_static(secret, 'deepseek-v4-pro', expected_kind=CHAT)"
     },
     {
       "from": "adm",
       "to": "cfg",
-      "description": "按摘要找 Key、找模型（内存）"
+      "description": "按 SHA-256 摘要取 KeyEntry，按租户取 ModelEntry（内存）"
     },
     {
       "from": "cfg",
       "to": "redis",
-      "description": "看配置版本号（最多每秒一次）",
-      "technology": "Redis GET"
+      "description": "单次 mget 看 Key 纪元与本租户配置版本（最多每秒一次）",
+      "technology": "Redis MGET"
+    },
+    {
+      "from": "orch",
+      "to": "cap",
+      "description": "check：核验模型承诺能力满足请求；fmt.routes_for 核验线路可达"
+    },
+    {
+      "from": "orch",
+      "to": "adm",
+      "description": "admit_quota(grant)：通过本地校验后再查月/5h/24h 预算并扣 RPM"
     },
     {
       "from": "adm",
       "to": "redis",
-      "description": "每分钟计数加一，读本月花费",
-      "technology": "Redis INCR / GET"
-    },
-    {
-      "from": "orch",
-      "to": "cap",
-      "description": "check：模型的能力够用"
+      "description": "读月花费 + Lua 校验 5h/24h 滑动窗口桶 + Lua 原子递增 RPM",
+      "technology": "Redis GET + EVAL"
     },
     {
       "from": "orch",
       "to": "route",
-      "description": "pick(模型, 会话) → 线路 1（公司账号）"
+      "description": "pick(routes, session_key, sticky=True) → 线路 1（主账号）"
     },
     {
       "from": "route",
       "to": "redis",
-      "description": "读线路冷却、账号异常",
+      "description": "检查线路冷却与账号异常标记",
       "technology": "Redis GET"
     },
     {
       "from": "orch",
       "to": "cap",
-      "description": "plan(线路 1) → ParamPlan",
-      "details": {
-        "items": [
-          [
-            "温度",
-            "上游规则：这个上游模型不收温度",
-            "去掉"
-          ],
-          [
-            "最大输出",
-            "上游模型的上限",
-            "64000 → 32768"
-          ],
-          [
-            "思考",
-            "「自动」在这个上游模型上的写法",
-            "{\"type\": \"adaptive\"} 原样"
-          ]
-        ]
-      }
+      "description": "plan(线路 1) → ParamPlan（去掉不支持的 temperature，截断 max_tokens）"
     },
     {
       "from": "orch",
       "to": "fmt",
-      "description": "open：格式相同，直通，在原请求上改参数、换模型名"
+      "description": "open：账号已登记 Anthropic 地址，同格式直通改写参数"
     },
     {
       "from": "fmt",
       "to": "provider",
-      "description": "发出请求，带账号密钥",
-      "technology": "Anthropic 格式，HTTPS + SSE",
-      "details": {
-        "items": [
-          [
-            "地址",
-            "账号登记的 Anthropic 格式地址",
-            "https://api.deepseek.com/anthropic"
-          ],
-          [
-            "密钥",
-            "账号密钥（配置快照里解密，只在内存）",
-            "sk-****"
-          ],
-          [
-            "模型名",
-            "线路的上游模型",
-            "deepseek-v4-pro"
-          ],
-          [
-            "出网",
-            "账号的出网方式",
-            "直连"
-          ]
-        ]
-      }
+      "description": "绑定校验后的公网 IP 发起流式请求，带主账号凭据",
+      "technology": "Anthropic 格式，HTTPS + SSE"
     },
     {
       "from": "provider",
       "to": "fmt",
-      "description": "200，消息开始……第一段内容",
-      "technology": "SSE",
-      "details": {
-        "note": "「消息开始」不含内容，先压着；第一段文字、思考或工具调用到了才是提交点。提交前收到错误还能换线路（见 dynamic-switch-route.html）。"
-      }
+      "description": "200：message_start（暂存）……首段思考/正文到达",
+      "technology": "SSE"
     },
     {
       "from": "orch",
       "to": "chat",
-      "description": "提交：压着的连同第一段一起交出，之后读一段写一段"
+      "description": "确立提交点：连同暂存帧一并放出，后续逐帧背压透传"
     },
     {
       "from": "chat",
       "to": "agent",
-      "description": "回答一段段写回",
+      "description": "流式返回 SSE 事件（模型名还原为 deepseek-v4-pro，思考块打来源戳）",
       "technology": "SSE"
     },
     {
       "from": "provider",
       "to": "fmt",
-      "description": "最后一段：停止原因、用量",
+      "description": "message_delta 尾帧携带完整四项 usage",
       "technology": "SSE"
     },
     {
       "from": "orch",
       "to": "met",
-      "description": "settle + record：四项用量 × 单价，调用记录进队列",
-      "details": {
-        "items": [
-          [
-            "用量",
-            "最后一段的 usage（Anthropic 读写器读出）",
-            "输入 2,000 · 缓存写入 0 · 缓存命中 48,000 · 输出 800"
-          ],
-          [
-            "单价",
-            "模型的价格（元 / 百万 token）",
-            "输入 4 · 缓存命中 0.4 · 输出 16"
-          ],
-          [
-            "费用",
-            "计量算出",
-            "¥0.040"
-          ]
-        ]
-      }
+      "description": "settle 精确计费 + record 入异步队列"
     },
     {
       "from": "met",
       "to": "db",
-      "description": "后台批量写调用记录（每秒或满 200 条）",
-      "technology": "SQL/TCP（INSERT model_call）"
-    },
-    {
-      "from": "orch",
-      "to": "adm",
-      "description": "settle：本月花费加上这次的费用（写网关状态）"
+      "description": "后台批量追加写入 gw_model_call（同时准入异步累加月花费与当前 5 分钟窗口桶）",
+      "technology": "SQL/TCP（INSERT gw_model_call）"
     }
   ]
 }

@@ -33,7 +33,7 @@
   "description": "目标领域模型，只画期望的样子。数据面：准入、列工具、调工具、错误协议、身份传递和 Trace；本领域没有自己的表，领域总览见 code-domains.html",
   "component": "工具调用",
   "package": "atlas_mcpgateway.invocation",
-  "overview": "工具调用就是网关的数据面。网关自己是 MCP 服务端（/mcp/{服务名}，无状态、JSON 响应），Atlas 的原生智能体、会话 Pod 里的 CLI、员工本机的 MCP 客户端都连它。一个请求先认人后办事：服务存在且启用、Key 有效、私有服务上这把 Key 有权限，才交给 MCP SDK；tools/list 按库里的定义只列能用的，tools/call 再做工具级判权和参数校验，交给上游接入按服务类型转换后调用。被拒的请求带着原因和「有没有转发」返回。\n\n它只编排，规则都在别的领域：服务和工具在服务目录，Key 在 API Key，权限在授权，协议转换和上游凭据在上游接入。",
+  "overview": "工具调用就是网关的数据面。网关自己是 MCP 服务端（/mcp/{服务名}，无状态、JSON 响应），Atlas 的原生智能体、会话 Pod 里的 CLI、员工本机的 MCP 客户端都连它。一个请求先认人后办事：服务存在且启用、Key 有效、私有服务上这把 Key 有权限，才交给 MCP SDK；tools/list 按库里的定义只列能用的，tools/call 再做工具级判权和参数校验，交给上游接入按服务类型转换后调用。被拒的请求带着原因和「有没有转发」返回。上游要按人判数据权限时（例如知识库），按谁判由 Atlas 签发的身份凭据给出，网关验签后写进身份请求头。\n\n它只编排，规则都在别的领域：服务和工具在服务目录，Key 在 API Key，权限在授权，协议转换和上游凭据在上游接入。",
   "elements": [
     {
       "id": "inv",
@@ -44,11 +44,11 @@
         1.6,
         0.35
       ],
-      "responsibility": "数据面的编排，自己不含规则：准入按「认 Key（它说明了租户，停用的租户的 Key 无效）→ 这个租户里服务存在且启用 → 私有服务判权」的顺序，任何一步不过就抛 Rejection；列工具只列可用且这把 Key 能用的；调工具先做工具级判权和参数校验，再交给上游接入，把上游的失败转成拒绝原因。每个请求独立，不开长事务：读目录、认 Key 各用一个短会话，转发上游时不占数据库连接。",
+      "responsibility": "数据面的编排，自己不含规则：准入按「认 Key（它说明了租户；不查租户状态，停用后私有服务由用户中心回答无权限）→ 带了身份凭据就验签 → 这个租户里服务（或平台服务）存在且启用 → 私有服务判权」的顺序，任何一步不过就抛 Rejection；列工具只列可用且这把 Key 能用的；调工具先做工具级判权和参数校验，再交给上游接入，把上游的失败转成拒绝原因。每个请求独立，不开长事务：读目录、认 Key 各用一个短会话，转发上游时不占数据库连接。",
       "methods": [
         [
           "+",
-          "admit(service, secret, *, user_uid, audit) -> Caller"
+          "admit(service, secret, *, grant, user_uid, audit) -> Caller"
         ],
         [
           "+",
@@ -69,7 +69,7 @@
         1.6,
         2.3
       ],
-      "responsibility": "认过的一次调用：哪个服务、哪把 Key（它的主体）、这把 Key 在私有服务上的权限（公开服务为空 = 全部工具），以及使用者和调用方带来的审计头。",
+      "responsibility": "认过的一次调用：哪个服务、哪把 Key（它的主体）、这把 Key 在私有服务上的权限（公开服务为空 = 全部工具）、验过的身份凭据，以及使用者和调用方带来的审计头。",
       "attributes": [
         [
           "+",
@@ -78,6 +78,10 @@
         [
           "+",
           "access: KeyAccess | None"
+        ],
+        [
+          "+",
+          "grant: IdentityGrant | None"
         ],
         [
           "+",
@@ -104,11 +108,15 @@
         1.6,
         4.2
       ],
-      "responsibility": "带给上游的身份，由网关重写：X-Auth-Uid 是 Key 的主体；X-Uid 是使用者（用户 Key 是持有人，智能体 Key 是调用方带来的 X-Uid，只作审计、网关不校验）；照转 X-Run-Id、X-Thread-Id。服务关了「传递调用者身份」就什么都不带。",
+      "responsibility": "带给上游的身份，由网关重写：X-Auth-Uid 是按谁判——带了身份凭据取它的按谁判，没带是 Key 的主体；X-Uid 是使用者（身份凭据里的发起人；没带时，用户 Key 是持有人，智能体 Key 是调用方带来的 X-Uid，只作审计、网关不校验）；X-Tenant-Id 是 Key 所在的租户；照转 X-Run-Id、X-Thread-Id。服务关了「传递调用者身份」就什么都不带。",
       "attributes": [
         [
           "+",
-          "key_uid · user_uid · pass_identity · audit"
+          "key_uid · grant · user_uid · tenant"
+        ],
+        [
+          "+",
+          "pass_identity · audit"
         ]
       ],
       "methods": [
@@ -166,7 +174,7 @@
         ],
         [
           "",
-          "key_missing · key_invalid 401"
+          "key_missing · key_invalid · grant_invalid 401"
         ],
         [
           "",
@@ -196,6 +204,29 @@
         [
           "+",
           "check(schema, arguments) -> str | None"
+        ]
+      ]
+    },
+    {
+      "id": "grant",
+      "kind": "class",
+      "name": "IdentityGrant",
+      "stereotype": "值对象",
+      "at": [
+        3.45,
+        2.3
+      ],
+      "responsibility": "Atlas 打开 CLI 会话时签发的身份凭据：HMAC-SHA256(和 Atlas 共享的密钥, {会话, 按谁判, 发起人, 租户})，CLI 放在 X-Identity-Grant 请求头里带来。它只说明这次调用按谁判、谁在用，不授予任何服务：能用哪些服务仍按 Key 判。签名不对、租户和 Key 所在租户不一致都拒绝（grant_invalid）。不设过期：CLI 会话只在打开时下发一次配置，可能挂起很久。",
+      "attributes": [
+        [
+          "+",
+          "thread · auth_uid · uid · tenant"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "verify(secret, token, *, tenant) -> IdentityGrant"
         ]
       ]
     },
@@ -356,6 +387,11 @@
     },
     {
       "from": "inv",
+      "to": "grant",
+      "description": "验签"
+    },
+    {
+      "from": "inv",
       "to": "rej",
       "description": "抛"
     },
@@ -394,14 +430,19 @@
       "from": "inv",
       "to": "upstream",
       "description": "调上游"
+    },
+    {
+      "from": "ident",
+      "to": "grant",
+      "description": "按谁判、发起人"
     }
   ],
   "capabilities": [
     {
       "name": "准入",
-      "entry": "admit(service, secret, *, user_uid, audit)",
+      "entry": "admit(service, secret, *, grant, user_uid, audit)",
       "callers": "MCP 端点（每个请求，交给 SDK 之前）、管理接口（试调）",
-      "description": "认 Key（Authorization: Bearer，确定租户）→ 这个租户里服务存在且启用 → 私有服务以 Key 的主体判权（授权的判权缓存，不占数据库连接），一点权限都没有就拒绝；不过就抛 Rejection"
+      "description": "认 Key（Authorization: Bearer，确定租户）→ 带了 X-Identity-Grant 就验签 → 这个租户里服务存在且启用 → 私有服务以 Key 的主体判权（授权的判权缓存，不占数据库连接），一点权限都没有就拒绝；不过就抛 Rejection"
     },
     {
       "name": "列工具",
@@ -440,6 +481,14 @@
     {
       "decision": "身份由网关重写，别的请求头不转发",
       "reason": "调用方的 Key 不能流到上游；上游看到的身份是网关确认过的 Key 主体。第三方服务（例如 SerpApi）关掉「传递调用者身份」，不把内部 uid 发出去。"
+    },
+    {
+      "decision": "按谁判由身份凭据给出，不认调用方写的请求头",
+      "reason": "会话 Pod 跑的是不可信代码，X-Auth-Uid 它想写什么都行。按谁判取决于智能体的权限类型（以 Agent 为权限是数字员工，以人为权限是使用者），只有 Atlas 知道，所以由 Atlas 在打开会话时签进身份凭据，网关验签后写给上游。网关自己的授权仍按 Key 的主体判；上游（例如知识库）按身份凭据判自己的数据权限。"
+    },
+    {
+      "decision": "身份凭据只说明身份，不授予服务",
+      "reason": "能用哪些服务、哪些工具只有一个来源：Key 的授权。凭据要是也带服务范围，网关就有两套判定。所以凭据里只有会话、按谁判、发起人和租户。"
     },
     {
       "decision": "试调走同一段逻辑",

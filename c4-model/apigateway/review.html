@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API 网关设计评审（c4-model/apigateway）</title>
+<style>
+  body { margin: 0; background: #fff; color: #333; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { max-width: 1200px; padding: 24px 32px 64px; }
+  h1 { margin: 8px 0 8px; font-size: 22px; font-weight: 600; color: #222; }
+  h2 { margin: 38px 0 12px; padding-bottom: 6px; border-bottom: 1px solid #e3e3e3; font-size: 17px; font-weight: 600; color: #222; }
+  h3 { margin: 24px 0 8px; font-size: 15px; font-weight: 600; color: #222; }
+  p { max-width: 1100px; margin: 0 0 8px; font-size: 14px; line-height: 1.8; }
+  p.meta { color: #666; font-size: 13px; margin-bottom: 14px; }
+  p.lead { padding: 12px 16px; border-left: 3px solid #1168bd; background: #f4f8fc; }
+  div.callout { padding: 10px 14px; border-left: 3px solid #d9480f; background: #fff6f0; margin: 10px 0 14px; font-size: 13.5px; line-height: 1.7; }
+  div.callout.ok { border-left-color: #2b8a3e; background: #f2fbf4; }
+  ul, ol { max-width: 1100px; margin: 6px 0 12px; padding-left: 22px; font-size: 14px; line-height: 1.8; }
+  li { margin: 4px 0; }
+  code { padding: 1px 4px; background: #f6f8fa; border-radius: 3px; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  a { color: #1168bd; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  table { width: 100%; margin: 10px 0 16px; border-collapse: collapse; font-size: 13px; line-height: 1.65; }
+  th, td { padding: 7px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  th { background: #f6f8fa; font-weight: 600; white-space: nowrap; }
+  .tag { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .tag.p0 { color: #b00020; background: #ffebee; border: 1px solid #f5b5be; }
+  .tag.p1 { color: #a65c00; background: #fff6e5; border: 1px solid #f2cf94; }
+  .tag.p2 { color: #1168bd; background: #eef4fb; border: 1px solid #b5d2f2; }
+  .tag.ok { color: #2b8a3e; background: #edf9f0; border: 1px solid #a9deb6; }
+  .tag.part { color: #a65c00; background: #fff6e5; border: 1px solid #f2cf94; }
+  .tag.no, .tag.drop { color: #666; background: #f3f3f3; border: 1px solid #d0d0d0; }
+  .tag.done { color: #2b8a3e; background: #edf9f0; border: 1px solid #a9deb6; }
+  .tag.todo { color: #1168bd; background: #eef4fb; border: 1px solid #b5d2f2; }
+  div.callout.check { border-left-color: #5b6770; background: #f6f7f8; }
+  .src { color: #666; font-size: 12.5px; }
+  .toc { columns: 2; padding-left: 20px; margin: 10px 0 20px; font-size: 13.5px; }
+  .toc li { break-inside: avoid; }
+</style>
+</head>
+<body>
+<main>
+  <h1>API 网关设计评审</h1>
+  <p class="meta">评审日期：2026-11-25 · 评审范围：<a href="design-api-gateway.html">c4-model/apigateway/</a> 全部 12 份设计/C4 文档，交叉核验现网清单（<code>deploy/</code>、<code>docker/</code>）与业务/前端/移动端源码</p>
+  <p class="meta"><b>2026-11-26 更新</b>：逐条对照设计稿和源码核对，结论和处理状态见<a href="#check">核对结论与处理状态</a>。评审原文没改，各节末尾的灰框是核对说明。</p>
+
+  <p class="lead"><b>总体结论：方向正确、选型克制，但存在 5 处 P0 阻断级缺陷（按当前设计直接落地会导致运营中心全挂、用户中心强制改密死锁、合法查询误杀、长连接 15 分钟续传断链与旧版手机 App 立即失效）、4 类 P1 部署/运维缺口，以及多份时序图遗留的旧版方案矛盾。建议先拍板 2 个顶层架构权衡点，逐项修订后再开工。</b></p>
+
+  <div class="callout ok">
+    <b>值得肯定的核心亮点：</b>
+    <ul>
+      <li><b>认证模型成熟克制</b>：Web（双 Path <code>HttpOnly</code> Cookie + CSRF）与移动端（<code>Bearer</code>）统一收口到 15 分钟 Ed25519 Access JWT + 14 天 Refresh Token（Redis 哈希轮换 + 30s 并发宽限），热路径零 Redis、零用户中心调用，不引入脆弱的 JWT 黑名单与 Redis Pub/Sub。</li>
+      <li><b>配置即代码与可验证守卫</b>：以 <code>routes.yaml</code> 为单一事实源 + <code>SafetyRules</code> 渲染期硬断言 + <code>openresty -t</code> 门禁 + 与实现无关的黑盒安全回归测试，根治了现网手写 330 行 <code>40-frontends.yaml</code> 易漏清头、漏封内部端点的顽疾。</li>
+      <li><b>技术边界清晰</b>：在团队主力 Python/TS、无 Go 栈的前提下，OpenResty 原生指令承担转发/流式/WS/大文件/reload，Lua 只写最薄的验签与 CSRF；并将网关从 <code>atlas-frontends</code> 剥离，解耦前端发版与长连接生命周期。</li>
+    </ul>
+  </div>
+
+  <h2 id="check">核对结论与处理状态（2026-11-26）</h2>
+  <p>评审之后，设计稿已经做了这几处改动：</p>
+  <ul>
+    <li>112 停用，部署图删除；</li>
+    <li>运营中心先改用独立域名做透传站点（第 1 条，11-25）；11-26 再改：运营人员改为用户中心里系统租户的人，运营中心和其他系统一样挂在 Atlas 站点（/opscenter/、/opscenter-ui/），走 auth 路由；</li>
+    <li>登录不限流，改为登录失败按 IP 封禁，替代第 9 条的 <code>limit_req</code>。</li>
+  </ul>
+  <table>
+    <thead><tr><th style="width: 22%">问题</th><th style="width: 8%">核对</th><th>说明</th><th style="width: 9%">状态</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#p0-1">1. 运营中心三重冲突</a></td><td><span class="tag ok">成立</span></td><td>A、B、C 都属实。小错：幂等头叫 <code>Idempotency-Key</code>，不带 <code>X-Ops-</code> 前缀。11-26 方案变更：运营中心并入统一登录、挂 Atlas 站点，三处冲突一并消失。</td><td><span class="tag done">已处理</span></td></tr>
+      <tr><td><a href="#p0-2">2. passthrough 吞掉认证接口、改密</a></td><td><span class="tag ok">成立</span></td><td>设计自相矛盾属实。「死锁」说重了，实际最多卡 15 分钟；refresh、logout 的 CSRF 影响小。</td><td><span class="tag todo">待处理</span></td></tr>
+      <tr><td><a href="#p0-3">3. Nginx 的 4 个陷阱</a></td><td><span class="tag part">部分成立</span></td><td>
+        <ul>
+          <li>① 查询串误杀、③ WebSocket 缺 Origin 校验：成立；</li>
+          <li>② 属实现注意事项，现网已有现成写法；</li>
+          <li>④ 机理不对：Nginx 会自动 301 补斜杠，不会 404。</li>
+        </ul>
+        11-26 网关代码已处理（含 ② ④ 的实现注意事项）。
+      </td><td><span class="tag done">已处理</span></td></tr>
+      <tr><td><a href="#p0-4">4. 错误信封、续传、预览</a></td><td><span class="tag ok">成立</span></td><td>前端几处问题属实，要列入配套改造。预览「全部 404」不准：设计保留了旧路径别名；但 <code>PREVIEW_BASE_URL</code> 确实要改。</td><td><span class="tag todo">待处理</span></td></tr>
+      <tr><td><a href="#p0-5">5. 旧版手机 App</a></td><td><span class="tag part">部分成立</span></td><td>逻辑成立。但 App 还没上真机，实际影响小，建议降为 P2；文中的文件路径也写错了。</td><td><span class="tag todo">待处理</span></td></tr>
+      <tr><td><a href="#p1-6">6. 部署环境与证书</a></td><td><span class="tag ok">成立</span></td><td>
+        <ul>
+          <li>112 相关内容作废：112 已停用，部署图已删；</li>
+          <li>本机开发、证书冷启动还没设计；</li>
+          <li>OpenResty 官方 apt 源没有 Debian 13 的包，比评审说的更严重。</li>
+        </ul>
+      </td><td><span class="tag part">部分处理</span></td></tr>
+      <tr><td><a href="#p1-7">7. 内部 Traefik</a></td><td><span class="tag part">部分成立</span></td><td>trustedIPs 成立，而且重要。超时设计里已经写了。Server Actions、Langfuse 回调两点不成立。</td><td><span class="tag todo">待处理</span></td></tr>
+      <tr><td><a href="#p1-8">8. 路由表遗漏</a></td><td><span class="tag part">部分成立</span></td><td>设计里的路由表只是示意，这一条算实现时的清单。knowledge/mcp 那点不成立：接口已经删了。</td><td><span class="tag todo">待处理</span></td></tr>
+      <tr><td><a href="#p1-9">9. 安全细节与运维</a></td><td><span class="tag part">部分成立</span></td><td>
+        <ul>
+          <li>限流不采纳，改为登录失败按 IP 封禁，已写进设计；</li>
+          <li>撤销口径成立，监控告警成立，都还没改；</li>
+          <li><code>Authorization</code> 头非法时回退读 Cookie：利用不了，只是规范问题。</li>
+        </ul>
+      </td><td><span class="tag part">部分处理</span></td></tr>
+      <tr><td><a href="#p2-10">10. 顶层决策再权衡</a></td><td><span class="tag part">部分成立</span></td><td>「两跳没减少」「mcp-ui 不存在」属实。替代方案和已定的决策冲突，不采纳。</td><td><span class="tag drop">不采纳</span></td></tr>
+      <tr><td><a href="#p2-11">11. 文档残留矛盾</a></td><td><span class="tag ok">成立</span></td><td>逐条都属实。运营中心那一行已改，其余还要清理。</td><td><span class="tag part">部分处理</span></td></tr>
+    </tbody>
+  </table>
+  <p><b>评审没提、核对时发现的：</b></p>
+  <ul>
+    <li><b>Secure Cookie 会断集群内的调用</b>：<code>uc_access</code> 设了 <code>Secure</code> 之后，集群内经 HTTP、靠 Cookie 调用户中心的 register 会断。当初不设 Secure 的原因写在 <code>deploy/server/traefik-https.yaml</code> 的注释里。这条要和第 2 条「用户中心自身鉴权怎么改」一起定。</li>
+    <li><b>OpenResty 官方包覆盖不全</b>：官方 apt 源里 Debian 只到 bookworm、Ubuntu 只到 noble（24.04），2026-11-25 查 openresty.org/package 确认。</li>
+    <li><b>gitea 透传站点</b>：gitea 只部署在 112 上。112 停用后，透传站点里还要不要留 gitea，待定。</li>
+  </ul>
+
+  <h2>评审问题总览</h2>
+  <table>
+    <thead><tr><th style="width: 7%">级别</th><th style="width: 28%">问题</th><th>核心影响</th><th style="width: 20%">涉及文档 / 源码</th></tr></thead>
+    <tbody>
+      <tr><td><span class="tag p0">P0</span></td><td><a href="#p0-1">1. 运营中心三重致命冲突</a></td><td><code>X-Ops-*</code> 误杀 <code>X-Ops-CSRF</code>（全量写操作 403）；<code>/ops/</code> 禁区封杀系统代理（全量 404）；挂进 Atlas 站点违背多租户域隔离。</td><td><a href="design-api-gateway.html">design</a> · <a href="code-routing.html">code-routing</a> · <code>opscenter/</code></td></tr>
+      <tr><td><span class="tag p0">P0</span></td><td><a href="#p0-2">2. <code>/uc/api/v1/auth/</code> 整段 passthrough + 改密死锁</a></td><td>吞掉需认证的 <code>/auth/me</code>、<code>/auth/password</code>；改密后旧 JWT 仍带 <code>mcp: true</code> 导致 15 分钟死循环；refresh/logout 存在 CSRF 归属真空。</td><td><a href="design-api-gateway.html">design</a> · <a href="code-auth.html">code-auth</a> · <code>usercenter/</code></td></tr>
+      <tr><td><span class="tag p0">P0</span></td><td><a href="#p0-3">3. OpenResty/Nginx 4 个实现陷阱</a></td><td><code>$request_uri</code> 误杀含 <code>%</code> 的 Query；<code>^~</code> 屏蔽正则子路径且正则内 <code>proxy_pass</code> 带 URI 报错；WS 缺 <code>Origin</code> 校验；无尾斜杠 UI 404。</td><td><a href="code-routing.html">code-routing</a> · <a href="code-auth.html">code-auth</a> · <a href="code-proxy.html">code-proxy</a></td></tr>
+      <tr><td><span class="tag p0">P0</span></td><td><a href="#p0-4">4. 前后端错误信封、流式续传与预览断链</a></td><td><code>@atlas/chat-ui</code> 不认顶层 <code>code</code>；<code>sse.ts</code> 遇 401 直接终止；TeamFlow 原生 <code>EventSource</code> / noVNC WS 拿不到 401；预览 URL 404。</td><td><a href="code-routing.html">code-routing</a> · <code>packages/chat-ui</code> · <code>preview.py</code></td></tr>
+      <tr><td><span class="tag p0">P0</span></td><td><a href="#p0-5">5. 旧版手机 App 切流瞬间全量失效</a></td><td>旧版 Expo App 走 Cookie+CSRF 且不发 <code>Origin</code>/<code>Sec-Fetch-Site</code>，强校验导致写请求全 403，15m JWT 到期直接踢回登录页。</td><td><a href="code-auth.html">code-auth</a> · <code>mobile/src/lib/session.tsx</code></td></tr>
+      <tr><td><span class="tag p1">P1</span></td><td><a href="#p1-6">6. 三套部署环境断裂与冷启动死锁</a></td><td>macOS Docker Desktop 无法跑宿主机+ClusterIP；112 私网 IP 无法走 Let's Encrypt HTTP-01；首签证书鸡生蛋死锁；Debian 13 apt 兼容性待验。</td><td>deployment-112（已删除） · <code>deploy/local/</code></td></tr>
+      <tr><td><span class="tag p1">P1</span></td><td><a href="#p1-7">7. 内部 Ingress（第二跳 Traefik）隐蔽风险</a></td><td>未配 <code>trustedIPs</code> 会覆写 <code>X-Forwarded-Host</code> 导致 Next.js/Langfuse 故障；默认 60s/180s 超时切流；<code>maxSurge: 0</code> 升级断流；固定 ClusterIP 不可变。</td><td><a href="code-proxy.html">code-proxy</a> · <code>cluster-setup.sh</code></td></tr>
+      <tr><td><span class="tag p1">P1</span></td><td><a href="#p1-8">8. 路由表遗漏与安全面退化</a></td><td>漏配 TeamFlow SSE、DeviceGW 三段拆档；<code>/llm/</code> 放宽暴露 <code>/healthz</code>；<code>/knowledge/mcp</code> 不再拦截；大文件上传/下载档位未全覆盖。</td><td><a href="design-api-gateway.html">design</a> · <code>40-frontends.yaml</code></td></tr>
+      <tr><td><span class="tag p1">P1</span></td><td><a href="#p1-9">9. 安全细节、撤销窗口口径与宿主机运维</a></td><td>登录/刷新无 IP 限流易受密码喷洒与 Argon2 DoS；KeyRing 原子落盘与多 worker 节流；快照缓存 5 分钟导致非“秒级生效”；宿主机监控告警缺失。</td><td><a href="code-auth.html">code-auth</a> · <a href="dynamic/dynamic-web-jwt.html">dynamic-web-jwt</a></td></tr>
+      <tr><td><span class="tag p2">P2</span></td><td><a href="#p2-10">10. 两个顶层架构决策的再权衡</a></td><td>宿主机 OpenResty+内部 Traefik 双跳双体系成本 vs 集群内 2 副本或砍掉 Traefik；为 3 个前端做全站 <code>-ui</code> 重命名 vs <code>/api/&lt;名&gt;/</code>。</td><td><a href="design-api-gateway.html">design</a> · <code>docker/frontends/</code></td></tr>
+      <tr><td><span class="tag p2">P2</span></td><td><a href="#p2-11">11. 12 份文档内部残留矛盾清理</a></td><td>4 份 <code>dynamic/*.html</code> 底部原理图仍为旧版 Go + K8s 2 副本方案；<code>code-routing.html</code> 存在多处未同步字段与描述。</td><td><code>dynamic/*.html</code> · <a href="code-routing.html">code-routing</a></td></tr>
+    </tbody>
+  </table>
+
+  <h2>一、P0 阻断级问题（落地即坏 / 安全缺口，必须修改）</h2>
+
+  <h3 id="p0-1">1. 运营中心（OpsCenter）存在三重致命冲突，按当前设计 100% 不可用</h3>
+  <ul>
+    <li><b>阻断 A（<code>HeaderScrub</code> 误杀 <code>X-Ops-CSRF</code>）</b>：<a href="code-routing.html">code-routing.html</a> 与 <a href="component-gateway.html">component-gateway.html</a> 在 http 级（对所有站点生效）执行：<code>more_clear_input_headers X-Uid X-Tenant-Id X-Auth-Uid X-Caller-App 'X-Ops-*'</code>。但运营中心前端写请求的 CSRF 头正是 <code>X-Ops-CSRF</code>（<code>opscenter/web/src/lib/api.ts:35</code>），后端在 <code>opscenter/services/opscenter/src/atlas_opscenter/api/deps.py:33-57</code> 强校验该头。通配符 <code>'X-Ops-*'</code> 会把 <code>X-Ops-CSRF</code> 无条件清空——<b>无论运营中心挂在 Atlas 站点还是独立透传站点，所有写操作都会全部 403 <code>CSRF_FAILED</code></b>。</li>
+    <li><b>阻断 B（<code>BoundaryGuard</code> 封杀运营中心系统代理）</b>：运营中心前端调用各系统运营接口的路径为 <code>/&lt;basePath&gt;/api/systems/{code}/ops/{path}</code>（<code>opscenter/web/src/lib/api.ts:97</code>、<code>opscenter/services/opscenter/src/atlas_opscenter/api/systems.py:51</code>），<b>合法包含 <code>/ops/</code> 路径段</b>。若按 <a href="design-api-gateway.html">design-api-gateway.html</a> 路由表把 <code>ops-ui</code> 挂在 Atlas 站点下，server 级禁区规则「含 <code>/ops/</code> 段直接 404」会把运营中心全部系统代理调用直接拦死。</li>
+    <li><b>冲突 C（域隔离违背 &amp; 文档自相矛盾）</b>：<a href="design-api-gateway.html">design-api-gateway.html</a>（词汇表、步骤 1）与 <a href="code-routing.html">code-routing.html</a>（设计决策）均称「运营中心、Langfuse、gitea 是透传站点」，<a href="dynamic/dynamic-routing-security.html">dynamic-routing-security.html</a> 称「运营中心独立域名、不挂入本网关」；但 <a href="design-api-gateway.html">design-api-gateway.html</a> 路由表与 deployment-112.html（已删除） 又把 <code>ops-ui</code> 塞进 Atlas 站点下的 <code>/ops-ui/…</code>，同时 <a href="system-context.html">system-context.html</a> 与 <a href="component-gateway.html">component-gateway.html</a> 的透传站点中又删掉了运营中心。与租户同域违背 <code>c4-model/opscenter/container.html</code> 的域隔离约束，且现网 <code>deploy/local/48-opscenter.yaml:45</code> 的 <code>ATLAS_OPS_COOKIE_PATH</code> 仍是 <code>/ops</code>。</li>
+  </ul>
+  <div class="callout">
+    <b>修改建议</b>：运营中心明确收敛为<b>独立域名（如 <code>ops.techstz.com</code>）的透传站点</b>，彻底移出 Atlas 站点；<code>HeaderScrub</code> 禁止使用 <code>'X-Ops-*'</code> 宽通配符，改为精确枚举内网运营签名头（<code>X-Ops-Timestamp</code>、<code>X-Ops-Signature</code>、<code>X-Ops-Operator</code>、<code>X-Ops-Operator-Name</code>、<code>X-Ops-Operation</code>、<code>X-Ops-Idempotency-Key</code>），放行 <code>X-Ops-CSRF</code>。
+  </div>
+  <div class="callout check">
+    <b>核对（11-26）</b>：成立。
+    <ul>
+      <li><code>opscenter/web/src/lib/api.ts:35</code> 发 <code>X-Ops-CSRF</code>，<code>deps.py:33</code> 强校验它。</li>
+      <li>系统代理路径 <code>/api/systems/{code}/ops/…</code> 含 <code>/ops/</code> 段。</li>
+      <li>小错：幂等头叫 <code>Idempotency-Key</code>（<code>atlas_opsapi/stamp.py:20</code>），不是 <code>X-Ops-Idempotency-Key</code>。</li>
+    </ul>
+    <b>处理</b>：已按建议改（11-25 选方案 A）。
+    <ul>
+      <li>运营中心用独立域名 <code>ops.techstz.com</code> 做透传站点，删掉了 Atlas 站点下的 <code>/ops-ui/</code> 路由。</li>
+      <li>清头逐个列出 5 个签名头，不再用通配符。</li>
+      <li>实现时，运营中心前端的 basePath 和 Cookie Path 要从 <code>/ops</code> 改成根路径。</li>
+    </ul>
+    <b>再改（11-26）</b>：用户定运营中心的登录、权限和其他系统一致，上面的独立域名方案作废。
+    <ul>
+      <li>运营人员是用户中心里系统租户的人，统一登录；运营中心挂在 Atlas 站点：接口 <code>/opscenter/</code>（auth），页面 <code>/opscenter-ui/</code>。名字不用 <code>ops</code>，因为它是禁区段。</li>
+      <li>A：运营中心不再有自己的 CSRF 头，写请求用网关统一的 CSRF；清头仍逐个列出 5 个签名头。</li>
+      <li>B：系统代理的路径改成 <code>/api/systems/{code}/…</code>，不含 <code>/ops/</code> 段；网关的硬规则加了一条「名字不能是禁区段」。</li>
+      <li>C：运营中心容器图去掉了「入口和租户分开」，ops.techstz.com 透传站点删掉。实现时运营中心前端的 basePath 改成 <code>/opscenter-ui</code>，自己的会话 Cookie 不再需要。</li>
+    </ul>
+  </div>
+
+  <h3 id="p0-2">2. <code>/uc/api/v1/auth/</code> 整段设为 <code>passthrough</code> 吞掉认证接口 + 强制改密 15 分钟死锁</h3>
+  <ul>
+    <li><b>吞掉需认证接口</b>：<a href="design-api-gateway.html">design-api-gateway.html</a> 路由表将整个子路径 <code>/api/v1/auth/</code> 标为 <code>passthrough</code>（不验 JWT、不写 <code>X-Uid</code>/<code>X-Tenant-Id</code>、不校 CSRF）。对照源码 <code>usercenter/services/usercenter/src/atlas_usercenter/api/auth.py:121-160</code>，<b><code>GET /api/v1/auth/me</code></b> 与 <b><code>POST /api/v1/auth/password</code></b> 均在 <code>/api/v1/auth/</code> 下，且正是需要 <code>AUTH</code> + <code>pending_password_ok: true</code> 的接口。按 Nginx 最长前缀匹配，它们会被 <code>passthrough</code> 吞掉，永远拿不到网关身份头。</li>
+    <li><b><code>mcp: true</code> 强制改密后的 15 分钟死锁</b>：用户使用临时密码登录后拿到 15 分钟有效、载荷带 <code>mcp: true</code> 的 Access JWT。通过 <code>pending_password_ok</code> 路由调用 <code>POST /uc/api/v1/auth/password</code> 改密成功后，网关无状态本地验签看到的<b>仍是旧 JWT 里的 <code>mcp: true</code></b>，接下来最多 15 分钟内访问所有业务路由都会持续 <code>403 PASSWORD_CHANGE_REQUIRED</code>。</li>
+    <li><b><code>passthrough</code> 写接口的 CSRF 真空</b>：<code>POST /uc/api/v1/auth/refresh</code> 与 <code>POST /uc/api/v1/auth/logout</code> 走 <code>passthrough</code>，不进网关 Lua <code>CsrfCheck</code>。<a href="dynamic/dynamic-web-jwt.html">dynamic-web-jwt.html</a> 写了 refresh 带 <code>X-UC-CSRF</code>，但设计未明确「这两条接口的 <code>Origin</code> + <code>uc_csrf == X-UC-CSRF</code> 校验由用户中心自行负责」，易造成两不管真空。</li>
+    <li><b>用户中心侧前置改造契约缺失</b>：现网 <code>deploy/local/15-usercenter.yaml</code> 与 <code>usercenter/.../settings.py</code> 尚未接入 Redis（需规划独立 Redis DB 编号，避开已用的 0/3/5），且 <code>usercenter/.../api/deps.py:76-101</code> 的 <code>current_principal</code> 仍直读 <code>uc_session</code> Cookie 而非 <code>X-Uid</code>/<code>X-Tenant-Id</code>；另 <code>change_password</code> 目前依赖 <code>keep_session=principal.session_row.uuid</code>，切无状态 JWT 后需明确改密时如何吊销其余设备的 Refresh Token，以及 Ed25519 私钥的 Secret 注入与多 <code>kid</code> 轮换运维方式。</li>
+  </ul>
+  <div class="callout">
+    <b>修改建议</b>：① <code>passthrough</code> 改为显式精确/独立子路径（<code>login</code>、<code>refresh</code>、<code>logout</code>、<code>token</code>、<code>token/refresh</code>、<code>token/revoke</code>、<code>tenant-required</code>），将 <code>/api/v1/auth/me</code> 和 <code>/api/v1/auth/password</code> 明确登记为 <code>AUTH</code> + <code>pending_password_ok: true</code>；② 约定改密成功后用户中心<b>立即重签一张 <code>mcp: false</code> 的新 Access JWT</b>（Web 写新 <code>uc_access</code> Cookie，Mobile 返回新 <code>access_token</code> 或强制前端立即刷新）；③ 明确 <code>refresh</code>/<code>logout</code> 的 CSRF 校验由用户中心兜底。
+  </div>
+  <div class="callout check">
+    <b>核对（11-26）</b>：成立，但有两点说重了。
+    <ul>
+      <li>设计里 <code>pending_password_ok</code> 要放行的三个接口（改密、登出、取自己的信息）恰好全在 passthrough 子路径下，自相矛盾属实。</li>
+      <li>「死锁」说重了：403 不会触发刷新，但旧令牌最多 15 分钟就过期，刷新后拿到的就是 <code>mcp: false</code> 的新令牌。</li>
+      <li>refresh/logout 的 CSRF 影响小：<code>uc_refresh</code> 是 <code>SameSite=Strict</code>，登出被伪造的后果也有限。</li>
+      <li>用户中心的现状属实：鉴权读的是 <code>uc_session</code>、还没接 Redis，Redis 已用 0/3/5 号库。</li>
+    </ul>
+    <b>处理</b>：待处理。为了登录失败封禁，路由表已经单列了 <code>login</code>、<code>token</code> 两条 passthrough；但 <code>/auth/me</code>、<code>/auth/password</code> 仍落在 passthrough 子路径下。
+  </div>
+
+  <h3 id="p0-3">3. OpenResty / Nginx 配置生成的 4 个高危实现陷阱</h3>
+  <ol>
+    <li><b><code>map $request_uri</code> 误杀合法 Query String，且禁区正则存在漏网变体</b>：<a href="code-routing.html">code-routing.html</a> 用 <code>map $request_uri $gw_malformed</code> 拒 <code>%25</code>、<code>%5C</code>、<code>\</code>。但 <code>$request_uri</code> <b>包含 <code>?</code> 后的查询串</b>——知识库搜索 <code>?q=100%25</code>、登录回跳 <code>?next=%2Fatlas-ui%3Fq%3D100%2525</code> 等正常请求均会被 400 误杀。必须只校验 <code>?</code> 之前的原始路径段（<code>~*^[^?]*...</code>），大小写不敏感，并补全 <b><code>%2e</code>（编码点号）与 <code>%2f</code>（编码斜杠）</b>检查；禁区段正则需覆盖无尾斜杠情况 <code>~*(^|/)(internal|ops|open)(/|$)</code>（否则 <code>/atlas/internal</code> 漏放）。</li>
+    <li><b><code>location</code> 优先级冲突与正则内 <code>proxy_pass</code> 报错</b>：<a href="design-api-gateway.html">design-api-gateway.html</a> 中的 <code>/v1/threads/*/events</code>、<code>/v1/threads/*/browser/view</code> 含通配符，只能渲染为正则 <code>location ~</code>。若父路由 <code>/atlas/</code> 用了 <code>location ^~ /atlas/</code>，Nginx 会直接跳过外层正则 location（必须嵌套在 <code>^~</code> 内或放弃 <code>^~</code> 并严格控制正则顺序）。此外，正则 location 内禁止 <code>proxy_pass http://internal_ingress/;</code> 带 URI（<code>openresty -t</code> 直接失败），必须改用 <code>rewrite ^/&lt;名&gt;(/.*)$ $1 break; proxy_pass http://internal_ingress;</code>。</li>
+    <li><b>WebSocket 握手缺少 <code>Origin</code> 校验（CSWSH 风险）</b>：<a href="code-auth.html">code-auth.html</a> 对所有 <code>GET</code> 跳过 <code>CsrfCheck</code>，但 WebSocket Upgrade 握手本身是 <code>GET</code> 且同源自动带 <code>uc_access</code> Cookie。对 <code>WEBSOCKET</code> + <code>COOKIE</code> 路由必须在握手阶段强制校验 <code>Origin</code> 精确等于本站。</li>
+    <li><b><code>upstream keepalive</code> 与 <code>Connection</code> 头冲突 + 无尾斜杠 UI 404</b>：<a href="code-proxy.html">code-proxy.html</a> 配了 <code>keepalive 64</code>，需保证 <code>common.conf</code> 与 <code>websocket.conf</code> 统一通过 <code>map $http_upgrade $connection_upgrade</code>（非 WS 路由固定写 <code>""</code>）设置 <code>Connection</code>，不重复声明 <code>proxy_set_header</code>。另仅生成 <code>location /atlas-ui/</code> 会导致直接访问 <code>/atlas-ui</code>（无尾斜杠）落入默认路由 404，需补 <code>location = /&lt;名&gt;-ui</code> 跳转或 <code>~ ^/&lt;名&gt;-ui(/|$)</code>。</li>
+  </ol>
+  <div class="callout check">
+    <b>核对（11-26）</b>：部分成立。
+    <ol>
+      <li><b>成立</b>：<code>$request_uri</code> 含查询串，<code>?q=100%25</code> 会被 400。补 <code>%2e</code>、<code>%2f</code> 只算加固：禁区段查的是 Nginx 解码、规范化后的 <code>$uri</code>。</li>
+      <li><b>规则说得对，但不是设计缺陷</b>：现网 <code>40-frontends.yaml:142-159</code> 已经是「<code>^~</code> 里嵌正则 + rewrite」的写法，实现时照搬即可。</li>
+      <li><b>成立</b>：<code>SameSite=Lax</code> 挡不住同站兄弟子域（如 <code>langfuse.techstz.com</code>）发起的握手。</li>
+      <li>keepalive 与 Connection 头的写法属实现细节。<b>「无尾斜杠 404」的机理不对</b>：以 <code>/</code> 结尾、带 <code>proxy_pass</code> 的前缀 location，Nginx 会自动 301 补上斜杠。沿用现网的 <code>~ ^/&lt;名&gt;(/|$)</code> 写法即可。</li>
+    </ol>
+    <b>建议级别</b>：① 保持 P0（正常请求会被误杀），③ 降为 P1，②④ 实现时注意即可。<b>处理</b>：已在网关代码里处理（11-26，<code>infra-platform/gateway</code>），都有安全回归测试。
+    <ol>
+      <li>畸形路径只看 <code>$request_uri</code> 的路径部分，不看查询串；另补了 <code>%2e</code>。</li>
+      <li>前缀 location 不加 <code>^~</code>，正则 location 用 rewrite 去前缀、<code>proxy_pass</code> 不带 URI；正则按字面前缀从长到短排。</li>
+      <li>Cookie 载体的 WebSocket 握手校 Origin（跨站 403）。</li>
+      <li>每个档位自带 Connection 头（WebSocket 用 upgrade 映射）；<code>/atlas-ui</code> 自动 301 到 <code>/atlas-ui/</code> 已有测试。</li>
+    </ol>
+  </div>
+
+  <h3 id="p0-4">4. 前后端错误信封、长连接 15 分钟过期续传与预览站点断链</h3>
+  <ul>
+    <li><b>网关错误体与 <code>@atlas/chat-ui</code> 不兼容</b>：<a href="code-routing.html">code-routing.html</a> 规定网关返回 <code>{code, message, request_id}</code>。但 <code>packages/chat-ui/src/lib/http.ts:79-93</code> 的 <code>toApiError()</code> 只认 <code>body.error.{kind, message}</code> 与 <code>body.detail</code>，<b>根本不读顶层 <code>code</code>/<code>message</code></b>（这正是现网 <code>40-frontends.yaml:99</code> 兼容返回三套字段的原因）。若不兼容或同步改造前端，<code>TOKEN_EXPIRED</code>、<code>CSRF_FAILED</code>、<code>PASSWORD_CHANGE_REQUIRED</code> 语义码会被全部丢失。</li>
+    <li><b>SSE 与 WebSocket 15 分钟过期后无法按文档实现「无感续传」</b>：
+      <ul>
+        <li><code>packages/chat-ui/src/lib/sse.ts:153-155</code> 目前把所有 <code>400..499</code>（含 <code>401 TOKEN_EXPIRED</code>）直接抛 <code>FatalError</code> 终止流，不会触发单飞刷新后带游标重连。</li>
+        <li>TeamFlow 使用原生 <code>new EventSource(...)</code>（<code>teamflow/web/src/lib/useProcessStream.ts:21</code>），浏览器原生 <code>EventSource</code> 无法读取 401 状态码以触发 <code>/refresh</code>。</li>
+        <li>noVNC 浏览器画面使用原生 <code>new WebSocket(...)</code>（<code>packages/chat-ui/src/chat/BrowserView.tsx:75</code>），闲置超过 15 分钟建连被 401 拒绝时只能收到不透明关闭码 <code>1006</code>，无法自动走 HTTP 401 拦截器刷新。</li>
+      </ul>
+      上述三处是从 12 小时 Session 切 15 分钟 JWT 带来的隐蔽回归，必须纳入配套改造范围。
+    </li>
+    <li><b>预览站点链接 404</b>：<code>agent-platform/services/agent/src/atlas_agent/services/preview.py:100</code> 生成的地址为 <code>{PREVIEW_BASE_URL}/v1/previews/{token}/</code>（<code>30-server.yaml:129</code> 填的是 <code>__PUBLIC_ORIGIN__</code>），而 <a href="dynamic/dynamic-routing-security.html">dynamic-routing-security.html</a> 将预览路径移到了 <code>/atlas/v1/previews/</code>。若不同步修改 <code>PREVIEW_BASE_URL</code> 或保留 <code>/v1/previews/</code> 路由，全部文件预览将 404。</li>
+  </ul>
+  <div class="callout check">
+    <b>核对（11-26）</b>：成立。
+    <ul>
+      <li>四处源码都属实：<code>http.ts:79-93</code>、<code>sse.ts:153</code>、TeamFlow 的 <code>useProcessStream.ts:21</code>、<code>BrowserView.tsx:75</code>。登录态从 12 小时会话改成 15 分钟令牌后，这几处确实会出问题。</li>
+      <li>预览「全部 404」不准：设计写了旧路径在过渡期保留别名。但 <code>PREVIEW_BASE_URL</code> 确实要改成带 <code>/atlas</code>。</li>
+    </ul>
+    <b>处理</b>：待处理，列入前端配套改造。
+  </div>
+
+  <h3 id="p0-5">5. 旧版手机 App 会在网关切流瞬间全量失效（仅保留路径别名不够）</h3>
+  <ul>
+    <li>核对 <code>agent-platform/mobile/src/lib/session.tsx:118-165</code>：当前 Expo App 是调用 <code>POST /uc/api/v1/auth/login</code> 走 Cookie + <code>X-UC-CSRF</code>，再访问 <code>${server}/atlas-api</code>，且 <code>app/_layout.tsx:26</code> 遇 401 直接退出到登录页。</li>
+    <li><b>双重破坏</b>：① React Native 的 <code>fetch</code> <b>不会附带浏览器的 <code>Origin</code> 或 <code>Sec-Fetch-Site</code> 请求头</b>，新网关在 <code>COOKIE</code> 写请求上新增强 <code>Origin</code>/<code>Sec-Fetch-Site</code> 校验会导致旧版 App 所有写操作立刻 <code>403 CSRF_FAILED</code>；② <code>uc_access</code> 缩至 15 分钟后，无刷新逻辑的旧版 App 每 15 分钟即被踢回登录页。</li>
+    <li><b>结论</b>：网关切流前必须先完成移动端发版（切换至 <code>/uc/api/v1/auth/token</code> + <code>Bearer</code> + 单飞刷新）并触发旧版强更，不能假设靠 <code>/atlas-api</code> 别名即可无缝过渡。</li>
+  </ul>
+  <div class="callout check">
+    <b>核对（11-26）</b>：逻辑成立，严重度偏高。
+    <ul>
+      <li>CSRF 规则是「Origin（没有时看 Sec-Fetch-Site）必须是本站」，React Native 的 fetch 两个头都不带，写请求确实会 403。</li>
+      <li>但 App 还没上真机，实际影响小，建议降为 P2。</li>
+      <li>文件路径应为 <code>agent-platform/mobile/src/app/_layout.tsx</code>。</li>
+    </ul>
+    <b>处理</b>：待处理。
+  </div>
+
+  <h2>二、P1 重要架构与运维缺口（建议开工前敲定）</h2>
+
+  <h3 id="p1-6">6. 三套部署环境断裂、证书冷启动死锁与 OS 兼容性</h3>
+  <ul>
+    <li><b>本机开发（macOS Docker Desktop）方案缺失</b>：macOS 无 systemd / apt OpenResty，且 Docker Desktop <b>不将 K8s ClusterIP / Pod 网段路由到 macOS 宿主机</b>（见 <code>deploy/local/30-server.yaml:4-5</code>）。一旦 <code>atlas-frontends</code> 去掉 <code>nginx</code> 且用户中心废弃 <code>uc_session</code> + <code>/auth/verify</code>，开发机将无法跑通全套。必须配套一份跑在 K8s 内的容器化 OpenResty 清单给 <code>deploy/local/</code>（共用 <code>render.py</code> + <code>lua/atlas_gw/*</code>，HTTP <code>:8080</code> 模式）。</li>
+    <li><b>192.168.0.112 私网 IP 与 Let's Encrypt HTTP-01 / <code>Secure</code> Cookie 的矛盾</b>：deployment-112.html（已删除） 以 <code>192.168.0.112</code> 画了 certbot HTTP-01 验证。若 112 无公网域名与公网 80 端口映射，Let's Encrypt 会拒签私网 IP / 内网 <code>nip.io</code>；且全站写死 <code>Secure</code> Cookie 在非 <code>localhost</code> 的纯 HTTP 内网会被浏览器直接丢弃。设计需显式支持 <b>HTTP（内网/本机）</b>与 <b>HTTPS（公网 HTTP-01 / DNS-01 / 自有证书）</b>两种模式，并将「环境无关的服务路由」与「环境相关的站点清单（域名、有无 gitea/Langfuse）」解耦。</li>
+    <li><b>首次切流/装机的证书「鸡生蛋」死锁</b>：<code>SafetyRules</code> 与 <code>openresty -t</code> 要求证书文件已存在，而 <code>certbot --webroot</code> 依赖 OpenResty 先在 80 端口启动提供验证文件，同时现网 Traefik 仍占着 <code>hostPort: 80/443</code>。必须设计两阶段引导（释放 Traefik <code>hostPort</code> → 先以 HTTP-only 配置启 80 → certbot 首签 → 再渲染完整 443 配置并 reload）。</li>
+    <li><b>Debian 13 apt 源兼容性</b>：<code>deploy/server/cluster-setup.sh:15</code> 标注日本服务器为 <b>Debian 13</b>（而 deployment-112.html（已删除） 写 Ubuntu LTS），开工前需实测 OpenResty 官方 apt 源是否已支持 Debian 13 (trixie)。</li>
+  </ul>
+  <div class="callout check">
+    <b>核对（11-26）</b>：成立。
+    <ul>
+      <li><b>112</b>：11-25 起 112 停用，<code>deployment-112.html</code> 已删，本节关于 112 的内容作废。</li>
+      <li><b>本机开发</b>：Docker Desktop 不把 ClusterIP、Pod 网段路由到宿主机，属实，还没设计。</li>
+      <li><b>证书冷启动</b>：属实，还没设计。</li>
+      <li><b>OpenResty 安装源</b>：比评审说的更严重。2026-11-25 查 openresty.org/package，官方 apt 源里 Debian 只到 bookworm、Ubuntu 只到 noble（24.04），日本服务器的 Debian 13 没有官方包。</li>
+    </ul>
+    <b>处理</b>：部分处理（112 部分）。
+  </div>
+
+  <h3 id="p1-7">7. 内部 Ingress（第二跳 Traefik）的 4 个隐蔽风险</h3>
+  <ol>
+    <li><b>未配 <code>forwardedHeaders.trustedIPs</code> 导致下游跳转与 Server Actions 崩溃</b>：Traefik 默认不信任并覆写 <code>X-Forwarded-Host</code> / <code>X-Forwarded-Proto</code> / <code>X-Forwarded-For</code>。OpenResty 把 <code>Host</code> 改写为 <code>&lt;名&gt;.internal.techstz.com</code> 后，若 Traefik 未精确信任宿主机来源 IP，Next.js Server Actions 会因 <code>Origin</code> 与 <code>Host</code> 不匹配报错，Langfuse NextAuth 回调也会跳往 <code>langfuse.internal.techstz.com</code>（另 <code>deploy.sh:145</code> 的 <code>NEXTAUTH_URL</code> 切 HTTPS 时须同步更新）。</li>
+    <li><b>Traefik 默认超时与滚动更新策略</b>：Traefik entryPoint 默认 <code>respondingTimeouts.readTimeout=60s</code>、<code>idleTimeout=180s</code>，必须显式调大至 &gt;1h 并确认非 SSE 流（如 <code>devicegw</code> relay）的 <code>flushInterval</code>；同时 <code>cluster-setup.sh:168-169</code> 原因 <code>hostPort</code> 限制设的 <code>maxSurge: 0, maxUnavailable: 1</code> 必须改为 <code>maxSurge: 1, maxUnavailable: 0</code> + <code>preStop</code>，否则升级 Traefik 仍会全站中断。</li>
+    <li><b>固定 ClusterIP 不可变</b>：K8s Service 的 <code>spec.clusterIP</code> 创建后不可原地修改，现网集群切流须重建 Traefik Service 指定固定 IP，或由 <code>gateway.sh</code> 渲染时从 <code>kubectl</code> 动态读取。</li>
+    <li><b>未来扩多节点时的 NetworkPolicy 行为</b>：单节点下 <code>traefik</code> Namespace 配 <code>ingress: []</code> 可依靠「本机 host 到本机 Pod 恒放行」隔离沙箱 Pod；但扩到多节点时，跨节点宿主机访问 Traefik Pod 会被 <code>ingress: []</code> 拦截，需提前记入演进约束。</li>
+  </ol>
+  <div class="callout check">
+    <b>核对（11-26）</b>：部分成立。
+    <ol>
+      <li><b>trustedIPs</b>：成立，而且重要。设计要求后端用 <code>X-Forwarded-Host</code> 生成对外地址，而 Traefik 默认会把它改写成内部域名。但这一条里有两点不成立：
+        <ul>
+          <li>Server Actions 不适用：仓库里没有 <code>"use server"</code>；</li>
+          <li>Langfuse 回调：它设了 <code>NEXTAUTH_URL</code>，回调地址不跟着 Host 走。</li>
+        </ul>
+      </li>
+      <li><b>超时与滚动更新</b>：
+        <ul>
+          <li>超时设计里已经写了：<code>code-proxy</code> 要求内部 Ingress 的读超时、空闲超时放到 1 小时以上，并且不缓冲；</li>
+          <li><code>maxSurge: 0</code> 是 Traefik 占 hostPort 时留下的配置，属实。</li>
+        </ul>
+      </li>
+      <li><b>ClusterIP 不可变</b>：属实。</li>
+      <li><b>多节点 NetworkPolicy</b>：属实，属于远期约束。</li>
+    </ol>
+    <b>处理</b>：待处理。
+  </div>
+
+  <h3 id="p1-8">8. 路由表遗漏与安全暴露面退化</h3>
+  <table>
+    <thead><tr><th style="width: 22%">服务 / 路径</th><th style="width: 38%">核对源码发现的遗漏 / 退化</th><th>建议修正</th></tr></thead>
+    <tbody>
+      <tr><td><code>teamflow</code> SSE</td><td><code>processes.py:440</code>（<code>/api/v1/processes/*/stream</code>）与 <code>atlas_proxy.py:127</code>（<code>.../atlas/v1/threads/*/events</code>）均为 SSE，路由表未列。</td><td>显式登记为 <code>AUTH</code> + <code>SSE</code> 档位，防 60s 断流与缓冲。</td></tr>
+      <tr><td><code>device</code>（设备网关）</td><td><code>devicegw/app.py:145-165</code> 混合了 <code>/connect</code>（WS）、<code>/u/</code>（64MB 流式代理）与 <code>/pair</code>（普通），路由表未拆。</td><td>按子路径拆为 <code>WEBSOCKET</code>、<code>STREAM</code>、<code>DEFAULT</code>，均为 <code>SELF_AUTH</code>。</td></tr>
+      <tr><td><code>llm</code> 数据面</td><td>现网 <code>40-frontends.yaml:224-235</code> 精确白名单只放推理端点并挡 <code>/healthz</code>、<code>/readyz</code>；新设计放行整个 <code>/llm/…</code>，暴露面扩大。</td><td>恢复按 <code>/v1/</code>、<code>/universal/v1/</code> 子路径白名单登记，不整服放行。</td></tr>
+      <tr><td><code>knowledge/mcp</code></td><td>现网 <code>40-frontends.yaml:178</code> 显式 404 拦截，源码 <code>knowledge/api/mcp.py</code> 仍在；新禁区仅挡 <code>/internal/</code>、<code>/ops/</code>、<code>/open/</code>。</td><td>从 <code>knowledge</code> 彻底删除该端点或在路由表显式封禁。</td></tr>
+      <tr><td>大文件上传/下载</td><td><code>skill</code> 上传 zip、<code>teamflow</code> 上传文件模板、<code>atlas</code> 工作区文件下载/预览大文件均需核对 <code>DEFAULT</code>（20MB / 60s）上限。</td><td>对上传路径按需设 <code>UPLOAD</code>，大文件流式下载/预览放宽读超时与缓冲策略。</td></tr>
+    </tbody>
+  </table>
+  <div class="callout check">
+    <b>核对（11-26）</b>：部分成立。
+    <ul>
+      <li>设计里的路由表标的是「示意」，不是完整清单，所以这一节更像实现时补全 <code>routes.yaml</code> 的清单。</li>
+      <li>TeamFlow SSE、设备网关要拆三档、<code>/llm/</code> 整段放行会暴露 healthz：都属实。</li>
+      <li><b>knowledge/mcp 不成立</b>：<code>knowledge/api/mcp.py</code> 已在 11-25 删除（知识库去掉了 MCP）。</li>
+    </ul>
+    <b>处理</b>：待处理，实现时补全。
+  </div>
+
+  <h3 id="p1-9">9. 安全细节补强、撤销窗口真实口径与宿主机运维</h3>
+  <ul>
+    <li><b>强烈建议一期用 Nginx 原生 <code>limit_req</code> 护住登录/刷新接口</b>：用户中心仅做「单账号错 5 次锁定」（<code>usercenter/.../auth/service.py:170-194</code>），防不住<b>密码喷洒</b>、<b>恶意锁全员账号</b>以及 <b>Argon2 CPU DoS</b>。无需 Lua 和 Redis，5 行原生 <code>limit_req_zone $binary_remote_addr</code> 即可零依赖兜底 <code>/login</code>、<code>/token</code>、<code>/refresh</code>。</li>
+    <li><b><code>Authenticator</code> 冲突与 Fail-Closed 规则</b>：只要请求带了 <code>Authorization</code> 头（哪怕格式非法或非 Bearer），<b>绝不能回退读 Cookie</b>；<code>CsrfCheck</code> 在 <code>Origin</code> 与 <code>Sec-Fetch-Site</code> 同时缺失时须明确 Fail-Closed。</li>
+    <li><b><code>KeyRing</code> 文件安全与多 worker 节流</b>：写 <code>/var/lib/atlas-gateway/jwks.json</code> 须用临时文件 + <code>os.rename</code> 原子替换，目录权限严格 <code>0700</code> 归属 OpenResty worker 专用用户（防本地篡改注入假公钥）；遇未知 <code>kid</code> 时处理请求的可能是非 worker 0，10 秒节流拉取应通过共享内存 <code>gw_jwks:add("refresh_lock", true, 10)</code> + <code>ngx.timer.at(0, ...)</code> 在任意 worker 上安全去重。</li>
+    <li><b>撤销延迟的准确口径</b>：<a href="dynamic/dynamic-web-jwt.html">dynamic-web-jwt.html</a> 称权限/停用下游「秒级生效、零漏放」，但 <code>agent/.../config.py:80</code> 授权快照缓存为 <b>300 秒（5 分钟）</b>（<code>mcpgateway</code> 为 30 秒），且纯个人态/已建连长连接最长受 15 分钟 JWT 约束。权衡本身合理，但文档应如实写清「5 分钟快照缓存 + 15 分钟 JWT 上限」。</li>
+    <li><b>宿主机监控与续期告警</b>：网关移出 K8s 后脱离探针与日志体系，需补齐 <code>127.0.0.1:8081/readyz</code> 探活、certbot 续期失败/证书剩余 &lt;14 天告警，以及 <code>/var/log/atlas-gateway/access.log</code> 的采集与排查方式。</li>
+  </ul>
+  <div class="callout check">
+    <b>核对（11-26）</b>：部分成立。
+    <ol>
+      <li><b><code>limit_req</code>：不采纳</b>。11-25 定为「登录不限流，登录失败按 IP 封禁」，已写进总入口页原理 7 和 <a href="code-auth.html">code-auth.html</a>：
+        <ul>
+          <li>只数登录接口（login、token）回的 401；令牌过期的 401 不数，免得把共用出口 IP 的整个办公室封掉。</li>
+          <li>10 分钟内满 20 次，封 30 分钟；封禁期间这个 IP 访问所有站点都返回 403 <code>IP_BLOCKED</code>。</li>
+          <li>用户中心要配合：触发账号锁定的那一次也要回 401。</li>
+        </ul>
+      </li>
+      <li><b>Authorization 非法时回退读 Cookie</b>：跨站请求带不了 <code>Authorization</code> 头（要过预检），没法利用，只是规范问题。Origin 和 Sec-Fetch-Site 都缺时，现有规则本来就不放行。</li>
+      <li><b>KeyRing 原子写、多 worker 去重</b>：属实现细节。</li>
+      <li><b>撤销口径：成立</b>。Atlas 授权快照缓存 300 秒，总入口页原理 2 和 <a href="dynamic/dynamic-web-jwt.html">dynamic-web-jwt.html</a> 里的「零漏放」都要改。</li>
+      <li><b>监控告警</b>：成立。</li>
+    </ol>
+    <b>处理</b>：① 已处理（换了方案）；④⑤ 待处理。
+  </div>
+
+  <h2>三、P2 顶层架构权衡建议 &amp; 文档一致性清理</h2>
+
+  <h3 id="p2-10">10. 两个值得重新权衡的顶层架构决策</h3>
+  <table>
+    <thead><tr><th style="width: 24%">当前决策</th><th style="width: 38%">隐藏代价</th><th>替代收敛方案</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>宿主机 systemd OpenResty + 集群内 Traefik 做第二跳</b></td>
+        <td>单节点 K8s 挂了时业务本就不可用，入口仅能回 502 页面；却换来宿主机非声明式运维、本机 macOS 无法同构、升级 OpenResty 单实例中断 ~1s、证书冷启动鸡生蛋，且依然保留 Traefik 双跳复杂度（组件数与跳数均未减少）。</td>
+        <td>
+          <b>选项 A（推荐 · 集群内统一）</b>：Traefik 留外层管 TLS/ACME（零改现有证书），集群内将 OpenResty <code>atlas-gateway</code> 拆为独立 2 副本 Deployment，直连各 Service DNS。本机与生产 100% 同构，RollingUpdate 零停机。<br>
+          <b>选项 B（坚持宿主机则砍掉 Traefik）</b>：<code>gateway.sh</code> 渲染时直接解析/固定各服务 ClusterIP，彻底下线 Traefik，真少一跳、少一组件。
+        </td>
+      </tr>
+      <tr>
+        <td><b>全站破坏性重命名为 <code>/&lt;名&gt;/</code> + <code>/&lt;名&gt;-ui/</code></b></td>
+        <td>仓库实际只有 3 个租户前端（<code>atlas</code>、<code>uc</code>、<code>teamflow</code>，见 <code>docker/frontends/Dockerfile</code>），并不存在文档反复举例的 <code>mcp-ui</code>、<code>memory-ui</code>。改名导致用户地址栏变丑（<code>/atlas-ui</code>、<code>/uc-ui</code>），牵动全部前端 <code>basePath</code>、硬编码 <code>/uc/login</code>、<code>uc_app.home_url</code>、本机连接器（<code>atlas_connect/link.py:58</code>）及外部 MCP/LLM 配置，还要长期背负过渡别名。</td>
+        <td>
+          <b>前端保留 <code>/atlas</code>、<code>/uc</code>、<code>/teamflow</code></b>（零破坏书签与 <code>basePath</code>），<b>后端 API 统一归入 <code>/api/&lt;服务名&gt;/…</code></b>（第二段即内部域名 <code>&lt;服务名&gt;.internal.techstz.com</code>），数据面可保留短路径 <code>/llm/v1/…</code>。前后端天然无冲突且无需 <code>-ui</code> 后缀。
+        </td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="callout check">
+    <b>核对（11-26）</b>：事实部分对。
+    <ul>
+      <li>改前改后都是两跳：现在是 Traefik → nginx → 服务，改后是 OpenResty → Traefik → 服务。</li>
+      <li>仓库里没有 <code>mcp-ui</code>、<code>memory-ui</code>，只有 atlas、uc、teamflow、ops 四个 Next.js 前端。</li>
+    </ul>
+    <b>处理</b>：不采纳。宿主机 OpenResty 加内部 Ingress 的部署形态和 <code>-ui</code> 命名都是已定的决策，选项 B 正是被推翻的上一版。<code>code-routing.html</code> 里「少一跳、少一个组件」的旧说法归到第 11 条清理。
+  </div>
+
+  <h3 id="p2-11">11. 12 份文档内部的遗留矛盾清单（建议统一清理）</h3>
+  <p>设计显然经历了从「Go + K8s 2 副本 + 限流 + 旧路径」向「宿主机 OpenResty + 内部 Traefik + 无限流 + 新路径」的演进，4 份时序图顶部的 JSON 模型已更新，但底部的手写 <code>#principle</code> 区域与部分代码图漏同步：</p>
+  <table>
+    <thead><tr><th style="width: 30%">文件</th><th>残留 / 矛盾位置与内容</th></tr></thead>
+    <tbody>
+      <tr><td><a href="dynamic/dynamic-streaming-ws.html">dynamic/dynamic-streaming-ws.html</a></td><td><code>#principle</code>（L272–L380）仍写「独立 2 副本 K8s <code>atlas-gateway</code>」「<code>FlushInterval = -1</code>（Go 术语）」「<code>SIGTERM</code> → <code>/readyz</code> 503 → Traefik 摘除 → <code>WaitGroup</code> 15s」「RollingUpdate 零停机」及旧路径 <code>/atlas-api/*</code>、<code>/device-api/connect</code>。</td></tr>
+      <tr><td><a href="dynamic/dynamic-routing-security.html">dynamic/dynamic-routing-security.html</a></td><td><code>#principle</code>（L282–L437）仍写「Go / Starlette / httpx」「<code>PathNormalizer</code> + <code>path.Clean</code>」「入站 7 步管道含 ⑤ 强 IP 防爆破限流、⑦ OTel 指标」「运营中心独立域名不挂本网关」「CLI Pod 走本网关后删 <code>08-sandbox-network</code>」及全套旧路径。</td></tr>
+      <tr><td><a href="dynamic/dynamic-web-jwt.html">dynamic/dynamic-web-jwt.html</a></td><td><code>#principle</code> 图 1（L380）仍写 <code>atlas-gateway</code>，图 2（L405）仍写 <code>/atlas-api/*</code>、<code>/skill-api/*</code>。</td></tr>
+      <tr><td><a href="dynamic/dynamic-mobile-jwt.html">dynamic/dynamic-mobile-jwt.html</a></td><td><code>#principle</code>（L420）写「多副本网关」「未知 kid 每分钟最多 1 次刷新」（与 <a href="code-auth.html">code-auth.html</a> 的「10 秒内只拉一次」冲突）。</td></tr>
+      <tr><td><a href="code-routing.html">code-routing.html</a></td><td>L110 仍写 <code>list[RouteSpec]</code>（类名已改为 <code>ServiceRoute</code>）；L222 仍写 <code>/</code> 302 到 <code>/atlas</code>（主文为 <code>/atlas-ui/</code>）；L352 关系仍写「查出上游的 ClusterIP」；L404 仍写「少一跳、少一个组件」（保留内部 Traefik 并未少一跳或少组件）。</td></tr>
+      <tr><td><a href="design-api-gateway.html">design-api-gateway.html</a> · <a href="component-gateway.html">component-gateway.html</a></td><td>多处用不存在的 <code>/mcp-ui/</code>、<code>memory-ui.internal.techstz.com</code> 举例；运营中心在透传站点与 Atlas 站点间前后矛盾。</td></tr>
+    </tbody>
+  </table>
+  <div class="callout check">
+    <b>核对（11-26）</b>：成立，逐条属实。<b>处理</b>：部分处理。
+    <ul>
+      <li>运营中心前后矛盾：已随第 1 条解决。</li>
+      <li><code>dynamic-routing-security.html</code> 原理区里「运营中心独立域名、不挂入本网关」这一行已改成「网关只做透传」。</li>
+      <li>其余还要清理。</li>
+      <li>部署图已删，现在是 11 份文档。</li>
+    </ul>
+  </div>
+
+  <h2>四、建议的修订与落地顺序</h2>
+  <ol>
+    <li><b>拍板两项顶层架构收敛点</b>：确定部署形态（集群内 2 副本 OpenResty vs 宿主机 OpenResty + 内部 Traefik vs 宿主机直连 Service），以及路径命名（<code>/api/&lt;名&gt;/</code> + 保留页面原路径 vs <code>-ui</code> 重命名）。</li>
+    <li><b>修复全部 5 项 P0 阻断设计</b>：运营中心独立域透传 + 精确清理 <code>X-Ops-*</code> 签名头；拆细 <code>/uc/api/v1/auth/</code> + 改密重签 <code>mcp: false</code> JWT + 用户中心兜底 refresh/logout CSRF；修正 Nginx path-only 正则/嵌套 location/WS Origin；对齐错误信封、预览 URL、前端 SSE/WS 15m 过期刷新与移动端强更节奏。</li>
+    <li><b>补全部署与运维契约</b>：补齐 <code>deploy/local/</code> 容器化同构网关、HTTP/HTTPS 双站点模式、内部 Traefik 调优清单（<code>trustedIPs</code> / 超时 / <code>maxSurge: 1</code> / NetworkPolicy）、首次证书冷启动引导，以及登录/刷新路由的 Nginx <code>limit_req</code>。</li>
+    <li><b>同步清理全部 C4 文档残留矛盾</b>，确保 12 份文档口径一致后再进入编码与安全回归测试建设。</li>
+  </ol>
+  <div class="callout check">
+    <b>核对（11-26）</b>：
+    <ul>
+      <li>第 1 步不采纳，见第 10 条。</li>
+      <li>第 2 步里运营中心一项已完成。</li>
+      <li>第 3 步「登录/刷新路由的 <code>limit_req</code>」改成了登录失败按 IP 封禁，已完成。</li>
+      <li>其余照旧待做，进度见顶部<a href="#check">核对结论与处理状态</a>。</li>
+    </ul>
+  </div>
+</main>
+</body>
+</html>

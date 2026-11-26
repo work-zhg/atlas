@@ -30,235 +30,175 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：模型平台 - 管理平台 - 领域总览",
-  "description": "目标模型，只画期望的样子。四个领域只画对外入口、跨领域的扩展点和共享内核，看依赖方向；入口组件怎么调各领域见 component-server.html，领域内部见各自的 code-*.html",
+  "description": "目标模型：按业务功能垂直划分五个领域（每个领域内聚自身的 HTTP 路由与应用服务，不再按调用方拆「管理接口 / 内部接口」），辅以跨领域基础设施与两个只读共享包。",
   "component": "管理平台",
-  "package": "atlas_modelgateway（目标模型 · 领域总览）",
-  "overview": "管理平台分四个领域。API Key 是核心：每把 Key 能用哪些模型由它算（分配的 ∩ 可选范围），推给 LiteLLM；它依赖授权（私有模型谁能用）、模型目录（有哪些模型能用）和 LiteLLM 接入（在 LiteLLM 里生成、修改 Key）。授权依赖模型目录，模型目录依赖 LiteLLM 接入。\n\n有两处依赖倒置：模型目录经 ModelEvents 让授权改用户中心、让 API Key 重算；授权经 AccessEvents 让 API Key 重算。用户中心只经授权的防腐层访问，LiteLLM 只经 LiteLLM 接入访问。图上每个元素第一行写着它属于哪个领域。",
+  "package": "atlas_modelgateway（管理平台 · 领域总览）",
+  "overview": "管理平台按业务功能垂直划分为五个领域：供应商账号（api/accounts · AccountService）管理上游凭据与连通性/余额探测；模型与线路（api/models · ModelRegistry）管理对外模型名、能力承诺、价格、多账号线路与统一模型目录查询；授权（api/grants · PrincipalGuard · UCPermissions · SubjectsCache）统一鉴别入站调用主体（员工、管理员、受信任应用）并对接用户中心管理私有模型数据权限；API Key（api/keys · KeyService）统一管理个人 Key 与客户端 Key 的生命周期并预计算有效模型列表 effective_models；调用记录查询（api/calls · CallLog）提供调用明细与账单聚合。\n\n所有配置变更在同一事务内记录操作审计（AuditLog）并打标 ConfigNotifier，事务提交后按租户或 Key 递增版本号、经 Redis Pub/Sub 广播被淘汰的 Key 摘要。控制面与数据面仅通过只读共享包（provider 与 shared）共享规则与协议，严禁反向导入 gateway。",
   "elements": [
     {
       "id": "keys",
       "kind": "class",
-      "name": "ApiKeys",
+      "name": "KeysRouter · KeyService",
       "stereotype": "应用服务",
+      "source": "keys.py + api/admin.py + api/internal.py（待收口至 api/keys.py）",
       "at": [
-        1.9,
-        0.3
+        1.45,
+        0.25
       ],
-      "responsibility": "【API Key】用户 Key、客户端 Key 的申请、分配模型、重置、停用、删除；给内部接口一把客户端 Key 此刻的样子。详见 code-keys.html。",
+      "responsibility": "【API Key】/api/v1/keys*：个人 Key（仅存摘要）与客户端 Key（密文存储 + 重置宽限期）统一接口与服务；管理月预算、5h/24h 滑动窗口费用限额与管理员硬上限，按调用主体控制权限与脱敏，预计算 effective_models 落库。详见 code-keys.html。",
       "attributes": [
         [
           "",
-          "领域：API Key"
+          "功能组件：API Key"
         ]
       ],
       "methods": [
         [
           "+",
-          "apply · ensure_client · assign · view"
+          "create_user_key · ensure_client · client_credential"
         ],
         [
           "+",
-          "reset · block · unblock · delete"
-        ]
-      ]
-    },
-    {
-      "id": "sync",
-      "kind": "class",
-      "name": "KeySync",
-      "stereotype": "领域服务",
-      "at": [
-        3.9,
-        1.5
-      ],
-      "responsibility": "【API Key】有效模型（分配的 ∩ 可选范围）推给 LiteLLM，空了就停用；接住模型和授权事件重算受影响的 Key；对账。",
-      "attributes": [
-        [
-          "",
-          "领域：API Key"
-        ]
-      ],
-      "methods": [
+          "update_key · rotate · block · unblock · delete"
+        ],
         [
           "+",
-          "sync · resync · reconcile_all"
+          "refresh_for_model · refresh_user_keys"
         ]
       ]
     },
     {
-      "id": "acc",
+      "id": "access",
       "kind": "class",
-      "name": "ModelAccess",
+      "name": "PrincipalGuard · SubjectsCache · UCPermissions",
       "stereotype": "应用服务",
+      "source": "auth.py · perms.py · api/admin.py",
       "at": [
-        0.0,
-        1.8
+        -0.55,
+        2.1
       ],
-      "responsibility": "【授权】私有模型授给用户、部门（用户中心数据权限 Model），一个人能用哪些私有模型、在不在职（缓存，最多沿用 1 小时），管理员操作码。授权变了发授权事件。详见 code-access.html。",
+      "responsibility": "【授权】统一解析入站调用主体（员工登录态、管理员 model:manage、受信任应用 X-Caller-App），维护用户中心私有模型数据权限与员工可用范围/在职状态缓存。详见 code-access.html。",
       "attributes": [
         [
           "",
-          "领域：授权"
+          "功能组件：授权"
         ]
       ],
       "methods": [
         [
           "+",
-          "usable · person · operator"
+          "usable(uid, *, fresh) · subject(uid, *, fresh)"
         ],
         [
           "+",
-          "grant · revoke · holders"
+          "register_model · grant · revoke · forget"
         ]
       ]
     },
     {
-      "id": "aevents",
-      "kind": "interface",
-      "name": "AccessEvents",
-      "stereotype": "扩展点",
-      "at": [
-        0.0,
-        2.85
-      ],
-      "responsibility": "【授权】私有模型的授权变了。授权定义、API Key 实现。",
-      "attributes": [
-        [
-          "",
-          "领域：授权"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "grants_changed(model)"
-        ]
-      ]
-    },
-    {
-      "id": "handler",
+      "id": "reg",
       "kind": "class",
-      "name": "ModelEventHandler",
-      "stereotype": "领域服务",
-      "at": [
-        0.0,
-        3.95
-      ],
-      "responsibility": "【授权】接住模型事件，在用户中心登记、改名、删除数据对象。",
-      "attributes": [
-        [
-          "",
-          "领域：授权"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "model_registered · model_renamed · model_removed"
-        ]
-      ]
-    },
-    {
-      "id": "uc",
-      "kind": "class",
-      "name": "UserCenterGateway",
-      "stereotype": "防腐层",
-      "at": [
-        -2.2,
-        3.8
-      ],
-      "responsibility": "【授权】管理平台里唯一调用户中心的地方：数据权限、用户、授权快照。",
-      "attributes": [
-        [
-          "",
-          "领域：授权"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "数据权限 · 用户 · 授权快照"
-        ]
-      ]
-    },
-    {
-      "id": "cat",
-      "kind": "class",
-      "name": "ModelCatalog",
+      "name": "ModelsRouter · ModelRegistry",
       "stereotype": "应用服务",
+      "source": "registry.py + api/admin.py + api/internal.py（待收口至 api/models.py）",
       "at": [
-        1.9,
-        4.3
+        2.25,
+        2.1
       ],
-      "responsibility": "【模型目录】模型的登记、纳入、修改、重新登记、删除，平台记录和 LiteLLM 部署按模型名合并；改动后发模型事件。详见 code-catalog.html。",
+      "responsibility": "【模型与线路】/api/v1/models*：模型与多账号线路增删改查、预置能力校验与单价配置；按调用主体（管理员、员工、应用）返回对应模型目录视图，变更后联动授权与 Key。详见 code-catalog.html。",
       "attributes": [
         [
           "",
-          "领域：模型目录"
+          "功能组件：模型与线路"
         ]
       ],
       "methods": [
         [
           "+",
-          "listing · callable · register · adopt"
+          "list_models · callable_names · get"
         ],
         [
           "+",
-          "update · reregister · delete"
+          "create · update · replace_routes · delete"
         ]
       ]
     },
     {
-      "id": "mevents",
-      "kind": "interface",
-      "name": "ModelEvents",
-      "stereotype": "扩展点",
+      "id": "acct",
+      "kind": "class",
+      "name": "AccountsRouter · AccountService",
+      "stereotype": "应用服务",
+      "source": "accounts.py + api/admin.py（待拆至 api/accounts.py）",
       "at": [
-        5.45,
-        3.0
+        4.35,
+        2.1
       ],
-      "responsibility": "【模型目录】模型登记、改名、改可见性、重新登记、删除了。目录定义，授权和 API Key 各自实现。",
+      "responsibility": "【供应商账号】/api/v1/accounts*：租户上游账号管理、密钥信封加密、草稿测试与按已配线路真实类型（对话/向量/重排）探测、余额刷新与异常恢复。详见 code-accounts.html。",
       "attributes": [
         [
           "",
-          "领域：模型目录"
+          "功能组件：供应商账号"
         ]
       ],
       "methods": [
         [
           "+",
-          "registered · renamed · visibility_changed"
+          "create · update · delete · test_draft"
         ],
         [
           "+",
-          "restored · removed"
+          "probe · check_accounts"
         ]
       ]
     },
     {
-      "id": "gw",
-      "kind": "interface",
-      "name": "LiteLLMAdmin",
-      "stereotype": "对外接口",
+      "id": "calls",
+      "kind": "class",
+      "name": "CallsRouter · CallLog",
+      "stereotype": "应用服务",
+      "source": "calls.py + api/admin.py（待拆至 api/calls.py）",
       "at": [
-        3.9,
-        5.15
+        6.3,
+        2.1
       ],
-      "responsibility": "【LiteLLM 接入】LiteLLM 管理接口的防腐层：模型部署（缓存 30 秒）和 Key；master key 只在这里。详见 code-litellm.html。",
+      "responsibility": "【调用记录查询】/api/v1/calls*：按分区键裁剪分页查询调用明细，按模型/Key/天汇总四项 token 与费用（管理员查全租户，员工查本人 Key）。详见 code-calls.html。",
       "attributes": [
         [
           "",
-          "领域：LiteLLM 接入"
+          "功能组件：调用记录查询"
         ]
       ],
       "methods": [
         [
           "+",
-          "deployments · add / update / delete_model"
+          "list_calls(filter) · call_summary(window)"
+        ]
+      ]
+    },
+    {
+      "id": "notify",
+      "kind": "class",
+      "name": "ConfigNotifier",
+      "stereotype": "基础设施",
+      "at": [
+        0.75,
+        4.0
+      ],
+      "responsibility": "【配置通知】在 Session 上登记本次事务改了哪个租户、是否涉及 Key、需立即驱逐哪些摘要；commit 成功后递增对应版本键并发布 Pub/Sub 广播。",
+      "attributes": [
+        [
+          "",
+          "跨领域基础（notify.py）"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "mark(session, *, tenant, tenant_changed, keys_changed, evict_digests)"
         ],
         [
           "+",
-          "generate / update / block / delete_key · key_info"
+          "flush(session)"
         ]
       ]
     },
@@ -268,20 +208,66 @@
       "name": "AuditLog",
       "stereotype": "仓储",
       "at": [
-        -2.15,
-        0.3
+        -0.55,
+        0.25
       ],
-      "responsibility": "【共享内核】平台的操作日志，只追加：谁、做了什么、对哪个模型 / Key、改了什么。模型目录、授权、API Key 的写操作在同一个事务里记一条；不记 Key 原文和供应商凭据。调用日志在 LiteLLM。",
+      "responsibility": "【操作日志】在同一事务内向 gw_audit 追加管理动作（操作人或应用、动作、目标与脱敏摘要），绝不记录供应商密钥或 API Key 原文。",
       "attributes": [
         [
           "",
-          "领域：共享内核"
+          "跨领域基础（audit.py）"
         ]
       ],
       "methods": [
         [
           "+",
-          "record(actor, action, target, **detail)"
+          "record(session, actor, action, target, detail)"
+        ]
+      ]
+    },
+    {
+      "id": "shared",
+      "kind": "class",
+      "name": "SharedFoundation",
+      "stereotype": "共享包",
+      "at": [
+        2.85,
+        4.0
+      ],
+      "responsibility": "【共享基础层】管理面与网关共用的纯底层包：值对象（ModelCaps、Price、key_digest）、PresetRules、RouteHealth、VersionWatch、防重绑定 UpstreamClient 与 PartitionKeeper。",
+      "attributes": [
+        [
+          "",
+          "共享包：atlas_modelgateway.shared"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "PresetRules · RouteHealth · VersionWatch · UpstreamClient"
+        ]
+      ]
+    },
+    {
+      "id": "prov",
+      "kind": "class",
+      "name": "ProviderCatalog",
+      "stereotype": "共享包",
+      "at": [
+        4.95,
+        4.0
+      ],
+      "responsibility": "【供应商】各家供应商的数据规格 ProviderSpec 与方言 ProviderDialect；管理平台探测与网关转发共用同一份实现。详见 code-gateway-provider.html。",
+      "attributes": [
+        [
+          "",
+          "共享包：atlas_modelgateway.provider"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "spec(provider) · dialect(provider) · providers()"
         ]
       ]
     }
@@ -289,196 +275,138 @@
   "relationships": [
     {
       "from": "keys",
-      "to": "sync",
-      "type": "association",
-      "description": "改动后同步"
+      "to": "access",
+      "type": "uses",
+      "description": "主体鉴权、查可用范围与在职"
     },
     {
       "from": "keys",
-      "to": "acc",
-      "description": "可选范围"
-    },
-    {
-      "from": "keys",
-      "to": "cat",
-      "description": "可调用的模型"
-    },
-    {
-      "from": "keys",
-      "to": "gw",
-      "description": "生成、删除 Key"
-    },
-    {
-      "from": "sync",
-      "to": "gw",
-      "description": "改模型、停用、查 Key"
-    },
-    {
-      "from": "sync",
-      "to": "aevents",
-      "type": "implements"
-    },
-    {
-      "from": "sync",
-      "to": "mevents",
-      "type": "implements"
-    },
-    {
-      "from": "acc",
-      "to": "aevents",
-      "type": "association",
-      "description": "发"
-    },
-    {
-      "from": "acc",
-      "to": "uc",
-      "type": "association",
-      "description": "全部用户中心调用"
-    },
-    {
-      "from": "acc",
-      "to": "cat",
-      "description": "只给私有模型授权"
-    },
-    {
-      "from": "handler",
-      "to": "mevents",
-      "type": "implements"
-    },
-    {
-      "from": "handler",
-      "to": "uc",
-      "description": "改数据对象"
-    },
-    {
-      "from": "cat",
-      "to": "mevents",
-      "type": "association",
-      "description": "发"
-    },
-    {
-      "from": "cat",
-      "to": "gw",
-      "description": "部署"
+      "to": "reg",
+      "type": "uses",
+      "description": "查可调用模型",
+      "labelAt": 0.25
     },
     {
       "from": "keys",
       "to": "audit",
-      "description": "记"
+      "type": "uses",
+      "description": "记审计"
     },
     {
-      "from": "acc",
-      "to": "audit",
-      "description": "记"
+      "from": "keys",
+      "to": "notify",
+      "type": "uses",
+      "description": "标记 Key 变更与驱逐摘要",
+      "labelAt": 0.72
+    },
+    {
+      "from": "reg",
+      "to": "acct",
+      "type": "uses",
+      "description": "校验线路引用的账号"
+    },
+    {
+      "from": "reg",
+      "to": "access",
+      "type": "uses",
+      "description": "主体鉴权、同步数据对象"
+    },
+    {
+      "from": "reg",
+      "to": "keys",
+      "type": "uses",
+      "description": "模型变更后重算 Key",
+      "labelAt": 0.25
+    },
+    {
+      "from": "reg",
+      "to": "shared",
+      "type": "uses",
+      "description": "PresetRules 校验能力"
+    },
+    {
+      "from": "reg",
+      "to": "notify",
+      "type": "uses",
+      "description": "标记租户配置变更",
+      "labelAt": 0.45
+    },
+    {
+      "from": "acct",
+      "to": "prov",
+      "type": "uses",
+      "description": "取规格与方言探测/查余额",
+      "labelAt": 0.65
+    },
+    {
+      "from": "acct",
+      "to": "shared",
+      "type": "uses",
+      "description": "安全探测、清异常"
+    },
+    {
+      "from": "acct",
+      "to": "notify",
+      "type": "uses",
+      "description": "标记租户配置变更",
+      "labelAt": 0.35
+    },
+    {
+      "from": "calls",
+      "to": "shared",
+      "type": "uses",
+      "description": "PartitionKeeper 维护月分区",
+      "labelAt": 0.25
+    },
+    {
+      "from": "notify",
+      "to": "shared",
+      "type": "uses",
+      "description": "VersionWatch.bump"
     }
   ],
   "capabilities": [
     {
-      "name": "智能体拿到模型 Key",
-      "entry": "ApiKeys.ensure_client · assign · view",
-      "callers": "内部接口（Atlas）、管理接口（管理员分配）",
-      "description": "建出来「待分配」→ 第一次分配时在 LiteLLM 生成 → 内部接口给出原文和有效模型；之后应用直连 LiteLLM 调用，管理平台不在路径上"
+      "name": "供应商账号接口与巡检",
+      "entry": "/api/v1/accounts · AccountService",
+      "callers": "模型管理员、定时巡检（AccountCheck）、运维命令行",
+      "description": "账号加密落库、草稿与实存账号连通性探测、余额刷新、恢复后解除网关异常标记"
     },
     {
-      "name": "登记一个模型",
-      "entry": "ModelCatalog.register",
-      "callers": "管理接口、运维命令行",
-      "description": "LiteLLM 接入登记部署 → 写平台记录 → 模型事件让授权在用户中心登记；后面失败撤回 LiteLLM"
+      "name": "模型与多账号线路接口",
+      "entry": "/api/v1/models · ModelRegistry",
+      "callers": "模型管理员、员工、Agent 平台、运维命令行",
+      "description": "登记模型与线路、核验预置能力，并按调用主体（管理员/员工/应用）投影返回模型目录与能力规格"
     },
     {
-      "name": "收回私有模型授权",
-      "entry": "ModelAccess.revoke",
-      "callers": "管理接口",
-      "description": "用户中心收回 → 授权事件 → KeySync 重算分配了这个模型的用户 Key，推给 LiteLLM（改模型或停用）"
+      "name": "API Key 统一生命周期接口",
+      "entry": "/api/v1/keys · KeyService",
+      "callers": "员工、模型管理员、Agent 平台、知识库服务、定时巡检（KeyRefresh）",
+      "description": "个人 Key 与客户端 Key 统一管理：管理端脱敏展示末 4 位，所属受信任应用按权限读取客户端 Key 明文凭据"
     },
     {
-      "name": "对账",
-      "entry": "KeySync.reconcile_all",
-      "callers": "对账任务（每 5 分钟）、运维命令行",
-      "description": "强制刷新授权和部署缓存，逐把 Key 问 LiteLLM，不一致以平台为准修正"
+      "name": "调用明细与费用汇总接口",
+      "entry": "/api/v1/calls · CallLog",
+      "callers": "模型管理员、员工",
+      "description": "基于分区表 gw_model_call 查询调用耗时、切换轨迹、四项 token 与多维费用汇总"
     }
   ],
   "decisions": [
     {
-      "decision": "四个领域，依赖只往下",
-      "reason": "API Key → 授权 → 模型目录 → LiteLLM 接入（API Key 也直接用模型目录和 LiteLLM 接入）。规则在哪里算只有一处：有效模型在 API Key，私有模型谁能用在授权，模型是否存在在模型目录；只有 LiteLLM 接入认识 LiteLLM，只有授权认识用户中心。"
+      "decision": "按业务功能划分接口与组件，不按调用方拆「管理接口 / 内部接口」",
+      "reason": "按调用方拆分导致客户端 Key 和模型目录同时散落在两套路由里，并造出塞满所有业务的上帝路由文件；按功能垂直切分后每个资源只有一处入口，谁在调用（员工、管理员、受信任应用 X-Caller-App）及是否脱敏交给横切鉴权守卫决定。"
     },
     {
-      "decision": "两处依赖倒置：模型事件、授权事件",
-      "reason": "现在接口层在每个改动之后手工调 keys.resync / drop_model，用户中心登记写在 registry 里；目录和授权各定义一个事件接口，下游领域实现。同一个事务里同步分发，不引入消息队列：用户中心登记失败整个登记回滚。"
+      "decision": "彻底内聚自研，下线第三方 LiteLLM",
+      "reason": "账号、线路、Key 和调用账单都在同一套租户表里维护，不再跨两个数据库同步状态，根除双写漂移与黑盒转换故障。"
     },
     {
-      "decision": "平台不在模型调用的路径上",
-      "reason": "应用拿着 Key 直连 LiteLLM；平台只管配置，挂了不影响已经在跑的调用，只是暂时改不了 Key。这也是和 MCP 网关最大的不同：MCP 网关要在每个请求上判权，模型的判权由 LiteLLM 按 Key 的可用模型做。"
+      "decision": "控制面与数据面单向解耦，共享底层收进 shared 与 provider",
+      "reason": "管理平台绝不导入 gateway 数据面模块，两边共用 shared 与 provider，由 import-linter 在 CI 强制检查。"
     },
     {
-      "decision": "平台是事实源，LiteLLM 跟随，定期对账",
-      "reason": "模型的基本信息、Key 的分配和状态在平台；LiteLLM 里的 Key 模型、停用状态是平台推过去的结果。推失败、用户中心那边变了（没有通知）、有人在 LiteLLM 界面里改了，都靠对账纠正。"
-    },
-    {
-      "decision": "审计是共享内核，和业务写在同一个事务里",
-      "reason": "三个领域的管理动作都要记，格式一样；回滚的操作不会留下日志。调用日志、花费只在 LiteLLM。"
-    },
-    {
-      "decision": "不用 Redis",
-      "reason": "多副本之间没有要共享的状态：授权结果、部署列表在进程内短时缓存；对账多副本各自跑，同步是幂等的。"
-    }
-  ],
-  "schemaNote": "主键约定：id 是自增主键，只在库内使用；uuid 是逻辑主键（Python 侧生成 uuid7），接口和表间引用都用它，引用列叫 xxx_uuid。表间不建外键约束，引用由代码维护。类型写的是 PostgreSQL 类型；每张表还有 created_at、updated_at（timestamptz，UTC），下面不重复列出。人员字段存用户中心用户 id 的字符串。LiteLLM 的表由 LiteLLM 自己建、自己管（atlas_litellm 库），不在这里。",
-  "tables": [
-    {
-      "name": "gw_audit",
-      "description": "对应仓储 AuditLog（共享内核）",
-      "at": [
-        0,
-        0
-      ],
-      "columns": [
-        {
-          "name": "id",
-          "type": "bigint",
-          "key": "PK",
-          "default": "自增",
-          "description": "库内主键"
-        },
-        {
-          "name": "uuid",
-          "type": "uuid",
-          "key": "UK",
-          "description": "逻辑主键"
-        },
-        {
-          "name": "actor",
-          "type": "varchar(64)",
-          "description": "谁做的（X-Uid）；应用调内部接口时是 app:atlas"
-        },
-        {
-          "name": "action",
-          "type": "varchar(64)",
-          "description": "model.register、model.update、key.apply、key.assign、key.reset、grant.add …"
-        },
-        {
-          "name": "target",
-          "type": "varchar(200)",
-          "description": "model:模型名、key:user:…、key:client:类型:编码"
-        },
-        {
-          "name": "detail",
-          "type": "jsonb",
-          "default": "'{}'",
-          "description": "改了什么；不记 Key 原文和供应商凭据"
-        }
-      ],
-      "indexes": [
-        {
-          "name": "ix_gw_audit_target_at",
-          "columns": [
-            "target",
-            "created_at"
-          ],
-          "description": "按对象看历史"
-        }
-      ]
+      "decision": "effective_models 在控制面预计算落库 + 按租户隔离版本与零窗口驱逐",
+      "reason": "网关热路径不调用户中心；单租户改配置只递增本租户版本键，Key 停用或授权撤回经 Pub/Sub 立即踢出网关缓存。"
     }
   ]
 }

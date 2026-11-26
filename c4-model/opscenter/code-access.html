@@ -29,321 +29,655 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "代码图：模型平台 - 管理平台 - LiteLLM 接入",
-  "description": "目标领域模型，只画期望的样子。LiteLLM 管理接口的防腐层：模型部署和 Key；本领域没有自己的表，领域总览见 code-domains.html",
-  "component": "LiteLLM 接入",
-  "package": "atlas_modelgateway.litellm（目标模型）",
-  "overview": "LiteLLM 是模型网关：应用带 Key 调它，它认 Key、只放行 Key 分配了的模型，再转成各供应商的协议。管理平台只用它的管理接口：登记模型部署（地址、供应商凭据、规格价格都存在 LiteLLM），生成 Key 并跟着平台的计算改可用模型、停用。这一层把 LiteLLM 的接口格式、错误和版本差异挡住，上面的领域只看到部署、Key 这几个值对象。\n\n它不决定登记什么、Key 该有哪些模型（模型目录、API Key），也不碰调用日志、花费和预算（在 LiteLLM 的管理界面里看）。",
+  "title": "代码图：运营中心 - 运营服务 - 权限与审计",
+  "description": "目标领域模型。运营人员是用户中心里系统租户的人，和其他系统一样统一登录；能进哪些模块、到什么级别，由用户中心里各模块数据编码的授权决定；只追加的运营审计。整体设计见 design-opscenter.html",
+  "component": "权限与审计",
+  "package": "atlas_opscenter.access（目标模型）",
+  "overview": "运营中心不再有自己的账号和登录。运营人员是用户中心里「系统租户」的人：在统一登录页用系统租户的企业代码登录，请求经 API 网关验过 JWT、写上身份头才进来。能不能进运营中心，和进别的应用一样看用户中心的授权快照；运营中心这个应用标了「仅系统租户」，普通租户开不了，取快照一律不可访问。\n\n进来之后能做什么，按模块判。运营中心分成若干模块：租户模块，以及每个登记的系统一个模块（用户中心、Atlas、知识库、技能、MCP 网关、模型平台、记忆服务）。每个模块在用户中心里是一个数据编码，系统租户的管理员给人（或部门）授这个编码的「全部」级别：只读能看，读写能改，Owner 还能做不可恢复的操作。例：小周有「MCP 运营 · 读写」「模型运营 · 只读」，他能改 MCP 网关的系统参数，只能看模型平台的，看不到别的模块。角色只管不属于任何模块的功能，现在只有看运营审计（ops:audit）。\n\n本领域回答三件事：这个请求是谁、能进哪些模块（PrincipalResolver）；这个动作够不够级别（AccessPolicy）；谁在什么时候对哪个模块做过什么（AuditLog）。另外，运营中心自己的应用目录（应用、每个模块的数据编码、操作码、内置角色）在启动时同步进用户中心（CatalogSync），授权仍由人在用户中心里做。",
   "elements": [
     {
-      "id": "admin",
-      "kind": "interface",
-      "name": "LiteLLMAdmin",
-      "stereotype": "对外接口",
-      "at": [
-        1.6,
-        0.35
-      ],
-      "responsibility": "管理平台对 LiteLLM 的全部需要：列出模型部署、登记 / 修改 / 删除部署、登记前试调；生成、改模型、停用、启用、删除、查询 Key。只有管理接口，没有模型调用。",
+      "id": "resolver",
+      "kind": "class",
+      "name": "PrincipalResolver",
+      "stereotype": "应用服务",
+      "responsibility": "每个请求解析出运营人员：读 API 网关写的身份头（外部带来的早被网关清掉），向用户中心取运营中心应用的授权快照。不可访问（不是系统租户、应用没开通、不在可访问范围、租户被挡住）→ 403 NOT_OPERATOR；再按模块目录逐个取数据编码的级别，拼成 ModuleGrants。按 (用户, 租户) 缓存 30 秒。没有身份头 → 401，控制台跳统一登录页。",
+      "attributes": [],
       "methods": [
         [
           "+",
-          "deployments(*, fresh) -> list[Deployment] | None"
+          "resolve(headers) -> OpsPrincipal"
         ],
         [
           "+",
-          "add_model(id, name, provider, route) · update_model · delete_model(id)"
-        ],
-        [
-          "+",
-          "test_connection(name, provider, route) -> (ok, message)"
-        ],
-        [
-          "+",
-          "generate_key(models, alias, metadata, user_id) -> GeneratedKey"
-        ],
-        [
-          "+",
-          "update_key · block_key · unblock_key · delete_key"
-        ],
-        [
-          "+",
-          "key_info(token) -> KeyState | None"
+          "me(principal) -> list[(OpsModule, Level)]"
         ]
-      ]
+      ],
+      "at": [
+        0,
+        0
+      ],
+      "source": "无：替代 accounts.py 的会话解析（current_operator）"
     },
     {
-      "id": "client",
+      "id": "snap",
       "kind": "class",
-      "name": "LiteLLMClient",
+      "name": "AuthzSnapshotClient",
       "stereotype": "防腐层",
-      "at": [
-        1.6,
-        1.95
+      "responsibility": "用户中心开放接口的客户端，和 Atlas、知识库是同一套：取授权快照（能不能访问、操作码），取某个数据编码的编码级授权级别（授给本人或所在部门，取最高）。调用方是运营中心这个应用。",
+      "attributes": [],
+      "methods": [
+        [
+          "+",
+          "snapshot(user_uuid, tenant_uuid) -> Snapshot"
+        ],
+        [
+          "+",
+          "type_level(user_uuid, tenant_uuid, data_code) -> Level"
+        ]
       ],
-      "responsibility": "LiteLLM 管理接口（/model/*、/key/*、/health/test_connection）的唯一客户端，master key 只在这里，不下发、不进日志。把 LiteLLM 的格式和版本差异挡在这一层：模型部署的 id 用平台模型的 uuid；查 Key 传哈希不传原文；错误按状态码映射成平台的错误。",
+      "at": [
+        0,
+        -1.9
+      ],
+      "source": "无：新建"
+    },
+    {
+      "id": "principal",
+      "kind": "class",
+      "name": "OpsPrincipal",
+      "stereotype": "值对象",
+      "responsibility": "一个请求的运营人员：用户中心里系统租户的一个人。随调用写进 OperatorStamp 带给业务系统，审计里也记它。",
+      "attributes": [
+        [
+          "+",
+          "user_uuid: UUID"
+        ],
+        [
+          "+",
+          "tenant_uuid: UUID（系统租户）"
+        ],
+        [
+          "+",
+          "name: str"
+        ],
+        [
+          "+",
+          "grants: ModuleGrants"
+        ],
+        [
+          "+",
+          "operations: frozenset[str]"
+        ]
+      ],
+      "methods": [],
+      "at": [
+        0,
+        2.5
+      ],
+      "source": "无：新建"
+    },
+    {
+      "id": "grants",
+      "kind": "class",
+      "name": "ModuleGrants",
+      "stereotype": "值对象",
+      "responsibility": "这个人在每个模块上的级别。没授的模块是 NONE：控制台不显示，接口 403。",
       "attributes": [
         [
           "-",
-          "base_url · master_key"
+          "levels: dict[str, Level]  # 按数据编码"
         ]
       ],
       "methods": [
         [
-          "-",
-          "_call(method, path, …)  # 错误映射"
-        ]
-      ]
-    },
-    {
-      "id": "cache",
-      "kind": "class",
-      "name": "DeploymentsCache",
-      "stereotype": "领域服务",
-      "at": [
-        -0.45,
-        1.95
-      ],
-      "responsibility": "LiteLLM 里的模型部署缓存 30 秒：每次算有效模型都要它。LiteLLM 不可达时沿用上一份，从没取到过返回 None（调用方按「状态未知」处理）。登记、修改、删除模型后立即作废。",
-      "methods": [
-        [
           "+",
-          "get(*, fresh) -> list[Deployment] | None"
+          "level(module) -> Level"
         ],
         [
           "+",
-          "forget()"
+          "visible() -> list[OpsModule]"
         ]
-      ]
-    },
-    {
-      "id": "dep",
-      "kind": "class",
-      "name": "Deployment",
-      "stereotype": "值对象",
-      "at": [
-        -0.45,
-        3.45
       ],
-      "responsibility": "LiteLLM 里的一个模型部署（/model/info 的一项）：名字、供应商、地址、规格、价格。db_model 区分经接口登记的（存在 LiteLLM 库里）和配置文件里的。",
-      "attributes": [
-        [
-          "+",
-          "id · model_name · provider · api_base"
-        ],
-        [
-          "+",
-          "max_input_tokens · max_output_tokens"
-        ],
-        [
-          "+",
-          "input_cost_per_token · output_cost_per_token · db_model"
-        ]
-      ]
-    },
-    {
-      "id": "params",
-      "kind": "class",
-      "name": "LiteLLMParams",
-      "stereotype": "工厂",
       "at": [
-        3.6,
-        1.95
+        0,
+        4.75
       ],
-      "responsibility": "登记、修改、试调时的 litellm_params：model 写成「供应商/模型名」并显式带上 custom_llm_provider；地址、凭据为空就不带（编辑时 = 不改）；价格换成美元 / token 放在这里（放 model_info 不生效），规格放 model_info。",
-      "methods": [
-        [
-          "+",
-          "build(name, provider, api_base, api_key, pricing) -> dict"
-        ]
-      ]
+      "source": "无：新建"
     },
     {
-      "id": "gen",
-      "kind": "class",
-      "name": "GeneratedKey",
-      "stereotype": "值对象",
-      "at": [
-        1.15,
-        3.45
-      ],
-      "responsibility": "新生成的 Key：原文（sk-…，只此一次能拿到）和 LiteLLM 里的标识（哈希，之后查询、对账用它）。",
-      "attributes": [
-        [
-          "+",
-          "key（原文）· token（哈希）"
-        ]
-      ]
-    },
-    {
-      "id": "state",
-      "kind": "class",
-      "name": "KeyState",
-      "stereotype": "值对象",
-      "at": [
-        2.55,
-        3.45
-      ],
-      "responsibility": "LiteLLM 里一把 Key 现在的样子：可用模型、是否停用。删除是软删除（status = deleted），按「没有」处理。",
-      "attributes": [
-        [
-          "+",
-          "models · blocked"
-        ]
-      ]
-    },
-    {
-      "id": "err",
+      "id": "level",
       "kind": "enum",
-      "name": "LiteLLMFailure",
+      "name": "Level",
       "stereotype": "值对象",
-      "at": [
-        4.1,
-        3.45
-      ],
-      "responsibility": "错误映射：不可达、5xx、没配 master key → 暂时不可用（503，不改平台状态，对账重试）；400 / 422 → LiteLLM 拒绝（多半是参数、凭据不对，原因给管理员看）；404 → 不存在（删除时当作已删）。",
+      "responsibility": "模块级别，和用户中心数据权限的三级一一对应。",
       "attributes": [
         [
           "",
-          "Unavailable：不可达 / 5xx / 没配 master key"
+          "NONE（看不到这个模块）"
         ],
         [
           "",
-          "Rejected：400、422"
+          "READ（只读：看）"
         ],
         [
           "",
-          "NotFound：404"
+          "WRITE（读写：日常变更）"
+        ],
+        [
+          "",
+          "OWNER（再加不可恢复的操作）"
         ]
-      ]
+      ],
+      "methods": [],
+      "at": [
+        2.5,
+        4.75
+      ],
+      "source": "无：新建"
+    },
+    {
+      "id": "policy",
+      "kind": "class",
+      "name": "AccessPolicy",
+      "stereotype": "策略",
+      "responsibility": "唯一的判断规则：模块级别 ≥ 这个动作要的级别。每个接口在依赖里声明（模块, 级别）：看要 READ，改要 WRITE，不可恢复的要 OWNER（关闭租户、补发首个管理员的临时密码、轮换应用凭据、删除应用）。系统代理的模块是路径里那个系统的模块（ModuleCatalog.of_system 查出），GET 要 READ、其余要 WRITE。跨模块的功能只有查运营审计，要操作码 ops:audit。不够 → 403 MODULE_FORBIDDEN。",
+      "attributes": [],
+      "methods": [
+        [
+          "+",
+          "require(principal, module, need: Level)"
+        ],
+        [
+          "+",
+          "require_op(principal, code)"
+        ]
+      ],
+      "at": [
+        2.5,
+        2.5
+      ],
+      "source": "无：替代 accounts.py 的 ActionPolicy（运营管理员 / 观察员）"
+    },
+    {
+      "id": "module",
+      "kind": "class",
+      "name": "OpsModule",
+      "stereotype": "值对象",
+      "responsibility": "运营中心的一个模块，也是用户中心里的一个数据编码。租户模块固定是 OpsTenant；每个登记的系统一个，数据编码写在系统登记里：用户中心 OpsUserCenter（应用目录）、Atlas OpsAtlas、知识库 OpsKnowledge、技能 OpsSkill、MCP 网关 OpsMcp、模型平台 OpsModel、记忆服务 OpsMemory。",
+      "attributes": [
+        [
+          "+",
+          "code: str（数据编码）"
+        ],
+        [
+          "+",
+          "name: str"
+        ],
+        [
+          "+",
+          "system: str | None（租户模块为空）"
+        ]
+      ],
+      "methods": [],
+      "at": [
+        2.5,
+        0
+      ],
+      "source": "无：新建"
     },
     {
       "id": "catalog",
       "kind": "class",
-      "name": "ModelCatalog",
-      "external": true,
-      "source": "模型目录领域",
+      "name": "ModuleCatalog",
+      "stereotype": "领域服务",
+      "responsibility": "有哪些模块：租户模块，加上系统登记里的每个系统一个。启动时校验每个登记的系统都写了数据编码、编码不重复。",
+      "attributes": [],
       "methods": [
         [
           "+",
-          "部署：列出、登记、修改、删除、试调"
+          "all() -> list[OpsModule]"
+        ],
+        [
+          "+",
+          "tenant() -> OpsModule"
+        ],
+        [
+          "+",
+          "of_system(code) -> OpsModule"
         ]
       ],
       "at": [
-        0.55,
-        -1.15
-      ]
+        2.5,
+        -1.9
+      ],
+      "source": "无：新建"
     },
     {
-      "id": "keys",
+      "id": "sync",
       "kind": "class",
-      "name": "ApiKeys · KeySync",
-      "external": true,
-      "source": "API Key 领域",
+      "name": "CatalogSync",
+      "stereotype": "应用服务",
+      "responsibility": "启动时把运营中心自己的应用目录同步进用户中心：应用 opscenter（标「仅系统租户」）、每个模块一个数据编码、操作码 ops:audit、内置角色「运营审计员」（只有 ops:audit），再给每个系统租户开通这个应用。按编码幂等，重复跑结果一样；新登记一个系统，重启后用户中心里就多一个数据编码。只写目录，不写授权。",
+      "attributes": [],
       "methods": [
         [
           "+",
-          "Key：生成、同步、查询、删除"
+          "sync()"
         ]
       ],
       "at": [
-        2.75,
-        -1.15
-      ]
+        5.0,
+        -1.9
+      ],
+      "source": "无：新建"
+    },
+    {
+      "id": "ucapi",
+      "kind": "interface",
+      "name": "UserCenterOpsApi",
+      "stereotype": "防腐层",
+      "responsibility": "系统接入领域：用户中心的运营接口（应用目录、租户）。",
+      "attributes": [],
+      "methods": [
+        [
+          "+",
+          "upsert_app(spec, stamp)"
+        ],
+        [
+          "+",
+          "system_tenants() -> list[TenantInfo]"
+        ],
+        [
+          "+",
+          "enable_app(tenant_uuid, app, on, stamp)"
+        ]
+      ],
+      "at": [
+        5.0,
+        -4.2
+      ],
+      "source": "系统接入领域（gateway.py）",
+      "external": true
+    },
+    {
+      "id": "audit",
+      "kind": "class",
+      "name": "AuditLog",
+      "stereotype": "应用服务",
+      "responsibility": "运营审计：每个写接口在接口层统一记一条「发起」（谁、哪个模块、做什么、对哪个租户或系统），结果出来后补记。跨系统的操作（如关闭租户）结果要等很久，由租户领域在操作结束时补记。只追加，不改不删。查审计要 ops:audit，看全部模块。",
+      "attributes": [],
+      "methods": [
+        [
+          "+",
+          "record(by, module, action, target, detail) -> UUID"
+        ],
+        [
+          "+",
+          "complete(audit_uuid, result)"
+        ],
+        [
+          "+",
+          "search(filter) -> list[AuditEntry]"
+        ]
+      ],
+      "at": [
+        5.0,
+        0
+      ],
+      "source": "audit.py record（接口 api/audit.py）"
+    },
+    {
+      "id": "auditrepo",
+      "kind": "class",
+      "name": "AuditRepository",
+      "stereotype": "仓储",
+      "responsibility": "ops_audit 只追加：插入、补记结果、按条件查；没有删除。",
+      "attributes": [],
+      "methods": [
+        [
+          "+",
+          "append(entry)"
+        ],
+        [
+          "+",
+          "complete(audit_uuid, result)"
+        ],
+        [
+          "+",
+          "search(filter) -> list[AuditEntry]"
+        ]
+      ],
+      "at": [
+        7.4,
+        0
+      ],
+      "source": "audit.py"
+    },
+    {
+      "id": "entry",
+      "kind": "class",
+      "name": "AuditEntry",
+      "stereotype": "实体",
+      "responsibility": "一条运营审计：谁（用户中心里的用户，名字存快照）、什么时候、哪个模块、做了什么、对哪个租户或系统、结果。detail 只放参数摘要，不放密码、临时密码、密钥。",
+      "attributes": [
+        [
+          "+",
+          "audit_uuid: UUID"
+        ],
+        [
+          "+",
+          "at: datetime"
+        ],
+        [
+          "+",
+          "operator_uuid: UUID | None"
+        ],
+        [
+          "+",
+          "operator_name: str | None"
+        ],
+        [
+          "+",
+          "module: str"
+        ],
+        [
+          "+",
+          "action: str"
+        ],
+        [
+          "+",
+          "target: str"
+        ],
+        [
+          "+",
+          "tenant_uuid: UUID | None"
+        ],
+        [
+          "+",
+          "result: str | None"
+        ]
+      ],
+      "methods": [],
+      "at": [
+        5.0,
+        2.5
+      ],
+      "source": "db/models.py OpsAudit"
     }
   ],
   "relationships": [
     {
+      "from": "resolver",
+      "to": "snap",
+      "type": "uses",
+      "description": "取快照、各模块的级别"
+    },
+    {
+      "from": "resolver",
+      "to": "catalog",
+      "type": "uses",
+      "description": "要取哪些数据编码"
+    },
+    {
+      "from": "resolver",
+      "to": "principal",
+      "type": "uses",
+      "description": "creates"
+    },
+    {
+      "from": "principal",
+      "to": "grants",
+      "type": "composition",
+      "description": "各模块的级别"
+    },
+    {
+      "from": "grants",
+      "to": "level",
+      "type": "association",
+      "description": "级别"
+    },
+    {
+      "from": "policy",
+      "to": "principal",
+      "type": "uses",
+      "description": "按级别、操作码判"
+    },
+    {
+      "from": "policy",
+      "to": "module",
+      "type": "uses",
+      "description": "要哪个模块的什么级别"
+    },
+    {
       "from": "catalog",
-      "to": "admin",
-      "description": "部署"
+      "to": "module",
+      "type": "composition",
+      "description": "全部模块"
     },
     {
-      "from": "keys",
-      "to": "admin",
-      "description": "Key"
+      "from": "sync",
+      "to": "catalog",
+      "type": "uses",
+      "description": "每个模块一个数据编码"
     },
     {
-      "from": "client",
-      "to": "admin",
-      "type": "implements"
+      "from": "sync",
+      "to": "ucapi",
+      "type": "uses",
+      "description": "幂等写入目录；给系统租户开通"
     },
     {
-      "from": "client",
-      "to": "cache",
+      "from": "audit",
+      "to": "policy",
+      "type": "uses",
+      "description": "查审计要 ops:audit",
+      "labelAt": 0.3
+    },
+    {
+      "from": "audit",
+      "to": "auditrepo",
+      "type": "uses",
+      "description": "只追加"
+    },
+    {
+      "from": "auditrepo",
+      "to": "entry",
+      "type": "uses",
+      "description": "读写"
+    },
+    {
+      "from": "entry",
+      "to": "module",
       "type": "association",
-      "description": "部署走缓存"
-    },
-    {
-      "from": "cache",
-      "to": "dep",
-      "type": "association",
-      "description": "缓存",
-      "multiplicity": "0..*"
-    },
-    {
-      "from": "client",
-      "to": "params",
-      "description": "拼参数"
-    },
-    {
-      "from": "client",
-      "to": "gen",
-      "description": "creates"
-    },
-    {
-      "from": "client",
-      "to": "state",
-      "description": "creates"
-    },
-    {
-      "from": "client",
-      "to": "err",
-      "description": "抛"
+      "description": "属于哪个模块",
+      "labelAt": 0.72
     }
   ],
   "capabilities": [
     {
-      "name": "模型部署",
-      "entry": "deployments · add_model · update_model · delete_model · test_connection",
-      "callers": "模型目录",
-      "description": "部署 id = 平台模型的 uuid，改、删都按它；试调把失败原因后面的整段堆栈截掉，只留原因"
+      "name": "解析请求的运营人员",
+      "entry": "PrincipalResolver.resolve(headers)",
+      "callers": "运营服务所有接口（FastAPI 依赖）",
+      "description": "没有身份头 → 401；不是系统租户、没开通、被挡住 → 403；结果缓存 30 秒"
     },
     {
-      "name": "Key",
-      "entry": "generate_key · update_key · block_key · unblock_key · delete_key · key_info",
-      "callers": "API Key（ApiKeys、KeySync）",
-      "description": "不接受空模型列表；删除时 LiteLLM 里已经没有就当作删了；查询用哈希标识"
+      "name": "按模块判权限",
+      "entry": "AccessPolicy.require(principal, module, need)",
+      "callers": "租户、应用目录、系统模块的每个接口",
+      "description": "看要 READ、改要 WRITE、不可恢复的要 OWNER；不够 → 403"
+    },
+    {
+      "name": "控制台显示哪些模块",
+      "entry": "PrincipalResolver.me(principal)",
+      "callers": "运营控制台",
+      "description": "只返回级别不是 NONE 的模块和级别；按钮按级别置灰，不隐藏"
+    },
+    {
+      "name": "同步自己的应用目录",
+      "entry": "CatalogSync.sync()",
+      "callers": "运营服务启动时",
+      "description": "幂等；只写目录（应用、数据编码、操作码、内置角色）和给系统租户开通，不写授权"
+    },
+    {
+      "name": "记审计、查审计",
+      "entry": "AuditLog.record / complete / search",
+      "callers": "运营服务所有写接口（接口层统一记）、租户（操作结束补记）、运营控制台（要 ops:audit）",
+      "description": "只追加；不记密码、临时密码、密钥"
     }
   ],
   "decisions": [
     {
-      "decision": "只调管理接口，不转发模型调用",
-      "reason": "应用拿着 Key 直连 LiteLLM，管理平台不在调用路径上：平台挂了不影响调用；调用日志、花费、预算限流都在 LiteLLM，平台不重复做。"
+      "decision": "运营人员是用户中心里系统租户的人，运营中心不再有自己的账号、会话和登录",
+      "reason": "和其他系统一样统一登录：密码、锁定、改密、停用都在用户中心一处，少一套账号体系。代价：用户中心不可用时运营中心也登不了；原来「运营账号和任何租户都无关」的隔离，改由「只有系统租户能开通运营中心」来保证。"
     },
     {
-      "decision": "master key 只在这一层",
-      "reason": "它能建 Key、改模型、看到供应商配置，等于 LiteLLM 的管理员；只在管理平台的这一个客户端里，不下发给应用、不进日志。"
+      "decision": "「系统租户」只是用户中心租户上的一个标记，只有用户中心和运营中心认它",
+      "reason": "业务系统不知道它：在 Atlas、知识库里它就是个普通租户，拿不到任何跨租户的能力，各系统不用写「是不是系统租户」的判断。用户中心用它决定「仅系统租户」的应用能开给谁；运营中心用它保护自己（系统租户不能停用、关闭）。"
     },
     {
-      "decision": "部署 id 用平台模型的 uuid",
-      "reason": "LiteLLM 里同一个模型名可以有多个部署；按 id 改、删才不会动到别人（比如直配的同名部署）。"
+      "decision": "能不能进运营中心由用户中心判：运营中心应用标「仅系统租户」",
+      "reason": "普通租户开通不了这个应用；就算租户管理员自己建了同名角色、授了同名编码，取授权快照也是不可访问。判断只在用户中心一处，网关和运营中心都不用再判租户。"
     },
     {
-      "decision": "查 Key 用哈希标识，不用原文",
-      "reason": "/key/info 的 Key 放在查询参数里，前面任何一层 HTTP 访问日志都会原样记下来；LiteLLM 1.106 接受哈希、文档里也建议传哈希。现在对账传的是原文。"
+      "decision": "每个模块一个数据编码，授「全部」级别；级别决定能做什么",
+      "reason": "和 Atlas 按智能体授只读 / 读写 / Owner 是同一套，模块就是运营中心的「数据」。同一个人可以「MCP 能改、模型只能看」：角色按人授，表达不了按模块不同；用操作码表达模块，又违反了「操作码不表达对哪些数据」。"
     },
     {
-      "decision": "不接受空模型列表",
-      "reason": "LiteLLM 里 Key 的 models 为空表示全部模型；生成、改模型时空列表直接拒绝，由 KeySync 改为停用。"
+      "decision": "不可恢复的操作要 Owner",
+      "reason": "关闭租户会删掉它在所有系统里的数据，补发临时密码等于拿到一个租户的管理员，轮换凭据会让接入方立刻断开；和 Atlas 里「只有 Owner 能删」一致，日常运营给读写就够。"
     },
     {
-      "decision": "按 1.106 实测的行为写，升级要复核",
-      "reason": "改模型要 PATCH /model/{id}/update（POST /model/update 不更新 model_info）；价格放 litellm_params；还没有任何模型时 /model/info 返回 500，先看 /v1/models；Key 删除是软删除；别名全局唯一。镜像现在是 main-stable、没固定版本，这些都可能随版本变。"
+      "decision": "角色只管跨模块的功能，现在只有 ops:audit",
+      "reason": "操作码只表达「能不能做某类事」。看审计不属于任何一个模块：审计员要看全部，却不该改任何东西，用模块级别表达不了。"
     },
     {
-      "decision": "部署列表缓存 30 秒，不可达时沿用上一份",
-      "reason": "算有效模型、合并列表都要它；LiteLLM 短暂不可用不该让所有 Key 的有效模型算空、被停用。"
+      "decision": "模块 = 租户 + 每个登记的系统；数据编码写在系统登记里",
+      "reason": "运营按系统分工（管 MCP 的只管 MCP）。新接入一个系统时在登记里写上它的数据编码，重启后自动同步进用户中心，运营中心不用改代码。"
+    },
+    {
+      "decision": "运营中心自己的应用目录随代码同步进用户中心（和用户中心自己的目录一样，是例外）",
+      "reason": "别的应用的目录由运营人员在运营中心录入；运营中心自己不行：第一个人登录之前目录里就得有它，而且模块来自系统登记，手工录入会和登记对不上。只同步目录，不碰授权：谁能进哪个模块始终由人在用户中心授。"
+    },
+    {
+      "decision": "授权按 (用户, 租户) 缓存 30 秒",
+      "reason": "每个请求都问用户中心太慢；运营权限大，收回授权、停用账号最长 30 秒生效，比 Atlas 的 5 分钟短。"
+    },
+    {
+      "decision": "审计在接口层统一记，每条带模块",
+      "reason": "每个写接口都声明了（模块, 级别），依赖里顺带记一条「发起」，新加接口不会忘；跨系统的操作结果要等很久，由租户领域在操作结束时补记。业务系统那边也按 OperatorStamp 记一份，两边能对上。"
+    },
+    {
+      "decision": "审计只追加、不自动清理，不记任何秘密",
+      "reason": "审计是事后追责的依据，不能被改；密码、临时密码、密钥一旦进了审计，看审计的人就能拿到。"
+    }
+  ],
+  "schemaNote": "主键约定：id 自增，只在库内使用；xxx_uuid 是逻辑主键，引用和接口都用它。时间一律 UTC。ops_audit 只追加；操作人是用户中心里的用户，名字在写入时存一份快照，账号停用、改名后审计里照样看得懂。运营中心不存账号、会话、角色和授权。",
+  "tables": [
+    {
+      "name": "ops_audit",
+      "description": "对应实体 AuditEntry，只追加",
+      "at": [
+        0,
+        0
+      ],
+      "columns": [
+        {
+          "name": "id",
+          "type": "BigInteger",
+          "key": "PK",
+          "default": "自增",
+          "description": "库内主键"
+        },
+        {
+          "name": "audit_uuid",
+          "type": "UUIDType",
+          "key": "UK",
+          "description": "逻辑主键；也随 OperatorStamp 带给业务系统"
+        },
+        {
+          "name": "at",
+          "type": "UTCDateTime",
+          "default": "now()"
+        },
+        {
+          "name": "operator_uuid",
+          "type": "UUIDType",
+          "nullable": true,
+          "description": "用户中心里的用户（系统租户的人）；后台任务自动发起时为空"
+        },
+        {
+          "name": "operator_name",
+          "type": "String(64)",
+          "nullable": true,
+          "description": "写入时的名字快照"
+        },
+        {
+          "name": "module",
+          "type": "String(32)",
+          "description": "模块的数据编码，如 OpsTenant、OpsMcp"
+        },
+        {
+          "name": "action",
+          "type": "String(64)",
+          "description": "如 tenant.close、system.put、app.rotate_secret"
+        },
+        {
+          "name": "target",
+          "type": "String(128)",
+          "description": "对象：系统编码、模板编码、应用编码等"
+        },
+        {
+          "name": "tenant_uuid",
+          "type": "UUIDType",
+          "nullable": true,
+          "description": "涉及的租户"
+        },
+        {
+          "name": "detail",
+          "type": "JSONType",
+          "description": "参数摘要，不含任何秘密"
+        },
+        {
+          "name": "result",
+          "type": "String(16)",
+          "nullable": true,
+          "description": "OK | FAILED；跨系统的操作结束后补记"
+        },
+        {
+          "name": "finished_at",
+          "type": "UTCDateTime",
+          "nullable": true
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uk_ops_audit_uuid",
+          "columns": [
+            "audit_uuid"
+          ],
+          "unique": true
+        },
+        {
+          "name": "ix_ops_audit_at",
+          "columns": [
+            "at"
+          ]
+        },
+        {
+          "name": "ix_ops_audit_tenant",
+          "columns": [
+            "tenant_uuid",
+            "at"
+          ]
+        },
+        {
+          "name": "ix_ops_audit_module",
+          "columns": [
+            "module",
+            "at"
+          ]
+        }
+      ]
     }
   ]
 }

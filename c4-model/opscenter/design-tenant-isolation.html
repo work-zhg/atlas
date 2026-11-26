@@ -61,8 +61,8 @@
   </svg>
 
   <h1>多租户隔离设计：数据只属于租户，平台的事归运营中心</h1>
-  <p class="lead">一句话：<b>每条业务数据都记着租户，各服务的数据访问层按「这一次替哪个租户做」自动过滤，漏写条件会报错而不会串数据；所有租户一律平等，没有平台租户；平台的事交给独立的运营中心，它用自己的运营账号，只经各系统的运营接口做事，看不到租户的业务内容。</b></p>
-  <p>这份设计回答四个问题：一次读写怎么知道是哪个租户的、漏写了怎么办；租户上下文从哪来、哪些来源可信；平台的事（开通、停用、关闭租户，运行环境，容量）谁来管、怎么管才看不到租户内容；共用的设施怎么按租户分。方案正文（什么归租户、什么归运营中心，以及过渡办法）见<a href="../../agent-platform/doc/design/tenant-isolation-design.html" target="_blank" rel="noopener">方案设计</a>；下面只讲原理，具体的类、表和交互见文末各图。</p>
+  <p class="lead">一句话：<b>每条业务数据都记着租户，各服务的数据访问层按「这一次替哪个租户做」自动过滤，漏写条件会报错而不会串数据；所有租户一律平等，没有平台租户；平台的事交给独立的运营中心，它只经各系统的运营接口做事，看不到租户的业务内容；运营人员是系统租户里的人，统一登录、按模块授权。</b></p>
+  <p>这份设计回答四个问题：一次读写怎么知道是哪个租户的、漏写了怎么办；租户上下文从哪来、哪些来源可信；平台的事（开通、停用、关闭租户，运行环境，容量）谁来管、怎么管才看不到租户内容；共用的设施怎么按租户分。方案正文（什么归租户、什么归运营中心，以及过渡办法）见<a href="../../agent-platform/doc/design/tenant-isolation-design.html" target="_blank" rel="noopener">方案设计</a>；运营人员怎么登录、怎么按模块授权，见<a href="design-opscenter.html" target="_blank" rel="noopener">运营中心设计</a>。下面只讲原理，具体的类、表和交互见文末各图。</p>
 
   <h2>先认识几个词</h2>
   <table>
@@ -72,8 +72,8 @@
       <tr><td>租户上下文</td><td>「这一次读写是替哪个租户做的」，放在协程的上下文里（contextvar）：一处设定，同一个请求或 run 里开的数据库会话、发的下游请求都看得到。</td><td>张三在网页上发消息：这个请求的上下文是星河科技；这条消息的 run 在后台跑时，上下文也是星河科技。</td></tr>
       <tr><td>自动过滤</td><td>数据访问层给每个涉及租户表的查询自动加「租户 = 当前上下文」，给新行自动填租户。业务代码不写租户条件。</td><td><code>SELECT … FROM agent</code> 实际执行的是 <code>… WHERE tenant_uuid = 星河科技</code>。</td></tr>
       <tr><td>系统范围</td><td>显式声明「这一次不过滤」，是唯一能跨租户的口子。只有两种用途：巡检取待办、运营接口。</td><td>兜底任务找出所有该续跑的 run 和它们的租户，再一条条进入各自的租户去跑。</td></tr>
-      <tr><td>运营中心</td><td>管平台本身的独立系统：开通、停用、关闭租户，运行环境，容量，系统参数，系统任务。有自己的运营账号，不属于任何租户。</td><td>运营人员小周用运营账号加双因素登录，给星河科技把份额从 20 调到 40。</td></tr>
-      <tr><td>运营接口</td><td>各业务系统专门开给运营中心的一组接口：挂在 <code>/ops/v1</code>，网关不转发，每个请求验运营中心的签名。里面没有读租户内容的功能。</td><td>Atlas 的 <code>POST /ops/v1/tenants/{id}/suspend</code>。</td></tr>
+      <tr><td>运营中心</td><td>管平台本身的独立系统：开通、停用、关闭租户，运行环境，容量，系统参数，系统任务。运营人员是系统租户里的人，按模块授权（见运营中心设计）。</td><td>运营人员小周用系统租户的账号统一登录，在 Atlas 模块里给星河科技把份额从 20 调到 40。</td></tr>
+      <tr><td>运营接口</td><td>各业务系统专门开给运营中心的一组接口：挂在 <code>/ops/v1</code>，网关不转发，每个请求验运营中心的签名。地址和各系统要实现的类由运营接口库（中间件）统一定好。里面没有读租户内容的功能。</td><td>知识库的 <code>PUT /ops/v1/tenants/{id}</code>：开通时为新租户记下存储份额。</td></tr>
       <tr><td>份额</td><td>一个租户最多同时占多少共用设施：同时运行的 run、同时存在的沙箱、存储。运营中心定，租户管理员在份额内再定每人上限。</td><td>星河科技同时最多 20 个 run，张三最多 3 个。</td></tr>
     </tbody>
   </table>
@@ -169,9 +169,9 @@
   <svg width="1240" viewBox="0 0 1240 330" role="img" aria-label="运营接口契约">
     <rect class="node" x="20" y="120" width="200" height="80" rx="4"/>
     <text class="t-name" x="120" y="152">运营中心</text>
-    <text class="t-sub" x="120" y="174">运营账号 · 双因素</text>
+    <text class="t-sub" x="120" y="174">系统租户 · 按模块授权</text>
     <rect class="node" x="300" y="20" width="340" height="40" rx="4"/>
-    <text class="t-lab" x="316" y="45">租户生命周期：挂起 · 恢复 · 删除（必选）</text>
+    <text class="t-lab" x="316" y="45">租户生命周期：创建 · 删除（必选）</text>
     <rect class="node" x="300" y="70" width="340" height="40" rx="4"/>
     <text class="t-lab" x="316" y="95">租户与应用目录（只有用户中心）</text>
     <rect class="node" x="300" y="120" width="340" height="40" rx="4"/>
@@ -203,25 +203,26 @@
     <text class="t-lab" x="990" y="90">· 挂在 /ops/v1，网关不转发</text>
     <text class="t-lab" x="990" y="120">· 验签名（每个系统一把密钥）</text>
     <text class="t-lab" x="990" y="150">· 在系统范围里执行</text>
-    <text class="t-lab" x="990" y="180">· 按幂等键去重、记运营请求</text>
+    <text class="t-lab" x="990" y="180">· 实现 TenantLifecycle：创建、删除</text>
     <text class="t-lab" x="990" y="210">· 数据留在自己库里</text>
   </svg>
   <ul>
-    <li><b>看不到是结构保证的，不是权限挡的。</b>契约里根本没有读租户内容的方法，就算运营账号被盗、运营中心有漏洞，也只能做这几类事。</li>
-    <li><b>运营权限和租户权限彻底分开。</b>运营账号不在用户中心的任何租户里；业务系统和用户中心里不再有平台级的操作码和「是不是平台租户」的判断，原来的平台管理接口（沙箱模板、配置项、定时任务、租户管理、应用接入）都移成运营接口。</li>
-    <li><b>数据留在用它的系统里。</b>租户名单在用户中心，份额、沙箱模板、系统参数在 Atlas 等各自的系统里；运营中心只存运营账号、运营审计和租户操作的进度。</li>
+    <li><b>看不到是结构保证的，不是权限挡的。</b>契约里根本没有读租户内容的方法，就算运营人员的账号被盗、运营中心有漏洞，也只能做这几类事。</li>
+    <li><b>运营权限不进业务系统。</b>运营人员是系统租户里的人，但业务系统里没有平台级的操作码，也没有「是不是系统租户」的判断：系统租户在那里就是个普通租户。能不能进运营中心、能运营哪些模块，只在用户中心授（见<a href="design-opscenter.html" target="_blank" rel="noopener">运营中心设计</a>）。原来的平台管理接口（沙箱模板、配置项、定时任务、租户管理、应用接入）都移成运营接口。</li>
+    <li><b>数据留在用它的系统里。</b>租户名单在用户中心，份额、沙箱模板、系统参数在 Atlas 等各自的系统里；运营中心只存运营审计和租户操作的进度。</li>
+    <li><b>业务系统不知道租户状态。</b>契约里没有停用、恢复：停用只在用户中心挡住，这个租户的人登录不了，各系统取角色权限、数据权限时一律拿到无权限。业务系统只管权限，不存、不问租户状态；到期也一样，由用户中心算作停用。</li>
   </ul>
 
   <h2>原理 4　租户操作：拆成步骤、记进度、失败一直重试</h2>
-  <p>开通、停用、恢复、关闭都要按固定顺序调好几个系统，任何一步都可能超时。运营中心把一次操作记成按系统排好的步骤，由后台任务一步步推进，每做完一步记一次进度。以停用为例：</p>
-  <svg width="1240" viewBox="0 0 1240 240" role="img" aria-label="停用租户的步骤">
+  <p>开通和关闭要按固定顺序调好几个系统，任何一步都可能超时；停用、恢复只改用户中心一处。运营中心把一次操作记成按系统排好的步骤，由后台任务一步步推进，每做完一步记一次进度。以开通为例：</p>
+  <svg width="1240" viewBox="0 0 1240 240" role="img" aria-label="开通租户的步骤">
     <rect class="node" x="20" y="50" width="150" height="56" rx="4"/>
     <text class="t-name" x="95" y="74">① 用户中心</text>
-    <text class="t-sub" x="95" y="94">挡住入口 ✓</text>
+    <text class="t-sub" x="95" y="94">建租户和管理员 ✓</text>
     <path class="e" d="M170 78 H188" marker-end="url(#a)"/>
     <rect class="node" x="190" y="50" width="150" height="56" rx="4"/>
     <text class="t-name" x="265" y="74">② Atlas</text>
-    <text class="t-sub" x="265" y="94">挂起 run、回收沙箱 ✓</text>
+    <text class="t-sub" x="265" y="94">创建（记份额）✓</text>
     <path class="e" d="M340 78 H358" marker-end="url(#a)"/>
     <rect class="node-hot" x="360" y="50" width="150" height="56" rx="4"/>
     <text class="t-name" x="435" y="74">③ 知识库</text>
@@ -230,11 +231,11 @@
     <text class="t-hot mid" x="554" y="68">退避 10 秒</text>
     <rect class="node" x="600" y="50" width="170" height="56" rx="4"/>
     <text class="t-name" x="685" y="74">③ 知识库</text>
-    <text class="t-sub" x="685" y="94">同一个幂等键重做 ✓</text>
+    <text class="t-sub" x="685" y="94">再建一次 ✓</text>
     <path class="e" d="M770 78 H788" marker-end="url(#a)"/>
     <rect class="node" x="790" y="50" width="170" height="56" rx="4"/>
     <text class="t-name" x="875" y="74">④–⑦ 其余系统</text>
-    <text class="t-sub" x="875" y="94">挂起 ✓</text>
+    <text class="t-sub" x="875" y="94">创建 ✓</text>
     <path class="e" d="M960 78 H1008" marker-end="url(#a)"/>
     <rect class="node" x="1010" y="50" width="200" height="56" rx="4"/>
     <text class="t-name" x="1110" y="74">操作结束</text>
@@ -244,13 +245,13 @@
     <rect class="band-a" x="20" y="166" width="1190" height="40" rx="6"/>
     <text class="t-lab" x="36" y="191">运营库：每做完一步记一次（成功、失败、下次重做的时间）——运营服务崩在半路，从下一步接着做</text>
     <g class="badge"><circle cx="20" cy="50" r="10"/><text x="20" y="54">1</text></g>
-    <g class="badge"><circle cx="510" cy="50" r="10"/><text x="510" y="54">2</text></g>
-    <g class="badge"><circle cx="1010" cy="50" r="10"/><text x="1010" y="54">3</text></g>
+    <g class="badge"><circle cx="510" cy="50" r="10"/><text x="510" y="54">3</text></g>
+    <g class="badge"><circle cx="190" cy="50" r="10"/><text x="190" y="54">2</text></g>
   </svg>
   <ol class="steps">
-    <li><span class="n">1</span>顺序固定：停用先让用户中心挡住入口（新请求一个也进不来），再通知各系统挂起；恢复反过来，各系统先准备好再放人进来；关闭最后才删用户中心里的租户。同一个租户同一时间只能有一个进行中的操作，关闭只能对已停用的租户做。</li>
-    <li><span class="n">2</span>失败不放弃：按退避一直重试，界面上标出卡住的步骤，修好后可以立即重做。每一步用步骤 uuid 作幂等键，对方按它去重，超时后重做不会做两遍。删除是分批的：对方说「还有剩」，这一步就马上再做一次。</li>
-    <li><span class="n">3</span>停用通知到了以后，各系统在本地记一份租户状态。后台工作（run 续跑、入库、记忆补记）开始前查它：这些工作没有用户请求，靠用户中心挡入口是挡不住的。</li>
+    <li><span class="n">1</span>顺序固定：开通先在用户中心建租户，再按登记逐个调各系统的创建，让它们为这个租户准备自己要用的配置（份额、默认技能等）；关闭反过来，各系统先删完自己的数据，最后才删用户中心里的租户。停用、恢复只是用户中心挡住或放开。同一个租户同一时间只能有一个进行中的操作，关闭只能对已停用的租户做。</li>
+    <li><span class="n">2</span>业务系统怎么接入，由运营接口库（中间件）定好：创建、删除两个接口地址，和一个要实现的类 TenantLifecycle。新接入的系统只写「新租户要准备什么」「删租户时数据库之外还要删什么、表按什么顺序删」，登记到运营中心后，运营中心给已有租户补建一次。</li>
+    <li><span class="n">3</span>失败不放弃：按退避一直重试，界面上标出卡住的步骤，修好后可以立即重做。各系统的创建、删除都能重做（再建一次结果一样，删除每次删剩下的），超时后重做不会出错。删除是分批的：对方说「还有剩」，这一步就马上再做一次。</li>
   </ol>
 
   <h2>原理 5　份额：运营中心管总量，按租户分</h2>
@@ -275,11 +276,12 @@
     <tbody>
       <tr><td>每张业务表都记租户（包括子表），读写自动过滤，没有上下文就报错</td><td>自动过滤只看得到当前查的这张表；后台按 id 直接查子数据也要受保护。漏写条件报错而不是返回全部，测试第一次跑就暴露。</td><td><a href="../infra-platform/code-tenancy.html" target="_blank" rel="noopener">租户隔离库</a></td></tr>
       <tr><td>系统范围必须给原因，只有「巡检取待办」「运营接口」两种</td><td>系统范围就是不过滤，是唯一跨租户的口子；收成两个有名字的用途，评审时一眼看出哪里在跨租户。</td><td><a href="../infra-platform/code-tenancy.html" target="_blank" rel="noopener">租户隔离库</a></td></tr>
-      <tr><td>没有平台租户；平台的事归独立的运营中心，运营账号不放进用户中心</td><td>放进用户中心就又多出一种不属于普通租户的特殊用户，各系统又要为它写特殊判断。代价是多一套登录，但运营人员少、功能简单。</td><td><a href="code-accounts.html" target="_blank" rel="noopener">运营账号与审计</a></td></tr>
+      <tr><td>没有平台租户；平台的事归独立的运营中心；运营人员是系统租户里的人，按模块授权</td><td>系统租户只在用户中心和运营中心被认出来，在业务系统里就是普通租户，各系统不用写特殊判断；运营人员和其他系统一样统一登录，不用另一套账号。</td><td><a href="design-opscenter.html" target="_blank" rel="noopener">运营中心设计</a>、<a href="code-access.html" target="_blank" rel="noopener">权限与审计</a></td></tr>
       <tr><td>运营中心只经运营接口做事，契约里没有读租户内容的方法；每个系统一把运营密钥，请求签名</td><td>看不到靠结构保证；运营接口能跨租户、能删数据，内部服务之间凭请求头互信那一套不够用。签名防重放，一把密钥泄露只影响一个系统。</td><td><a href="code-gateway.html" target="_blank" rel="noopener">系统接入</a>、<a href="../infra-platform/code-opsapi.html" target="_blank" rel="noopener">运营接口库</a></td></tr>
-      <tr><td>数据留在用它的系统里，运营中心只存账号、审计和操作进度</td><td>执行规则的是各业务系统自己（派发 run 查份额、建沙箱读模板）；存两份就要对账。</td><td><a href="container.html" target="_blank" rel="noopener">运营中心容器图</a></td></tr>
-      <tr><td>租户操作拆成步骤、存进度、后台推进；失败一直重试，不放弃</td><td>关闭要删的数据可能很多、任何一步都可能超时；半停用、半删除的租户比失败更糟，修好对方后自动接着做。</td><td><a href="code-tenants.html" target="_blank" rel="noopener">租户</a></td></tr>
-      <tr><td>各系统本地记租户状态，后台工作开始前查它</td><td>用户中心只挡得住新的用户请求，挡不住 run 续跑、入库这些后台工作。</td><td><a href="../infra-platform/code-opsapi.html" target="_blank" rel="noopener">运营接口库</a></td></tr>
+      <tr><td>数据留在用它的系统里，运营中心只存审计和操作进度</td><td>执行规则的是各业务系统自己（派发 run 查份额、建沙箱读模板）；存两份就要对账。</td><td><a href="container.html" target="_blank" rel="noopener">运营中心容器图</a></td></tr>
+      <tr><td>租户操作拆成步骤、存进度、后台推进；失败一直重试，不放弃</td><td>关闭要删的数据可能很多、任何一步都可能超时；半开通、半删除的租户比失败更糟，修好对方后自动接着做。</td><td><a href="code-tenants.html" target="_blank" rel="noopener">租户</a></td></tr>
+      <tr><td>业务系统不知道租户状态，只认角色权限和数据权限；停用、恢复只改用户中心</td><td>租户归用户中心管。各系统存一份就要同步，停用还得逐个系统通知，哪个没通知到就不一致；停用、到期、删除后用户中心对这个租户的人返回无权限，一处生效。代价是在跑的后台工作不会被立即叫停，它们再取权限时失败。</td><td><a href="code-tenants.html" target="_blank" rel="noopener">租户</a></td></tr>
+      <tr><td>租户接入由运营接口库规定：两个接口地址、一个要实现的类（创建、删除）</td><td>新接入一个存租户数据的系统，要做什么一目了然；地址、签名、租户上下文、分批删行都在库里，各系统不会各写一套。创建、删除都能重做，不用按幂等键去重。</td><td><a href="../infra-platform/code-opsapi.html" target="_blank" rel="noopener">运营接口库</a>、<a href="code-gateway.html" target="_blank" rel="noopener">系统接入</a></td></tr>
       <tr><td>份额存在 Atlas；run 和沙箱在认领的事务里锁租户行，精确不超；满了 run 排队</td><td>先数再建在并发时是软上限；锁一行让同一租户的认领串行，不同租户互不影响。run 已经提交，排队等空位最符合预期。</td><td><a href="../agent/code-capacity.html" target="_blank" rel="noopener">容量</a></td></tr>
       <tr><td>运行期参数分系统参数和租户设置；租户由调用方显式传入</td><td>影响所有租户的归运营中心，只影响一个租户的归租户管理员；租户设置没改过就跟着运营中心定的系统值走。</td><td><a href="../infra-platform/code-appconfig.html" target="_blank" rel="noopener">应用配置库</a>、<a href="../agent/code-tenant-settings.html" target="_blank" rel="noopener">租户设置</a></td></tr>
       <tr><td>模型属于租户：系统功能的模型按租户绑定，能力表按供应商模型名查、随版本发布</td><td>没有平台提供的模型；租户可以随便给模型起名，按租户起的名字查能力迟早查错。</td><td><a href="../agent/code-model-access.html" target="_blank" rel="noopener">模型接入</a></td></tr>
@@ -294,7 +296,7 @@
     <tbody>
       <tr><td><a href="system-context.html" target="_blank" rel="noopener">运营中心 · 系统上下文</a></td><td>运营人员用运营中心；运营中心连用户中心、Agent 平台和五个同级服务，每条线写了能做什么。</td></tr>
       <tr><td><a href="container.html" target="_blank" rel="noopener">运营中心 · 容器</a></td><td>运营控制台、运营服务、运营库；所有对外调用都是运营接口（签名）。</td></tr>
-      <tr><td><a href="component-server.html" target="_blank" rel="noopener">运营服务 · 组件</a></td><td>六个组件：运营账号与审计、租户、应用、容量、系统设置、系统接入；只有系统接入连各业务系统。</td></tr>
+      <tr><td><a href="component-server.html" target="_blank" rel="noopener">运营服务 · 组件</a></td><td>五个组件：权限与审计、租户、应用目录、系统模块、系统接入；只有系统接入调各系统的运营接口。</td></tr>
       <tr><td><a href="../agent/system-context.html" target="_blank" rel="noopener">Agent 平台 · 系统上下文</a>、<a href="../agent/container.html" target="_blank" rel="noopener">容器</a></td><td>多了运营中心：经 Agent 服务的运营接口管运行环境、份额、租户的挂起和删除。</td></tr>
     </tbody>
   </table>
@@ -304,9 +306,10 @@
     <tbody>
       <tr><td><a href="../agent/dynamic/dynamic-tenant-context.html" target="_blank" rel="noopener">一次请求和一个 run 怎么带上租户</a></td><td>原理 1、2 的完整交互：网关写租户、用户中心核对（第 4 步）、自动过滤（第 8 步）、run 按会话的租户进入（第 10 步）、调知识库带上租户（第 12 步）。</td></tr>
       <tr><td><a href="../agent/dynamic/dynamic-tenant-quota.html" target="_blank" rel="noopener">run 按租户份额排队</a></td><td>原理 5：认领事务里锁份额行、数在跑的 run；满了排队并推「排队中」；空出位置后兜底任务接走。</td></tr>
-      <tr><td><a href="dynamic/dynamic-tenant-open.html" target="_blank" rel="noopener">开通租户</a></td><td>第一步在接口里同步跑、临时密码只出现一次；第二步设份额由后台推进。</td></tr>
-      <tr><td><a href="dynamic/dynamic-tenant-suspend.html" target="_blank" rel="noopener">停用租户</a></td><td>原理 4 的完整交互：先挡入口再通知各系统；知识库超时后用同一个幂等键重做；到期从哪里发起。</td></tr>
-      <tr><td><a href="dynamic/dynamic-tenant-close.html" target="_blank" rel="noopener">关闭租户</a></td><td>只能关已停用的；Atlas 分批删（先外部资源后数据库，「还有剩」就再做一次）；最后删用户中心里的租户。</td></tr>
+      <tr><td><a href="dynamic/dynamic-operator-access.html" target="_blank" rel="noopener">运营人员登录并运营一个模块</a></td><td>统一登录、授权快照、各模块级别、按模块判权限，再经运营接口改 MCP 网关的参数。</td></tr>
+      <tr><td><a href="dynamic/dynamic-tenant-open.html" target="_blank" rel="noopener">开通租户</a></td><td>第一步在接口里同步跑、临时密码只出现一次；之后按登记逐个调各系统的创建，知识库超时后退避再建一次。</td></tr>
+      <tr><td><a href="dynamic/dynamic-tenant-suspend.html" target="_blank" rel="noopener">停用租户</a></td><td>只有一步：用户中心挡住；之后这个租户的人取权限一律无权限，业务系统不收通知。</td></tr>
+      <tr><td><a href="dynamic/dynamic-tenant-close.html" target="_blank" rel="noopener">关闭租户</a></td><td>只能关已停用的；各系统经运营接口库的删除接口分批删（先外部资源后数据库，「还有剩」就再做一次）；最后删用户中心里的租户。</td></tr>
     </tbody>
   </table>
   <h3>类图</h3>
@@ -314,11 +317,11 @@
     <thead><tr><th style="width: 28%">图</th><th>看什么</th></tr></thead>
     <tbody>
       <tr><td><a href="../infra-platform/code-tenancy.html" target="_blank" rel="noopener">公共库 · 租户隔离</a></td><td>原理 1、2 的实现：TenantScope 和 contextvar、自动过滤、系统范围的两种原因、跨租户巡检的固定写法、名字带租户、按表分批删除、给已有表加租户的迁移。</td></tr>
-      <tr><td><a href="../infra-platform/code-opsapi.html" target="_blank" rel="noopener">公共库 · 运营接口</a></td><td>各业务系统一侧的运营接口：签名校验、幂等记录、本地租户状态和 TenantGate、宿主要实现的 TenantLifecycle；两张表。</td></tr>
+      <tr><td><a href="../infra-platform/code-opsapi.html" target="_blank" rel="noopener">公共库 · 运营接口</a></td><td>各业务系统接入运营中心的中间件：/ops/v1 地址、签名校验、宿主要实现的 TenantLifecycle（创建、删除）；没有表。</td></tr>
       <tr><td><a href="../infra-platform/code-appconfig.html" target="_blank" rel="noopener">公共库 · 应用配置</a></td><td>加了作用域：系统参数只给运营中心改，租户设置按「本租户 → 系统值 → 默认值」取。</td></tr>
-      <tr><td><a href="code-tenants.html" target="_blank" rel="noopener">运营中心 · 租户</a></td><td>原理 4 的实现：TenantOperation 和步骤、顺序规则、后台推进与退避、到期自动停用；两张表。</td></tr>
-      <tr><td><a href="code-gateway.html" target="_blank" rel="noopener">运营中心 · 系统接入</a></td><td>原理 3 的契约：五组接口、系统登记与能力、签名、OperatorStamp、两类错误。</td></tr>
-      <tr><td><a href="code-accounts.html" target="_blank" rel="noopener">运营中心 · 运营账号与审计</a></td><td>双因素登录、两个运营角色、会话、只追加的运营审计；三张表。</td></tr>
+      <tr><td><a href="code-tenants.html" target="_blank" rel="noopener">运营中心 · 租户</a></td><td>原理 4 的实现：TenantOperation 和步骤、顺序规则、后台推进与退避、给新系统补建；两张表。</td></tr>
+      <tr><td><a href="code-gateway.html" target="_blank" rel="noopener">运营中心 · 系统接入</a></td><td>原理 3 的契约：五组接口（租户生命周期只有创建、删除）、系统登记与能力、签名、OperatorStamp、两类错误。</td></tr>
+      <tr><td><a href="code-access.html" target="_blank" rel="noopener">运营中心 · 权限与审计</a></td><td>运营人员怎么解析、按模块判权限、同步自己的应用目录、只追加的运营审计；一张表。</td></tr>
       <tr><td><a href="../agent/code-capacity.html" target="_blank" rel="noopener">Atlas · 容量</a></td><td>原理 5 的实现：租户份额、每人上限、三个准入点、用量怎么数；两张表。</td></tr>
       <tr><td><a href="../agent/code-ops.html" target="_blank" rel="noopener">Atlas · 运营接口</a></td><td>Atlas 挂起、恢复时 run、沙箱、设备怎么处理；删除外部资源的顺序；容量和沙箱模板两组契约的实现。</td></tr>
       <tr><td><a href="../agent/code-tenant-settings.html" target="_blank" rel="noopener">Atlas · 租户设置</a></td><td>原来的平台管理：租户指令、默认智能体、每人上限，改要租户级操作码 settings:manage。</td></tr>

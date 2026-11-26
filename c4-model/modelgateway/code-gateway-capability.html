@@ -30,50 +30,42 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：模型平台 - 模型网关 - 能力与参数",
-  "description": "目标领域模型，只画期望的样子。模型的能力、参数的三种处理、思考块的来源标记；本领域没有自己的表（模型登记在管理平台，预置规则随网关发布），领域总览见 code-gateway-domains.html",
+  "description": "模型对外承诺能力检查、上游模型写法规划（ParamPlan），以及思考块与加密思考块的跨线路溯源保护；领域总览见 code-gateway-domains.html。",
   "component": "能力与参数",
-  "package": "atlas_modelgateway.gateway.capability（目标模型）",
-  "overview": "能力与参数把「模型之间的差异」收在一处。差异分两类：一类是能做什么（能看图、能思考、能调工具、上下文多长），这是对调用方的承诺；另一类是同一件事怎么写（温度收不收、思考怎么开关、力度有哪几档），这是网关自己的事。\n\n调用方按统一的含义说意图，这里先看模型做不做得到，做不到就拒绝；做得到就按线路上游模型的规则，算出「哪些参数去掉、哪些换个写法」。它只出决定，改请求是格式领域的事。",
+  "package": "atlas_modelgateway.gateway.capability",
+  "overview": "能力与参数领域将「模型能做什么」（ModelCaps，对调用方的承诺）与「上游接口怎么写参数」（UpstreamRules，供应商模型的脾气）解耦。\n\n选路前 check 拦截一旦静默丢弃会导致语义错误的请求（如图文发给纯文本模型、工具发给不支持工具的模型、估算长度超上下文窗口）。选好线路后 plan 根据共享基础层的 PresetRules 计算 ParamPlan：不支持温度就删温度、最大输出超上限就截断、思考自动档按上游能力译成自适应或固定预算，并生成上游来源戳 stamp，使读写器能够识别并剥离跨线路切换后的历史 thinking 与 redacted_thinking 块，避免多轮对话签名校验 400。",
   "elements": [
     {
       "id": "inv",
       "kind": "class",
-      "name": "Invocation · AttemptLoop",
-      "at": [
-        1.5,
-        -1.2
-      ],
+      "name": "Invocation",
+      "external": true,
+      "source": "调用编排领域（gateway/invocation.py）",
       "methods": [
         [
           "+",
-          "check（选线路之前）"
-        ],
-        [
-          "+",
-          "plan（每次尝试）"
-        ],
-        [
-          "+",
-          "模型的能力从配置快照取了传进来"
+          "check（选路前）· plan（每次尝试选路后）"
         ]
       ],
-      "external": true,
-      "source": "调用编排领域"
+      "at": [
+        1.5,
+        -1.2
+      ]
     },
     {
       "id": "gate",
       "kind": "class",
       "name": "CapabilityGate",
+      "stereotype": "应用服务",
       "at": [
         1.5,
         0.3
       ],
-      "stereotype": "应用服务",
-      "responsibility": "能力的检查和参数的整理。check 在选线路之前：请求要的（图片、工具、长度、模型类型）这个模型有没有承诺，没有就拒绝，不打到供应商。plan 在选好线路之后：按这条线路上游模型的规则，把调用方的意图算成「参数怎么改」。只出决定，不碰请求：改请求由格式领域的读写器按 ParamPlan 去做。不读配置：模型的能力由调用方传进来。",
+      "responsibility": "能力门禁与参数规划入口：纯函数无 IO，check 不通过抛 400 BEYOND_CAPABILITY；plan 输出与协议无关的 ParamPlan 交由格式读写器落地。",
       "methods": [
         [
           "+",
-          "check(model, caps, summary)"
+          "check(model_name, caps, summary)"
         ],
         [
           "+",
@@ -82,15 +74,15 @@
       ]
     },
     {
-      "id": "check",
+      "id": "chk",
       "kind": "class",
       "name": "CapabilityCheck",
+      "stereotype": "策略",
       "at": [
-        -0.4,
+        -0.3,
         2.0
       ],
-      "stereotype": "策略",
-      "responsibility": "去掉会让结果出错的，一律拒绝（400，说清缺什么）：图片给不能看图的、工具给不能调工具的、估算的输入超过上下文、对话入口用了向量模型。模型看不到图也会照样回答，调用方发现不了，所以绝不悄悄去掉。",
+      "responsibility": "核验请求摘要是否超出模型承诺：含图片但 caps.vision=False、含工具但 caps.tools=False、估算输入 token 超过 caps.context_window 均立即拒绝。",
       "methods": [
         [
           "+",
@@ -99,40 +91,15 @@
       ]
     },
     {
-      "id": "caps",
-      "kind": "class",
-      "name": "ModelCaps",
-      "at": [
-        -0.4,
-        3.7
-      ],
-      "stereotype": "值对象（共享内核）",
-      "responsibility": "模型对调用方承诺的能力。登记时由预置规则按线路带出，管理员可以改（自部署的模型要手填）；配置快照、管理平台、模型清单都用它，所以放在共享内核。Atlas 按它显示、过滤模型，按上下文长度算压缩时机。",
-      "attributes": [
-        [
-          "+",
-          "kind · vision · tools"
-        ],
-        [
-          "+",
-          "thinking: NONE | OPTIONAL | ALWAYS_ON"
-        ],
-        [
-          "+",
-          "context_window · max_output"
-        ]
-      ]
-    },
-    {
-      "id": "policy",
+      "id": "pol",
       "kind": "class",
       "name": "ParamPolicy",
+      "stereotype": "策略",
       "at": [
         1.5,
         2.0
       ],
-      "stereotype": "策略",
-      "responsibility": "参数的两种处理（第三种「拒绝」在 check 里）：去掉——模型不收温度就不传温度、不支持思考力度就不传力度、思考关不掉的模型收到「关闭」就不传；换写法——「思考：自动」在支持自适应的模型上传自适应、只支持固定额度的传一个额度，最大输出超过上限改成上限。每条决定都写进 ParamPlan.notes，进调用记录。",
+      "responsibility": "按 UpstreamRules 把调用方统一意图（思考开关/预算、力度档位、温度、最大输出）归纳为删除项、改写项与审计说明 notes。",
       "methods": [
         [
           "+",
@@ -141,27 +108,19 @@
       ]
     },
     {
-      "id": "rules",
+      "id": "prov_stamp",
       "kind": "class",
-      "name": "UpstreamRules",
+      "name": "ThinkingProvenance",
+      "stereotype": "策略",
       "at": [
-        1.5,
-        3.7
+        3.35,
+        2.0
       ],
-      "stereotype": "值对象",
-      "responsibility": "一个上游模型「同一件事怎么写」：收不收温度、有哪些思考力度、思考有哪几种写法、思考关闭时力度最高到多少、最大输出上限、历史里的思考块要带回还是去掉。网关自带，租户不能改。",
-      "attributes": [
+      "responsibility": "思考块溯源策略：以 `mgw:<provider>:<upstream_model>:` 为前缀给 thinking.signature 与 redacted_thinking.data 打来源戳；下一轮若切到不同上游线路，读写器识别异源标记后安全剥离思考块，保留正文与工具调用。",
+      "methods": [
         [
           "+",
-          "accepts_temperature · effort_levels"
-        ],
-        [
-          "+",
-          "thinking_modes · off_max_effort"
-        ],
-        [
-          "+",
-          "max_output · history_thinking"
+          "stamp_for(route) -> str"
         ]
       ]
     },
@@ -169,60 +128,56 @@
       "id": "preset",
       "kind": "class",
       "name": "PresetRules",
+      "external": true,
+      "source": "共享基础层（shared.presets，管理面与网关共用）",
+      "methods": [
+        [
+          "+",
+          "rules_for(provider, upstream_model) · caps_for(...)"
+        ]
+      ],
       "at": [
-        3.4,
+        5.1,
         2.0
-      ],
-      "stereotype": "仓储",
-      "responsibility": "产品自带的常见上游模型的规则和能力，随网关版本发布，按「供应商 + 上游模型名」匹配（支持前缀，如 deepseek-v4-*），不按租户起的模型名查。查不到的按最保守的规则：只传模型名、消息、最大输出。管理平台加线路时用同一份规则校验「这条线路做得到模型承诺的能力」。",
-      "methods": [
-        [
-          "+",
-          "rules_for(provider, upstream_model) -> UpstreamRules"
-        ],
-        [
-          "+",
-          "caps_for(provider, upstream_model) -> ModelCaps"
-        ]
       ]
     },
     {
-      "id": "prov",
+      "id": "rules",
       "kind": "class",
-      "name": "ThinkingProvenance",
-      "at": [
-        4.6,
-        0.3
-      ],
-      "stereotype": "策略",
-      "responsibility": "思考块的来源标记：回答里的每个思考块都标上来自哪个上游模型，调用方原样保存、原样带回，不用理解它。标记写进 ParamPlan.stamp；下一轮带回时，读写器拿历史里的标记和这次的比：同一个上游就按它的规则带回或去掉，别的上游（比如换了线路）就去掉——只去思考，正文和工具调用都保留。",
-      "methods": [
-        [
-          "+",
-          "stamp(route) -> str"
-        ]
-      ]
-    },
-    {
-      "id": "kernel",
-      "kind": "class",
-      "name": "RequestSummary · ParamPlan · Route",
-      "at": [
-        -1.9,
-        0.3
-      ],
+      "name": "UpstreamRules · ModelCaps",
+      "external": true,
+      "source": "共享基础层（shared.presets · kernel）",
       "attributes": [
         [
           "+",
-          "summary：意图、图片、工具、估算长度"
+          "ModelCaps: kind · vision · tools · thinking · context_window · max_output"
         ],
         [
           "+",
-          "plan：drop · set · history_thinking · stamp · notes"
+          "UpstreamRules: accepts_temperature · thinking_modes · effort_levels · history_thinking"
         ]
       ],
+      "at": [
+        1.5,
+        3.85
+      ]
+    },
+    {
+      "id": "plan_vo",
+      "kind": "class",
+      "name": "RequestSummary · ParamPlan",
       "external": true,
-      "source": "共享内核"
+      "source": "共享基础层（shared.kernel）",
+      "attributes": [
+        [
+          "+",
+          "ParamPlan: drop · set · thinking · effort · history_thinking · stamp · notes"
+        ]
+      ],
+      "at": [
+        -1.95,
+        0.3
+      ]
     }
   ],
   "relationships": [
@@ -234,100 +189,69 @@
     },
     {
       "from": "gate",
-      "to": "check",
+      "to": "chk",
       "type": "uses",
-      "description": "查能力"
+      "description": "核验模型能力"
     },
     {
       "from": "gate",
-      "to": "policy",
+      "to": "pol",
       "type": "uses",
-      "description": "算参数"
+      "description": "计算参数改写"
+    },
+    {
+      "from": "gate",
+      "to": "prov_stamp",
+      "type": "uses",
+      "description": "生成来源戳"
     },
     {
       "from": "gate",
       "to": "preset",
       "type": "uses",
-      "description": "上游规则"
+      "description": "查上游预置规则"
     },
     {
       "from": "gate",
-      "to": "prov",
+      "to": "plan_vo",
       "type": "uses",
-      "description": "思考块怎么处理",
-      "labelAt": 0.55
+      "description": "收摘要、产出 ParamPlan"
     },
     {
-      "from": "gate",
-      "to": "kernel",
-      "type": "uses",
-      "description": "收 summary、route，产出 plan"
-    },
-    {
-      "from": "check",
-      "to": "caps",
-      "type": "uses",
-      "description": "按"
-    },
-    {
-      "from": "policy",
+      "from": "chk",
       "to": "rules",
       "type": "uses",
-      "description": "按"
+      "description": "读取 ModelCaps"
     },
     {
-      "from": "preset",
+      "from": "pol",
       "to": "rules",
       "type": "uses",
-      "description": "creates",
-      "labelAt": 0.4
-    },
-    {
-      "from": "preset",
-      "to": "caps",
-      "type": "uses",
-      "description": "creates",
-      "labelAt": 0.25
+      "description": "读取 UpstreamRules"
     }
   ],
   "capabilities": [
     {
-      "name": "查能力",
-      "entry": "check(model, caps, summary)",
-      "callers": "调用编排（选线路之前）",
-      "description": "模型承诺的能力不够就抛 GatewayError（请求超出能力，400），说清缺什么"
+      "name": "前置能力门禁",
+      "entry": "CapabilityGate.check",
+      "callers": "调用编排（扣 RPM 与选路之前）",
+      "description": "拦截看图、工具、超长上下文等模型无法兑现的请求，返回 400 BEYOND_CAPABILITY"
     },
     {
-      "name": "算参数怎么改",
-      "entry": "plan(caps, route, summary)",
-      "callers": "调用编排（每次尝试，选好线路之后）",
-      "description": "按这条线路上游模型的规则，把意图（思考、力度、温度、最大输出）算成 ParamPlan；含历史思考块的去留和这次回答的来源标记"
+      "name": "按线路规划参数与思考溯源",
+      "entry": "CapabilityGate.plan",
+      "callers": "调用编排（每次尝试选定线路后）",
+      "description": "生成 ParamPlan 指导读写器改写参数，管理 thinking 与 redacted_thinking 的跨线路去留"
     }
   ],
   "decisions": [
     {
-      "decision": "能力和写法分两层",
-      "reason": "能力是对调用方的承诺，挂在模型上、管理员可改；写法是上游模型的脾气，挂在上游模型上、网关自带。调用方只按能力挑模型，不用知道写法。"
+      "decision": "PresetRules 下沉至 shared.presets 供控制面与数据面共用",
+      "reason": "管理平台添加线路时用它校验能力不缩水，网关转发时用它整理参数，单一事实源且消除控制面对数据面的反向依赖。"
     },
     {
-      "decision": "只出决定，不碰请求，也不读配置",
-      "reason": "ParamPlan 交给格式领域的读写器在请求原来的格式上改；这里不认识任何格式，加一种格式不用动它。模型的能力由调用编排从配置快照取了传进来，这里是纯计算，好测。"
-    },
-    {
-      "decision": "拒绝在选线路之前",
-      "reason": "能力是模型的承诺，跟走哪条线路无关；被拒的请求不打到供应商。每条线路都必须做得到模型的能力（加线路时由管理平台用同一份预置规则校验），换线路不会让能力缩水。"
-    },
-    {
-      "decision": "查不到规则按最保守的来",
-      "reason": "意图里的思考、力度、温度都不传，只传模型名、消息、最大输出：宁可少传，也不要 400。新模型补进预置规则后自动用上。"
-    },
-    {
-      "decision": "规则按供应商 + 上游模型名查",
-      "reason": "模型名是租户自己起的，同一个名字在不同租户背后可能是不同的上游；按上游查，一份规则所有租户共用。"
-    },
-    {
-      "decision": "思考块带来源标记",
-      "reason": "各家对历史里的思考内容要求不同（Anthropic 要带签名原样带回，有的带回会报错）；不知道来源就没法在换线路之后正确处理。"
+      "decision": "thinking 与 redacted_thinking 同步打来源戳并在切换上游时一并剥离",
+      "reason": "Claude 推理常返回加密的 redacted_thinking 块；若对话中途故障切换到另一家供应商或备用模型，原样回传加密块会直接触发上游 400 签名错误。"
     }
   ]
 }

@@ -1,0 +1,1143 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code View</title>
+<style>
+  body { margin: 0; background: #fff; color: #444; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { padding: 24px 32px 48px; }
+  svg { display: block; max-width: 100%; height: auto; }
+  h2 { margin: 40px 0 12px; font-size: 15px; font-weight: 600; color: #666; }
+  #c4-report { margin: 0 0 24px; padding: 12px 16px 12px 36px; border: 1px solid #e0b4b4; background: #fff6f6; font-size: 14px; line-height: 1.6; }
+  #c4-report li[data-level="error"] { color: #b00020; }
+  #c4-report li[data-level="warn"] { color: #8a5a00; }
+  #c4-overview p { max-width: 1100px; margin: 0 0 10px; font-size: 14px; line-height: 1.8; color: #333; }
+  section table { border-collapse: collapse; font-size: 14px; line-height: 1.6; color: #333; }
+  section th, section td { border: 1px solid #d0d0d0; padding: 6px 10px; text-align: left; vertical-align: top; }
+  section th { background: #f4f4f4; font-weight: 600; white-space: nowrap; }
+  section td.code { font-family: Menlo, Consolas, monospace; font-size: 13px; }
+  section td.nowrap { white-space: nowrap; }
+  #c4-tables h3 { margin: 28px 0 6px; font: 600 14px Menlo, Consolas, monospace; color: #333; }
+  #c4-tables h4 { margin: 14px 0 6px; font-size: 13px; font-weight: 600; color: #666; }
+  #c4-tables p { max-width: 1100px; margin: 0 0 10px; font-size: 14px; line-height: 1.8; color: #333; }
+</style>
+</head>
+<body>
+<!--
+  只改下面这段 JSON；渲染器不用动。字段说明见 code/RULES.md 的「数据格式」。
+-->
+<script type="application/json" id="c4-model">
+{
+  "title": "代码图：API 网关 - 网关服务 - 站点、路由表与边界防护",
+  "description": "目标领域模型。routes.yaml 是站点和对外服务的唯一来源：每个对外的后端或前端只登记名字、种类、认证模式和档位，不写地址。外部路径第一段就是名字，也是内部域名第一段——后端 /<名>/… 去掉 /<名> 发往 <名>.internal.techstz.com，前端 /<名>-ui/… 原样发往 <名>-ui.internal.techstz.com；网关只连集群里的内部 Ingress，把域名写进 Host。请求先按域名分站点（不认识的拒绝）、清身份头；Atlas 站点再过边界（畸形路径 400、禁区段 404）和白名单 location，没登记的落默认 location 返回 404",
+  "component": "TLS 与站点 · 白名单路由表 · 入口与边界防护",
+  "package": "infra-platform/gateway（routes.yaml · render.py · templates/ · lua/atlas_gw/errors.lua）· deploy/server/gateway.sh",
+  "overview": "这一块守住服务器对外的第一道边界，分两半。\n\n部署时：routes.yaml 记两样东西。一是站点——每个对外域名是 Atlas 站点还是透传站点（Langfuse、gitea）。二是 Atlas 站点上对外的服务：名字（同时是外部路径的第一段和内部域名的第一段；前端的名字一律以 -ui 结尾）、种类（后端 api 或前端 ui）、可选的子路径（同一服务里认证模式或转发档位不同的部分单独登记）、认证模式、转发档位。render.py 按硬规则校验后渲染：后端外部 /<名>/… 去掉 /<名> 后转给 <名>.internal.techstz.com；前端外部 /<名>-ui/… 原样转给 <名>-ui.internal.techstz.com（前端的 basePath 就是 /<名>-ui）。例：/mcp-ui/ 返回 MCP 的页面，页面里调的接口是 /mcp/…；运营中心也一样，/opscenter-ui/ 是页面、/opscenter/ 是接口。所有 location 的上游都是同一个：内部 Ingress 的固定 ClusterIP；区别只在 Host。\n\n请求时：先按 Host 进站点，不认识的域名在 TLS 握手时就拒绝；80 端口只放 ACME 验证路径，其余跳 HTTPS。所有站点在进入 location 之前清掉外部带来的内网身份头；进 location 后先查登录失败封禁表，被封的 IP 403（访问阶段与 JWT 认证）。Atlas 站点再过 server 级边界：原始请求行有双编码、反斜杠、控制字符的 400；规范化后的路径有 /internal/、/ops/、/open/ 段的 404；然后按生成的 location 匹配，没登记的落默认 location，404。\n\n它不验 JWT（JWT 认证器），也不决定怎么转发（流式转发，按档位）。服务在集群里怎么被找到，由各服务自己的 Ingress 负责。",
+  "elements": [
+    {
+      "id": "spec",
+      "kind": "class",
+      "name": "ServiceRoute",
+      "stereotype": "值对象",
+      "at": [
+        0.0,
+        0.15
+      ],
+      "source": "routes.yaml 的 services 段 → model.py Route（替代 40-frontends.yaml 里手写的 location 和上游地址）",
+      "responsibility": "一条对外路由：名字（小写字母、数字、连字符；外部路径第一段 = 内部域名第一段；前端以 -ui 结尾，如 mcp-ui）；种类 api 或 ui；可选子路径（默认整个 /<名>/；同一服务里模式或档位不同的部分单独登记，如 uc 的 /api/v1/auth/ 是 passthrough、atlas 的 /v1/threads/*/events 用 SSE）；认证模式；转发档位；改密前能否使用；是不是登录接口（回 401 计入这个 IP 的登录失败）。",
+      "attributes": [
+        [
+          "+",
+          "name · kind: api | ui"
+        ],
+        [
+          "+",
+          "subpath = /（默认整个服务）"
+        ],
+        [
+          "+",
+          "mode: AuthMode · proxy: ProxyProfile"
+        ],
+        [
+          "+",
+          "pending_password_ok: bool"
+        ],
+        [
+          "+",
+          "login: bool（登录接口：回 401 计入 IP 封禁）"
+        ]
+      ]
+    },
+    {
+      "id": "mode",
+      "kind": "enum",
+      "name": "AuthMode",
+      "stereotype": "值对象",
+      "at": [
+        0.0,
+        1.75
+      ],
+      "source": "model.py AuthMode（替代「哪些 location include identity.inc」的隐式约定）",
+      "responsibility": "请求怎么过网关：AUTH 验 JWT 并写身份头；PASSTHROUGH 不验、透传给用户中心（登录、刷新、登出）；SELF_AUTH 不验、透传专属 Key 或设备令牌（数据面子网关自己认）；PUBLIC 不验（页面、静态资源、带令牌的预览站点）。后三种都不写身份头。",
+      "attributes": [
+        [
+          "",
+          "AUTH | PASSTHROUGH | SELF_AUTH | PUBLIC"
+        ]
+      ]
+    },
+    {
+      "id": "table",
+      "kind": "class",
+      "name": "RouteTable",
+      "stereotype": "聚合根",
+      "at": [
+        1.45,
+        0.15
+      ],
+      "source": "model.py RouteTable（load 读 routes.yaml，${VAR} 从环境变量取）",
+      "responsibility": "全部站点、服务路由和转发档位。加载时查引用完整：站点域名唯一，同一名字同一子路径只登记一次，引用的档位都存在；渲染时同一服务里更长的子路径排在前面，和 Nginx 的最长前缀匹配一致。",
+      "attributes": [
+        [
+          "-",
+          "sites · services · proxies · internal_suffix = internal.techstz.com"
+        ]
+      ],
+      "methods": [
+        [
+          "+",
+          "load(path) -> RouteTable"
+        ],
+        [
+          "+",
+          "routes() -> list[RouteSpec]"
+        ]
+      ]
+    },
+    {
+      "id": "rules",
+      "kind": "class",
+      "name": "SafetyRules",
+      "stereotype": "领域服务",
+      "at": [
+        4.35,
+        0.15
+      ],
+      "source": "rules.py check（渲染前的硬规则，替代人工评审 location）",
+      "responsibility": "违反任何一条就不生成配置：名字是合法的域名标签，且不是禁区段（internal、ops、open，否则整个服务都会被 404）；种类和名字一致（ui 的名字以 -ui 结尾，api 的不以 -ui 结尾）；同一名字同一子路径只登记一次；子路径不得含 /internal/、/ops/、/open/；WEBSOCKET 档位只给显式声明的路由；PUBLIC 只能用在 ui 和预览；login 只能用在 PASSTHROUGH 路由；每个站点都要有证书。",
+      "methods": [
+        [
+          "+",
+          "check(table) -> list[Problem]"
+        ]
+      ]
+    },
+    {
+      "id": "renderer",
+      "kind": "class",
+      "name": "ConfigRenderer",
+      "stereotype": "应用服务",
+      "at": [
+        1.45,
+        1.75
+      ],
+      "source": "render.py（模板在 templates/）；deploy/server/gateway.sh 负责 openresty -t 与 reload",
+      "responsibility": "把通过校验的站点与服务渲染成宿主机上的配置：sites.conf（http 级挂 rewrite_by_lua 查登录失败封禁，对所有站点生效；每个站点一个 server：域名、证书、80 跳转与 ACME 路径；透传站点整域转发）、atlas.conf（Atlas 站点的边界指令；唯一的 upstream internal_ingress；每条路由一个 location（login 路由再挂 log_by_lua，记登录失败）：api 去掉 /<名>、ui 原样，Host 都写 <名>.internal.techstz.com；更长的子路径排在前面；最后一个默认 location）。只在部署和 CI 里跑。",
+      "methods": [
+        [
+          "+",
+          "render(table) -> {sites.conf, atlas.conf}"
+        ],
+        [
+          "+",
+          "main(--check | --out /etc/openresty/atlas)"
+        ]
+      ]
+    },
+    {
+      "id": "guard",
+      "kind": "class",
+      "name": "BoundaryGuard",
+      "stereotype": "入口守卫",
+      "at": [
+        2.9,
+        1.75
+      ],
+      "source": "sites.conf 的 server 级 if + nginx.conf 的 map $request_uri / $uri",
+      "responsibility": "只在 Atlas 站点、匹配 location 之前：① 原始请求行（$request_uri）的路径部分（不看查询串）含 %25、%5C、%2E、反斜杠、%00、换行等 → 400 INVALID_PATH；② 规范化后的 $uri 有 /internal/、/ops/、/open/ 段（后面还有 /；以这些词结尾的不算，如接管接口 …/open）→ 404（server 级 map，新加的路由不用再写）；③ 生成 $request_id。网关是第一跳，客户端 IP 就是 $remote_addr，不读任何 X-Forwarded-For。",
+      "attributes": [
+        [
+          "-",
+          "map $uri $gw_forbidden · map $request_uri $gw_malformed"
+        ]
+      ]
+    },
+    {
+      "id": "scrub",
+      "kind": "class",
+      "name": "HeaderScrub",
+      "stereotype": "入口守卫",
+      "at": [
+        2.9,
+        3.15
+      ],
+      "source": "nginx.conf 的 http 级 more_clear_input_headers（替代 no-identity.inc，对所有站点生效）",
+      "responsibility": "所有站点、进入 location 之前清掉外部带来的 X-Uid、X-Tenant-Id、X-Auth-Uid、X-Caller-App，以及运营接口的签名头 X-Ops-Timestamp、X-Ops-Signature、X-Ops-Operator、X-Ops-Operator-Name、X-Ops-Operation；逐个列出、不用 X-Ops-* 通配符，只清外部本来就不该带的头。不依赖哪个 location 记得 include。身份头之后只由流式转发在 Atlas 的 AUTH 路由上用网关自己的变量写入。Authorization 不清（SELF_AUTH 的 Key 在里面）。",
+      "attributes": [
+        [
+          "-",
+          "more_clear_input_headers X-Uid X-Tenant-Id X-Auth-Uid X-Caller-App"
+        ],
+        [
+          "-",
+          "X-Ops-Timestamp · Signature · Operator · Operator-Name · Operation"
+        ]
+      ]
+    },
+    {
+      "id": "errors",
+      "kind": "class",
+      "name": "ErrorResponder",
+      "stereotype": "领域服务",
+      "at": [
+        4.35,
+        1.75
+      ],
+      "source": "lua/atlas_gw/errors.lua + errors.conf（render.py 生成）",
+      "responsibility": "网关自己产生的拒绝统一成 JSON {code, message, request_id}（另带 error.kind、detail，现有前端的错误解包都认得）：Lua 里调 exit(status, code)；边界的 400 INVALID_PATH、禁区段和默认拒绝的 404 在 server / location 里直接回 JSON；进了 location 之后 Nginx 自己的 413 / 5xx 经 error_page 交给它。Nginx 在解析请求行时就拒绝的请求（如 %00）没有 URI，回 Nginx 默认的 400 页。上游返回的 4xx / 5xx 原样透传（不开 proxy_intercept_errors）。",
+      "methods": [
+        [
+          "+",
+          "exit(status, code, message?)"
+        ],
+        [
+          "+",
+          "page(status)  # error_page 调"
+        ]
+      ]
+    },
+    {
+      "id": "fallback",
+      "kind": "class",
+      "name": "DefaultRoute",
+      "stereotype": "入口守卫",
+      "at": [
+        1.45,
+        3.15
+      ],
+      "source": "atlas-routes.conf 末尾的 location /",
+      "responsibility": "默认拒绝：没登记的路径都落到这里，返回 404 NOT_FOUND，不暴露后面有哪些服务。根路径 / 单独一条 exact 路由，302 到 /atlas。"
+    },
+    {
+      "id": "site",
+      "kind": "class",
+      "name": "SiteSpec",
+      "stereotype": "值对象",
+      "at": [
+        2.9,
+        0.15
+      ],
+      "source": "routes.yaml 的 sites 段（替代 Traefik 的 Ingress 规则）",
+      "responsibility": "一个对外域名：host；种类 atlas（走 Atlas 的完整规则）或 passthrough（Langfuse、gitea：只清身份头，整域转给 <名>.internal.techstz.com）；证书路径。",
+      "attributes": [
+        [
+          "+",
+          "host · kind: atlas | passthrough"
+        ],
+        [
+          "+",
+          "cert · name（passthrough 拼内部域名用）"
+        ]
+      ]
+    },
+    {
+      "id": "tls",
+      "kind": "class",
+      "name": "TlsSites",
+      "stereotype": "入口守卫",
+      "at": [
+        4.35,
+        3.15
+      ],
+      "source": "sites.conf（替代 Traefik 的 entryPoints、certResolver、HSTS 中间件）",
+      "responsibility": "每个站点一个 server：443 用 /etc/letsencrypt 下的证书终结 TLS，回 HSTS；80 上 /.well-known/acme-challenge/ 从 /var/www/acme 取文件（给 certbot 验证），其余 301 到 HTTPS。默认 server：不认识的 SNI 在握手时拒绝（ssl_reject_handshake），80 上不认识的 Host 直接关连接（444）。",
+      "attributes": [
+        [
+          "-",
+          "listen 443 ssl · ssl_certificate /etc/letsencrypt/live/<域名>/…"
+        ],
+        [
+          "-",
+          "default_server：ssl_reject_handshake on · return 444"
+        ]
+      ]
+    },
+    {
+      "id": "upaddr",
+      "kind": "class",
+      "name": "InternalHost",
+      "stereotype": "领域服务",
+      "at": [
+        0.0,
+        3.15
+      ],
+      "source": "paths.py + Settings.internal_host（替代按 Service 登记上游地址）",
+      "responsibility": "按名字拼内部域名：<名>.internal.techstz.com（前端的名字本身带 -ui，如 mcp-ui.internal.techstz.com）；透传站点同理（langfuse.internal.techstz.com）。渲染成 location 里的 proxy_set_header Host。网关只认一个上游：内部 Ingress 的固定 ClusterIP（宿主机经 kube-proxy 直达），不解析这些域名，也不依赖集群 DNS。",
+      "methods": [
+        [
+          "+",
+          "of(route) -> <名>.internal.techstz.com"
+        ]
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "from": "renderer",
+      "to": "table",
+      "type": "uses",
+      "description": "读路由表"
+    },
+    {
+      "from": "renderer",
+      "to": "rules",
+      "type": "uses",
+      "description": "先校验，违反就不生成"
+    },
+    {
+      "from": "table",
+      "to": "spec",
+      "type": "composition",
+      "description": "持有全部路由"
+    },
+    {
+      "from": "spec",
+      "to": "mode",
+      "type": "association",
+      "description": "声明认证模式"
+    },
+    {
+      "from": "renderer",
+      "to": "fallback",
+      "type": "uses",
+      "description": "最后生成默认拒绝"
+    },
+    {
+      "from": "guard",
+      "to": "errors",
+      "type": "uses",
+      "description": "400 / 404 统一成 JSON"
+    },
+    {
+      "from": "renderer",
+      "to": "guard",
+      "type": "uses",
+      "description": "渲染进 server 级"
+    },
+    {
+      "from": "renderer",
+      "to": "scrub",
+      "type": "uses",
+      "description": "渲染进 server 级"
+    },
+    {
+      "from": "table",
+      "to": "site",
+      "type": "composition",
+      "description": "持有全部站点"
+    },
+    {
+      "from": "renderer",
+      "to": "tls",
+      "type": "uses",
+      "description": "每个站点一个 server"
+    },
+    {
+      "from": "renderer",
+      "to": "upaddr",
+      "type": "uses",
+      "description": "查出上游的 ClusterIP"
+    }
+  ],
+  "capabilities": [
+    {
+      "name": "加服务、加站点",
+      "entry": "服务清单里加 Ingress（<名>[-ui].internal.techstz.com）→ routes.yaml 登记一行 → render.py --check → CI → gateway.sh（渲染、openresty -t、reload）",
+      "callers": "开发者、deploy.sh（每次部署末尾）",
+      "description": "网关侧只登记名字、种类、前缀、认证模式和档位；不写地址"
+    },
+    {
+      "name": "TLS 与站点分流",
+      "entry": "TlsSites",
+      "callers": "每个连接",
+      "description": "按 SNI / Host 进站点；不认识的域名拒绝；80 只放 ACME 验证，其余跳 HTTPS"
+    },
+    {
+      "name": "边界防护",
+      "entry": "HeaderScrub · BoundaryGuard · DefaultRoute",
+      "callers": "每个请求（先于 location）",
+      "description": "所有站点清外部身份头；Atlas 站点畸形路径 400、内部端点 404、没登记的路径 404"
+    },
+    {
+      "name": "统一错误",
+      "entry": "ErrorResponder.exit / page",
+      "callers": "访问阶段编排、Nginx error_page",
+      "description": "网关自己的拒绝是 JSON 并带 request_id；上游错误原样透传"
+    }
+  ],
+  "decisions": [
+    {
+      "decision": "路由表渲染成静态 location，不在 Lua 里动态路由",
+      "reason": "缓冲、请求体上限、超时、WebSocket 升级都是 location 级指令，不能按变量切；静态配置能被 openresty -t 和测试一次校验完。路由跟着发布走，不需要运行时改。"
+    },
+    {
+      "decision": "三道挡内部端点：禁区段（请求时）、默认拒绝（请求时）、上游路径断言（渲染时）",
+      "reason": "原来每个服务手写两条 return 404，漏一条就把内网免令牌接口暴露出去。禁区段在 server 级、先于 location，对以后新加的路由也生效；即使误登记了一条，渲染时也会因上游路径含禁区而失败。"
+    },
+    {
+      "decision": "身份头在 server 级统一清，不靠每个 location include",
+      "reason": "Nginx 的 proxy_set_header 只要 location 里写了一条就不继承 server 级的，原来靠 include 很容易漏。headers-more 在进 location 前就把请求头删掉，任何路由都拿不到外部伪造的值。"
+    },
+    {
+      "decision": "畸形路径直接 400，不做宽容折叠",
+      "reason": "网关和下游 Starlette 的解码口径不同（如 ..%252f、%2e%2e），折叠后再转发容易被绕过；正常客户端不会发这种路径。"
+    },
+    {
+      "decision": "条件用路由属性表达，不在 Lua 里比路径前缀",
+      "reason": "认证模式、转发档位、改密前能否使用都写在路由上，渲染进 location；Lua 只读 $gw_route 对应的属性。加路由不用改 Lua，也不会因为前缀写错放过请求。是不是登录接口（计不计入 IP 封禁）也一样，是路由属性。"
+    },
+    {
+      "decision": "网关替代 Traefik，透传站点也由它转",
+      "reason": "服务器上只留一个对外入口：TLS、证书、域名分流和 Atlas 的安全规则都在一处，少一跳、少一个组件，网关拿到的就是真实客户端 IP。Langfuse、gitea 有自己的登录，网关只清身份头、不套 Atlas 的规则（它们的路径可能合法地含禁区段）。"
+    },
+    {
+      "decision": "不认识的域名直接拒绝",
+      "reason": "扫描器用 IP 或乱写的 Host 访问时，不暴露任何站点，也不出示证书。"
+    },
+    {
+      "decision": "生成器用 Python，只在部署和 CI 里跑",
+      "reason": "团队主力语言；生成器不在请求路径上，出错只会让发布失败，不会影响线上流量。"
+    },
+    {
+      "decision": "上游按名字拼内部域名，经内部 Ingress 访问，不登记地址",
+      "reason": "服务在集群里怎么被找到由它自己的 Ingress 负责，网关只管「对外叫什么、怎么认证」；加服务不用改网关的上游，也不用固定 ClusterIP。代价：多一跳（网关 → 内部 Ingress → Service），内部 Ingress 的超时、缓冲要按长连接配。"
+    },
+    {
+      "decision": "网关连内部 Ingress 时只写 Host，不解析内部域名",
+      "reason": "Ingress 本来就按 Host 分流；网关只连一个固定地址，不依赖 DNS，内部域名也不用在公网 DNS 上出现。"
+    },
+    {
+      "decision": "仍然是白名单，不按路径第一段自动转发",
+      "reason": "按第一段自动拼域名，会把集群里所有带 Ingress 的服务（包括只该内部用的）都暴露出去；只有登记过的名字才有 location。"
+    },
+    {
+      "decision": "前端的名字带 -ui，外部路径也带：/mcp-ui/ 是页面，/mcp/ 是接口",
+      "reason": "路径第一段和内部域名第一段完全一致，一条规则就能看出请求去哪，前端和后端不会抢同一个前缀。前端不去前缀，因为 Next.js 的 basePath 就是 /<名>-ui；后端去掉 /<名>，服务自己的路径（/v1/…）不用变。"
+    },
+    {
+      "decision": "运营中心和其他系统一样挂在 Atlas 站点：/opscenter/ 是接口（auth），/opscenter-ui/ 是页面；名字不用 ops",
+      "reason": "运营人员是用户中心里系统租户的人，和别的系统一样统一登录、凭访问 JWT 访问，网关不为它开特例，也不需要知道谁是系统租户——能不能进运营中心由用户中心的授权快照判。名字叫 opscenter 而不是 ops：/ops/ 是禁区段，叫 ops 整个服务都会被 404；运营中心自己的路径（如系统代理 /api/systems/<系统>/…）也不能含 /ops/ 段。代价：运营中心和租户业务共用一个站点和登录态，系统租户里有模块授权的人一旦被盗号，攻击者也能进运营中心；靠只授必要的模块、不可恢复的操作要 Owner 来收窄。"
+    },
+    {
+      "decision": "清头逐个列出头名，不用通配符",
+      "reason": "清头对所有站点生效，包括 Langfuse、gitea 这些透传站点。通配符会连以后某个服务合法使用的同前缀头一起清掉，而且出了问题很难查；只列运营接口的签名头，这几个头外部本来就不该带。"
+    }
+  ]
+}
+</script>
+
+<main>
+  <ul id="c4-report" hidden></ul>
+  <svg id="c4-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <section id="c4-overview" hidden>
+    <h2>概述</h2>
+  </section>
+  <section id="c4-capabilities" hidden>
+    <h2>对外能力</h2>
+    <table><thead></thead><tbody></tbody></table>
+  </section>
+  <section id="c4-decisions" hidden>
+    <h2>设计决策</h2>
+    <table><thead></thead><tbody></tbody></table>
+  </section>
+  <section id="c4-elements" hidden>
+    <h2>元素职责</h2>
+    <table><thead></thead><tbody></tbody></table>
+  </section>
+  <section id="c4-er" hidden>
+    <h2>ER 图</h2>
+    <svg id="c4-er-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  </section>
+  <section id="c4-tables" hidden>
+    <h2>表结构</h2>
+  </section>
+  <h2>Diagram key</h2>
+  <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const FONT = '"Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  const INK = '#181818';
+  const EXTERNAL_INK = '#8a8a8a';           // 外部元素（不在本 component 里）
+  const TITLE_INK = '#444444';
+  const SOURCE_INK = '#7a7a7a';             // 「现状：…」（目标模型的元素当前由哪段代码承担）
+  // 元素类型：图标字母、名字是否斜体、图例文字
+  const KINDS = {
+    class: { letter: 'C', italic: false, key: 'Class' },
+    interface: { letter: 'I', italic: true, key: 'Interface' },
+    abstract: { letter: 'A', italic: true, key: 'Abstract class' },
+    enum: { letter: 'E', italic: false, key: 'Enum' },
+    function: { letter: 'F', italic: false, key: 'Function' },
+  };
+  // 可见性：元素名前用实心彩色符号，成员前用空心符号
+  const VIS = {
+    '+': { shape: 'circle', color: '#84be84', key: 'public' },
+    '-': { shape: 'square', color: '#c82930', key: 'private' },
+    '#': { shape: 'diamond', color: '#ffcc44', key: 'protected' },
+    '~': { shape: 'triangle', color: '#4177af', key: 'package' },
+    '': null,
+  };
+  // 关系：线型、目标端箭头、源端菱形、是否必须写说明
+  const RELS = {
+    implements: { dash: true, head: 'triangle', tail: null, needsText: false, key: 'Realization（implements）' },
+    extends: { dash: false, head: 'triangle', tail: null, needsText: false, key: 'Generalization（extends）' },
+    uses: { dash: true, head: 'open', tail: null, needsText: true, key: 'Dependency（uses）' },
+    association: { dash: false, head: 'open', tail: null, needsText: true, key: 'Association' },
+    composition: { dash: false, head: null, tail: 'filled', needsText: true, key: 'Composition' },
+    aggregation: { dash: false, head: null, tail: 'hollow', needsText: true, key: 'Aggregation' },
+  };
+  const COL = 440, ROW = 230;                // 网格间距：at 的一个单位
+  const MAX_ELEMENTS = 15;
+  const TXT = {
+    name: { size: 15, weight: 400, lh: 20 },
+    member: { size: 13, weight: 400, lh: 20 },
+    rel: { size: 13, weight: 400, lh: 17 },
+    mult: { size: 12, weight: 400, lh: 16 },
+    frame: { size: 14, weight: 700, lh: 20 },
+    key: { size: 13, weight: 400, lh: 18 },
+    stereo: { size: 12, weight: 400, lh: 16 },
+    source: { size: 12, weight: 400, lh: 16 },
+  };
+  const HEADER_H = 36, ICON_R = 11, PAD_X = 12, MEMBER_ICON = 16, MIN_W = 160, EMPTY_H = 8, MARGIN = 60;
+  const LABEL_W = 200, ARROW_L = 14, ARROW_W = 12, GAP = 2;
+  // 标题栏有构造型或「现状」时：上下留白 + 名字行，构造型在上、现状在下
+  const HEADER_PAD = 6, NAME_H = 26, SOURCE_W = 280;
+  // 图下方的表格：[字段, 列名, 单元格样式（code 等宽字体，nowrap 不换行）]。必填的列总是显示，其余列有一行写了才显示
+  const CAP_COLS = [['name', '能力', 'nowrap'], ['entry', '入口', 'code'], ['callers', '调用方'], ['description', '说明'], ['source', '现状']];
+  const DECISION_COLS = [['decision', '决策', 'nowrap'], ['reason', '理由']];
+  const ELEMENT_COLS = [['name', '元素', 'code'], ['stereotype', '角色', 'nowrap'], ['responsibility', '职责'], ['source', '现状']];
+  // 表结构：列表、索引表的列（必填的列总是显示，其余列有一行写了才显示）
+  const COLUMN_COLS = [['name', '字段', 'code'], ['type', '类型', 'code nowrap'], ['null', '可空', 'nowrap'], ['key', '键', 'nowrap'],
+    ['references', '引用', 'code'], ['default', '默认值', 'code'], ['description', '说明']];
+  const INDEX_COLS = [['name', '索引', 'code'], ['columns', '字段', 'code'], ['unique', '唯一', 'nowrap'], ['description', '说明']];
+  const KEYS = ['PK', 'UK', 'FK'];
+  // ER 图：表头高、行高、左右留白、键标记列宽、列名与类型的间距、最小宽度
+  const ER = { header: 32, row: 22, padX: 10, badgeW: 30, gapType: 18, minW: 200 };
+  const ER_TXT = { name: { size: 14, weight: 700, lh: 20 }, col: { size: 13, weight: 400, lh: 22 }, type: { size: 12, weight: 400, lh: 22 }, badge: { size: 11, weight: 700, lh: 22 } };
+  // 连线端点：有且只有一个 ||、零或一个 o|、零或多个 o<
+  const ER_ENDS = { one: '有且只有一个', zeroOne: '零或一个', many: '零或多个' };
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const problems = [];
+  const fail = (msg) => problems.push({ level: 'error', msg });
+  const warn = (msg) => problems.push({ level: 'warn', msg });
+
+  const ctx = document.createElement('canvas').getContext('2d');
+  const measure = (s, st, italic) => { ctx.font = `${italic ? 'italic ' : ''}${st.weight} ${st.size}px ${FONT}`; return ctx.measureText(s).width; };
+
+  // 中文按字断行，英文按词断行；行首不放标点
+  const CJK = '\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f';
+  const TOKEN = new RegExp(`[${CJK}]|[^\\s${CJK}]+|\\s+`, 'g');
+  const NO_LINE_START = /^[，。、；：！？）》」』,.;:!?)]$/;
+  function wrap(text, st, maxW) {
+    const lines = [];
+    for (const para of String(text || '').split('\n')) {
+      let line = '';
+      for (const tok of para.match(TOKEN) || []) {
+        if (/^\s+$/.test(tok)) { if (line) line += ' '; continue; }
+        const next = line + tok;
+        if (line.trim() && measure(next.trimEnd(), st) > maxW && !NO_LINE_START.test(tok)) {
+          lines.push(line.trimEnd());
+          line = tok;
+        } else {
+          line = next;
+        }
+      }
+      if (line.trim()) lines.push(line.trimEnd());
+    }
+    return lines;
+  }
+
+  function node(tag, attrs, parent) {
+    const n = document.createElementNS(svgNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    parent.appendChild(n);
+    return n;
+  }
+  // top 是文字块上沿
+  function textLines(parent, lines, x, top, st, color, anchor = 'middle', italic = false) {
+    const t = node('text', { x, y: top + st.lh / 2 + st.size * 0.35, 'text-anchor': anchor,
+      'font-family': FONT, 'font-size': st.size, 'font-weight': st.weight, fill: color,
+      ...(italic ? { 'font-style': 'italic' } : {}) }, parent);
+    lines.forEach((ln, i) => { node('tspan', { x, dy: i ? st.lh : 0 }, t).textContent = ln; });
+    return t;
+  }
+  // 可见性符号，(cx, cy) 是中心
+  function visIcon(g, vis, cx, cy, filled, ink = INK) {
+    const v = VIS[vis];
+    if (!v) return;
+    const fill = filled ? v.color : 'none', stroke = filled ? v.color : ink, s = 4.5;
+    const a = { fill, stroke, 'stroke-width': 1.2 };
+    if (v.shape === 'circle') node('circle', { cx, cy, r: s, ...a }, g);
+    else if (v.shape === 'square') node('rect', { x: cx - s, y: cy - s, width: 2 * s, height: 2 * s, ...a }, g);
+    else if (v.shape === 'diamond') node('polygon', { points: `${cx},${cy - s - 1} ${cx + s + 1},${cy} ${cx},${cy + s + 1} ${cx - s - 1},${cy}`, ...a }, g);
+    else node('polygon', { points: `${cx},${cy - s} ${cx + s},${cy + s} ${cx - s},${cy + s}`, ...a }, g);
+  }
+  function kindIcon(g, kind, cx, cy, ink = INK) {
+    node('circle', { cx, cy, r: ICON_R, fill: '#fff', stroke: ink, 'stroke-width': 1.2 }, g);
+    textLines(g, [KINDS[kind].letter], cx, cy - TXT.name.lh / 2, { size: 14, weight: 700, lh: TXT.name.lh }, ink);
+  }
+
+  const inter = (a, b, m = 0) => a.x < b.x + b.w + m && b.x < a.x + a.w + m && a.y < b.y + b.h + m && b.y < a.y + a.h + m;
+  function segHitsRect([x0, y0], [x1, y1], r) {
+    let t0 = 0, t1 = 1;
+    const dx = x1 - x0, dy = y1 - y0;
+    for (const [p, q] of [[-dx, x0 - r.x], [dx, r.x + r.w - x0], [-dy, y0 - r.y], [dy, r.y + r.h - y0]]) {
+      if (p === 0) { if (q < 0) return false; continue; }
+      const t = q / p;
+      if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+      else { if (t < t0) return false; if (t < t1) t1 = t; }
+    }
+    return true;
+  }
+  // 从矩形内部 (ox, oy) 沿 (dx, dy) 射出，返回离开矩形时的 t
+  function exitT(b, ox, oy, dx, dy) {
+    let t = Infinity;
+    if (dx > 0) t = Math.min(t, (b.x + b.w - ox) / dx); else if (dx < 0) t = Math.min(t, (b.x - ox) / dx);
+    if (dy > 0) t = Math.min(t, (b.y + b.h - oy) / dy); else if (dy < 0) t = Math.min(t, (b.y - oy) / dy);
+    return t;
+  }
+
+  // 元素尺寸：宽度按内容，高度 = 标题栏 + 属性栏 + 方法栏
+  function layoutElement(el) {
+    const k = KINDS[el.kind];
+    const nameW = measure(el.name, TXT.name, k.italic);
+    const headerW = 2 * ICON_R + 8 + (VIS[el.visibility] ? 14 : 0) + nameW;
+    const memberW = (list) => Math.max(0, ...list.map(([v, text]) => measure(text, TXT.member) + (VIS[v] ? MEMBER_ICON : 0)));
+    el.stereo = el.stereotype ? `«${el.stereotype}»` : '';
+    let w = Math.max(MIN_W, headerW + 2 * PAD_X, measure(el.stereo, TXT.stereo) + 2 * PAD_X,
+      Math.max(memberW(el.attributes), memberW(el.methods)) + 2 * PAD_X);
+    el.sourceLines = el.source ? wrap(`现状：${el.source}`, TXT.source, Math.max(w - 2 * PAD_X, SOURCE_W)) : [];
+    w = Math.max(w, ...el.sourceLines.map((s) => measure(s, TXT.source) + 2 * PAD_X));
+    el.headerH = el.stereo || el.sourceLines.length
+      ? 2 * HEADER_PAD + (el.stereo ? TXT.stereo.lh : 0) + NAME_H + el.sourceLines.length * TXT.source.lh
+      : HEADER_H;
+    const part = (list) => (list.length ? list.length * TXT.member.lh + 8 : EMPTY_H);
+    const h = el.headerH + part(el.attributes) + part(el.methods);
+    el.box = { x: el.at[0] * COL - w / 2, y: el.at[1] * ROW - h / 2, w, h };
+    el.headerW = headerW;
+  }
+  function drawElement(g, el) {
+    const { box } = el;
+    const k = KINDS[el.kind];
+    const ink = el.external ? EXTERNAL_INK : INK;
+    node('rect', { x: box.x, y: box.y, width: box.w, height: box.h, rx: 3, fill: '#fff', stroke: ink, 'stroke-width': 1.2 }, g);
+    // 标题栏：«构造型»，图标 + 可见性 + 名字，「现状：…」，各自居中
+    const extra = el.stereo || el.sourceLines.length;
+    let top = box.y + (extra ? HEADER_PAD : 0);
+    if (el.stereo) { textLines(g, [el.stereo], box.x + box.w / 2, top, TXT.stereo, ink); top += TXT.stereo.lh; }
+    const nameH = extra ? NAME_H : HEADER_H;
+    let x = box.x + (box.w - el.headerW) / 2;
+    const cy = top + nameH / 2;
+    kindIcon(g, el.kind, x + ICON_R, cy, ink);
+    x += 2 * ICON_R + 8;
+    if (VIS[el.visibility]) { visIcon(g, el.visibility, x + 4, cy, true, ink); x += 14; }
+    textLines(g, [el.name], x, cy - TXT.name.lh / 2, TXT.name, ink, 'start', k.italic);
+    if (el.sourceLines.length) textLines(g, el.sourceLines, box.x + box.w / 2, top + nameH, TXT.source, el.external ? EXTERNAL_INK : SOURCE_INK);
+    // 属性栏、方法栏
+    let y = box.y + el.headerH;
+    for (const list of [el.attributes, el.methods]) {
+      node('line', { x1: box.x, y1: y, x2: box.x + box.w, y2: y, stroke: ink, 'stroke-width': 1 }, g);
+      if (!list.length) { y += EMPTY_H; continue; }
+      y += 4;
+      for (const [v, text] of list) {
+        let mx = box.x + PAD_X;
+        if (VIS[v]) { visIcon(g, v, mx + 5, y + TXT.member.lh / 2, false, ink); mx += MEMBER_ICON; }
+        textLines(g, [text], mx, y, TXT.member, ink, 'start');
+        y += TXT.member.lh;
+      }
+      y += 4;
+    }
+  }
+  // 关系线：dash 虚线；head 目标端（triangle 空心三角 / open 开口箭头）；tail 源端菱形（filled / hollow）
+  function drawRelation(g, start, end, dx, dy, spec) {
+    const nx = -dy, ny = dx;
+    let a = start, b = end;
+    if (spec.tail) {
+      const L = 20, W = 9, tip = start, mid = [start[0] + dx * L / 2, start[1] + dy * L / 2], back = [start[0] + dx * L, start[1] + dy * L];
+      node('polygon', { points: [tip, [mid[0] + nx * W / 2, mid[1] + ny * W / 2], back, [mid[0] - nx * W / 2, mid[1] - ny * W / 2]].map((p) => p.join(',')).join(' '),
+        fill: spec.tail === 'filled' ? INK : '#fff', stroke: INK, 'stroke-width': 1.2 }, g);
+      a = back;
+    }
+    if (spec.head === 'triangle') {
+      const base = [end[0] - dx * ARROW_L, end[1] - dy * ARROW_L];
+      node('polygon', { points: [end, [base[0] + nx * ARROW_W / 2, base[1] + ny * ARROW_W / 2], [base[0] - nx * ARROW_W / 2, base[1] - ny * ARROW_W / 2]].map((p) => p.join(',')).join(' '),
+        fill: '#fff', stroke: INK, 'stroke-width': 1.2 }, g);
+      b = base;
+    }
+    node('line', { x1: a[0], y1: a[1], x2: b[0], y2: b[1], stroke: INK, 'stroke-width': 1.2, ...(spec.dash ? { 'stroke-dasharray': '6 5' } : {}) }, g);
+    if (spec.head === 'open') {
+      const base = [end[0] - dx * ARROW_L, end[1] - dy * ARROW_L];
+      node('polyline', { points: [[base[0] + nx * ARROW_W / 2, base[1] + ny * ARROW_W / 2], end, [base[0] - nx * ARROW_W / 2, base[1] - ny * ARROW_W / 2]].map((p) => p.join(',')).join(' '),
+        fill: 'none', stroke: INK, 'stroke-width': 1.2 }, g);
+    }
+  }
+
+  function render() {
+    const model = JSON.parse(document.getElementById('c4-model').textContent);
+    if (model.title) document.title = model.title;
+    else fail('缺少 title（建议「Code View: 系统名 - 容器名 - 组件名」）');
+    if (!model.component) fail('缺少 component（被展开的 component 的名字，和 Component 图里的一致）');
+
+    // ---- 元素 ----
+    const byId = new Map();
+    const els = [];
+    const memberOk = (list) => Array.isArray(list) && list.every((m) => Array.isArray(m) && m.length === 2 && m[0] in VIS && typeof m[1] === 'string');
+    for (const el of model.elements || []) {
+      const who = el.id || el.name || '(未命名元素)';
+      if (!el.id) { fail(`${who}：缺少 id`); continue; }
+      if (byId.has(el.id)) { fail(`元素 id 重复：${el.id}`); continue; }
+      if (!KINDS[el.kind]) { fail(`${who}：kind 只能是 ${Object.keys(KINDS).join(' / ')}`); continue; }
+      if (!Array.isArray(el.at) || el.at.length !== 2 || !el.at.every(Number.isFinite)) { fail(`${who}：at 必须是 [列, 行] 两个数字`); continue; }
+      if (!el.name) fail(`${who}：缺少 name`);
+      el.attributes = el.attributes || [];
+      el.methods = el.methods || [];
+      if (!memberOk(el.attributes) || !memberOk(el.methods)) { fail(`${who}：attributes / methods 的每一项都要写成 [可见性, 文本]，可见性取 + - # ~ 或空串`); continue; }
+      if (el.visibility !== undefined && !(el.visibility in VIS)) fail(`${who}：visibility 只能是 + - # ~ 或空串`);
+      for (const f of ['stereotype', 'source', 'responsibility']) {
+        if (el[f] !== undefined && typeof el[f] !== 'string') { fail(`${who}：${f} 必须是字符串`); el[f] = undefined; }
+      }
+      byId.set(el.id, el);
+      els.push(el);
+    }
+    const inside = els.filter((e) => !e.external);
+    if (!inside.length) fail('Code 图至少要有一个本 component 里的代码元素');
+    if (els.length > MAX_ELEMENTS) warn(`代码元素有 ${els.length} 个，超过 ${MAX_ELEMENTS} 个：只画讲清楚这件事需要的，或者拆成几张图`);
+    els.forEach(layoutElement);
+    for (let i = 0; i < els.length; i++) {
+      for (let j = i + 1; j < els.length; j++) {
+        if (inter(els[i].box, els[j].box, 30)) fail(`「${els[i].name}」和「${els[j].name}」重叠或太近，调整 at`);
+      }
+    }
+
+    // ---- 关系 ----
+    const rels = (model.relationships || []).filter((r) => {
+      const who = `${r.from} → ${r.to}`;
+      if (!byId.has(r.from) || !byId.has(r.to)) { fail(`关系 ${who}：端点 id 不存在`); return false; }
+      if (r.from === r.to) { fail(`关系 ${who}：不能指向自己`); return false; }
+      r.type = r.type || 'uses';
+      if (!RELS[r.type]) { fail(`关系 ${who}：type 只能是 ${Object.keys(RELS).join(' / ')}`); return false; }
+      if (RELS[r.type].needsText && !r.description) fail(`关系 ${who}：${r.type} 要写 description（说清做什么，如 creates、persists data using）`);
+      const a = byId.get(r.from), b = byId.get(r.to);
+      if (r.type === 'implements' && b.kind !== 'interface') fail(`关系 ${who}：implements 的目标必须是 interface`);
+      if (r.type === 'extends' && (a.kind === 'interface') !== (b.kind === 'interface')) fail(`关系 ${who}：extends 不能跨 class 和 interface，类实现接口用 implements`);
+      return true;
+    });
+    for (const el of els) {
+      if (!rels.some((r) => r.from === el.id || r.to === el.id)) warn(`「${el.name}」没有任何关系：与要讲的事无关就删掉`);
+    }
+    // 同一对元素之间的多条关系：平行错开，标签沿线错开。错开量按同一个参考方向（id 小的一端 → 大的一端）算，
+    // 再换算回每条关系自己的方向 —— 否则两条方向相反的关系，标签会落在同一点
+    const pairs = new Map();
+    for (const r of rels) {
+      const k = [r.from, r.to].sort().join('\u0000');
+      if (!pairs.has(k)) pairs.set(k, []);
+      pairs.get(k).push(r);
+    }
+    for (const list of pairs.values()) {
+      list.forEach((r, i) => {
+        const k = i - (list.length - 1) / 2;
+        const along = 0.5 + k * 0.3;
+        r.offset = k * 20;
+        r.t = Number.isFinite(r.labelAt) ? r.labelAt : r.from < r.to ? along : 1 - along;
+      });
+    }
+    for (const r of rels) {
+      const a = byId.get(r.from), b = byId.get(r.to);
+      const [p, q] = r.from < r.to ? [a, b] : [b, a];
+      const pc = [p.box.x + p.box.w / 2, p.box.y + p.box.h / 2], qc = [q.box.x + q.box.w / 2, q.box.y + q.box.h / 2];
+      let nx = pc[1] - qc[1], ny = qc[0] - pc[0];
+      const nl = Math.hypot(nx, ny) || 1;
+      nx /= nl; ny /= nl;
+      const ac = [a.box.x + a.box.w / 2 + nx * r.offset, a.box.y + a.box.h / 2 + ny * r.offset];
+      const bc = [b.box.x + b.box.w / 2 + nx * r.offset, b.box.y + b.box.h / 2 + ny * r.offset];
+      const len = Math.hypot(bc[0] - ac[0], bc[1] - ac[1]);
+      if (!len) { r.skip = true; continue; }
+      r.dx = (bc[0] - ac[0]) / len; r.dy = (bc[1] - ac[1]) / len;
+      const t0 = exitT(a.box, ac[0], ac[1], r.dx, r.dy) + GAP;
+      const t1 = exitT(b.box, bc[0], bc[1], -r.dx, -r.dy) + GAP;
+      if (t0 + t1 + ARROW_L + 24 >= len) { fail(`关系 ${r.from} → ${r.to} 两端元素太近，连线放不下`); r.skip = true; continue; }
+      r.start = [ac[0] + r.dx * t0, ac[1] + r.dy * t0];
+      r.end = [bc[0] - r.dx * t1, bc[1] - r.dy * t1];
+      r.lines = wrap(r.description, TXT.rel, LABEL_W);
+      if (r.lines.length) {
+        const lw = Math.max(...r.lines.map((s) => measure(s, TXT.rel))) + 8;
+        const lh = r.lines.length * TXT.rel.lh + 4;
+        const mx = r.start[0] + (r.end[0] - r.start[0]) * r.t, my = r.start[1] + (r.end[1] - r.start[1]) * r.t;
+        r.label = { x: mx - lw / 2, y: my - lh / 2, w: lw, h: lh };
+      }
+      if (r.multiplicity) {
+        // 多重性写在目标端附近，偏到线的一侧
+        const px = r.end[0] - r.dx * 26 - r.dy * 14, py = r.end[1] - r.dy * 26 + r.dx * 14;
+        const mw = measure(String(r.multiplicity), TXT.mult) + 6;
+        r.mult = { x: px - mw / 2, y: py - TXT.mult.lh / 2, w: mw, h: TXT.mult.lh };
+      }
+    }
+    const drawn = rels.filter((r) => !r.skip);
+    const labelled = drawn.filter((r) => r.label);
+    const who = (r) => r.description || `${r.from} → ${r.to}`;
+    for (const r of drawn) {
+      for (const el of els) {
+        if (r.from !== el.id && r.to !== el.id && segHitsRect(r.start, r.end, el.box)) warn(`关系「${who(r)}」的连线穿过「${el.name}」`);
+        if (r.label && inter(r.label, el.box, 4)) warn(`关系「${who(r)}」的标签压到「${el.name}」，调整 labelAt 或元素位置`);
+      }
+    }
+    for (let i = 0; i < labelled.length; i++) {
+      for (let j = i + 1; j < labelled.length; j++) {
+        if (inter(labelled[i].label, labelled[j].label, 3)) warn(`关系「${who(labelled[i])}」和「${who(labelled[j])}」的标签重叠`);
+      }
+    }
+
+    // ---- 包框：包住本 component 的元素（外部元素放在框外），左上角标签页写包名（没写 package 就写 component）----
+    let frame = null;
+    if (inside.length) {
+      const x0 = Math.min(...inside.map((e) => e.box.x)), y0 = Math.min(...inside.map((e) => e.box.y));
+      const x1 = Math.max(...inside.map((e) => e.box.x + e.box.w)), y1 = Math.max(...inside.map((e) => e.box.y + e.box.h));
+      const label = model.package || `${model.component || ''} [Component]`;
+      const tabW = measure(label, TXT.frame) + 20, tabH = 26;
+      frame = { x: x0 - 30, y: y0 - 30, w: Math.max(x1 - x0 + 60, tabW + 20), h: y1 - y0 + 60, label, tabW, tabH };
+      const tab = { x: frame.x, y: frame.y - tabH, w: tabW + 10, h: tabH };
+      for (const el of els) {
+        if (el.external && (inter(el.box, frame) || inter(el.box, tab))) fail(`「${el.name}」是外部元素，却落在包框里，调整 at`);
+      }
+    }
+
+    // ---- 绘制 ----
+    const svg = document.getElementById('c4-diagram');
+    const gB = node('g', {}, svg), gR = node('g', {}, svg), gE = node('g', {}, svg), gL = node('g', {}, svg), gT = node('g', {}, svg);
+    if (frame) {
+      const { x, y, w, h, tabW, tabH } = frame;
+      node('path', { d: `M${x} ${y} V${y - tabH + 3} Q${x} ${y - tabH} ${x + 3} ${y - tabH} H${x + tabW} L${x + tabW + 10} ${y}`,
+        fill: '#fff', stroke: INK, 'stroke-width': 1.6 }, gB);
+      node('rect', { x, y, width: w, height: h, rx: 3, fill: 'none', stroke: INK, 'stroke-width': 1.6 }, gB);
+      textLines(gB, [frame.label], x + 10, y - tabH + 2, { ...TXT.frame, lh: tabH - 2 }, INK, 'start');
+    }
+    for (const r of drawn) drawRelation(gR, r.start, r.end, r.dx, r.dy, RELS[r.type]);
+    for (const el of els) drawElement(node('g', {}, gE), el);
+    for (const r of drawn) {
+      if (r.label) {
+        node('rect', { x: r.label.x, y: r.label.y, width: r.label.w, height: r.label.h, fill: '#fff' }, gL);
+        textLines(gL, r.lines, r.label.x + r.label.w / 2, r.label.y + 2, TXT.rel, INK);
+      }
+      if (r.mult) textLines(gL, [String(r.multiplicity)], r.mult.x + r.mult.w / 2, r.mult.y, TXT.mult, INK);
+    }
+    const boxes = [...els.map((e) => e.box), ...labelled.map((r) => r.label),
+      ...(frame ? [frame, { x: frame.x, y: frame.y - frame.tabH, w: frame.tabW + 10, h: frame.tabH }] : [])];
+    if (!boxes.length) boxes.push({ x: 0, y: 0, w: 0, h: 0 });
+    const minX = Math.min(...boxes.map((b) => b.x)), minY = Math.min(...boxes.map((b) => b.y));
+    let maxX = Math.max(...boxes.map((b) => b.x + b.w)), maxY = Math.max(...boxes.map((b) => b.y + b.h));
+    const title = { size: 26, weight: 400, lh: 34 }, sub = { size: 15, weight: 400, lh: 22 };
+    textLines(gT, [model.title || ''], minX, maxY + 40, title, TITLE_INK, 'start');
+    if (model.description) textLines(gT, [model.description], minX, maxY + 40 + title.lh, sub, '#666', 'start');
+    maxX = Math.max(maxX, minX + measure(model.title || '', title), minX + measure(model.description || '', sub));
+    maxY += 40 + title.lh + (model.description ? sub.lh : 0);
+    const vw = maxX - minX + 2 * MARGIN, vh = maxY - minY + 2 * MARGIN;
+    svg.setAttribute('viewBox', `${minX - MARGIN} ${minY - MARGIN} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', model.title || 'Code diagram');
+
+    renderOverview(model.overview);
+    renderList('c4-capabilities', '对外能力', model.capabilities, CAP_COLS, ['name', 'entry']);
+    renderList('c4-decisions', '设计决策', model.decisions, DECISION_COLS, ['decision', 'reason']);
+    const described = inside.filter((e) => e.responsibility);
+    if (described.length) {
+      for (const e of inside) if (!e.responsibility) warn(`「${e.name}」没写 responsibility：元素职责表里会缺它`);
+      renderTable('c4-elements', ELEMENT_COLS, described);
+    }
+    renderSchema(model.tables, model.schemaNote);
+    renderKey(els, drawn);
+  }
+
+  // ---- 表：校验、ER 图、表结构（只在写了 tables 时显示）----
+  function renderSchema(tables, note) {
+    if (tables === undefined) return;
+    if (!Array.isArray(tables) || !tables.length) { fail('tables 必须是非空数组'); return; }
+    const byName = new Map();
+    for (const [i, t] of tables.entries()) {
+      const who = (t && t.name) || `第 ${i + 1} 张表`;
+      if (!t || typeof t !== 'object' || !t.name) { fail(`表「${who}」：缺少 name`); continue; }
+      if (byName.has(t.name)) { fail(`表名重复：${t.name}`); continue; }
+      if (!Array.isArray(t.columns) || !t.columns.length) { fail(`表 ${t.name}：columns 必须是非空数组`); continue; }
+      const seen = new Set();
+      if (t.columns.some((c) => !c || !c.name || !c.type)) { fail(`表 ${t.name}：每一列都要有 name 和 type`); continue; }
+      for (const c of t.columns) {
+        if (seen.has(c.name)) fail(`表 ${t.name}：列名重复 ${c.name}`);
+        seen.add(c.name);
+        if (c.key !== undefined && !KEYS.includes(c.key)) fail(`表 ${t.name}.${c.name}：key 只能是 ${KEYS.join(' / ')}`);
+        if (c.nullable !== undefined && typeof c.nullable !== 'boolean') fail(`表 ${t.name}.${c.name}：nullable 必须是 true / false`);
+        if (c.referenceOptional !== undefined && typeof c.referenceOptional !== 'boolean') fail(`表 ${t.name}.${c.name}：referenceOptional 必须是 true / false`);
+        for (const f of ['type', 'default', 'description', 'references']) {
+          if (c[f] !== undefined && typeof c[f] !== 'string') fail(`表 ${t.name}.${c.name}：${f} 必须是字符串`);
+        }
+      }
+      if (t.indexes !== undefined && (!Array.isArray(t.indexes) || t.indexes.some((ix) => !ix || !ix.name || !ix.columns))) {
+        fail(`表 ${t.name}：indexes 的每一项都要有 name 和 columns`);
+        t.indexes = [];
+      }
+      if (t.at !== undefined && !(Array.isArray(t.at) && t.at.length === 2 && t.at.every(Number.isFinite))) {
+        fail(`表 ${t.name}：at 必须是 [列, 行] 两个数字`);
+        t.at = undefined;
+      }
+      byName.set(t.name, t);
+    }
+    const ok = [...byName.values()];
+    // 引用关系：references 写成「表.列」，被引用的列应是 PK 或 UK
+    const links = [];
+    for (const t of ok) {
+      for (const c of t.columns) {
+        if (!c.references) continue;
+        const [rt, rc] = c.references.split('.');
+        const target = byName.get(rt);
+        const col = target && target.columns.find((x) => x.name === rc);
+        if (!col) { fail(`表 ${t.name}.${c.name}：references「${c.references}」指向不存在的表或列`); continue; }
+        if (!['PK', 'UK'].includes(col.key)) warn(`表 ${t.name}.${c.name}：引用的 ${c.references} 不是 PK 或 UK`);
+        if (target === t) { warn(`表 ${t.name}.${c.name}：自引用不画在 ER 图里`); continue; }
+        links.push({ child: t, column: c, parent: target });
+      }
+    }
+    drawER(ok, links);
+
+    const section = document.getElementById('c4-tables');
+    if (note !== undefined) {
+      if (typeof note !== 'string') fail('schemaNote 必须是字符串');
+      else section.appendChild(document.createElement('p')).textContent = note;
+    }
+    for (const t of ok) {
+      section.appendChild(document.createElement('h3')).textContent = t.name;
+      if (t.description) section.appendChild(document.createElement('p')).textContent = t.description;
+      const rows = t.columns.map((c) => ({ ...c, null: c.nullable ? '是' : '否' }));
+      buildTable(section, COLUMN_COLS.filter(([k]) => ['name', 'type', 'null'].includes(k) || rows.some((r) => r[k])), rows);
+      if (t.indexes && t.indexes.length) {
+        section.appendChild(document.createElement('h4')).textContent = '索引';
+        const ix = t.indexes.map((i) => ({ ...i, columns: [].concat(i.columns).join(', '), unique: i.unique ? '是' : '否' }));
+        buildTable(section, INDEX_COLS.filter(([k]) => k !== 'description' || ix.some((r) => r.description)), ix);
+      }
+    }
+    section.hidden = false;
+  }
+  function buildTable(parent, cols, rows) {
+    const table = parent.appendChild(document.createElement('table'));
+    const head = table.appendChild(document.createElement('thead')).appendChild(document.createElement('tr'));
+    for (const [, label] of cols) head.appendChild(document.createElement('th')).textContent = label;
+    const body = table.appendChild(document.createElement('tbody'));
+    for (const row of rows) {
+      const tr = body.appendChild(document.createElement('tr'));
+      for (const [k, , cls] of cols) {
+        const td = tr.appendChild(document.createElement('td'));
+        if (cls) td.className = cls;
+        td.textContent = row[k] || '';
+      }
+    }
+  }
+  // 连线一端的标记。p 在表框边上，(dx, dy) 是从线指向这张表的单位向量
+  function erEnd(g, p, dx, dy, kind) {
+    const nx = -dy, ny = dx;
+    const back = (d) => [p[0] - dx * d, p[1] - dy * d];
+    const seg = (a, b) => node('line', { x1: a[0], y1: a[1], x2: b[0], y2: b[1], stroke: INK, 'stroke-width': 1.2 }, g);
+    const bar = (d) => { const c = back(d); seg([c[0] + nx * 7, c[1] + ny * 7], [c[0] - nx * 7, c[1] - ny * 7]); };
+    const ring = (d) => { const c = back(d); node('circle', { cx: c[0], cy: c[1], r: 5, fill: '#fff', stroke: INK, 'stroke-width': 1.2 }, g); };
+    if (kind === 'one') { bar(8); bar(14); return; }
+    if (kind === 'zeroOne') { bar(8); ring(20); return; }
+    const c = back(16);
+    seg(c, [p[0] + nx * 8, p[1] + ny * 8]);
+    seg(c, [p[0] - nx * 8, p[1] - ny * 8]);
+    seg(c, p);
+    ring(24);
+  }
+  function drawER(tables, links) {
+    const svg = document.getElementById('c4-er-diagram');
+    tables.forEach((t, i) => {
+      const at = t.at || [i * 1.2, 0];
+      const rowW = Math.max(...t.columns.map((c) => ER.badgeW + measure(c.name, ER_TXT.col) + ER.gapType + measure(c.type, ER_TXT.type)));
+      const w = Math.max(ER.minW, measure(t.name, ER_TXT.name) + 2 * ER.padX, rowW + 2 * ER.padX);
+      const h = ER.header + t.columns.length * ER.row + 8;
+      t.box = { x: at[0] * COL - w / 2, y: at[1] * ROW - h / 2, w, h };
+    });
+    for (let i = 0; i < tables.length; i++) {
+      for (let j = i + 1; j < tables.length; j++) {
+        if (inter(tables[i].box, tables[j].box, 60)) fail(`表 ${tables[i].name} 和 ${tables[j].name} 在 ER 图里重叠或太近，调整 at`);
+      }
+    }
+    const gR = node('g', {}, svg), gT = node('g', {}, svg), gL = node('g', {}, svg);
+    const boxes = tables.map((t) => t.box);
+    for (const l of links) {
+      const a = l.child.box, b = l.parent.box;
+      const ac = [a.x + a.w / 2, a.y + a.h / 2], bc = [b.x + b.w / 2, b.y + b.h / 2];
+      const len = Math.hypot(bc[0] - ac[0], bc[1] - ac[1]);
+      const dx = (bc[0] - ac[0]) / len, dy = (bc[1] - ac[1]) / len;
+      const s = [ac[0] + dx * exitT(a, ac[0], ac[1], dx, dy), ac[1] + dy * exitT(a, ac[0], ac[1], dx, dy)];
+      const e = [bc[0] - dx * exitT(b, bc[0], bc[1], -dx, -dy), bc[1] - dy * exitT(b, bc[0], bc[1], -dx, -dy)];
+      node('line', { x1: s[0], y1: s[1], x2: e[0], y2: e[1], stroke: INK, 'stroke-width': 1.2 }, gR);
+      erEnd(gR, s, -dx, -dy, l.column.key === 'UK' ? 'zeroOne' : 'many');   // 引用方：列唯一时至多一个
+      // 被引用方：列可空，或被引用的行可能已经不在（referenceOptional，如日志指向已删除的实例）时，可以没有
+      erEnd(gR, e, dx, dy, l.column.nullable || l.column.referenceOptional ? 'zeroOne' : 'one');
+      const lw = measure(l.column.name, TXT.rel) + 8, lh = TXT.rel.lh + 4;
+      const label = { x: (s[0] + e[0]) / 2 - lw / 2, y: (s[1] + e[1]) / 2 - lh / 2, w: lw, h: lh };
+      node('rect', { x: label.x, y: label.y, width: lw, height: lh, fill: '#fff' }, gL);
+      textLines(gL, [l.column.name], label.x + lw / 2, label.y + 2, TXT.rel, INK);
+      boxes.push(label);
+      for (const t of tables) {
+        if (t !== l.child && t !== l.parent && segHitsRect(s, e, t.box)) warn(`ER 图：${l.child.name}.${l.column.name} 的连线穿过表 ${t.name}`);
+      }
+    }
+    for (const t of tables) {
+      const { x, y, w, h } = t.box;
+      const g = node('g', {}, gT);
+      node('rect', { x, y, width: w, height: h, rx: 3, fill: '#fff', stroke: INK, 'stroke-width': 1.2 }, g);
+      node('rect', { x, y, width: w, height: ER.header, rx: 3, fill: '#f4f4f4', stroke: INK, 'stroke-width': 1.2 }, g);
+      textLines(g, [t.name], x + w / 2, y + (ER.header - ER_TXT.name.lh) / 2, ER_TXT.name, INK);
+      t.columns.forEach((c, i) => {
+        const top = y + ER.header + 4 + i * ER.row;
+        if (c.key) textLines(g, [c.key], x + ER.padX, top, ER_TXT.badge, INK, 'start');
+        textLines(g, [c.name], x + ER.padX + ER.badgeW, top, ER_TXT.col, INK, 'start', !!c.nullable);
+        textLines(g, [c.type], x + w - ER.padX, top, ER_TXT.type, SOURCE_INK, 'end');
+      });
+    }
+    // 图例：三种端点，加键标记和斜体的含义
+    const minX = Math.min(...boxes.map((b) => b.x)), minY = Math.min(...boxes.map((b) => b.y));
+    let maxX = Math.max(...boxes.map((b) => b.x + b.w));
+    const keyY = Math.max(...boxes.map((b) => b.y + b.h)) + 40;
+    let kx = minX;
+    for (const [kind, text] of Object.entries(ER_ENDS)) {
+      node('line', { x1: kx, y1: keyY, x2: kx + 60, y2: keyY, stroke: INK, 'stroke-width': 1.2 }, gL);
+      erEnd(gL, [kx + 60, keyY], 1, 0, kind);
+      textLines(gL, [text], kx + 70, keyY - TXT.key.lh / 2, TXT.key, INK, 'start');
+      kx += 70 + measure(text, TXT.key) + 40;
+    }
+    const keys = 'PK 主键 · UK 唯一键 · FK 引用别的表 · 斜体列可为空';
+    textLines(gL, [keys], kx, keyY - TXT.key.lh / 2, TXT.key, INK, 'start');
+    maxX = Math.max(maxX, kx + measure(keys, TXT.key));
+    const maxY = keyY + TXT.key.lh;
+    const vw = maxX - minX + 2 * 30, vh = maxY - minY + 2 * 30;
+    svg.setAttribute('viewBox', `${minX - 30} ${minY - 30} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', 'ER diagram');
+    document.getElementById('c4-er').hidden = false;
+  }
+
+  // ---- 图下方的文字：概述（空行分段）和几张表 ----
+  function renderOverview(text) {
+    if (text === undefined) return;
+    if (typeof text !== 'string') { fail('overview 必须是字符串'); return; }
+    const section = document.getElementById('c4-overview');
+    for (const para of text.split(/\n\s*\n/)) if (para.trim()) section.appendChild(document.createElement('p')).textContent = para.trim();
+    section.hidden = false;
+  }
+  function renderList(id, label, list, cols, required) {
+    if (list === undefined) return;
+    if (!Array.isArray(list)) { fail(`${label}必须是数组`); return; }
+    const rows = list.filter((c, i) => {
+      const who = (c && c[cols[0][0]]) || `第 ${i + 1} 项`;
+      if (!c || typeof c !== 'object') { fail(`${label}${who}：要写成对象`); return false; }
+      if (required.some((k) => !c[k])) fail(`${label}「${who}」：${required.join(' 和 ')} 必填`);
+      for (const [k] of cols) if (c[k] !== undefined && typeof c[k] !== 'string') fail(`${label}「${who}」：${k} 必须是字符串`);
+      return true;
+    });
+    renderTable(id, cols.filter(([k]) => required.includes(k) || rows.some((c) => c[k])), rows);
+  }
+  function renderTable(id, cols, rows) {
+    if (!rows.length) return;
+    const section = document.getElementById(id);
+    const head = section.querySelector('thead').appendChild(document.createElement('tr'));
+    for (const [, label] of cols) head.appendChild(document.createElement('th')).textContent = label;
+    const body = section.querySelector('tbody');
+    for (const row of rows) {
+      const tr = body.appendChild(document.createElement('tr'));
+      for (const [k, , cls] of cols) {
+        const td = tr.appendChild(document.createElement('td'));
+        if (cls) td.className = cls;
+        td.textContent = row[k] || '';
+      }
+    }
+    section.hidden = false;
+  }
+
+  // ---- 图例：用到的元素类型、可见性符号、关系线型，各占一行 ----
+  function renderKey(els, rels) {
+    const svg = document.getElementById('c4-key');
+    const kinds = Object.keys(KINDS).filter((k) => els.some((e) => e.kind === k));
+    const used = new Set();
+    for (const e of els) { used.add(e.visibility || ''); for (const [v] of [...e.attributes, ...e.methods]) used.add(v); }
+    const vis = Object.keys(VIS).filter((v) => v && used.has(v));
+    const types = Object.keys(RELS).filter((t) => rels.some((r) => r.type === t));
+    const external = els.some((e) => e.external);
+    const CELL_W = 250, ROW_H = 46;
+    let y = 0, maxW = 0;
+    const row = (items, draw) => {
+      if (!items.length) return;
+      items.forEach((it, i) => draw(node('g', {}, svg), it, i * CELL_W, y));
+      maxW = Math.max(maxW, items.length * CELL_W);
+      y += ROW_H;
+    };
+    row(kinds, (g, k, x, y0) => {
+      kindIcon(g, k, x + ICON_R + 2, y0 + 16);
+      textLines(g, [KINDS[k].key], x + 2 * ICON_R + 12, y0 + 16 - TXT.key.lh / 2, TXT.key, INK, 'start', KINDS[k].italic);
+    });
+    row(external ? ['external'] : [], (g, _, x, y0) => {
+      node('rect', { x, y: y0 + 4, width: 2 * ICON_R + 4, height: 24, rx: 3, fill: '#fff', stroke: EXTERNAL_INK, 'stroke-width': 1.2 }, g);
+      textLines(g, ['External（不在本 component 里）'], x + 2 * ICON_R + 12, y0 + 16 - TXT.key.lh / 2, TXT.key, EXTERNAL_INK, 'start');
+    });
+    const notes = [els.some((e) => e.stereo) && 'stereo', els.some((e) => e.sourceLines.length) && 'source'].filter(Boolean);
+    row(notes, (g, n, x, y0) => {
+      const [sample, text, color] = n === 'stereo' ? ['«…»', '构造型：领域模型里的角色', INK] : ['现状：…', '当前承担它的代码', SOURCE_INK];
+      textLines(g, [sample], x, y0 + 16 - TXT.key.lh / 2, TXT.key, color, 'start');
+      textLines(g, [text], x + measure(sample, TXT.key) + 10, y0 + 16 - TXT.key.lh / 2, TXT.key, INK, 'start');
+    });
+    row(vis, (g, v, x, y0) => {
+      visIcon(g, v, x + 8, y0 + 16, true);
+      visIcon(g, v, x + 24, y0 + 16, false);
+      textLines(g, [`${v} ${VIS[v].key}（类型 / 成员）`], x + 38, y0 + 16 - TXT.key.lh / 2, TXT.key, INK, 'start');
+    });
+    row(types, (g, t, x, y0) => {
+      drawRelation(g, [x, y0 + 16], [x + 70, y0 + 16], 1, 0, RELS[t]);
+      textLines(g, [RELS[t].key], x + 82, y0 + 16 - TXT.key.lh / 2, TXT.key, INK, 'start');
+    });
+    svg.setAttribute('viewBox', `-10 -10 ${maxW + 20} ${y + 10}`);
+    svg.setAttribute('width', maxW + 20);
+    svg.setAttribute('aria-label', 'Diagram key');
+  }
+
+  try {
+    render();
+  } catch (e) {
+    fail(`渲染异常：${e && e.message}`);
+    console.error(e);
+  }
+  const status = problems.some((p) => p.level === 'error') ? 'error' : problems.length ? 'warn' : 'ok';
+  document.documentElement.dataset.c4Status = status;
+  const report = document.getElementById('c4-report');
+  for (const p of problems) {
+    const li = document.createElement('li');
+    li.dataset.level = p.level;
+    li.textContent = p.msg;
+    report.appendChild(li);
+  }
+  report.hidden = !problems.length;
+  if (problems.length) console.warn('[c4]', problems);
+})();
+</script>
+</body>
+</html>

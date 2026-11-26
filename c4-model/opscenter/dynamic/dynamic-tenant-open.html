@@ -36,7 +36,7 @@
 <script type="application/json" id="c4-model">
 {
   "title": "动态图：运营中心 - 开通租户",
-  "description": "目标模型。运营人员开通一个新租户：第一步在用户中心建租户和首个管理员（接口里同步跑，好当场交出临时密码），第二步在 Atlas 设份额（后台推进）。整体设计见 ../design-tenant-isolation.html",
+  "description": "目标模型。运营人员开通一个新租户：第一步在用户中心建租户和首个管理员（接口里同步跑，好当场交出临时密码）；之后后台按登记逐个调各系统的创建，知识库超时一次，退避后再建一次。技能、MCP 网关、模型平台、记忆服务和知识库一样，图中省略。整体设计见 ../design-tenant-isolation.html；运营人员怎么登录、按模块授权见 ../design-opscenter.html",
   "boundaries": [
     {
       "id": "ops",
@@ -69,7 +69,7 @@
       "kind": "component",
       "technology": "FastAPI 依赖 + Router",
       "in": "server",
-      "name": "运营账号与审计"
+      "name": "权限与审计"
     },
     {
       "id": "tenants",
@@ -104,41 +104,48 @@
       "kind": "system",
       "color": "#bf101d",
       "name": "Agent 平台"
+    },
+    {
+      "id": "knowledge",
+      "kind": "system",
+      "tag": "同级服务",
+      "color": "#8411bd",
+      "name": "知识库服务"
     }
   ],
   "messages": [
     {
       "from": "operator",
       "to": "console",
-      "description": "填企业代码、名字、首个管理员、名额、到期、应用、份额，提交"
+      "description": "填企业代码、名字、首个管理员、名额、到期、应用，以及各系统的创建参数（份额等），提交"
     },
     {
       "from": "console",
       "to": "tenants",
       "description": "开通租户",
-      "technology": "JSON/HTTPS",
+      "technology": "JSON/HTTPS（经 API 网关）",
       "details": {
         "items": [
           [
             "请求",
-            "运营服务接口",
-            "POST /api/tenants"
+            "运营服务接口（网关去掉 /opscenter 后转发）",
+            "POST /opscenter/api/tenants"
           ],
           [
-            "会话",
-            "运营账号登录后的会话令牌",
-            "Cookie: ops_session=<令牌>"
+            "身份",
+            "网关验过访问 JWT 后写的头（浏览器带来的早被清掉）",
+            "X-Uid: <小周>、X-Tenant-Id: <系统租户>"
           ]
         ],
-        "example": "{\n  \"code\": \"xinghe\",\n  \"name\": \"星河科技\",\n  \"admin\": {\"account\": \"admin\", \"name\": \"王五\", \"email\": \"wangwu@xinghe.example\"},\n  \"max_users\": 200,\n  \"expires_at\": \"2027-11-30T00:00:00Z\",\n  \"apps\": [\"atlas\", \"skill\", \"mcp-gateway\", \"model-gateway\"],\n  \"quota\": {\"running_runs\": 20, \"sandboxes\": 30, \"storage_bytes\": 214748364800}\n}"
+        "example": "{\n  \"code\": \"xinghe\",\n  \"name\": \"星河科技\",\n  \"admin\": {\"account\": \"admin\", \"name\": \"王五\", \"email\": \"wangwu@xinghe.example\"},\n  \"max_users\": 200,\n  \"expires_at\": \"2027-11-30T00:00:00Z\",\n  \"apps\": [\n    \"atlas\",\n    \"skill\",\n    \"mcp-gateway\",\n    \"model-gateway\"\n  ],\n  \"params\": {\n    \"atlas\": {\n      \"running_runs\": 20,\n      \"sandboxes\": 30,\n      \"storage_bytes\": 214748364800\n    },\n    \"knowledge\": {\n      \"storage_bytes\": 107374182400\n    },\n    \"skill\": {\n      \"install_default_skills\": true\n    }\n  }\n}"
       }
     },
     {
       "from": "tenants",
       "to": "accounts",
-      "description": "解析运营人员，要求运营管理员；记一条「发起」审计",
+      "description": "解析运营人员，要租户模块读写；记一条「发起」审计",
       "details": {
-        "note": "接口层的依赖统一做：会话失效 → 401，观察员 → 403。审计只记参数摘要，不记临时密码。"
+        "note": "接口层的依赖统一做：没有身份头 → 401；不是系统租户、没开通运营中心 → 403；租户模块的级别不到读写 → 403。审计记在租户模块下，只记参数摘要，不记临时密码。"
       }
     },
     {
@@ -146,16 +153,16 @@
       "to": "tenants",
       "description": "生成租户 uuid，按「开通」排步骤",
       "details": {
-        "note": "OperationPlanner：① 用户中心建租户（含根部门、首个管理员、开通的应用）② Atlas 设份额（没填份额就没有这一步，用默认份额）。租户 uuid 由运营中心先生成，用户中心按它幂等建。"
+        "note": "OperationPlanner：① 用户中心建租户（含根部门、首个管理员、开通的应用）② Atlas 创建 ③ 知识库创建 ④ 技能 … ⑦ 记忆服务创建。「各系统」= 系统登记里声明了租户生命周期的，按登记顺序；每一步带上开通时给这个系统填的参数。租户 uuid 由运营中心先生成，用户中心按它幂等建。"
       }
     },
     {
       "from": "tenants",
       "to": "opsdb",
-      "description": "保存操作和两个步骤",
+      "description": "保存操作和七个步骤",
       "technology": "SQL/TCP",
       "details": {
-        "note": "INSERT ops_tenant_operation（kind = OPEN，status = RUNNING）、ops_operation_step × 2（PENDING）。企业代码在用户中心里唯一，重复的会在下一步被拒。"
+        "note": "INSERT ops_tenant_operation（kind = OPEN，status = RUNNING）、ops_operation_step × 7（PENDING）。企业代码在用户中心里唯一，重复的会在下一步被拒。"
       }
     },
     {
@@ -186,7 +193,7 @@
           [
             "谁、为了哪次操作",
             "OperatorStamp",
-            "X-Ops-Operator: <运营账号 uuid> · X-Ops-Operation: <租户操作 uuid>"
+            "X-Ops-Operator: <运营人员的用户 uuid> · X-Ops-Operation: <租户操作 uuid>"
           ],
           [
             "幂等键",
@@ -216,7 +223,7 @@
       "from": "tenants",
       "to": "console",
       "description": "返回租户、操作进度和临时密码",
-      "technology": "JSON/HTTPS"
+      "technology": "JSON/HTTPS（经 API 网关）"
     },
     {
       "from": "console",
@@ -229,48 +236,88 @@
     {
       "from": "tenants",
       "to": "tenants",
-      "description": "后台任务取到第二步（每个实例都跑，逐个抢租约）",
+      "description": "后台任务取到下一步，按登记逐个系统创建",
       "details": {
         "note": "OperationSweeper，定时任务库的实例任务；分页取有到期步骤的操作，抢到的实例推进。"
       }
     },
     {
-      "from": "tenants",
-      "to": "gateway",
-      "description": "第二步：设份额"
-    },
-    {
       "from": "gateway",
       "to": "agent",
-      "description": "设这个租户的份额",
+      "description": "为这个租户创建",
       "technology": "JSON/HTTP（运营接口，签名）",
       "details": {
         "items": [
           [
             "请求",
-            "Atlas 的运营接口（容量）",
-            "PUT /ops/v1/quotas/{tenant_uuid}"
+            "Atlas 的运营接口（地址由运营接口库定好）",
+            "PUT /ops/v1/tenants/{tenant_uuid}"
           ],
           [
             "幂等键",
-            "步骤 uuid",
+            "步骤 uuid（对方用来写日志）",
             "Idempotency-Key: <step_uuid>"
           ]
         ],
-        "example": "{\"running_runs\": 20, \"sandboxes\": 30, \"storage_bytes\": 214748364800}"
+        "example": "{\"running_runs\": 20, \"sandboxes\": 30, \"storage_bytes\": 214748364800}",
+        "note": "运营接口库验签名，进入这个租户，调 Atlas 实现的 TenantLifecycle.create：记下这个租户的份额。能重做：再建一次结果一样。"
       }
     },
     {
       "from": "agent",
       "to": "gateway",
-      "description": "已保存",
+      "description": "已创建",
+      "technology": "JSON/HTTP（运营接口，签名）"
+    },
+    {
+      "from": "gateway",
+      "to": "knowledge",
+      "description": "为这个租户创建",
+      "technology": "JSON/HTTP（运营接口，签名）",
+      "details": {
+        "items": [
+          [
+            "请求",
+            "知识库的运营接口",
+            "PUT /ops/v1/tenants/{tenant_uuid}"
+          ]
+        ],
+        "example": "{\"storage_bytes\": 107374182400}",
+        "note": "KnowledgeTenantLifecycle.create：记下知识库的存储份额；没填就什么都不建，用默认份额。见 ../../knowledge/code-ops.html"
+      }
+    },
+    {
+      "from": "knowledge",
+      "to": "gateway",
+      "description": "超时",
+      "technology": "JSON/HTTP（运营接口，签名）",
+      "details": {
+        "note": "不知道对方做没做：这一步记 FAILED（可重试）存进运营库，按退避定下次时间（10 秒起翻倍，最长 10 分钟）。不放弃，界面上标出卡住的步骤，可以立即重做。前面成功的步骤同样每做完一步记一次。"
+      }
+    },
+    {
+      "from": "gateway",
+      "to": "knowledge",
+      "description": "到时间了，再建一次",
+      "technology": "JSON/HTTP（运营接口，签名）",
+      "details": {
+        "note": "创建能重做：上次其实建好了，这次就是把份额写成同样的值；知识库不按幂等键去重，也不用记。"
+      }
+    },
+    {
+      "from": "knowledge",
+      "to": "gateway",
+      "description": "已创建",
       "technology": "JSON/HTTP（运营接口，签名）"
     },
     {
       "from": "tenants",
       "to": "opsdb",
-      "description": "第二步成功，操作结束",
-      "technology": "SQL/TCP"
+      "description": "④–⑦ 其余系统也创建完，操作结束",
+      "technology": "SQL/TCP",
+      "details": {
+        "note": "其余系统同样各建各的，如技能按开通参数装默认技能；没有要准备的系统，创建什么都不做。"
+      }
     },
     {
       "from": "tenants",

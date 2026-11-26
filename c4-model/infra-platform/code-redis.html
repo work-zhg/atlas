@@ -374,7 +374,7 @@
       "name": "CoalescedCache",
       "visibility": "+",
       "stereotype": "领域服务",
-      "source": "无：新建（补救 modelgateway TenantGate 击穿与降级）",
+      "source": "cache.py CoalescedCache（现在没有业务方在用：模型网关原来用它缓存租户状态，业务系统不再存租户状态后去掉了）",
       "responsibility": "防击穿本地+分布式协同缓存。TTL 到期时按 key 用 Singleflight 合并并发回源（只放 1 个协程查库）；回源失败在 stale_ttl_s 内降级返旧值；可选订阅 PubSubHub 接收跨副本即时失效广播。",
       "attributes": [
         [
@@ -568,7 +568,7 @@
     {
       "name": "单连接多路复用 PubSub",
       "entry": "runtime.pubsub.subscribe(channel) / publish(channel, payload)",
-      "callers": "Agent 审批与授权失效、ModelGateway 租户停用广播、TeamFlow 流程协调",
+      "callers": "Agent 审批与授权失效、模型网关配置失效广播、TeamFlow 流程协调",
       "description": "进程内无论多少协程订阅永远只占 1 条 TCP 连接；断线重连后全量重订阅并投递 Resubscribed 哨兵触发回库补查。",
       "source": "agent/approval/channel.py、teamflow/process/bus.py"
     },
@@ -582,9 +582,9 @@
     {
       "name": "原子限流与防击穿协同缓存",
       "entry": "AtomicQuota.allow / CoalescedCache.get_or_load(key, loader)",
-      "callers": "ModelGateway 准入与 TenantGate、UserCenter 授权快照缓存",
+      "callers": "AtomicQuota：模型网关准入（限流、预算）；CoalescedCache：暂无（适合授权快照、配置这类高频读）",
       "description": "Lua 原子计数杜绝无过期键泄漏；Singleflight 消除 5 秒缓存击穿，DB 闪断在 stale_ttl_s 内降级返旧值。",
-      "source": "modelgateway/gateway/admission.py、opsapi/state.py"
+      "source": "modelgateway/gateway/admission.py"
     }
   ],
   "decisions": [

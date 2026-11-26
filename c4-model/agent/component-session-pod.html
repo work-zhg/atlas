@@ -41,21 +41,10 @@
       "kind": "system",
       "tag": "同级服务",
       "name": "MCP 网关",
-      "description": "统一接入 MCP 服务和外部 API，如 SerpApi 搜索，按 Key 授权。",
+      "description": "统一接入 MCP 服务和外部 API，如 SerpApi 搜索、平台的知识库检索，按 Key 授权。",
       "at": [
         3.75,
         2.25
-      ]
-    },
-    {
-      "id": "knowledge",
-      "kind": "system",
-      "tag": "同级服务",
-      "name": "知识库服务",
-      "description": "文档入库与检索，按文档权限过滤结果。",
-      "at": [
-        3.75,
-        3.2
       ]
     },
     {
@@ -188,13 +177,7 @@
     {
       "from": "adapter",
       "to": "mcp",
-      "description": "调用 MCP 工具（智能体的 Key）",
-      "technology": "MCP/HTTP"
-    },
-    {
-      "from": "adapter",
-      "to": "knowledge",
-      "description": "检索知识库（签名令牌）",
+      "description": "调用 MCP 工具，含知识库检索（智能体的 Key 和身份凭据）",
       "technology": "MCP/HTTP"
     },
     {

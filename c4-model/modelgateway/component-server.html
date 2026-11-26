@@ -21,32 +21,32 @@
 <script type="application/json" id="c4-model">
 {
   "title": "组件图：模型平台 - 管理平台",
-  "description": "目标模型。组件按领域拆：模型目录、授权、API Key、LiteLLM 接入四个领域，前面是三个入口（领域之间的类级依赖见 code-domains.html）。各领域读写自己的表，图中不画平台库；操作日志是共享内核，模型目录、授权、API Key 的管理动作都记进去，图中未画。运维命令行调的是同一套领域服务",
+  "description": "目标模型：按业务功能垂直划分组件（不再按调用方拆「管理接口 / 内部接口」），每个功能组件内聚自身的 HTTP 路由与领域服务；调用主体鉴别（员工登录态、管理员 model:manage、内部受信任应用 X-Caller-App、运营签名）与字段脱敏由横切鉴权守卫统一负责。操作审计（audit.py）与配置变更通知（notify.py）由写路径统一调用。",
   "system": "模型平台",
   "container": "管理平台",
   "elements": [
-    {
-      "id": "employee",
-      "kind": "person",
-      "tag": "员工",
-      "name": "员工",
-      "color": "#297e06",
-      "description": "在控制台的模型页面申请自己的用户 Key，从能用的模型里选，在本机工具里用它调模型。",
-      "at": [
-        1.15,
-        0.0
-      ]
-    },
     {
       "id": "admin",
       "kind": "person",
       "tag": "模型管理员",
       "name": "模型管理员",
       "color": "#1a849c",
-      "description": "登记模型、设公有私有、给私有模型授权，给智能体和平台服务的 Key 分配模型；在 LiteLLM 界面看日志和花费、配预算。",
+      "description": "登记供应商账号、模型与线路，配置公有或私有可见性并授权，给客户端 Key 分配模型与限额，查看调用明细与费用。",
       "at": [
-        0.0,
-        0.0
+        0.45,
+        -0.15
+      ]
+    },
+    {
+      "id": "employee",
+      "kind": "person",
+      "tag": "员工",
+      "name": "员工",
+      "color": "#297e06",
+      "description": "在控制台申请并管理个人 Key，在研发工具或脚本中调用授权范围内的模型。",
+      "at": [
+        2.25,
+        -0.15
       ]
     },
     {
@@ -54,10 +54,10 @@
       "kind": "system",
       "name": "Agent 平台",
       "color": "#ed8609",
-      "description": "智能体的配置、会话与执行：跑每一轮对话，实时推送模型、工具和子智能体的执行过程。",
+      "description": "智能体与平台系统功能的编排与运行时，按智能体或系统用途获取客户端 Key 并调用对话模型。",
       "at": [
-        2.6,
-        0.0
+        3.85,
+        -0.15
       ]
     },
     {
@@ -65,10 +65,124 @@
       "kind": "system",
       "name": "知识库服务",
       "color": "#8411bd",
-      "description": "文档入库与检索，按文档权限过滤结果。",
+      "description": "企业文档解析、向量化入库与混合检索服务，调用对话、向量与重排模型。",
       "at": [
-        3.75,
-        0.0
+        5.25,
+        -0.15
+      ]
+    },
+    {
+      "id": "ops",
+      "kind": "system",
+      "name": "运营中心",
+      "color": "#8a6d00",
+      "description": "平台级运维系统：管理租户启用、停用与数据清理，配置全局运行参数并查看后台巡检任务状态。",
+      "at": [
+        -2.1,
+        4.3
+      ]
+    },
+    {
+      "id": "calls",
+      "kind": "component",
+      "technology": "FastAPI Router + CallLog",
+      "name": "调用记录查询",
+      "description": "/api/v1/calls：按月分区裁剪分页查询调用明细并汇总四项 token 与费用（管理员查全租户，员工查本人 Key）。",
+      "at": [
+        1.0,
+        1.45
+      ]
+    },
+    {
+      "id": "keys",
+      "kind": "component",
+      "technology": "FastAPI Router + KeyService",
+      "name": "API Key",
+      "description": "/api/v1/keys：个人 Key 与客户端 Key 统一生命周期（申请/幂等补建、分配模型与月/5h/24h 窗口费用限额及管理员硬上限、重置、启停、所属应用读凭据），预计算 effective_models 并零窗口驱逐。",
+      "at": [
+        4.25,
+        1.45
+      ]
+    },
+    {
+      "id": "jobs",
+      "kind": "component",
+      "technology": "atlas_jobs + Redis 租约锁",
+      "name": "定时巡检",
+      "description": "多副本互斥运行三项任务：AccountCheck（巡检异常账号与余额）、KeyRefresh（同步离职与部门调整）、CallRetention（建下月分区并删除超期分区）。",
+      "at": [
+        5.85,
+        1.45
+      ]
+    },
+    {
+      "id": "access",
+      "kind": "component",
+      "technology": "FastAPI Router + UCPermissions",
+      "name": "授权",
+      "description": "/api/v1/models/{id}/grants 与入站主体守卫：解析用户与受信任应用身份，维护用户中心私有模型数据权限及员工可用范围/在职缓存。",
+      "at": [
+        -0.45,
+        2.85
+      ]
+    },
+    {
+      "id": "catalog",
+      "kind": "component",
+      "technology": "FastAPI Router + ModelRegistry",
+      "name": "模型与线路",
+      "description": "/api/v1/models：模型与多账号线路增删改查、预置能力核验与单价配置；按调用主体（管理员、员工、应用）返回对应模型目录与规格。",
+      "at": [
+        2.35,
+        2.85
+      ]
+    },
+    {
+      "id": "accounts",
+      "kind": "component",
+      "technology": "FastAPI Router + AccountService",
+      "name": "供应商账号",
+      "description": "/api/v1/providers、/api/v1/accounts：供应商账号 CRUD、密钥信封加密、草稿与实存账号按真实线路模型类型探测、余额刷新与异常恢复。",
+      "at": [
+        4.15,
+        2.85
+      ]
+    },
+    {
+      "id": "ops_api",
+      "kind": "component",
+      "technology": "atlas_opsapi Router",
+      "name": "租户与系统管控",
+      "description": "租户与系统管控 /ops/v1：热更新系统参数、暴露定时任务状态、汇总租户级用量；开通时创建（不用准备什么），关闭租户时清理全部表数据。不知道租户状态：停用、恢复只在用户中心。",
+      "at": [
+        -0.45,
+        4.3
+      ]
+    },
+    {
+      "id": "shared_pkg",
+      "kind": "component",
+      "technology": "atlas_modelgateway.shared",
+      "name": "共享基础层",
+      "tag": "共享包",
+      "color": "#b8336a",
+      "description": "共享内核值对象、预置规则 PresetRules、线路健康 RouteHealth、租户级配置版本与 Pub/Sub 失效协议、IP 绑定防重绑定的上游客户端与月分区维护器。",
+      "at": [
+        4.95,
+        4.3
+      ]
+    },
+    {
+      "id": "provider_pkg",
+      "kind": "component",
+      "technology": "atlas_modelgateway.provider",
+      "name": "供应商",
+      "tag": "共享包",
+      "color": "#b8336a",
+      "description": "各家供应商的数据规格 ProviderSpec（认证头、地址模板、余额/模型列表接口）与协议方言 ProviderDialect；与模型网关共用。",
+      "at": [
+        6.3,
+        4.3
       ]
     },
     {
@@ -76,193 +190,258 @@
       "kind": "system",
       "name": "用户中心",
       "color": "#bf101d",
-      "description": "用户、组织与权限的唯一数据源，负责统一登录。",
+      "description": "用户、组织架构、在职状态与数据权限的唯一事实源，负责统一身份认证。",
       "at": [
-        -0.9,
-        3.9
+        -2.1,
+        2.85
       ]
     },
     {
-      "id": "litellm",
+      "id": "db",
       "kind": "container",
-      "shape": "server",
-      "technology": "LiteLLM 1.106（第三方）",
-      "name": "LiteLLM",
-      "description": "模型网关：认 Key，只放行 Key 分配了的模型，转成各供应商的协议；记调用日志和花费，按 Key 限额；管理界面 /ui。",
+      "shape": "database",
+      "technology": "PostgreSQL 16",
+      "name": "平台库",
+      "description": "存租户的供应商账号、模型与线路、API Key、操作审计及按月分区的调用记录表 gw_model_call。",
       "at": [
-        4.9,
-        3.9
+        1.95,
+        5.8
       ]
     },
     {
-      "id": "mgmt",
-      "kind": "component",
-      "name": "管理接口",
-      "technology": "FastAPI Router",
-      "description": "/api/v1：模型、私有模型授权、我的用户 Key、客户端 Key，给控制台的模型页面。",
+      "id": "redis",
+      "kind": "container",
+      "shape": "database",
+      "technology": "Redis 7（键值 + Pub/Sub）",
+      "name": "网关状态",
+      "description": "共享状态：线路冷却、账号异常、RPM 与月/5h/24h 滑动窗口费用桶、租户级配置版本与 Key 即时失效广播。",
       "at": [
-        0.6,
-        1.3
+        4.95,
+        5.8
       ]
     },
     {
-      "id": "internal",
-      "kind": "component",
-      "name": "内部接口",
-      "technology": "FastAPI Router",
-      "description": "/internal：客户端 Key 的申请、获取、改名、删除，可调用的模型；nginx 不转发，只认登记过的应用。",
+      "id": "provider",
+      "kind": "system",
+      "name": "模型供应商",
+      "color": "#5b6770",
+      "description": "公有云商业大模型厂商以及企业内部私有化部署的模型推理服务。",
       "at": [
-        2.6,
-        1.3
-      ]
-    },
-    {
-      "id": "recon",
-      "kind": "component",
-      "name": "对账任务",
-      "technology": "asyncio 后台任务",
-      "description": "每 5 分钟逐把 Key 问一次 LiteLLM，不一致以平台为准修正。",
-      "at": [
-        4.0,
-        1.4
-      ]
-    },
-    {
-      "id": "catalog",
-      "kind": "component",
-      "name": "模型目录",
-      "technology": "SQLAlchemy 异步",
-      "description": "模型的登记、纳入、修改、重新登记、删除，公有 / 私有；平台记录和 LiteLLM 部署按模型名合并；发模型事件。",
-      "at": [
-        2.0,
-        4.0
-      ]
-    },
-    {
-      "id": "access",
-      "kind": "component",
-      "name": "授权",
-      "technology": "httpx",
-      "description": "私有模型授给用户、部门（用户中心数据权限 Model），用户能用哪些模型、是否在职（缓存），管理员操作码；发授权事件。",
-      "at": [
-        0.6,
-        3.9
-      ]
-    },
-    {
-      "id": "keys",
-      "kind": "component",
-      "name": "API Key",
-      "technology": "SQLAlchemy 异步",
-      "description": "用户 Key、客户端 Key 的生命周期，有效模型，推给 LiteLLM 并记同步状态，对账；接住模型和授权事件重算。",
-      "at": [
-        1.9,
-        2.6
-      ]
-    },
-    {
-      "id": "gw",
-      "kind": "component",
-      "name": "LiteLLM 接入",
-      "technology": "httpx",
-      "description": "LiteLLM 管理接口的唯一客户端：模型部署（短时缓存）、Key；master key 只在这里。",
-      "at": [
-        3.4,
-        3.9
+        6.3,
+        7.15
       ]
     }
   ],
   "relationships": [
     {
-      "from": "employee",
-      "to": "mgmt",
-      "description": "申请用户 Key，选模型",
-      "technology": "JSON/HTTPS（经 nginx）"
+      "from": "admin",
+      "to": "access",
+      "description": "配置私有模型授权",
+      "technology": "JSON/HTTPS",
+      "labelAt": 0.55
     },
     {
       "from": "admin",
-      "to": "mgmt",
-      "description": "登记模型、授权、分配模型",
-      "technology": "JSON/HTTPS（经 nginx）"
+      "to": "calls",
+      "description": "查全租户调用与账单",
+      "technology": "JSON/HTTPS",
+      "labelAt": 0.52
+    },
+    {
+      "from": "admin",
+      "to": "catalog",
+      "description": "登记管理模型与线路",
+      "technology": "JSON/HTTPS",
+      "labelAt": 0.68
+    },
+    {
+      "from": "admin",
+      "to": "keys",
+      "description": "分配客户端 Key 模型与限额",
+      "technology": "JSON/HTTPS",
+      "labelAt": 0.68
+    },
+    {
+      "from": "admin",
+      "to": "accounts",
+      "description": "登记账号并测试连接",
+      "technology": "JSON/HTTPS",
+      "labelAt": 0.52
+    },
+    {
+      "from": "employee",
+      "to": "calls",
+      "description": "查个人调用与花费",
+      "technology": "JSON/HTTPS",
+      "labelAt": 0.65
+    },
+    {
+      "from": "employee",
+      "to": "catalog",
+      "description": "查看可选模型",
+      "technology": "JSON/HTTPS",
+      "labelAt": 0.22
+    },
+    {
+      "from": "employee",
+      "to": "keys",
+      "description": "申请管理个人 Key",
+      "technology": "JSON/HTTPS",
+      "labelAt": 0.35
     },
     {
       "from": "agent",
-      "to": "internal",
-      "description": "智能体和平台服务的 Key",
-      "technology": "JSON/HTTP"
+      "to": "catalog",
+      "description": "查可调用模型与能力",
+      "technology": "JSON/HTTP",
+      "labelAt": 0.25
+    },
+    {
+      "from": "agent",
+      "to": "keys",
+      "description": "补建并读取客户端 Key",
+      "technology": "JSON/HTTP",
+      "labelAt": 0.52
     },
     {
       "from": "kb",
-      "to": "internal",
-      "description": "服务级 Key",
-      "technology": "JSON/HTTP"
-    },
-    {
-      "from": "mgmt",
-      "to": "catalog",
-      "description": "登记、修改、删除模型"
-    },
-    {
-      "from": "mgmt",
-      "to": "access",
-      "description": "操作码、私有模型授权"
-    },
-    {
-      "from": "mgmt",
       "to": "keys",
-      "description": "用户 Key、客户端 Key"
+      "description": "读取服务级客户端 Key",
+      "technology": "JSON/HTTP",
+      "labelAt": 0.52
     },
     {
-      "from": "internal",
+      "from": "ops",
+      "to": "ops_api",
+      "description": "参数、任务与租户管控",
+      "technology": "JSON/HTTP（HMAC）"
+    },
+    {
+      "from": "jobs",
       "to": "keys",
-      "description": "客户端 Key"
+      "description": "刷新用户 Key 有效模型",
+      "labelAt": 0.5
     },
     {
-      "from": "internal",
-      "to": "catalog",
-      "description": "可调用的模型"
+      "from": "jobs",
+      "to": "accounts",
+      "description": "巡检异常账号与余额",
+      "labelAt": 0.55
     },
     {
-      "from": "recon",
-      "to": "keys",
-      "description": "逐把对账"
-    },
-    {
-      "from": "keys",
-      "to": "catalog",
-      "description": "可调用的模型；订阅模型事件"
+      "from": "jobs",
+      "to": "shared_pkg",
+      "description": "抢巡检锁、建/删月分区",
+      "labelAt": 0.35
     },
     {
       "from": "keys",
       "to": "access",
-      "description": "用户能用的模型、是否在职；订阅授权事件"
+      "description": "查可用私有模型与在职",
+      "labelAt": 0.35
     },
     {
       "from": "keys",
-      "to": "gw",
-      "description": "生成、更新、停用 Key"
+      "to": "catalog",
+      "description": "查可调用模型集合",
+      "labelAt": 0.45
     },
     {
-      "from": "access",
-      "to": "catalog",
-      "description": "查模型；订阅模型事件"
+      "from": "keys",
+      "to": "shared_pkg",
+      "description": "递增 Key 版本并广播驱逐",
+      "labelAt": 0.58
     },
     {
       "from": "catalog",
-      "to": "gw",
-      "description": "模型部署"
+      "to": "accounts",
+      "description": "校验线路引用的账号",
+      "labelAt": 0.5
+    },
+    {
+      "from": "catalog",
+      "to": "access",
+      "description": "登记/删除数据对象",
+      "labelAt": 0.5
+    },
+    {
+      "from": "catalog",
+      "to": "shared_pkg",
+      "description": "预置能力核验与递增租户版本",
+      "labelAt": 0.48
+    },
+    {
+      "from": "accounts",
+      "to": "provider_pkg",
+      "description": "取供应商规格与方言",
+      "labelAt": 0.55
+    },
+    {
+      "from": "accounts",
+      "to": "shared_pkg",
+      "description": "防重绑定探测、清异常",
+      "labelAt": 0.55
     },
     {
       "from": "access",
       "to": "usercenter",
-      "description": "数据权限、用户、授权快照",
-      "technology": "JSON/HTTP（开放接口）"
+      "description": "数据权限、用户与授权快照",
+      "technology": "JSON/HTTP"
     },
     {
-      "from": "gw",
-      "to": "litellm",
-      "description": "管理接口",
-      "technology": "JSON/HTTP（master key）"
+      "from": "calls",
+      "to": "db",
+      "description": "只读查询 gw_model_call",
+      "technology": "SQL/TCP",
+      "labelAt": 0.55
+    },
+    {
+      "from": "keys",
+      "to": "db",
+      "description": "读写 gw_api_key、gw_audit",
+      "technology": "SQL/TCP",
+      "labelAt": 0.65
+    },
+    {
+      "from": "catalog",
+      "to": "db",
+      "description": "读写 gw_model、gw_route",
+      "technology": "SQL/TCP",
+      "labelAt": 0.55
+    },
+    {
+      "from": "accounts",
+      "to": "db",
+      "description": "读写 gw_account",
+      "technology": "SQL/TCP",
+      "labelAt": 0.72
+    },
+    {
+      "from": "ops_api",
+      "to": "db",
+      "description": "清理已关闭租户表数据",
+      "technology": "SQL/TCP",
+      "labelAt": 0.48
+    },
+    {
+      "from": "shared_pkg",
+      "to": "db",
+      "description": "维护 gw_model_call 月分区",
+      "technology": "SQL/TCP",
+      "labelAt": 0.48
+    },
+    {
+      "from": "shared_pkg",
+      "to": "redis",
+      "description": "版本号、Pub/Sub 与异常状态",
+      "technology": "Redis 协议"
+    },
+    {
+      "from": "shared_pkg",
+      "to": "provider",
+      "description": "发起探测与余额请求",
+      "technology": "HTTPS",
+      "labelAt": 0.65
     }
   ]
 }

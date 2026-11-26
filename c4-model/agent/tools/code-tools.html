@@ -63,7 +63,7 @@
       "kind": "class",
       "name": "CliToolHandoff",
       "stereotype": "应用服务",
-      "responsibility": "【组合入口】CLI 运行时开会话时调用一次：交出要下发给 CLI 的 MCP 服务——网关上的服务（带智能体的 Key）和知识库 MCP（带签名令牌），以及提示。",
+      "responsibility": "【组合入口】CLI 运行时开会话时调用一次：交出要下发给 CLI 的 MCP 服务——网关上的服务（带智能体的 Key 和身份凭据；绑定了知识集时包括网关上的知识库平台服务），以及提示。",
       "attributes": [
         [
           "",
@@ -132,7 +132,7 @@
       "kind": "class",
       "name": "KnowledgeService",
       "stereotype": "应用服务",
-      "responsibility": "【知识库】tool 模式的检索工具、auto 模式并入本轮输入、CLI 的知识库 MCP 令牌、主体能读哪些库。详见 code-tools-knowledge.html。",
+      "responsibility": "【知识库】tool 模式的检索工具、auto 模式并入本轮输入、CLI 下发网关上的知识库服务、主体能读哪些库。详见 code-tools-knowledge.html。",
       "attributes": [
         [
           "",
@@ -342,7 +342,7 @@
       "from": "handoff",
       "to": "knowledge",
       "type": "uses",
-      "description": "知识库 MCP"
+      "description": "知识库服务项"
     },
     {
       "from": "toolset",
@@ -404,7 +404,7 @@
       "name": "CLI 智能体下发的 MCP",
       "entry": "CliToolHandoff.mcp_servers(spec, user)",
       "callers": "CLI 运行时 · 一轮的编排（开会话时）",
-      "description": "网关上的服务带智能体的 Key、知识库 MCP 带签名令牌；之后的调用 CLI 自己完成，网关和知识库在每个请求上判权"
+      "description": "网关上的服务（含知识库平台服务）带智能体的 Key 和 Atlas 签发的身份凭据；之后的调用 CLI 自己完成，网关在每个请求上判权，知识库按网关写的身份请求头判数据权限"
     },
     {
       "name": "技能",

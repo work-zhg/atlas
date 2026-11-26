@@ -56,7 +56,7 @@
         1.25
       ],
       "name": "MCP 网关",
-      "description": "所有 MCP 调用的唯一入口：代理已有的 MCP Server，把 REST、gRPC 转换成 MCP 工具；Key 是权限主体，按授权调用，上游凭据只在网关；服务和 Key 都归租户。"
+      "description": "所有 MCP 调用的唯一入口：代理已有的 MCP Server，把 REST、gRPC 转换成 MCP 工具；Key 是权限主体，按授权调用，上游凭据只在网关；服务和 Key 都归租户（平台服务除外）。"
     },
     {
       "id": "client",
@@ -96,7 +96,7 @@
       "kind": "system",
       "name": "上游服务",
       "color": "#5b6770",
-      "description": "已有的远程 MCP Server，以及被转换成工具的 REST API、gRPC 服务，例如 SerpApi 搜索。",
+      "description": "已有的远程 MCP Server，以及被转换成工具的 REST API、gRPC 服务，例如 SerpApi 搜索；平台自己的服务（例如知识库）也作为上游登记成平台服务。",
       "at": [
         1.65,
         2.5
@@ -153,7 +153,7 @@
     {
       "from": "ops",
       "to": "gw",
-      "description": "停用、恢复租户，关闭时删除租户的 MCP 数据；看系统任务"
+      "description": "开通时创建、关闭时删除租户的 MCP 数据；看系统任务"
     }
   ]
 }

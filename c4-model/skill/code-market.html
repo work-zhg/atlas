@@ -140,7 +140,11 @@
       "methods": [
         [
           "+",
-          "发布、改默认、下架、给租户装（开通租户时）"
+          "发布、改默认、下架"
+        ],
+        [
+          "+",
+          "创建租户（TenantLifecycle.create）：装默认技能"
         ]
       ]
     },
@@ -221,7 +225,7 @@
     {
       "from": "ops",
       "to": "svc",
-      "description": "发布、下架、给租户装"
+      "description": "发布、下架；开通时装默认"
     },
     {
       "from": "mgmt",
@@ -288,7 +292,7 @@
     {
       "name": "装进租户",
       "entry": "install · install_many",
-      "callers": "管理接口（skill:review）、运营接口（开通租户时装默认）、运维命令行",
+      "callers": "管理接口（skill:review）、运营接口的创建租户（开通、补建时装默认，参数 install_defaults / skills）、运维命令行",
       "description": "已下架的不能装；交给技能版本拷进本租户、登记成来源 market 的已发布版本；装过就不重复装"
     }
   ],

@@ -30,41 +30,41 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：基础设施平台 - 公共库 - 运营接口",
-  "description": "目标模型（新库 infra-platform/libs/opsapi）。各业务服务实现运营接口用：只认运营中心、在系统范围里执行、幂等、本地记租户状态。契约见 ../opscenter/code-gateway.html，整体设计见 ../opscenter/design-tenant-isolation.html",
+  "description": "目标模型（infra-platform/libs/opsapi），每个元素下方的「现状」是现在承担它的代码。各业务系统接入运营中心的中间件：定好接口地址和要实现的类 TenantLifecycle（创建、删除），只认运营中心。业务系统不存租户状态。契约见 ../opscenter/code-gateway.html，整体设计见 ../opscenter/design-tenant-isolation.html",
   "component": "运营接口",
   "package": "atlas_opsapi（目标模型）",
-  "overview": "运营接口是一个嵌入式库，业务服务引用它来实现运营中心要求的契约（../opscenter/code-gateway.html）。它负责所有服务都一样的部分：路由统一挂在 /ops/v1、网关不转发；每个请求验运营中心的签名和时间窗，解析出运营人员；在 OPS 系统范围里执行；按幂等键去重并记下每个运营请求；在本地记一份租户状态，给宿主的后台工作查。系统参数、系统任务两组直接复用应用配置库和定时任务库的管理接口，只是换上本库的守卫。\n\n宿主只需要实现 TenantLifecycle：挂起和恢复时自己的后台工作怎么停、怎么接着做，以及数据库之外要删哪些东西（对象存储、向量、Pod、用户中心里登记的数据权限）。数据库里的租户数据由租户隔离库按表依赖分批删除。宿主特有的运营接口（Atlas 的份额、沙箱模板）用 ops_dependency 挂进来，同样先验签名。",
+  "overview": "运营接口库是业务系统接入运营中心的中间件，业务服务引用它来实现运营中心要求的契约（../opscenter/code-gateway.html）。它把所有系统都一样的部分做掉：接口地址统一挂在 /ops/v1、网关不转发；每个请求验运营中心的签名和时间窗，解析出运营人员；系统参数、系统任务两组直接复用应用配置库和定时任务库的管理接口，只是换上本库的守卫。\n\n租户这一块，它定好两个接口地址——创建租户、删除租户——和一个要实现的类 TenantLifecycle。新接入一个存租户数据的系统，只写两段逻辑：create（新租户在本系统要先准备什么，例如知识库记存储份额、技能装默认技能），以及删除时数据库之外还要删什么（delete_external）；再给出本系统租户表的删除顺序（purge_order），数据库里的行由基类交给租户隔离库按顺序分批删。停用、恢复不在这里：业务系统不知道租户状态，租户停用、到期、删除后，用户中心对这个租户的人一律返回无权限。本库没有自己的表（迁移链留着：0002 删掉存量库里 0001 建的本地租户状态、运营请求两张表）。",
   "elements": [
     {
       "id": "routes",
       "kind": "class",
       "name": "OpsRoutes",
       "stereotype": "对外接口",
-      "responsibility": "运营接口的路由，统一挂在 /ops/v1（网关不转发这个前缀）：租户的挂起、恢复、删除；系统参数、系统任务（直接挂应用配置库、定时任务库的管理接口，换上 OpsGuard）。宿主自己的运营接口（Atlas 的份额、沙箱模板）用 ops_dependency 挂进来，同样先过 OpsGuard。",
+      "responsibility": "运营接口的路由，统一挂在 /ops/v1（网关不转发这个前缀）：租户的创建、删除，调宿主的 TenantLifecycle，创建在这个租户的上下文里执行；系统参数、系统任务（直接挂应用配置库、定时任务库的管理接口，换上 OpsGuard）。宿主自己的运营接口（Atlas 的份额、沙箱模板，知识库的存储份额）用 dependency() 挂进来，同样先过 OpsGuard。",
       "attributes": [],
       "methods": [
         [
           "+",
-          "mount(app, lifecycle, *, config, jobs)"
+          "mount(app, guard, lifecycle, *, config, jobs) -> OpsRoutes"
         ],
         [
           "+",
-          "ops_dependency() -> Depends"
+          "dependency() -> Depends"
         ],
         [
           "+",
-          "POST /tenants/{id}/suspend | resume | purge"
+          "PUT /tenants/{id}  # 创建，body 是开通参数"
         ],
         [
           "+",
-          "GET /tenant-states"
+          "DELETE /tenants/{id} -> {deleted, remaining}"
         ]
       ],
       "at": [
         1.6,
         0
       ],
-      "source": "无：新建"
+      "source": "routes.py OpsRoutes"
     },
     {
       "id": "guard",
@@ -96,7 +96,7 @@
         -0.5,
         1.8
       ],
-      "source": "无：新建"
+      "source": "guard.py OpsGuard"
     },
     {
       "id": "cfgguard",
@@ -147,7 +147,7 @@
       "kind": "class",
       "name": "OperatorStamp",
       "stereotype": "值对象",
-      "responsibility": "请求上带来的「谁、为了哪次操作」：运营人员、租户操作 uuid、幂等键。和运营中心系统接入领域的是同一个契约。",
+      "responsibility": "请求上带来的「谁、为了哪次操作」：运营人员、租户操作 uuid、幂等键（步骤 uuid）。和运营中心系统接入领域的是同一个契约。本库只用它写日志、和运营中心的审计对上，不按幂等键去重：创建、删除本身就能重做。",
       "attributes": [
         [
           "+",
@@ -171,213 +171,56 @@
         -0.5,
         3.8
       ],
-      "source": "无：新建"
-    },
-    {
-      "id": "svc",
-      "kind": "class",
-      "name": "TenantLifecycleService",
-      "stereotype": "应用服务",
-      "responsibility": "租户生命周期在本系统这一侧的流程。都在 OPS 系统范围里执行，先查幂等记录（重复请求返回上次的结果）。挂起：本地状态改成 SUSPENDED，再调宿主的 on_suspend；恢复：调宿主的 on_resume，再改回 ACTIVE；删除：只对已挂起的租户，先删外部资源，再分批删数据库，都删完才标 PURGED。",
-      "attributes": [],
-      "methods": [
-        [
-          "+",
-          "suspend(tenant_uuid, stamp)"
-        ],
-        [
-          "+",
-          "resume(tenant_uuid, stamp)"
-        ],
-        [
-          "+",
-          "purge(tenant_uuid, stamp) -> PurgeReport"
-        ]
-      ],
-      "at": [
-        1.6,
-        2.2
-      ],
-      "source": "无：新建"
+      "source": "stamp.py OperatorStamp（签名见 signature.py）"
     },
     {
       "id": "hooks",
-      "kind": "interface",
+      "kind": "abstract",
       "name": "TenantLifecycle",
       "stereotype": "扩展点",
-      "responsibility": "宿主实现的租户生命周期：挂起时停掉这个租户的后台工作（Atlas 挂起在跑的 run、回收沙箱；知识库暂停入库），恢复时接着做；删除数据库之外的东西（对象存储里租户目录下的文件、向量集合、Pod、在用户中心登记的数据权限），每次删一批，返回还有没有剩。",
-      "attributes": [],
+      "responsibility": "宿主要实现的类，租户接入的全部逻辑都在这里。create：新租户在本系统要先准备的东西（配置、份额、默认数据），参数是运营中心开通时给本系统填的；在这个租户的上下文里执行，必须能重做（再建一次结果一样）。delete：基类实现，先调 delete_external 删数据库之外的东西（对象存储、向量、Pod），每次最多 budget 个；外部删完再按 purge_order 交给租户隔离库在 OPS 系统范围里分批删行；返回删了多少、还有没有剩。没有外部资源的系统不用覆盖 delete_external。不查租户状态：只能删已停用的租户由运营中心保证。",
+      "attributes": [
+        [
+          "#",
+          "purge_order: tuple[type, ...]  # 抽象：本系统租户表的删除顺序"
+        ]
+      ],
       "methods": [
         [
           "+",
-          "on_suspend(tenant_uuid)"
+          "create(tenant_uuid, params)  # 抽象"
         ],
         [
           "+",
-          "on_resume(tenant_uuid)"
+          "delete(tenant_uuid) -> PurgeReport"
         ],
         [
-          "+",
-          "purge_external(tenant_uuid, budget) -> PurgeReport"
+          "#",
+          "delete_external(tenant_uuid, budget) -> PurgeReport"
         ]
       ],
       "at": [
         1.6,
-        4.3
+        2.4
       ],
-      "source": "无：新建"
+      "source": "lifecycle.py TenantLifecycle（抽象基类；参数不对时宿主抛 Rejected → 409）"
     },
     {
-      "id": "ledger",
+      "id": "impl",
       "kind": "class",
-      "name": "OpsRequestLedger",
-      "stereotype": "仓储",
-      "responsibility": "读写 app_ops_request：按幂等键记下每个运营请求和结果，重复请求直接返回上次的结果。这张表也就是本系统一侧的运营记录：谁、什么时候、对哪个租户、做了什么。",
-      "attributes": [],
+      "name": "各系统的 TenantLifecycle",
+      "external": true,
+      "source": "Atlas、知识库、技能、MCP 网关、模型平台、记忆服务",
       "methods": [
         [
           "+",
-          "seen(idempotency_key) -> OpsRequest | None"
-        ],
-        [
-          "+",
-          "record(stamp, action, tenant_uuid, result)"
+          "create · delete_external · purge_order"
         ]
       ],
       "at": [
-        -0.3,
-        5.8
-      ],
-      "source": "无：新建"
-    },
-    {
-      "id": "staterepo",
-      "kind": "class",
-      "name": "TenantStateRepository",
-      "stereotype": "仓储",
-      "responsibility": "读写 app_tenant_state。保存时按版本号 CAS。",
-      "attributes": [],
-      "methods": [
-        [
-          "+",
-          "get(tenant_uuid) -> TenantState"
-        ],
-        [
-          "+",
-          "save(state)"
-        ]
-      ],
-      "at": [
-        3.6,
-        4.3
-      ],
-      "source": "无：新建"
-    },
-    {
-      "id": "gate",
-      "kind": "class",
-      "name": "TenantGate",
-      "stereotype": "应用服务",
-      "responsibility": "给宿主的后台工作用：开始之前问一句这个租户还能不能用（Run 执行器接 run、续跑，入库任务取文档，记忆补记）。查本地状态，进程内缓存几秒；没有记录 = ACTIVE。",
-      "attributes": [],
-      "methods": [
-        [
-          "+",
-          "is_active(tenant_uuid) -> bool"
-        ],
-        [
-          "+",
-          "require_active(tenant_uuid)"
-        ]
-      ],
-      "at": [
-        5.5,
-        4.3
-      ],
-      "source": "无：新建"
-    },
-    {
-      "id": "state",
-      "kind": "class",
-      "name": "TenantState",
-      "stereotype": "聚合根",
-      "responsibility": "一个租户在本系统里的状态。只能按 ACTIVE → SUSPENDED → PURGING → PURGED 走，SUSPENDED 可以回到 ACTIVE；PURGING 以后不能恢复。PURGED 的行保留，晚到的请求照样被拒。",
-      "attributes": [
-        [
-          "+",
-          "tenant_uuid: UUID"
-        ],
-        [
-          "+",
-          "status: TenantStatus"
-        ],
-        [
-          "+",
-          "changed_at: datetime"
-        ],
-        [
-          "+",
-          "operation_uuid: UUID | None"
-        ],
-        [
-          "-",
-          "version: int"
-        ]
-      ],
-      "methods": [
-        [
-          "+",
-          "suspend()"
-        ],
-        [
-          "+",
-          "resume()"
-        ],
-        [
-          "+",
-          "start_purge()"
-        ],
-        [
-          "+",
-          "finish_purge()"
-        ]
-      ],
-      "at": [
-        3.6,
-        6.0
-      ],
-      "source": "无：新建"
-    },
-    {
-      "id": "status",
-      "kind": "enum",
-      "name": "TenantStatus",
-      "stereotype": "值对象",
-      "responsibility": "租户在本系统里的状态。",
-      "attributes": [
-        [
-          "",
-          "ACTIVE"
-        ],
-        [
-          "",
-          "SUSPENDED"
-        ],
-        [
-          "",
-          "PURGING"
-        ],
-        [
-          "",
-          "PURGED"
-        ]
-      ],
-      "methods": [],
-      "at": [
-        5.5,
-        6.0
-      ],
-      "source": "无：新建"
+        1.6,
+        5.1
+      ]
     },
     {
       "id": "purge",
@@ -393,8 +236,8 @@
         ]
       ],
       "at": [
-        7.4,
-        1.8
+        4.3,
+        2.4
       ],
       "source": "租户隔离库 atlas_tenancy",
       "external": true
@@ -404,17 +247,17 @@
       "kind": "class",
       "name": "TenantScope",
       "stereotype": "应用服务",
-      "responsibility": "租户隔离库：进入 OPS 系统范围。",
+      "responsibility": "租户隔离库：创建时进入这个租户；删行时进入 OPS 系统范围。",
       "attributes": [],
       "methods": [
         [
           "+",
-          "system(SystemReason.OPS)"
+          "enter(tenant_uuid) · system(SystemReason.OPS)"
         ]
       ],
       "at": [
-        7.4,
-        3.1
+        4.3,
+        0.8
       ],
       "source": "租户隔离库 atlas_tenancy",
       "external": true
@@ -429,9 +272,15 @@
     },
     {
       "from": "routes",
-      "to": "svc",
+      "to": "hooks",
       "type": "uses",
-      "description": "挂起、恢复、删除"
+      "description": "创建、删除"
+    },
+    {
+      "from": "routes",
+      "to": "scope",
+      "type": "uses",
+      "description": "创建时进入这个租户"
     },
     {
       "from": "guard",
@@ -450,90 +299,47 @@
       "description": "解析出"
     },
     {
-      "from": "svc",
-      "to": "hooks",
-      "type": "uses",
-      "description": "调宿主"
-    },
-    {
-      "from": "svc",
-      "to": "ledger",
-      "type": "uses",
-      "description": "去重、记录"
-    },
-    {
-      "from": "svc",
-      "to": "staterepo",
-      "type": "uses",
-      "description": "改状态"
-    },
-    {
-      "from": "svc",
+      "from": "hooks",
       "to": "purge",
       "type": "uses",
-      "description": "外部删完后删数据库"
+      "description": "外部删完后分批删行"
     },
     {
-      "from": "svc",
-      "to": "scope",
-      "type": "uses",
-      "description": "在 OPS 系统范围里执行"
-    },
-    {
-      "from": "gate",
-      "to": "staterepo",
-      "type": "uses",
-      "description": "查状态（缓存几秒）"
-    },
-    {
-      "from": "staterepo",
-      "to": "state",
-      "type": "uses",
-      "description": "读写"
-    },
-    {
-      "from": "state",
-      "to": "status",
-      "type": "association",
-      "description": "状态"
+      "from": "impl",
+      "to": "hooks",
+      "type": "extends"
     }
   ],
   "capabilities": [
     {
       "name": "挂上运营接口",
-      "entry": "OpsRoutes.mount(app, lifecycle, config=, jobs=)",
+      "entry": "OpsRoutes.mount(app, guard, lifecycle, config=, jobs=)",
       "callers": "各业务服务启动时",
-      "description": "租户生命周期、系统参数、系统任务三组一次挂好"
+      "description": "租户的创建删除、系统参数、系统任务三组一次挂好"
     },
     {
       "name": "挂宿主自己的运营接口",
-      "entry": "ops_dependency()",
-      "callers": "Atlas（份额、沙箱模板）、知识库（存储用量）",
+      "entry": "ops.dependency()",
+      "callers": "Atlas（份额、沙箱模板）、知识库（存储份额）",
       "description": "依赖里先验签名，拿到 OperatorStamp"
     },
     {
-      "name": "挂起、恢复租户",
-      "entry": "POST /ops/v1/tenants/{id}/suspend | resume",
-      "callers": "运营中心（租户操作的步骤）",
-      "description": "幂等；挂起后宿主的后台工作经 TenantGate 立即停手"
+      "name": "创建租户",
+      "entry": "PUT /ops/v1/tenants/{id}",
+      "callers": "运营中心（开通租户、给新登记的系统补建）",
+      "description": "在这个租户的上下文里调宿主的 create；能重做"
     },
     {
       "name": "删除租户数据",
-      "entry": "POST /ops/v1/tenants/{id}/purge",
-      "callers": "运营中心（关闭租户的步骤）",
-      "description": "只对已挂起的；先外部后数据库，分批，返回还有没有剩"
+      "entry": "DELETE /ops/v1/tenants/{id}",
+      "callers": "运营中心（关闭租户）",
+      "description": "先外部后数据库，分批，返回还有没有剩；不查租户状态"
     },
     {
       "name": "系统参数、系统任务",
       "entry": "/ops/v1/configs、/ops/v1/jobs",
       "callers": "运营中心（系统设置）",
       "description": "就是应用配置库、定时任务库的管理接口，守卫换成 OpsGuard"
-    },
-    {
-      "name": "后台工作前查租户",
-      "entry": "TenantGate.is_active / require_active",
-      "callers": "Run 执行器、入库任务、记忆补记",
-      "description": "查本地状态，不问用户中心"
     }
   ],
   "decisions": [
@@ -546,12 +352,16 @@
       "reason": "参数和任务的管理逻辑（修订、回滚、任务状态）已经在两个库里；各服务再写一遍就会有六份不一样的实现。"
     },
     {
-      "decision": "在本地记一份租户状态，宿主的后台工作开始前查它",
-      "reason": "停用以后，用户中心只挡得住新的用户请求；run 续跑、入库、记忆补记这些后台工作没有用户请求，挡不住。本地记一份，停用通知一到立即生效，也不用每次去问用户中心。"
+      "decision": "租户接入只有两个接口地址和一个要实现的类：创建、删除",
+      "reason": "新接入一个系统时，要做的事一眼看清：继承 TenantLifecycle 写创建和删除，再到运营中心登记。地址、签名、租户上下文、分批删行都由本库做，各系统不会各写一套。"
     },
     {
-      "decision": "状态只能 ACTIVE → SUSPENDED → PURGING → PURGED，开始删除以后不能恢复；PURGED 的行保留",
-      "reason": "删了一半的租户不能再放人进来；保留 PURGED 的行，晚到的请求、重放的旧消息照样被拒。"
+      "decision": "不提供停用、恢复，也不存租户状态",
+      "reason": "租户归用户中心管。业务系统只认角色权限和数据权限，租户停用、到期、删除后，用户中心对这个租户的人一律返回无权限。本地再存一份状态就要和用户中心同步，停用还得逐个系统通知，哪个没通知到就不一致。"
+    },
+    {
+      "decision": "创建、删除都必须能重做；本库不按幂等键去重，不记运营请求",
+      "reason": "运营中心超时后会重调同一步。创建按租户 uuid 写数据，再建一次结果一样；删除每次删剩下的，删完返回 remaining=false。重做本身安全，就不需要一张记录表。"
     },
     {
       "decision": "删除先删外部资源，再删数据库",
@@ -560,145 +370,6 @@
     {
       "decision": "每次删除都有预算（条数和时长），返回还有没有剩",
       "reason": "一个租户的数据可能很多，一次请求删不完；运营中心按「还有剩」重做，和失败重试走同一条路。"
-    },
-    {
-      "decision": "幂等键落库，重复请求返回上次的结果；这张表也作为本系统一侧的运营记录",
-      "reason": "运营中心调用超时后会重做同一步；记下结果，对方重做时直接返回，不会做两遍。表里有运营人员和操作 uuid，和运营中心的审计能对上，不需要另建一张审计表。"
-    }
-  ],
-  "schemaNote": "表建在宿主自己的库里，表名前缀 app_，和应用配置库、定时任务库一致。主键约定：id 自增，只在库内使用。两张表都不继承 TenantOwned：它们本来就在系统范围里读写。时间一律 UTC。",
-  "tables": [
-    {
-      "name": "app_tenant_state",
-      "description": "对应聚合根 TenantState",
-      "at": [
-        0,
-        0
-      ],
-      "columns": [
-        {
-          "name": "id",
-          "type": "BigInteger",
-          "key": "PK",
-          "default": "自增"
-        },
-        {
-          "name": "tenant_uuid",
-          "type": "UUIDType",
-          "key": "UK",
-          "description": "用户中心的租户 uuid；没有行 = ACTIVE"
-        },
-        {
-          "name": "status",
-          "type": "String(16)",
-          "description": "ACTIVE | SUSPENDED | PURGING | PURGED"
-        },
-        {
-          "name": "operation_uuid",
-          "type": "UUIDType",
-          "nullable": true,
-          "description": "最近一次改状态的运营操作"
-        },
-        {
-          "name": "version",
-          "type": "Integer",
-          "default": "0",
-          "description": "保存时 CAS"
-        },
-        {
-          "name": "changed_at",
-          "type": "UTCDateTime",
-          "default": "now()"
-        }
-      ],
-      "indexes": [
-        {
-          "name": "uk_app_tenant_state_tenant",
-          "columns": [
-            "tenant_uuid"
-          ],
-          "unique": true
-        }
-      ]
-    },
-    {
-      "name": "app_ops_request",
-      "description": "运营请求记录（幂等、追溯）",
-      "at": [
-        1.6,
-        0
-      ],
-      "columns": [
-        {
-          "name": "id",
-          "type": "BigInteger",
-          "key": "PK",
-          "default": "自增"
-        },
-        {
-          "name": "idempotency_key",
-          "type": "UUIDType",
-          "key": "UK",
-          "nullable": true,
-          "description": "步骤 uuid；只读请求不记"
-        },
-        {
-          "name": "action",
-          "type": "String(64)",
-          "description": "如 tenant.suspend、tenant.purge、config.set、quota.set"
-        },
-        {
-          "name": "tenant_uuid",
-          "type": "UUIDType",
-          "nullable": true,
-          "references": "app_tenant_state.tenant_uuid",
-          "referenceOptional": true
-        },
-        {
-          "name": "operator_uuid",
-          "type": "UUIDType",
-          "nullable": true,
-          "description": "运营中心的运营账号"
-        },
-        {
-          "name": "operator_name",
-          "type": "String(64)",
-          "nullable": true
-        },
-        {
-          "name": "operation_uuid",
-          "type": "UUIDType",
-          "nullable": true,
-          "description": "运营中心的租户操作"
-        },
-        {
-          "name": "result",
-          "type": "JSONType",
-          "nullable": true,
-          "description": "返回给运营中心的结果（只有数字和状态）"
-        },
-        {
-          "name": "created_at",
-          "type": "UTCDateTime",
-          "default": "now()"
-        }
-      ],
-      "indexes": [
-        {
-          "name": "uk_app_ops_request_key",
-          "columns": [
-            "idempotency_key"
-          ],
-          "unique": true
-        },
-        {
-          "name": "ix_app_ops_request_tenant",
-          "columns": [
-            "tenant_uuid",
-            "created_at"
-          ]
-        }
-      ]
     }
   ]
 }

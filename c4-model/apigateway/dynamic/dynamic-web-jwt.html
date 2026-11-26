@@ -1,0 +1,909 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dynamic View</title>
+<style>
+  body { margin: 0; background: #fff; color: #444; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { padding: 24px 32px 48px; }
+  svg { display: block; max-width: 100%; height: auto; }
+  h2 { margin: 40px 0 12px; font-size: 15px; font-weight: 600; color: #666; }
+  #c4-report { margin: 0 0 24px; padding: 12px 16px 12px 36px; border: 1px solid #e0b4b4; background: #fff6f6; font-size: 14px; line-height: 1.6; }
+  #c4-report li[data-level="error"] { color: #b00020; }
+  #c4-report li[data-level="warn"] { color: #8a5a00; }
+  #c4-details { max-width: 1280px; }
+  #c4-details article { margin: 0 0 28px; scroll-margin-top: 16px; }
+  #c4-details article:target h3 { background: #fff8d6; }
+  #c4-details h3 { margin: 0 0 8px; padding: 2px 4px; font-size: 15px; font-weight: 600; color: #333; }
+  #c4-details h3 .tech { margin-left: 8px; font-size: 13px; font-weight: 400; color: #888; }
+  #c4-details p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #c4-details table { width: 100%; margin: 0 0 8px; border-collapse: collapse; table-layout: fixed; font-size: 13px; line-height: 1.6; }
+  #c4-details th, #c4-details td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+  #c4-details th { background: #f6f8fa; font-weight: 600; }
+  #c4-details th:nth-child(1) { width: 14%; }
+  #c4-details th:nth-child(2) { width: 46%; }
+  #c4-details td.sample, #c4-details pre { font-family: Menlo, Consolas, "PingFang SC", monospace; }
+  #c4-details td.sample { word-break: break-all; }
+  #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
+  svg a { cursor: pointer; }
+  /* 原理图：手写的静态图，不经渲染器（参照 c4-model/knowledge/dynamic/） */
+  #principle { max-width: 1280px; }
+  #principle h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  #principle p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #principle code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  #principle ol { margin: 8px 0 0; padding: 0; list-style: none; }
+  #principle ol li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  #principle ol li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  #principle table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  #principle th, #principle td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  #principle th { background: #f6f8fa; font-weight: 600; }
+  #principle th:first-child { width: 28%; }
+  #principle svg { margin: 8px 0 4px; }
+  #principle svg text { font-size: 13px; fill: #444; }
+  #principle svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  #principle svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  #principle svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  #principle svg .t-key { font-size: 12px; fill: #888; }
+  #principle svg .t-lab { font-size: 12px; fill: #666; }
+  #principle svg .t-hot { font-size: 12px; fill: #d9480f; }
+  #principle svg .t-mute { font-size: 12px; fill: #aaa; }
+  #principle svg .t-ghost { font-size: 14px; font-weight: 600; fill: #888; }
+  #principle svg .hot { fill: #d9480f; }
+  #principle svg .mid { text-anchor: middle; }
+  #principle svg .end { text-anchor: end; }
+  #principle svg .b { font-weight: 700; }
+  #principle svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  #principle svg .node-hot { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.6; }
+  #principle svg .head { fill: #f6f8fa; stroke: none; }
+  #principle svg .cell { fill: #fff; stroke: #bbb; stroke-width: 1.2; }
+  #principle svg .band-a { fill: #eef4fb; stroke: #1168bd; stroke-width: 1.2; }
+  #principle svg .band-b { fill: #fff3ea; stroke: #d9480f; stroke-width: 1.2; }
+  #principle svg .sep { stroke: #e3e3e3; stroke-width: 1; }
+  #principle svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .ghost { fill: #fafafa; stroke: #aaa; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  #principle svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  #principle svg .e-dash { fill: none; stroke: #444; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.2; }
+  #principle svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .e-link { fill: none; stroke: #d9480f; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  #principle svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  #principle svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
+</style>
+</head>
+<body>
+<!--
+  只改下面这段 JSON；渲染器不用动。字段说明见 dynamic/RULES.md 的「数据格式」。
+-->
+<script type="application/json" id="c4-model">
+{
+  "title": "动态图：API 网关 - Web 登录、Cookie 载 JWT 本地验签与无感刷新",
+  "description": "目标模型（组件按 component-gateway.html 拆）。Web 用 15 分钟 Ed25519 访问 JWT（内含 sub=uid、tid=租户）+ 14 天刷新令牌，都放 HttpOnly Cookie；登录、刷新走 passthrough 路由直接转给用户中心；业务请求在 OpenResty 的 access 阶段由 Lua 校 CSRF、本地验签，不连 Redis、不调用户中心；到期由前端单飞刷新；登录接口回 401 时网关按 IP 记失败，太多就封这个 IP",
+  "boundaries": [
+    {
+      "id": "apigw",
+      "name": "API 网关",
+      "type": "Software System"
+    },
+    {
+      "id": "gwB",
+      "name": "网关服务",
+      "type": "Container: OpenResty 1.27（宿主机 systemd 进程）",
+      "in": "apigw"
+    }
+  ],
+  "participants": [
+    {
+      "id": "webUser",
+      "kind": "person",
+      "name": "员工（Web 浏览器）",
+      "color": "#297e06",
+      "tag": "Web 员工"
+    },
+    {
+      "id": "edge",
+      "kind": "component",
+      "name": "TLS 与边界防护",
+      "technology": "Nginx server 块 + 路由表",
+      "in": "gwB"
+    },
+    {
+      "id": "ipBan",
+      "kind": "component",
+      "name": "登录失败封禁",
+      "technology": "Lua（rewrite_by_lua + log_by_lua）",
+      "in": "gwB"
+    },
+    {
+      "id": "access",
+      "kind": "component",
+      "name": "访问阶段编排",
+      "technology": "Lua（access_by_lua）",
+      "in": "gwB"
+    },
+    {
+      "id": "jwtAuth",
+      "kind": "component",
+      "name": "JWT 认证器",
+      "technology": "Lua + lua-resty-openssl",
+      "in": "gwB"
+    },
+    {
+      "id": "proxy",
+      "kind": "component",
+      "name": "流式转发",
+      "technology": "Nginx proxy_pass + 档位",
+      "in": "gwB"
+    },
+    {
+      "id": "usercenter",
+      "kind": "system",
+      "name": "用户中心",
+      "color": "#bf101d"
+    },
+    {
+      "id": "ucRedis",
+      "kind": "container",
+      "name": "刷新令牌库（用户中心）",
+      "technology": "Redis 7",
+      "shape": "database"
+    },
+    {
+      "id": "bizServices",
+      "kind": "system",
+      "name": "业务应用群",
+      "color": "#ed8609"
+    }
+  ],
+  "messages": [
+    {
+      "from": "webUser",
+      "to": "edge",
+      "description": "提交企业代码、账号与密码登录",
+      "technology": "JSON/HTTPS（POST /uc/api/v1/auth/login）",
+      "details": {
+        "note": "server 级先过边界：路径正常、外部身份头清掉；命中服务 uc 的 /uc/api/v1/auth/login（passthrough，标了 login；刷新、登出走 /uc/api/v1/auth/ 那条）。",
+        "items": [
+          [
+            "tenant / account / password",
+            "登录表单（单租户时 tenant 可省）",
+            "\"xinghe\" / \"zhangsan\" / \"***\""
+          ]
+        ]
+      }
+    },
+    {
+      "from": "edge",
+      "to": "ipBan",
+      "description": "进 location 先查封禁表：这个 IP 没被封，放行",
+      "details": {
+        "note": "所有站点、所有请求都查一次共享内存；被封的 IP 在这里就返回 403 IP_BLOCKED，消息里写还剩几分钟。"
+      }
+    },
+    {
+      "from": "edge",
+      "to": "proxy",
+      "description": "passthrough 路由：不进 access 阶段，不验 JWT、不写身份头，直接转发"
+    },
+    {
+      "from": "proxy",
+      "to": "usercenter",
+      "description": "转发登录",
+      "technology": "JSON/HTTP（POST /api/v1/auth/login） · 经内部 Ingress，Host: uc.internal.techstz.com"
+    },
+    {
+      "from": "usercenter",
+      "to": "ucRedis",
+      "description": "校 Argon2 密码通过后写入 14 天 Refresh Token 哈希",
+      "technology": "RESP/TCP（HSET gw:rt:<sha256> + EXPIRE 1209600）",
+      "details": {
+        "note": "不再存 Web Session 表，只存 Refresh Token 的 SHA-256 哈希；Access JWT 无状态不入库。",
+        "items": [
+          [
+            "Redis Key",
+            "SHA-256(refresh_token)",
+            "gw:rt:9f2c…a81d"
+          ],
+          [
+            "Fields",
+            "uid · tenant_id · abs_exp",
+            "<user_uuid> / <tenant_uuid> / +14d"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "usercenter",
+      "to": "webUser",
+      "description": "Ed25519 私钥签发 15m Access JWT，通过三个分级 Cookie 下发",
+      "technology": "HTTP Set-Cookie（经网关透传）",
+      "details": {
+        "note": "双 Path 隔离是 Web 用 JWT 最关键的安全细节：uc_access 随全站请求携带；uc_refresh 限定 Path=/uc/api/v1/auth，平时所有业务请求根本不会发送刷新令牌；两者均设 HttpOnly 防 XSS。",
+        "items": [
+          [
+            "uc_access",
+            "15m Access JWT（含 sub=uid, tid, mcp）；HttpOnly; Secure; SameSite=Lax; Path=/",
+            "eyJhbGciOiJFZERTQS…"
+          ],
+          [
+            "uc_refresh",
+            "14d Refresh Token；HttpOnly; Secure; SameSite=Strict; Path=/uc/api/v1/auth",
+            "rt_8xK2…"
+          ],
+          [
+            "uc_csrf",
+            "24 字节随机串（非 HttpOnly，供 JS 读入 X-UC-CSRF）；Secure; SameSite=Lax; Path=/",
+            "c9f1…"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "proxy",
+      "to": "ipBan",
+      "description": "log 阶段：登录接口这次回 200，不记；回 401（账号或密码错）就给这个 IP 记一次失败",
+      "details": {
+        "note": "10 分钟内满 20 次就封这个 IP 30 分钟；登录成功也不清零。别的 401（比如下面的令牌过期、刷新失败）不数。"
+      }
+    },
+    {
+      "from": "webUser",
+      "to": "edge",
+      "description": "发起业务写请求（自动带 uc_access Cookie + X-UC-CSRF，不带 uc_refresh）",
+      "technology": "JSON/HTTPS（POST /atlas/v1/threads/{id}/runs）",
+      "details": {
+        "note": "浏览器同源自动附带 uc_access 与 uc_csrf Cookie（uc_refresh 因 Path 不匹配不会发出）；前端 http.ts 照旧把 uc_csrf 写入 X-UC-CSRF。",
+        "items": [
+          [
+            "Cookie",
+            "浏览器同源自动携带",
+            "uc_access=<jwt>; uc_csrf=<csrf>"
+          ],
+          [
+            "X-UC-CSRF",
+            "前端从 document.cookie 读取写入",
+            "<csrf>"
+          ],
+          [
+            "Origin / Sec-Fetch-Site",
+            "浏览器自动附加",
+            "https://atlas.example.com / same-origin"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "edge",
+      "to": "access",
+      "description": "命中服务 atlas 的后端路由 /atlas/v1/（auth、DEFAULT 档位），进入 access 阶段",
+      "details": {
+        "note": "走到这里之前：畸形路径已经 400、禁区段已经 404、外部带来的 X-Uid 等已经清掉。"
+      }
+    },
+    {
+      "from": "access",
+      "to": "jwtAuth",
+      "description": "认证：Cookie 载体的写请求先校 CSRF，再验签",
+      "details": {
+        "note": "Origin 必须是本站；Cookie uc_csrf 与请求头 X-UC-CSRF 等长逐字节比较。手机的 Bearer 请求不校 CSRF。"
+      }
+    },
+    {
+      "from": "jwtAuth",
+      "to": "jwtAuth",
+      "description": "只认 alg=EdDSA，按 kid 取共享内存里的公钥本地验签，取出 sub、tid、mcp",
+      "details": {
+        "note": "不连 Redis、不调用户中心：载荷里的 sub 就是 X-Uid，tid 就是 X-Tenant-Id；同时核对 iss、aud、exp（允许 30 秒偏差），mcp 为真且路由不允许改密前使用就 403。",
+        "example": "{\n  \"iss\": \"atlas-usercenter\",\n  \"aud\": \"atlas-gateway\",\n  \"sub\": \"3f8a1c20-...\",  // → 直接写入 X-Uid\n  \"tid\": \"7d1b9e44-...\",  // → 直接写入 X-Tenant-Id\n  \"mcp\": false,\n  \"iat\": 1795000000,\n  \"exp\": 1795000900       // 15 分钟\n}"
+      }
+    },
+    {
+      "from": "access",
+      "to": "proxy",
+      "description": "uid、租户写进 $gw_uid、$gw_tenant，进入转发"
+    },
+    {
+      "from": "proxy",
+      "to": "bizServices",
+      "description": "写 X-Uid / X-Tenant-Id / X-Caller-App: gateway，去掉 Cookie 和 Authorization",
+      "technology": "JSON/HTTP（POST /v1/threads/{id}/runs） · 经内部 Ingress，Host: atlas.internal.techstz.com",
+      "details": {
+        "note": "下游不知道认证方式变了：照旧按 X-Uid、X-Tenant-Id 向用户中心取授权快照；账号或租户已停用时在这里拿到 403。"
+      }
+    },
+    {
+      "from": "bizServices",
+      "to": "webUser",
+      "description": "返回 202 {run_id}（经网关透传）",
+      "technology": "JSON/HTTPS"
+    },
+    {
+      "from": "webUser",
+      "to": "edge",
+      "description": "15 分钟后访问 JWT 过期：网关本地判定，返回 401 TOKEN_EXPIRED",
+      "technology": "JSON/HTTPS → 401",
+      "details": {
+        "note": "JWT 认证器判 exp，不问用户中心；错误体是 JSON，带 request_id。"
+      }
+    },
+    {
+      "from": "webUser",
+      "to": "usercenter",
+      "description": "前端单飞拦截 401 自动无感刷新（只有这个路径会带上 uc_refresh；经 passthrough 路由）",
+      "technology": "JSON/HTTPS（POST /uc/api/v1/auth/refresh，带 X-UC-CSRF）",
+      "details": {
+        "note": "用户全程无感知、不跳登录页；前端 HTTP 封装用单飞 Promise 锁合并同一时刻多个 401，刷新成功后自动重放原请求；只有刷新也 401（14 天到期或账号/租户被停用）才跳登录页 /uc-ui/login。"
+      }
+    },
+    {
+      "from": "usercenter",
+      "to": "ucRedis",
+      "description": "原子核验并轮换旧 Refresh Token，复核 PG 用户与租户仍有效后写入新 RT",
+      "technology": "RESP/TCP（Lua 原子消费旧 gw:rt:<old> + 写新 gw:rt:<new>）"
+    },
+    {
+      "from": "usercenter",
+      "to": "webUser",
+      "description": "下发全新 15m uc_access 与新 uc_refresh Cookie（前端重放原请求）",
+      "technology": "HTTP Set-Cookie"
+    },
+    {
+      "from": "webUser",
+      "to": "usercenter",
+      "description": "主动登出：经网关透传，用户中心删 Redis gw:rt:<sha256> 并置空全部三个 Cookie",
+      "technology": "JSON/HTTPS（POST /uc/api/v1/auth/logout）"
+    }
+  ]
+}
+</script>
+
+<main>
+  <ul id="c4-report" hidden></ul>
+  <svg id="c4-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <section id="c4-details" hidden></section>
+  <h2>Diagram key</h2>
+  <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <section id="principle">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <marker id="pr-a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+        <marker id="pr-h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+        <marker id="pr-m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+      </defs>
+    </svg>
+    <h2>Web JWT 原理：JWT 直接携带 uid/租户、HttpOnly 双 Path Cookie、热路径零 Redis</h2>
+    <p>一句话：<b>JWT 的 Payload 本身就携带 <code>sub</code>（uid）和 <code>tid</code>（租户）</b>，网关持用户中心 Ed25519 公钥在本地离线验签后即可直接写入 <code>X-Uid</code> 与 <code>X-Tenant-Id</code>——热路径<b>零 Redis 查询、零 UserCenter 调用、无黑名单、无 Pub/Sub</b>。Web 端为了防 XSS 不放 <code>localStorage</code>，而是把 Access JWT 与 Refresh Token 分装在两个不同 <code>Path</code> 的 <code>HttpOnly</code> Cookie 中。下面三张图讲清：JWT 解包到内网头、Web 双 Path Cookie 与 CSRF 防线、无 Pub/Sub 安全闭环。</p>
+
+    <h3>图 1　JWT 结构与网关“零 Redis”离线解包（直接取 uid 与租户）</h3>
+    <svg width="1240" viewBox="0 0 1240 275" role="img" aria-label="JWT 结构与离线解包">
+      <rect class="node" x="20" y="34" width="210" height="130" rx="4"/>
+      <text class="t-name" x="125" y="64">用户中心</text>
+      <text class="t-hot mid b" x="125" y="88">独占 Ed25519 私钥</text>
+      <text class="t-sub" x="125" y="112">登录 / 刷新时签发</text>
+      <text class="t-sub" x="125" y="132">15 分钟短期有效</text>
+      <text class="t-sub" x="125" y="152">/.well-known/jwks.json</text>
+
+      <path class="e-hot" d="M230 98 H288" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="259" y="88">签发</text>
+
+      <rect class="node-hot" x="290" y="24" width="430" height="150" rx="6"/>
+      <text class="t-name b" x="505" y="50">Access JWT（三段式，体积 &lt; 350 字节）</text>
+      <rect class="cell" x="308" y="64" width="394" height="28" rx="3"/>
+      <text class="t-lab" x="320" y="83">Header：{"alg": "EdDSA", "kid": "k-2026-11"}</text>
+      <rect class="band-b" x="308" y="98" width="394" height="36" rx="3"/>
+      <text class="t-hot b" x="320" y="121">Payload：sub=uid · tid=tenant_id · mcp · iss · aud · exp</text>
+      <rect class="cell" x="308" y="140" width="394" height="24" rx="3"/>
+      <text class="t-lab" x="320" y="156">Signature：Ed25519(Header.Payload, PrivateKey) —— 不可篡改</text>
+
+      <path class="e-hot" d="M720 98 H788" marker-end="url(#pr-h)"/>
+      <text class="t-hot mid" x="754" y="88">离线验签</text>
+
+      <rect class="band-a" x="790" y="28" width="430" height="142" rx="6"/>
+      <text class="t-head" x="808" y="54">atlas-gateway 本地 CPU 验签（0 次 Redis）</text>
+      <text class="t-lab" x="808" y="78">① 按 kid 从本地 KeyRing 取公钥校验 Ed25519 签名</text>
+      <text class="t-lab" x="808" y="98">② 校验 iss / aud / exp（≤15m）与 mcp（须改密白名单）</text>
+      <text class="t-hot b" x="808" y="122">③ 取出 sub → X-Uid、tid → X-Tenant-Id、X-Caller-App: gateway</text>
+      <text class="t-sub" x="1005" y="152">转发业务服务前剥离原始 JWT，下游完全无感</text>
+
+      <rect class="cell" x="20" y="198" width="1200" height="58" rx="4"/>
+      <text class="t-head" x="38" y="222">注意：JWT Payload 只是 Base64URL 编码（非加密），因此只放最小身份集</text>
+      <text class="t-lab" x="38" y="244">只放 UUID 形式的 sub、tid 与布尔 mcp；绝不放密码、手机号、敏感资料，也不放角色/操作码列表（权限由下游向用户中心实时查授权快照）</text>
+
+      <g class="badge"><circle cx="290" cy="24" r="10"/><text x="290" y="28">1</text></g>
+      <g class="badge"><circle cx="790" cy="28" r="10"/><text x="790" y="32">2</text></g>
+      <g class="badge"><circle cx="20" cy="198" r="10"/><text x="20" y="202">3</text></g>
+    </svg>
+    <ol>
+      <li><span class="n">1</span>是的，JWT 明确包含 <code>sub</code>（即 <code>uid</code>）和 <code>tid</code>（租户 UUID），且受 Ed25519 非对称数字签名保护——客户端看得到但绝对改不了。</li>
+      <li><span class="n">2</span>网关收到请求后只用内存里的公钥做一次微秒级 Ed25519 验签，直接把 <code>sub</code>/<code>tid</code> 写入内网头转发，彻底告别热路径查 Redis 或调 UserCenter。</li>
+      <li><span class="n">3</span>不往 JWT 里塞细粒度权限，既避免 Header 膨胀，也保证管理员调整角色/数据权限后立即在下游生效。</li>
+    </ol>
+
+    <h3>图 2　Web 端“双 Path HttpOnly Cookie”与 CSRF 防线（不用 localStorage）</h3>
+    <svg width="1240" viewBox="0 0 1240 275" role="img" aria-label="Web 双 Path HttpOnly Cookie 与 CSRF">
+      <rect class="node-hot" x="20" y="32" width="370" height="114" rx="4"/>
+      <text class="t-name b" x="205" y="58">Cookie 1：uc_access（15m Access JWT）</text>
+      <text class="t-hot mid" x="205" y="82">HttpOnly · Secure · SameSite=Lax · Path=/</text>
+      <text class="t-sub" x="205" y="106">所有 /atlas-api/*、/skill-api/* 等请求自动携带</text>
+      <text class="t-sub" x="205" y="128">JS 不可读 → XSS 偷不走 JWT</text>
+
+      <rect class="node" x="430" y="32" width="380" height="114" rx="4"/>
+      <text class="t-name b" x="620" y="58">Cookie 2：uc_refresh（14d Refresh Token）</text>
+      <text class="t-hot mid" x="620" y="82">HttpOnly · Secure · SameSite=Strict · Path=/uc/api/v1/auth</text>
+      <text class="t-sub" x="620" y="106">平时业务请求根本不会发出，只有刷新/登出接口才带</text>
+      <text class="t-sub" x="620" y="128">Redis 仅存 gw:rt:{sha256}，每次刷新自动轮换</text>
+
+      <rect class="node" x="850" y="32" width="370" height="114" rx="4"/>
+      <text class="t-name b" x="1035" y="58">Cookie 3：uc_csrf（双提交防跨站）</text>
+      <text class="t-lab mid" x="1035" y="82">非 HttpOnly · Secure · SameSite=Lax · Path=/</text>
+      <text class="t-sub" x="1035" y="106">前端 JS 读出塞进 X-UC-CSRF 请求头</text>
+      <text class="t-sub" x="1035" y="128">仅写请求校验 Origin 同源 + Cookie==Header</text>
+
+      <rect class="band-a" x="20" y="172" width="1200" height="82" rx="4"/>
+      <text class="t-head" x="38" y="198">为什么 Web 端把 JWT 放 HttpOnly Cookie，而不是存 localStorage？</text>
+      <text class="t-lab" x="38" y="222">① 放 localStorage 一旦页面任意依赖出现 XSS，攻击者一行 JS 就能把 Access JWT 和 Refresh Token 全部偷走并长期离线冒用；</text>
+      <text class="t-lab" x="38" y="242">② 放 HttpOnly Cookie 彻底隔离 JS 读取，同源多标签页天然共享；再配合 Path 隔离与网关统一 CSRF 校验，安全级别与传统 Session 持平。</text>
+
+      <g class="badge"><circle cx="20" cy="32" r="10"/><text x="20" y="36">1</text></g>
+      <g class="badge"><circle cx="430" cy="32" r="10"/><text x="430" y="36">2</text></g>
+      <g class="badge"><circle cx="850" cy="32" r="10"/><text x="850" y="36">3</text></g>
+    </svg>
+
+    <h3>图 3　无黑名单、无 Redis Pub/Sub 的安全闭环与容灾收益</h3>
+    <svg width="1240" viewBox="0 0 1240 220" role="img" aria-label="无 Pub/Sub 安全闭环">
+      <rect class="node-hot" x="20" y="32" width="380" height="156" rx="6"/>
+      <text class="t-name b" x="210" y="60">闸门 1：15 分钟内（业务权限实时兜底）</text>
+      <text class="t-lab" x="38" y="88">· 租户停用 / 到期、员工离职停用后：</text>
+      <text class="t-lab" x="38" y="110">· 即使手里的 Access JWT 还没满 15 分钟，</text>
+      <text class="t-hot b" x="38" y="132">· 下游问用户中心 /open/v1 授权快照直接返 403</text>
+      <text class="t-sub" x="210" y="166">业务数据与执行权限零漏放</text>
+
+      <path class="e-hot" d="M400 110 H438" marker-end="url(#pr-h)"/>
+
+      <rect class="node-hot" x="440" y="32" width="380" height="156" rx="6"/>
+      <text class="t-name b" x="630" y="60">闸门 2：满 15 分钟（Refresh 彻底截断）</text>
+      <text class="t-lab" x="458" y="88">· Access JWT 到点本地验签即返 401</text>
+      <text class="t-lab" x="458" y="110">· 调 /auth/refresh 时用户中心复核 PG 状态</text>
+      <text class="t-hot b" x="458" y="132">· 账号/租户停用或已登出删 RT → 直接拒签</text>
+      <text class="t-sub" x="630" y="166">彻底踢回登录页，无需黑名单与 Pub/Sub</text>
+
+      <path class="e" d="M820 110 H858" marker-end="url(#pr-a)"/>
+
+      <rect class="band-a" x="860" y="32" width="360" height="156" rx="6"/>
+      <text class="t-name b" x="1040" y="60">附带收益：极强抗 Redis 抖动能力</text>
+      <text class="t-lab" x="878" y="88">· 网关鉴权热路径完全不依赖 Redis</text>
+      <text class="t-lab" x="878" y="110">· Redis 重启或短暂闪断期间：</text>
+      <text class="t-name" x="1040" y="134" style="font-size:13px">全站已登录的 Web 与 Mobile 用户照常使用</text>
+      <text class="t-sub" x="1040" y="166">仅影响该瞬间恰好登录或换票的极少数请求</text>
+    </svg>
+
+    <h3>为什么这样做</h3>
+    <table>
+      <thead><tr><th>做法</th><th>为什么</th></tr></thead>
+      <tbody>
+        <tr><td>Web 与 Mobile 统一用 JWT，彻底去掉服务端 Session</td><td>一套签发、一套验签逻辑，网关热路径零存储访问、无滑动续期写放大，系统极简且高可用。</td></tr>
+        <tr><td>Web 端用 HttpOnly Cookie 载 JWT，而非 localStorage</td><td>兼得 JWT 无状态验签与 Cookie 抗 XSS 能力，前端代码无需自己拼 Authorization，多标签页自动同步。</td></tr>
+        <tr><td>uc_refresh Cookie 单独限定 Path=/uc/api/v1/auth + SameSite=Strict</td><td>普通业务请求、SSE、WebSocket 绝不携带长期刷新令牌，大幅收窄令牌暴露面。</td></tr>
+        <tr><td>不建 JWT 黑名单、不引 Redis Pub/Sub</td><td>15 分钟短有效期 + 下游用户中心实时授权快照 + Refresh 复核 PG 已形成完整闭环，避免引入脆弱广播链路。</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const FONT = '"Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  const INK = '#444444';
+  const LIFELINE = '#9a9a9a';
+  const SCOPE_COLOR = '#1168bd';
+  const PALETTE = {
+    person: ['#297e06', '#1a849c', '#6b8e23'],
+    system: ['#ed8609', '#bf101d', '#8411bd', '#5b6770', '#b8336a'],
+  };
+  const KIND_LABEL = { person: 'Person', system: 'Software System', container: 'Container', component: 'Component' };
+  const MAX_MESSAGES = 20;
+  const TXT = {
+    name: { size: 17, weight: 400, lh: 22 },
+    meta: { size: 12, weight: 400, lh: 16 },
+    msg: { size: 15, weight: 400, lh: 20 },
+    tech: { size: 12, weight: 400, lh: 16 },
+    bname: { size: 18, weight: 700, lh: 22 },
+    btype: { size: 12, weight: 700, lh: 16 },
+    key: { size: 13, weight: 400, lh: 18 },
+  };
+  const BOX_H = 52, ICON_H = 30, HEADER_H = 48, LABEL_W = 260, MIN_GAP = 70, SELF_W = 36, MARGIN = 50;
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const problems = [];
+  const fail = (msg) => problems.push({ level: 'error', msg });
+  const warn = (msg) => problems.push({ level: 'warn', msg });
+
+  const ctx = document.createElement('canvas').getContext('2d');
+  const measure = (s, st) => { ctx.font = `${st.weight} ${st.size}px ${FONT}`; return ctx.measureText(s).width; };
+
+  // 中文按字断行，英文按词断行；行首不放标点
+  const CJK = '\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f';
+  const TOKEN = new RegExp(`[${CJK}]|[^\\s${CJK}]+|\\s+`, 'g');
+  const NO_LINE_START = /^[，。、；：！？）》」』,.;:!?)]$/;
+  function wrap(text, st, maxW) {
+    const lines = [];
+    for (const para of String(text || '').split('\n')) {
+      let line = '';
+      for (const tok of para.match(TOKEN) || []) {
+        if (/^\s+$/.test(tok)) { if (line) line += ' '; continue; }
+        const next = line + tok;
+        if (line.trim() && measure(next.trimEnd(), st) > maxW && !NO_LINE_START.test(tok)) {
+          lines.push(line.trimEnd());
+          line = tok;
+        } else {
+          line = next;
+        }
+      }
+      if (line.trim()) lines.push(line.trimEnd());
+    }
+    return lines;
+  }
+
+  // 行数不变的前提下收窄宽度，让各行长度接近，避免末行只剩一两个字
+  function wrapBalanced(text, st, maxW) {
+    const lines = wrap(text, st, maxW);
+    if (lines.length < 2) return lines;
+    let lo = maxW / 2, hi = maxW;
+    while (hi - lo > 4) {
+      const mid = (lo + hi) / 2;
+      if (wrap(text, st, mid).length > lines.length) lo = mid; else hi = mid;
+    }
+    return wrap(text, st, hi);
+  }
+
+  function node(tag, attrs, parent) {
+    const n = document.createElementNS(svgNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    parent.appendChild(n);
+    return n;
+  }
+  // top 是文字块上沿
+  function textLines(parent, lines, x, top, st, color, anchor = 'middle') {
+    const t = node('text', { x, y: top + st.lh / 2 + st.size * 0.35, 'text-anchor': anchor,
+      'font-family': FONT, 'font-size': st.size, 'font-weight': st.weight, fill: color }, parent);
+    lines.forEach((ln, i) => { node('tspan', { x, dy: i ? st.lh : 0 }, t).textContent = ln; });
+    return t;
+  }
+
+  // 参与者头：人员和数据库画图标 + 文字，其余画方框
+  const iconHead = (p) => p.kind === 'person' || (p.kind === 'container' && p.shape === 'database');
+  function headSize(p) {
+    const w = Math.max(measure(p.name, TXT.name), measure(p.meta, TXT.meta)) + 24;
+    return { w, h: iconHead(p) ? ICON_H + 4 + TXT.name.lh + TXT.meta.lh : BOX_H };
+  }
+  function drawHead(g, p, cx, top) {
+    const c = p.color;
+    let textTop = top + (BOX_H - TXT.name.lh - TXT.meta.lh) / 2;
+    if (p.kind === 'person') {
+      node('circle', { cx, cy: top + 8, r: 7, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      node('path', { d: `M${cx - 14} ${top + ICON_H} Q${cx - 14} ${top + 16} ${cx} ${top + 16} Q${cx + 14} ${top + 16} ${cx + 14} ${top + ICON_H} Z`, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      textTop = top + ICON_H + 4;
+    } else if (iconHead(p)) {
+      const rx = 17, ry = 5, y0 = top + ry, y1 = top + ICON_H - ry;
+      node('path', { d: `M${cx - rx} ${y0} V${y1} A${rx} ${ry} 0 0 0 ${cx + rx} ${y1} V${y0}`, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      node('ellipse', { cx, cy: y0, rx, ry, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      textTop = top + ICON_H + 4;
+    } else {
+      node('rect', { x: cx - p.size.w / 2, y: top, width: p.size.w, height: BOX_H, rx: 4, fill: '#fff', stroke: c, 'stroke-width': 1.6 }, g);
+    }
+    textLines(g, [p.name], cx, textTop, TXT.name, c);
+    textLines(g, [p.meta], cx, textTop + TXT.name.lh, TXT.meta, c);
+  }
+  function drawArrow(g, x0, x1, y) {
+    const dir = Math.sign(x1 - x0), L = 10, W = 7;
+    node('line', { x1: x0, y1: y, x2: x1 - dir * L, y2: y, stroke: INK, 'stroke-width': 1.6, 'stroke-dasharray': '8 5' }, g);
+    node('polygon', { points: `${x1},${y} ${x1 - dir * L},${y - W / 2} ${x1 - dir * L},${y + W / 2}`, fill: INK }, g);
+  }
+
+  function render() {
+    const model = JSON.parse(document.getElementById('c4-model').textContent);
+    if (model.title) document.title = model.title;
+    else fail('缺少 title（建议「Dynamic View: 系统名 - 场景」）');
+
+    // ---- 边界 ----
+    const bById = new Map();
+    for (const b of model.boundaries || []) {
+      if (!b.id) { fail(`边界 ${b.name || ''}：缺少 id`); continue; }
+      if (bById.has(b.id)) { fail(`边界 id 重复：${b.id}`); continue; }
+      if (!b.name || !b.type) fail(`边界 ${b.id}：name、type 都要写，type 如「Software System」「Container: Python / FastAPI」`);
+      bById.set(b.id, b);
+    }
+    const chain = (id) => {   // 从里到外的边界链
+      const out = [];
+      for (let cur = id; cur; cur = bById.get(cur) && bById.get(cur).in) {
+        if (!bById.has(cur) || out.includes(cur)) return null;
+        out.push(cur);
+      }
+      return out;
+    };
+    for (const b of bById.values()) {
+      if (b.in && !chain(b.id)) { fail(`边界 ${b.id}：in 指向不存在的边界，或者边界互相嵌套成了环`); b.broken = true; }
+    }
+
+    // ---- 参与者 ----
+    const pById = new Map();
+    const ps = [];
+    for (const p of model.participants || []) {
+      const who = p.id || p.name || '(未命名参与者)';
+      if (!p.id) { fail(`${who}：缺少 id`); continue; }
+      if (pById.has(p.id)) { fail(`参与者 id 重复：${p.id}`); continue; }
+      if (!KIND_LABEL[p.kind]) { fail(`${who}：kind 只能是 person / system / container / component`); continue; }
+      if (!p.name) fail(`${who}：缺少 name`);
+      if ((p.kind === 'container' || p.kind === 'component') && !p.technology) fail(`${who}：${p.kind} 缺少 technology`);
+      if (p.in && (!bById.has(p.in) || bById.get(p.in).broken)) { fail(`${who}：in 指向的边界 ${p.in} 不存在`); p.in = null; }
+      p.chain = p.in ? chain(p.in) : [];
+      p.meta = p.technology && (p.kind === 'container' || p.kind === 'component') ? `[${KIND_LABEL[p.kind]}: ${p.technology}]` : `[${KIND_LABEL[p.kind]}]`;
+      pById.set(p.id, p);
+      ps.push(p);
+    }
+    if (ps.length < 2) fail('至少要有两个参与者');
+    const assigned = new Map(), used = { person: 0, system: 0 };
+    for (const p of ps) {
+      if (p.color) continue;
+      if (p.kind === 'container' || p.kind === 'component' || (p.kind === 'system' && p.scope)) { p.color = SCOPE_COLOR; continue; }
+      const k = `${p.kind}:${p.tag || p.id}`;
+      if (!assigned.has(k)) assigned.set(k, PALETTE[p.kind][used[p.kind]++ % PALETTE[p.kind].length]);
+      p.color = assigned.get(k);
+    }
+    // 同一边界里的参与者在左右顺序上必须相邻，否则边界框会把别的参与者框进去
+    for (const b of bById.values()) {
+      const idx = ps.map((p, i) => (p.chain.includes(b.id) ? i : -1)).filter((i) => i >= 0);
+      b.members = idx.map((i) => ps[i]);
+      if (!idx.length) { fail(`边界「${b.name}」里没有任何参与者`); continue; }
+      if (idx[idx.length - 1] - idx[0] + 1 !== idx.length) fail(`边界「${b.name}」里的参与者在 participants 里不相邻，调整顺序`);
+    }
+
+    // ---- 消息 ----
+    const msgs = (model.messages || []).filter((m, i) => {
+      const who = `第 ${i + 1} 条消息（${m.from} → ${m.to}）`;
+      if (!pById.has(m.from) || !pById.has(m.to)) { fail(`${who}：端点 id 不存在`); return false; }
+      if (!m.description) fail(`${who}：缺少 description（写做什么）`);
+      const a = pById.get(m.from), b = pById.get(m.to);
+      const crossProcess = a.kind !== 'person' && b.kind !== 'person' && !(a.kind === 'component' && b.kind === 'component') && a !== b;
+      if (crossProcess && !m.technology) fail(`${who}：涉及 container 或软件系统，是跨进程交互，要写 technology`);
+      if (m.details !== undefined) {
+        const d = m.details;
+        const isText = (v) => typeof v === 'string';
+        if (!d || typeof d !== 'object' || Array.isArray(d)) {
+          fail(`${who}：details 要写成对象 { note, items, example }`);
+          m.details = undefined;
+        } else {
+          if (d.note !== undefined && !isText(d.note)) fail(`${who}：details.note 要写成字符串`);
+          if (d.example !== undefined && !isText(d.example)) fail(`${who}：details.example 要写成字符串，多行用 \\n`);
+          if (d.items !== undefined && !(Array.isArray(d.items) && d.items.every((r) => Array.isArray(r) && r.length === 3 && r.every(isText)))) {
+            fail(`${who}：details.items 的每一行要写成 [项, 来源, 样例] 三个字符串`);
+          }
+          if (!d.note && !d.example && !(Array.isArray(d.items) && d.items.length)) warn(`${who}：details 是空的，删掉或补上内容`);
+        }
+      }
+      m.n = i + 1;
+      return true;
+    });
+    if (!msgs.length) fail('至少要有一条消息');
+    if (msgs.length > MAX_MESSAGES) warn(`消息有 ${msgs.length} 条，超过 ${MAX_MESSAGES} 条：只画这个场景的关键交互，或者拆成几张图`);
+    for (const p of ps) {
+      if (!msgs.some((m) => m.from === p.id || m.to === p.id)) warn(`「${p.name}」没有参与任何消息：与这个场景无关就删掉`);
+    }
+
+    // ---- 横向：列间距按参与者宽度和消息标签宽度撑开 ----
+    for (const p of ps) p.size = headSize(p);
+    const index = new Map(ps.map((p, i) => [p.id, i]));
+    for (const m of msgs) {
+      m.lines = wrapBalanced(`${m.n}: ${m.description || ''}${m.details ? ' ⓘ' : ''}`, TXT.msg, LABEL_W);
+      m.tech = m.technology ? `[${m.technology}]` : '';
+      m.labelW = Math.max(...m.lines.map((s) => measure(s, TXT.msg)), m.tech ? measure(m.tech, TXT.tech) : 0);
+      m.labelH = m.lines.length * TXT.msg.lh + (m.tech ? TXT.tech.lh : 0);
+    }
+    const gaps = ps.slice(1).map((p, i) => (ps[i].size.w + p.size.w) / 2 + MIN_GAP);
+    let rightExtra = 0;
+    const spanOf = (m) => Math.abs(index.get(m.to) - index.get(m.from));
+    for (const m of [...msgs].sort((a, b) => spanOf(a) - spanOf(b))) {
+      const i = index.get(m.from), j = index.get(m.to);
+      if (i === j) {   // 自调用：标签在生命线右边，占下一列间距
+        const need = SELF_W + 16 + m.labelW + 20;
+        if (i < gaps.length) gaps[i] = Math.max(gaps[i], need); else rightExtra = Math.max(rightExtra, need);
+        continue;
+      }
+      const lo = Math.min(i, j), hi = Math.max(i, j);
+      const span = gaps.slice(lo, hi).reduce((s, g) => s + g, 0);
+      const need = m.labelW + 40;
+      if (span < need) for (let k = lo; k < hi; k++) gaps[k] += (need - span) / (hi - lo);
+    }
+    let x = 0;
+    ps.forEach((p, i) => { if (i) x += gaps[i - 1]; p.x = x; });
+
+    // ---- 纵向：边界标题 → 参与者头 → 消息 → 底部参与者头 ----
+    const depthOf = (b) => chain(b.id).length;
+    const live = [...bById.values()].filter((b) => !b.broken && b.members && b.members.length);
+    const maxDepth = Math.max(0, ...live.map(depthOf));
+    const headTop = maxDepth * HEADER_H + (maxDepth ? 10 : 0);
+    const headH = Math.max(...ps.map((p) => p.size.h), BOX_H);
+    let y = headTop + headH + 24;
+    for (const m of msgs) {
+      m.labelTop = y;
+      m.y = y + m.labelH + 8;
+      y = m.y + (m.from === m.to ? 46 : 26);
+    }
+    const bottomTop = y + 8, bottom = bottomTop + headH;
+
+    // 边界框：外层比内层多留一圈
+    const below = (b) => Math.max(0, ...live.filter((c) => c.in === b.id).map((c) => 1 + below(c)));
+    for (const b of live) {
+      const pad = 14 + 16 * below(b);
+      const d = depthOf(b);
+      b.rect = {
+        x: Math.min(...b.members.map((p) => p.x - p.size.w / 2)) - pad,
+        y: (d - 1) * HEADER_H,
+        w: 0, h: 0,
+      };
+      b.rect.w = Math.max(...b.members.map((p) => p.x + p.size.w / 2)) + pad - b.rect.x;
+      b.rect.h = bottom + 10 + 14 * below(b) - b.rect.y;
+      const titleW = Math.max(measure(b.name, TXT.bname), measure(`[${b.type}]`, TXT.btype)) + 20;
+      if (titleW > b.rect.w) warn(`边界「${b.name}」的标题比边界还宽，名字写短一点`);
+    }
+    for (const b of live) {
+      for (const p of ps) {
+        if (!b.members.includes(p) && p.x + p.size.w / 2 > b.rect.x && p.x - p.size.w / 2 < b.rect.x + b.rect.w) {
+          fail(`「${p.name}」不在边界「${b.name}」里，却和边界框重叠，调整 participants 顺序`);
+        }
+      }
+    }
+
+    // ---- 绘制 ----
+    const svg = document.getElementById('c4-diagram');
+    const gB = node('g', {}, svg), gLife = node('g', {}, svg), gM = node('g', {}, svg), gH = node('g', {}, svg), gT = node('g', {}, svg);
+    for (const b of [...live].sort((a, c) => depthOf(a) - depthOf(c))) {
+      const r = b.rect;
+      node('rect', { x: r.x, y: r.y, width: r.w, height: r.h, fill: 'none', stroke: SCOPE_COLOR, 'stroke-width': 1.6 }, gB);
+      textLines(gB, [b.name], r.x + r.w / 2, r.y + 4, TXT.bname, SCOPE_COLOR);
+      textLines(gB, [`[${b.type}]`], r.x + r.w / 2, r.y + 4 + TXT.bname.lh, TXT.btype, SCOPE_COLOR);
+    }
+    for (const p of ps) {
+      node('line', { x1: p.x, y1: headTop + p.size.h, x2: p.x, y2: bottomTop, stroke: LIFELINE, 'stroke-width': 1, 'stroke-dasharray': '4 4' }, gLife);
+      drawHead(gH, p, p.x, headTop);
+      drawHead(gH, p, p.x, bottomTop);
+    }
+    for (const m of msgs) {
+      const a = pById.get(m.from), b = pById.get(m.to);
+      let lx;
+      if (a === b) {
+        const x0 = a.x, x1 = a.x + SELF_W;
+        node('polyline', { points: `${x0},${m.y} ${x1},${m.y} ${x1},${m.y + 20} ${x0 + 10},${m.y + 20}`, fill: 'none', stroke: INK, 'stroke-width': 1.6, 'stroke-dasharray': '8 5' }, gM);
+        node('polygon', { points: `${x0},${m.y + 20} ${x0 + 10},${m.y + 16.5} ${x0 + 10},${m.y + 23.5}`, fill: INK }, gM);
+        lx = x1 + 12;
+      } else {
+        drawArrow(gM, a.x, b.x, m.y);
+        lx = Math.min(a.x, b.x) + 12;
+      }
+      // 有 details 的消息：标签链接到图下方「消息说明」里的同号条目
+      const gL = m.details ? node('a', { href: `#c4-msg-${m.n}` }, gM) : gM;
+      node('rect', { x: lx - 3, y: m.labelTop - 1, width: m.labelW + 6, height: m.labelH + 2, fill: '#fff' }, gL);
+      textLines(gL, m.lines, lx, m.labelTop, TXT.msg, INK, 'start');
+      if (m.tech) textLines(gL, [m.tech], lx, m.labelTop + m.lines.length * TXT.msg.lh, TXT.tech, INK, 'start');
+    }
+    const minX = Math.min(...ps.map((p) => p.x - p.size.w / 2), ...live.map((b) => b.rect.x));
+    let maxX = Math.max(...ps.map((p) => p.x + p.size.w / 2 + (p === ps[ps.length - 1] ? rightExtra : 0)), ...live.map((b) => b.rect.x + b.rect.w));
+    let maxY = Math.max(bottom, ...live.map((b) => b.rect.y + b.rect.h));
+    const title = { size: 26, weight: 400, lh: 34 }, sub = { size: 15, weight: 400, lh: 22 };
+    textLines(gT, [model.title || ''], minX, maxY + 36, title, INK, 'start');
+    if (model.description) textLines(gT, [model.description], minX, maxY + 36 + title.lh, sub, '#666', 'start');
+    maxX = Math.max(maxX, minX + measure(model.title || '', title), minX + measure(model.description || '', sub));
+    maxY += 36 + title.lh + (model.description ? sub.lh : 0);
+    const vw = maxX - minX + 2 * MARGIN, vh = maxY + 2 * MARGIN;
+    svg.setAttribute('viewBox', `${minX - MARGIN} ${-MARGIN} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', model.title || 'Dynamic diagram');
+
+    renderKey(ps, live);
+    renderDetails(msgs);
+  }
+
+  // ---- 消息说明：每条带 details 的消息一节（说明、[项, 来源, 样例] 表、数据样例）----
+  function renderDetails(msgs) {
+    const list = msgs.filter((m) => m.details);
+    if (!list.length) return;
+    const sec = document.getElementById('c4-details');
+    const el = (tag, cls, text) => {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined) e.textContent = text;
+      return e;
+    };
+    sec.appendChild(el('h2', '', '消息说明'));
+    for (const m of list) {
+      const d = m.details;
+      const art = el('article');
+      art.id = `c4-msg-${m.n}`;
+      const h = el('h3', '', `${m.n}: ${m.description || ''}`);
+      if (m.technology) h.appendChild(el('span', 'tech', `[${m.technology}]`));
+      art.appendChild(h);
+      if (typeof d.note === 'string' && d.note) art.appendChild(el('p', '', d.note));
+      const rows = Array.isArray(d.items) ? d.items.filter((r) => Array.isArray(r)) : [];
+      if (rows.length) {
+        const table = el('table');
+        const head = table.createTHead().insertRow();
+        for (const c of ['项', '来源', '样例']) head.appendChild(el('th', '', c));
+        const body = table.createTBody();
+        for (const r of rows) {
+          const tr = body.insertRow();
+          r.slice(0, 3).forEach((c, i) => tr.appendChild(el('td', i === 2 ? 'sample' : '', String(c))));
+        }
+        art.appendChild(table);
+      }
+      if (typeof d.example === 'string' && d.example) art.appendChild(el('pre', '', d.example));
+      sec.appendChild(art);
+    }
+    sec.hidden = false;
+  }
+
+  // ---- 图例：每种参与者一项，再加边界和消息 ----
+  function renderKey(ps, boundaries) {
+    const svg = document.getElementById('c4-key');
+    const rank = { person: 0, system: 1, container: 2, component: 3 };
+    const label = (p) => {
+      if (p.kind === 'person') return `Person, ${p.tag || p.name}`;
+      if (p.kind === 'system') return p.tag || p.name;
+      if (p.kind === 'container') return p.shape === 'database' ? 'Container, Database' : 'Container';
+      return 'Component';
+    };
+    const groups = new Map();
+    for (const p of [...ps].sort((a, b) => rank[a.kind] - rank[b.kind])) {
+      const k = `${p.kind}|${iconHead(p)}|${p.color}`;
+      if (!groups.has(k)) groups.set(k, { proto: p, labels: [] });
+      if (!groups.get(k).labels.includes(label(p))) groups.get(k).labels.push(label(p));
+    }
+    const items = [...groups.values()].map((g) => ({ kind: 'head', proto: g.proto, text: g.labels.join('、') }));
+    if (boundaries.length) items.push({ kind: 'boundary', text: 'Boundary（系统 / 容器）' });
+    items.push({ kind: 'message', text: 'n: 交互（编号 = 先后顺序）' });
+    const CELL_W = 230, CELL_H = 110, PER_ROW = 6;
+    items.forEach((it, i) => {
+      const cx = (i % PER_ROW) * CELL_W + CELL_W / 2, top = Math.floor(i / PER_ROW) * CELL_H;
+      const g = node('g', {}, svg);
+      if (it.kind === 'head') {
+        const p = { ...it.proto, name: it.text.length > 22 ? it.text.slice(0, 21) + '…' : it.text, meta: '' };
+        p.size = { w: Math.min(CELL_W - 20, measure(p.name, TXT.name) + 24), h: BOX_H };
+        drawHead(g, p, cx, top + 10);
+        return;
+      }
+      if (it.kind === 'boundary') {
+        node('rect', { x: cx - 95, y: top + 10, width: 190, height: 56, fill: 'none', stroke: SCOPE_COLOR, 'stroke-width': 1.6 }, g);
+        textLines(g, [it.text], cx, top + 10 + 4, TXT.key, SCOPE_COLOR);
+        return;
+      }
+      drawArrow(g, cx - 90, cx + 90, top + 46);
+      textLines(g, [it.text], cx - 88, top + 18, TXT.key, INK, 'start');
+    });
+    const rows = Math.ceil(items.length / PER_ROW), cols = Math.min(items.length, PER_ROW);
+    svg.setAttribute('viewBox', `0 0 ${cols * CELL_W} ${rows * CELL_H}`);
+    svg.setAttribute('width', cols * CELL_W);
+    svg.setAttribute('aria-label', 'Diagram key');
+  }
+
+  try {
+    render();
+  } catch (e) {
+    fail(`渲染异常：${e && e.message}`);
+    console.error(e);
+  }
+  const status = problems.some((p) => p.level === 'error') ? 'error' : problems.length ? 'warn' : 'ok';
+  document.documentElement.dataset.c4Status = status;
+  const report = document.getElementById('c4-report');
+  for (const p of problems) {
+    const li = document.createElement('li');
+    li.dataset.level = p.level;
+    li.textContent = p.msg;
+    report.appendChild(li);
+  }
+  report.hidden = !problems.length;
+  if (problems.length) console.warn('[c4]', problems);
+})();
+</script>
+</body>
+</html>

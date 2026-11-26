@@ -35,8 +35,8 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "动态图：模型平台 - 智能体拿到模型 Key",
-  "description": "目标模型（参与者按组件图拆）。Atlas 建智能体时申请客户端 Key（待分配）→ 管理员分配模型，第一次在 LiteLLM 生成 → Atlas 取 Key 直连 LiteLLM 调模型。平台服务（会话标题等）的 Key 一样，只是类型是 Service、由管理员或命令行事先建好",
+  "title": "动态图：模型平台 - 智能体获取客户端 Key 并调用模型网关",
+  "description": "目标模型（按业务功能统一接口）：Agent 平台与模型管理员调用同一个「API Key」功能组件完成客户端 Key 的幂等补建、模型分配与明文凭据读取（靠主体鉴权区分权限），随后直连自研模型网关。",
   "boundaries": [
     {
       "id": "mpsys",
@@ -65,38 +65,24 @@
       "color": "#1a849c"
     },
     {
-      "id": "internal",
-      "kind": "component",
-      "name": "内部接口",
-      "technology": "FastAPI Router",
-      "in": "srvB"
-    },
-    {
-      "id": "mgmt",
-      "kind": "component",
-      "name": "管理接口",
-      "technology": "FastAPI Router",
-      "in": "srvB"
-    },
-    {
       "id": "keys",
       "kind": "component",
       "name": "API Key",
-      "technology": "SQLAlchemy 异步",
+      "technology": "FastAPI Router + KeyService",
+      "in": "srvB"
+    },
+    {
+      "id": "access",
+      "kind": "component",
+      "name": "授权",
+      "technology": "PrincipalGuard · UCPermissions",
       "in": "srvB"
     },
     {
       "id": "catalog",
       "kind": "component",
-      "name": "模型目录",
-      "technology": "SQLAlchemy 异步",
-      "in": "srvB"
-    },
-    {
-      "id": "gw",
-      "kind": "component",
-      "name": "LiteLLM 接入",
-      "technology": "httpx",
+      "name": "模型与线路",
+      "technology": "FastAPI Router + ModelRegistry",
       "in": "srvB"
     },
     {
@@ -108,10 +94,18 @@
       "in": "mpsys"
     },
     {
-      "id": "litellm",
+      "id": "redis",
       "kind": "container",
-      "name": "LiteLLM",
-      "technology": "LiteLLM 1.106（第三方）",
+      "name": "网关状态",
+      "technology": "Redis 7（键值 + Pub/Sub）",
+      "shape": "database",
+      "in": "mpsys"
+    },
+    {
+      "id": "gateway",
+      "kind": "container",
+      "name": "模型网关",
+      "technology": "Python / FastAPI（asyncio + httpx 流式）",
       "in": "mpsys"
     },
     {
@@ -124,176 +118,103 @@
   "messages": [
     {
       "from": "agent",
-      "to": "internal",
-      "description": "POST /internal/client-keys",
+      "to": "keys",
+      "description": "PUT /api/v1/keys/clients/Agent/{agent_id}（幂等补建智能体 Key）",
       "technology": "JSON/HTTP（X-Caller-App: atlas）",
       "details": {
-        "note": "Atlas 建智能体时补建：尽力而为，平台不可用不挡住建智能体，之后取 Key 时再补。",
-        "example": "{\"client_type\": \"Agent\", \"client_code\": \"<智能体 id>\", \"name\": \"合同审查助手\"}"
-      }
-    },
-    {
-      "from": "internal",
-      "to": "keys",
-      "description": "ensure_client(Agent, 智能体 id, name, app = atlas)",
-      "details": {
-        "note": "Agent 类型只给 atlas 建。按类型 + 编码幂等：已有就返回（名字不同则改名）；并发创建时唯一约束兜底，后到的取先建出来的那把。"
+        "note": "现状代码路径为 POST /internal/client-keys；目标设计收口到 API Key 功能组件下，由 PrincipalGuard 校验 X-Caller-App 属于 Agent 类型白名单。",
+        "example": "{\"name\": \"合同审查助手\"}"
       }
     },
     {
       "from": "keys",
+      "to": "access",
+      "description": "require_caller_app('Agent')：核验应用 atlas 有权操作"
+    },
+    {
+      "from": "keys",
       "to": "db",
-      "description": "写一行 status = pending，没有原文",
+      "description": "INSERT gw_api_key（生成加密原文与 secret_digest）",
       "technology": "SQL/TCP"
     },
     {
-      "from": "internal",
-      "to": "agent",
-      "description": "status = pending_models",
-      "technology": "JSON/HTTP",
-      "details": {
-        "note": "LiteLLM 里还没有 Key（生成时不给模型 = 能用全部模型）。这期间智能体不能运行，Atlas 开始前提示「还没分配模型，请找模型管理员」。"
-      }
-    },
-    {
       "from": "admin",
-      "to": "mgmt",
-      "description": "PUT /api/v1/client-keys/{id}/models",
-      "technology": "JSON/HTTPS（经 nginx，校验登录后写 X-Uid）",
+      "to": "keys",
+      "description": "分配模型与配额：PUT /api/v1/keys/{key_uuid}",
+      "technology": "JSON/HTTPS（管理员登录态）",
       "details": {
-        "note": "要有 model:manage（授权领域判，图中省略）。",
-        "example": "{\"models\": [\"deepseek-v4-pro\", \"deepseek-flash\"]}"
+        "example": "{\"models\": [\"deepseek-v4-pro\", \"qwen-max\"], \"monthly_budget\": \"500.00\", \"budget_5h\": \"50.00\", \"budget_24h\": \"150.00\", \"rpm\": 120}"
       }
     },
     {
-      "from": "mgmt",
-      "to": "keys",
-      "description": "assign(key, models, actor)"
+      "from": "keys",
+      "to": "access",
+      "description": "require_manager：核验管理员具备 model:manage"
     },
     {
       "from": "keys",
       "to": "catalog",
-      "description": "callable()：都是已登记、LiteLLM 里存在的？",
-      "details": {
-        "note": "客户端 Key 的可选范围是全部可调用的模型，不看用户中心的授权。"
-      }
-    },
-    {
-      "from": "catalog",
-      "to": "gw",
-      "description": "deployments()",
-      "details": {
-        "note": "缓存 30 秒；LiteLLM 不可达时沿用上一份。"
-      }
-    },
-    {
-      "from": "keys",
-      "to": "gw",
-      "description": "generate_key(有效模型, 别名, metadata)",
-      "details": {
-        "note": "第一次分配才生成。别名 Agent:<智能体 id>@时间-随机串：LiteLLM 要求全局唯一。"
-      }
-    },
-    {
-      "from": "gw",
-      "to": "litellm",
-      "description": "POST /key/generate",
-      "technology": "JSON/HTTP（管理接口，master key）",
-      "details": {
-        "items": [
-          [
-            "models",
-            "有效模型，不能为空（空 = 全部模型）",
-            "[\"deepseek-v4-pro\", \"deepseek-flash\"]"
-          ],
-          [
-            "key_alias",
-            "LiteLLM 界面里看到的名字",
-            "Agent:7f3e…@20261104101500-a1b2c3"
-          ],
-          [
-            "metadata",
-            "对得上平台的哪把 Key",
-            "{platform_key, key_type, client_type, client_code}"
-          ]
-        ]
-      }
-    },
-    {
-      "from": "litellm",
-      "to": "gw",
-      "description": "原文 sk-… 和哈希 token",
-      "technology": "JSON/HTTP"
+      "description": "callable_names()：核对均为本租户已启用且有线路的模型"
     },
     {
       "from": "keys",
       "to": "db",
-      "description": "存原文、token，status = active，记同步状态和操作日志，提交",
-      "technology": "SQL/TCP",
-      "details": {
-        "note": "写库失败就删掉刚生成的 Key，不留没人管的。响应前提交，Atlas 马上来取也读得到。"
-      }
-    },
-    {
-      "from": "mgmt",
-      "to": "admin",
-      "description": "200 客户端 Key（不带原文）",
-      "technology": "JSON/HTTPS",
-      "details": {
-        "note": "客户端 Key 的原文不在页面上返回，只经内部接口给所属应用。"
-      }
-    },
-    {
-      "from": "agent",
-      "to": "internal",
-      "description": "GET /internal/client-keys?client_type=Agent&client_code=…",
-      "technology": "JSON/HTTP",
-      "details": {
-        "note": "原生智能体每段开始前、CLI 智能体开会话时都取最新的；平台不可用时 Atlas 沿用上次取到的。"
-      }
-    },
-    {
-      "from": "internal",
-      "to": "keys",
-      "description": "view(key)"
+      "description": "更新 effective_models、status='active'，记审计并提交",
+      "technology": "SQL/TCP"
     },
     {
       "from": "keys",
-      "to": "catalog",
-      "description": "callable()：算有效模型"
+      "to": "redis",
+      "description": "INCR modelgw:config:keys 并广播驱逐该 Key 旧缓存",
+      "technology": "Redis INCR + Pub/Sub"
     },
     {
-      "from": "internal",
-      "to": "agent",
-      "description": "status = active、Key 原文、有效模型",
-      "technology": "JSON/HTTP",
-      "details": {
-        "example": "{\"status\": \"active\", \"key\": \"sk-…\",\n \"models\": [{\"name\": \"deepseek-v4-pro\", \"max_input_tokens\": 131072, \"max_output_tokens\": 32768}, …]}"
-      }
+      "from": "keys",
+      "to": "admin",
+      "description": "200 返回 Key 详情（管理端仅含末 4 位，不回传明文）",
+      "technology": "JSON/HTTPS"
     },
     {
       "from": "agent",
-      "to": "litellm",
-      "description": "POST /v1/messages（model = deepseek-v4-pro）",
-      "technology": "Anthropic Messages/HTTP（Key 在 x-api-key）",
-      "details": {
-        "note": "管理平台不在这条路径上。原生智能体、会话 Pod 里的 CLI 都直连 LiteLLM；模型不在 Key 里 LiteLLM 回 key_model_access_denied。"
-      }
+      "to": "keys",
+      "description": "GET /api/v1/keys/clients/Agent/{agent_id}/credential",
+      "technology": "JSON/HTTP（X-Caller-App: atlas，仅内网可达）"
     },
     {
-      "from": "litellm",
-      "to": "provider",
-      "description": "转成供应商的协议，带供应商凭据",
-      "technology": "HTTPS（api.deepseek.com）"
-    },
-    {
-      "from": "litellm",
+      "from": "keys",
       "to": "agent",
-      "description": "响应（流式）",
-      "technology": "Anthropic Messages/HTTP（SSE）",
-      "details": {
-        "note": "LiteLLM 收到供应商的响应后转回 Anthropic 格式，同时记调用日志和花费、按 Key 限额；这些都在 LiteLLM 里看，平台不记。"
-      }
+      "description": "校验所属应用通过，解密返回明文 key 与可用模型规格",
+      "technology": "JSON/HTTP"
+    },
+    {
+      "from": "agent",
+      "to": "gateway",
+      "description": "POST /universal/v1/messages（带 x-api-key 与 X-Session-Id）",
+      "technology": "Anthropic Messages，HTTP + SSE"
+    },
+    {
+      "from": "gateway",
+      "to": "db",
+      "description": "首次命中按摘要单行读 Key、按租户加载配置快照",
+      "technology": "SQL/TCP"
+    },
+    {
+      "from": "gateway",
+      "to": "provider",
+      "description": "按线路直通或转换协议转发请求，带租户供应商密钥",
+      "technology": "HTTPS + SSE"
+    },
+    {
+      "from": "gateway",
+      "to": "agent",
+      "description": "流式透传回答帧",
+      "technology": "Anthropic Messages SSE"
+    },
+    {
+      "from": "gateway",
+      "to": "db",
+      "description": "后台批量写入调用明细与费用至 gw_model_call",
+      "technology": "SQL/TCP"
     }
   ]
 }

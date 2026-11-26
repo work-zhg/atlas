@@ -35,8 +35,8 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "动态图：模型平台 - 登记一个模型",
-  "description": "目标模型（参与者按组件图拆）。模型管理员登记一个私有模型（示例 qwen-max）：先测试连接，再在 LiteLLM 登记部署、写平台记录、在用户中心登记并授权；用户中心失败就撤回 LiteLLM。运维命令行的 model add 走同一个 register",
+  "title": "动态图：模型平台 - 登记供应商账号与私有模型",
+  "description": "目标模型（按业务功能组件交互）：模型管理员直接调用「供应商账号」测试并保存加密账号，再调用「模型与线路」登记私有模型、联动「授权」在用户中心授研发部使用权，最后只递增本租户配置版本。",
   "boundaries": [
     {
       "id": "mpsys",
@@ -59,31 +59,31 @@
       "color": "#1a849c"
     },
     {
-      "id": "mgmt",
+      "id": "accounts",
       "kind": "component",
-      "name": "管理接口",
-      "technology": "FastAPI Router",
+      "name": "供应商账号",
+      "technology": "FastAPI Router + AccountService",
+      "in": "srvB"
+    },
+    {
+      "id": "catalog",
+      "kind": "component",
+      "name": "模型与线路",
+      "technology": "FastAPI Router + ModelRegistry",
       "in": "srvB"
     },
     {
       "id": "access",
       "kind": "component",
       "name": "授权",
-      "technology": "httpx",
+      "technology": "FastAPI Router + UCPermissions",
       "in": "srvB"
     },
     {
-      "id": "catalog",
+      "id": "shared",
       "kind": "component",
-      "name": "模型目录",
-      "technology": "SQLAlchemy 异步",
-      "in": "srvB"
-    },
-    {
-      "id": "gw",
-      "kind": "component",
-      "name": "LiteLLM 接入",
-      "technology": "httpx",
+      "name": "共享基础层",
+      "technology": "atlas_modelgateway.shared",
       "in": "srvB"
     },
     {
@@ -95,10 +95,11 @@
       "in": "mpsys"
     },
     {
-      "id": "litellm",
+      "id": "redis",
       "kind": "container",
-      "name": "LiteLLM",
-      "technology": "LiteLLM 1.106（第三方）",
+      "name": "网关状态",
+      "technology": "Redis 7（键值 + Pub/Sub）",
+      "shape": "database",
       "in": "mpsys"
     },
     {
@@ -117,163 +118,102 @@
   "messages": [
     {
       "from": "admin",
-      "to": "mgmt",
-      "description": "测试连接：POST /api/v1/models/test-connection",
-      "technology": "JSON/HTTPS（经 nginx，校验登录后写 X-Uid）",
+      "to": "accounts",
+      "description": "测试草稿账号：POST /api/v1/accounts/test",
+      "technology": "JSON/HTTPS（经前端网关鉴权）",
       "details": {
-        "example": "{\"name\": \"qwen-max\", \"provider\": \"dashscope\", \"api_key\": \"sk-…\"}"
+        "example": "{\"name\": \"通义主账号\", \"provider\": \"qwen\", \"endpoints\": {\"openai\": \"https://dashscope.aliyuncs.com/compatible-mode/v1\"}, \"secret\": \"sk-…\", \"test_model\": \"qwen-max\"}"
       }
     },
     {
-      "from": "mgmt",
+      "from": "accounts",
       "to": "access",
-      "description": "operator(uid, auth_uid)：有没有 model:manage"
+      "description": "require_manager：校验操作人具备 model:manage"
     },
     {
       "from": "access",
       "to": "usercenter",
-      "description": "授权快照",
-      "technology": "JSON/HTTP（GET /open/v1/users/{auth_uid}/authz）",
-      "details": {
-        "note": "成功结果缓存 30 秒；账号停用 → 401，没有 model:manage → 403。"
-      }
+      "description": "拉取授权快照（缓存 30 秒）",
+      "technology": "JSON/HTTP（GET /open/v1/users/{uid}/authz）"
     },
     {
-      "from": "mgmt",
-      "to": "catalog",
-      "description": "test_connection(name, provider, route)",
-      "details": {
-        "note": "先查供应商的要求：Azure、vLLM 要填地址，vLLM 可以不填凭据。"
-      }
+      "from": "accounts",
+      "to": "shared",
+      "description": "AddressGuard 校验公网 IP 并绑定建连探测"
     },
     {
-      "from": "catalog",
-      "to": "gw",
-      "description": "test_connection"
-    },
-    {
-      "from": "gw",
-      "to": "litellm",
-      "description": "POST /health/test_connection",
-      "technology": "JSON/HTTP（管理接口，master key）"
-    },
-    {
-      "from": "litellm",
+      "from": "shared",
       "to": "provider",
-      "description": "用填的参数试调一次",
+      "description": "发最小探测请求核验凭据与模型可用",
       "technology": "HTTPS"
     },
     {
-      "from": "gw",
-      "to": "catalog",
-      "description": "（成功, 说明）",
-      "details": {
-        "note": "失败原因后面跟着整段堆栈（1.106），只留原因给管理员看。"
-      }
+      "from": "admin",
+      "to": "accounts",
+      "description": "保存账号：POST /api/v1/accounts（SecretCipher 信封加密密钥）",
+      "technology": "JSON/HTTPS"
+    },
+    {
+      "from": "accounts",
+      "to": "db",
+      "description": "INSERT gw_account、gw_audit 并提交",
+      "technology": "SQL/TCP"
     },
     {
       "from": "admin",
-      "to": "mgmt",
-      "description": "登记：POST /api/v1/models",
-      "technology": "JSON/HTTPS（经 nginx，校验登录后写 X-Uid）",
-      "details": {
-        "example": "{\"name\": \"qwen-max\", \"display_name\": \"通义千问 Max\", \"provider\": \"dashscope\",\n \"visibility\": \"private\", \"api_key\": \"sk-…\", \"max_input_tokens\": 32768,\n \"input_price\": 2.4, \"output_price\": 9.6,\n \"grants\": [{\"subject_type\": \"dept\", \"subject_id\": \"<研发部>\", \"include_sub\": true}]}"
-      }
-    },
-    {
-      "from": "mgmt",
       "to": "catalog",
-      "description": "register(name, fields, route, actor)"
-    },
-    {
-      "from": "catalog",
-      "to": "gw",
-      "description": "deployments(fresh)：LiteLLM 里有没有同名的",
+      "description": "登记私有模型与线路：POST /api/v1/models",
+      "technology": "JSON/HTTPS",
       "details": {
-        "note": "平台里、LiteLLM 里（含直配的）都不能重名，直配的同名模型要用「纳入」；LiteLLM 不可达就不让登记。"
+        "example": "{\"name\": \"qwen-max\", \"visibility\": \"private\", \"price\": {\"input\": \"2.4\", \"cache_hit\": \"0.4\", \"output\": \"9.6\"},\n \"routes\": [{\"account_uuid\": \"<通义主账号>\", \"upstream_model\": \"qwen-max\", \"priority\": 1, \"weight\": 1}]}"
       }
     },
     {
       "from": "catalog",
-      "to": "gw",
-      "description": "add_model(id = 平台 uuid, name, provider, route)"
-    },
-    {
-      "from": "gw",
-      "to": "litellm",
-      "description": "POST /model/new",
-      "technology": "JSON/HTTP（管理接口，master key）",
-      "details": {
-        "items": [
-          [
-            "model_name",
-            "模型名 = 调用时传的 model",
-            "qwen-max"
-          ],
-          [
-            "litellm_params",
-            "「供应商/模型名」、custom_llm_provider、供应商凭据、价格（美元 / token）",
-            "{\"model\": \"dashscope/qwen-max\", …}"
-          ],
-          [
-            "model_info",
-            "部署 id = 平台模型的 uuid；上下文窗口、最大输出",
-            "{\"id\": \"<uuid>\", \"max_input_tokens\": 32768}"
-          ]
-        ],
-        "note": "地址、凭据、规格价格只存在 LiteLLM（凭据用 salt key 加密），平台库里没有。"
-      }
+      "to": "shared",
+      "description": "PresetRules 带出默认能力并核验线路可兑现承诺"
     },
     {
       "from": "catalog",
       "to": "db",
-      "description": "写 gw_model（未提交）",
+      "description": "INSERT gw_model、gw_route（同一事务）",
       "technology": "SQL/TCP"
     },
     {
       "from": "catalog",
       "to": "access",
-      "description": "model_registered(qwen-max, owner = 登记人)",
-      "details": {
-        "note": "ModelEvents，同一个事务里同步分发。"
-      }
+      "description": "register_model('qwen-max', owner=登记人) 并授研发部 READ"
     },
     {
       "from": "access",
       "to": "usercenter",
-      "description": "登记 Model / qwen-max，登记人为 OWNER",
-      "technology": "JSON/HTTP（POST /open/v1/data-permissions/batch）",
-      "details": {
-        "note": "同名模型删了又登记、用户中心里还有：沿用原来的授权，只改名。失败 → 撤回 LiteLLM 里刚建的部署，整个登记回滚。公有模型也登记，只是不写授权。"
-      }
-    },
-    {
-      "from": "mgmt",
-      "to": "access",
-      "description": "grant(qwen-max, 初始授权, operator)",
-      "details": {
-        "note": "私有模型才有初始授权。"
-      }
-    },
-    {
-      "from": "access",
-      "to": "usercenter",
-      "description": "研发部（含下级）READ",
-      "technology": "JSON/HTTP（POST /open/v1/data-permissions/batch，带 operator_id）"
+      "description": "登记数据对象 Model/qwen-max 并写入部门授权",
+      "technology": "JSON/HTTP（POST /open/v1/data-permissions/batch）"
     },
     {
       "from": "catalog",
       "to": "db",
-      "description": "记操作日志 model.register，提交",
-      "technology": "SQL/TCP",
+      "description": "记录审计 model.create 并提交事务",
+      "technology": "SQL/TCP"
+    },
+    {
+      "from": "catalog",
+      "to": "shared",
+      "description": "notify.flush -> VersionWatch.bump(tenant=本租户)"
+    },
+    {
+      "from": "shared",
+      "to": "redis",
+      "description": "INCR modelgw:config:tenant:<uuid> + PUBLISH 变更通知",
+      "technology": "Redis INCR + Pub/Sub",
       "details": {
-        "note": "响应前提交。"
+        "note": "只递增本租户的配置版本键，其他租户在模型网关里的内存快照不重拉、不重解密。"
       }
     },
     {
-      "from": "mgmt",
+      "from": "catalog",
       "to": "admin",
-      "description": "201 模型（合并后的一行：可调用）",
+      "description": "201 返回已登记的模型与线路",
       "technology": "JSON/HTTPS"
     }
   ]

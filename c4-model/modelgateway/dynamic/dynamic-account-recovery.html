@@ -35,8 +35,8 @@
 -->
 <script type="application/json" id="c4-model">
 {
-  "title": "动态图：模型平台 - 账号异常与恢复",
-  "description": "目标模型（代码还没有），方案见 agent-platform/doc/design/model-gateway-design.html。上游 402 → 网关把账号标异常、改走备用线路；管理平台每 5 分钟检查，充值后解除，同一会话回到原来的线路",
+  "title": "动态图：模型平台 - 账号欠费隔离与定时巡检自动恢复",
+  "description": "上游返回 402（或 OpenAI insufficient_quota 429）被方言归为 NO_BALANCE，网关在 Redis 将账号 A 标异常并切备用账号 B；管理平台每 5 分钟持锁巡检，充值恢复后自动解除异常。",
   "boundaries": [
     {
       "id": "mp",
@@ -75,21 +75,21 @@
       "id": "orch",
       "kind": "component",
       "name": "调用编排",
-      "technology": "Python 模块",
+      "technology": "gateway.invocation",
       "in": "gw"
     },
     {
       "id": "route",
       "kind": "component",
       "name": "线路",
-      "technology": "Python 模块",
+      "technology": "gateway.routing",
       "in": "gw"
     },
     {
       "id": "fmt",
       "kind": "component",
       "name": "格式",
-      "technology": "Python 模块",
+      "technology": "gateway.format",
       "in": "gw"
     },
     {
@@ -100,10 +100,18 @@
       "in": "mp"
     },
     {
+      "id": "db",
+      "kind": "container",
+      "name": "平台库",
+      "technology": "PostgreSQL 16",
+      "shape": "database",
+      "in": "mp"
+    },
+    {
       "id": "redis",
       "kind": "container",
       "name": "网关状态",
-      "technology": "Redis 7",
+      "technology": "Redis 7（键值 + Pub/Sub）",
       "shape": "database",
       "in": "mp"
     },
@@ -118,21 +126,18 @@
     {
       "from": "agent",
       "to": "chat",
-      "description": "调 deepseek-v4-pro（会话 S1）",
-      "technology": "Anthropic 格式，HTTP + SSE"
+      "description": "调 deepseek-v4-pro（带 X-Session-Id: S1）",
+      "technology": "HTTP + SSE"
     },
     {
       "from": "chat",
       "to": "orch",
-      "description": "chat(…)",
-      "details": {
-        "note": "读共同信息、准入、查能力、算参数都略过。"
-      }
+      "description": "chat(...)"
     },
     {
       "from": "orch",
       "to": "route",
-      "description": "pick(模型, S1) → 线路 1（公司账号 A）"
+      "description": "pick(routes, S1) → 线路 1（主账号 A）"
     },
     {
       "from": "orch",
@@ -142,109 +147,95 @@
     {
       "from": "fmt",
       "to": "provider",
-      "description": "发出（账号 A）",
-      "technology": "Anthropic 格式，HTTPS"
+      "description": "使用主账号 A 请求上游",
+      "technology": "HTTPS"
     },
     {
       "from": "provider",
       "to": "fmt",
-      "description": "402 余额不足",
-      "technology": "HTTPS",
-      "details": {
-        "example": "HTTP/1.1 402 Payment Required\n{\"error\": {\"message\": \"Insufficient Balance\", \"type\": \"unknown_error\"}}"
-      }
+      "description": "402 Payment Required（Insufficient Balance）",
+      "technology": "HTTPS"
     },
     {
       "from": "orch",
       "to": "route",
-      "description": "report(线路 1, 余额不足) → 换；账号 A 标异常",
-      "details": {
-        "note": "格式领域经 DeepSeek 的方言把 402 归成「余额不足」；线路只认种类，不看状态码（OpenAI 额度用完回的是 429，也会归成余额不足）。"
-      }
+      "description": "方言归类为 NO_BALANCE → report(线路 1) 判定切换并标账号异常"
     },
     {
       "from": "route",
       "to": "redis",
-      "description": "账号 A 异常：余额不足、开始时间",
-      "technology": "Redis SET",
-      "details": {
-        "note": "标在账号上，不是线路上：用到账号 A 的所有线路（不管哪个模型）都跳过，所有网关实例都看得到。"
-      }
+      "description": "SET modelgw:acct_issue:<账号 A> = no_balance（引用账号 A 的全部模型线路即刻跳过）",
+      "technology": "Redis SET"
     },
     {
       "from": "orch",
       "to": "route",
-      "description": "pick(模型, S1, 已试：线路 1) → 线路 2（备用账号 B）"
+      "description": "pick(routes, S1, tried={线路 1}) → 线路 2（备用账号 B）"
     },
     {
       "from": "fmt",
       "to": "provider",
-      "description": "发出（账号 B），正常回答",
-      "technology": "Anthropic 格式，HTTPS + SSE"
+      "description": "使用备用账号 B 成功完成流式回答",
+      "technology": "HTTPS + SSE"
     },
     {
       "from": "chat",
       "to": "agent",
-      "description": "回答（调用方不知道换过账号）",
+      "description": "正常返回回答（业务零中断）",
       "technology": "SSE"
     },
     {
       "from": "server",
       "to": "redis",
-      "description": "每 5 分钟：列出异常账号",
-      "technology": "Redis SCAN / GET"
+      "description": "每 5 分钟 AccountCheck 抢租约锁并读取异常账号标记",
+      "technology": "Redis SET NX + GET"
     },
     {
       "from": "server",
       "to": "provider",
-      "description": "查账号 A 的余额 → 0",
-      "technology": "HTTPS（DeepSeek 余额接口）",
-      "details": {
-        "note": "能查余额的供应商查余额；查不了的发一个 1 token 的请求试（余额不足时它也只会返回 402，不花钱）。管理员也可以在账号里点「测试连接」立即检查。"
-      }
+      "description": "查账号 A 余额（或按已配线路类型探测）→ 仍为 0",
+      "technology": "HTTPS"
     },
     {
       "from": "server",
-      "to": "admin",
-      "description": "通知：账号 A 余额不足，哪些模型已改走备用、哪些不可用",
-      "technology": "通知（渠道沿用平台的通知方式）"
+      "to": "db",
+      "description": "更新 gw_account.balance=0、check_error 并输出余额告警日志（控制台红字展示）",
+      "technology": "SQL/TCP"
     },
     {
       "from": "admin",
       "to": "provider",
-      "description": "给账号 A 充值"
+      "description": "给主账号 A 充值（也可在控制台点「测试连接」立即触发恢复）",
+      "technology": "供应商控制台"
     },
     {
       "from": "server",
       "to": "provider",
-      "description": "下一次检查：余额正常",
-      "technology": "HTTPS（DeepSeek 余额接口）"
+      "description": "下一轮巡检（或手动探测）：查到账号 A 余额恢复正常",
+      "technology": "HTTPS"
     },
     {
       "from": "server",
       "to": "redis",
-      "description": "解除账号 A 的异常",
+      "description": "RouteHealth.clear(账号 A)：DEL modelgw:acct_issue:<账号 A>",
       "technology": "Redis DEL"
     },
     {
       "from": "agent",
       "to": "chat",
-      "description": "会话 S1 的下一轮",
-      "technology": "Anthropic 格式，HTTP + SSE"
+      "description": "会话 S1 发起下一轮请求",
+      "technology": "HTTP + SSE"
     },
     {
       "from": "orch",
       "to": "route",
-      "description": "pick(模型, S1) → 线路 1：账号 A 恢复了，S1 回到原来的落点",
-      "details": {
-        "note": "落点由会话标识算出来，没变过；账号 A 异常期间 S1 临时走线路 2，恢复后回到线路 1（缓存要重新建一次）。"
-      }
+      "description": "pick(routes, S1) → 账号 A 已恢复，一致性哈希自然回到线路 1"
     },
     {
       "from": "fmt",
       "to": "provider",
-      "description": "发出（账号 A）",
-      "technology": "Anthropic 格式，HTTPS + SSE"
+      "description": "重新由主账号 A 承载流量",
+      "technology": "HTTPS + SSE"
     }
   ]
 }
