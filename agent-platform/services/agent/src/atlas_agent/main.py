@@ -13,6 +13,7 @@ from atlas_tenancy import TenantScope
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import exc as sa_exc
 from starlette.requests import Request
 
 from .api.internal import router as internal_router
@@ -249,6 +250,18 @@ def create_app() -> FastAPI:
             status_code=503,
             headers={"Retry-After": "5"},
             content={"error": {"kind": "streams_busy", "message": str(exc), "details": {}}},
+        )
+
+    @app.exception_handler(sa_exc.TimeoutError)
+    async def db_pool_busy_handler(_: Request, exc: sa_exc.TimeoutError) -> JSONResponse:
+        """数据库连接池占满、等不到连接：503 + Retry-After（可重试），不是 500。"""
+        logger.warning("数据库连接池占满：%s", exc)
+        return JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "2"},
+            content={
+                "error": {"kind": "db_busy", "message": "系统忙不过来了，请稍后重试", "details": {}}
+            },
         )
 
     @app.exception_handler(EngineError)

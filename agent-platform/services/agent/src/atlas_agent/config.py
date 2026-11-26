@@ -60,6 +60,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=_REPO_ROOT / ".env", extra="ignore")
 
     database_url: str
+    #: 本进程的数据库连接池：常驻 db_pool_size 个，忙时再多开 db_max_overflow 个；
+    #: 都占满时新请求最多等 db_pool_timeout_s，等不到回 503（main.py）。
+    #: ★ 跑着的 run 只在读写时短暂借连接，不常占；跟着 max_concurrent_runs 调的是峰值时
+    #:   同时开跑、写检查点的量。各服务的池加起来要小于 PostgreSQL 的 max_connections
+    #:   （deploy/server/10-infra.yaml：300）
+    db_pool_size: int = 20
+    db_max_overflow: int = 20
+    db_pool_timeout_s: float = 30.0
     redis_url: str
     #: 共享连接池（redisx.RedisComponent）里短命令那个池的连接上限，和用满时等空出连接的上限
     redis_max_connections: int = 100

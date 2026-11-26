@@ -41,6 +41,12 @@ spec:
             # PG / Redis / MinIO 都留在宿主的 docker compose 里。
             - {name: DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas"}
             - {name: REDIS_URL, value: "redis://__HOST_IP__:6380/0"}
+            # 并发（config.py）：本实例同时执行的 run、SSE 连接、数据库连接池（常驻 + 忙时多开）。
+            #   跑着的 run 只在读写时短暂借连接；池加起来要小于 PostgreSQL 的 max_connections（300）
+            - {name: MAX_CONCURRENT_RUNS, value: "256"}
+            - {name: SSE_MAX_CONNECTIONS, value: "600"}
+            - {name: DB_POOL_SIZE, value: "30"}
+            - {name: DB_MAX_OVERFLOW, value: "50"}
             # 运营接口（/ops/v1）的签名密钥：运营中心（48-opscenter.yaml）调用时核对（apply.sh 建 atlas-ops-keys）
             - name: OPS_API_KEY
               valueFrom: {secretKeyRef: {name: atlas-ops-keys, key: atlas}}

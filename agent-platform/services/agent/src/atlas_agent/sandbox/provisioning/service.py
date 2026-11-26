@@ -27,7 +27,7 @@ c4-model/agent/sandbox/code-sandbox-provisioning.html。
   坏了退役时，绑在上面的业务一起换到新沙箱。
 ★ 配额可以是固定的，也可以每次分配时现取（每人上限是租户设置 capacity.sandboxes_per_person，
   runtime_config.py）：管理员改了上限，下一次分配就按新的判。要登记新沙箱时再判租户份额
-  （tenant_quota，容量组件给的；同一个事务里判，复用已有的沙箱不判）。
+  （tenant_quota，容量组件给的：开事务之前取一个读好配置的检查，事务里只锁行、数数；复用已有的沙箱不判）。
 ★ 附加件（SandboxAddon）：沙箱建好、就绪之后，按登记顺序回调 on_created（只对它认的请求）；退役前
   回调 before_retire。供给不认识它们（如浏览器）：依赖只有附加件 → 供给一个方向。
   on_created 失败按建沙箱失败处理（退役，下次 ensure 换一个重建）；before_retire 失败只记日志，
@@ -61,7 +61,14 @@ from .model import (
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-__all__ = ["SandboxAddon", "SandboxKind", "SandboxProvisioning", "SandboxUnavailableError"]
+__all__ = [
+    "SandboxAddon",
+    "SandboxKind",
+    "SandboxProvisioning",
+    "SandboxUnavailableError",
+    "TenantQuotaCheck",
+    "TenantSandboxQuota",
+]
 
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
@@ -70,8 +77,10 @@ T = TypeVar("T")
 _MAX_ATTEMPTS = 8
 
 
-#: 租户份额的准入：(会话, 沙箱的主人) → 不行时的说明，行就返回空
-TenantSandboxQuota = Callable[["AsyncSession", UUID], Awaitable[str | None]]
+#: 租户份额的检查：(事务的 session, 用户) → 拒绝的原因，None = 放行
+TenantQuotaCheck = Callable[["AsyncSession", UUID], Awaitable[str | None]]
+#: 开供给事务之前调，拿到一个读好配置的检查（读配置要另借连接，事务里不能借，见 capacity.py）
+TenantSandboxQuota = Callable[[], Awaitable[TenantQuotaCheck]]
 
 
 class SandboxUnavailableError(RuntimeError):
@@ -183,6 +192,7 @@ class SandboxProvisioning:
         self, biz: BizRef, spec: CreateSpec, sharing: Sharing | None
     ) -> UserSandbox:
         quota = self._quota if isinstance(self._quota, QuotaPolicy) else await self._quota()
+        tenant_check = await self._tenant_quota() if self._tenant_quota is not None else None
         async with self._sessions() as session:
             repo = SandboxAccountRepository(session, cache_s=self._cache_s)
             account = await repo.load(biz.user_uuid)
@@ -194,9 +204,9 @@ class SandboxProvisioning:
             sandbox = account.allocate(
                 biz, spec, policy=self._allocation, quota=quota, sharing=sharing
             )
-            if self._tenant_quota is not None and sandbox.sandbox_uuid not in existing:
+            if tenant_check is not None and sandbox.sandbox_uuid not in existing:
                 # 要登记一个新的：再判租户份额（同一个事务里锁住份额行再数，见 code-capacity.html）
-                refused = await self._tenant_quota(session, biz.user_uuid)
+                refused = await tenant_check(session, biz.user_uuid)
                 if refused:
                     raise QuotaExceeded(refused)
             await repo.save(account)

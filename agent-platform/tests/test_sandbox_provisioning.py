@@ -192,9 +192,14 @@ async def test_the_tenant_quota_holds_across_people_even_concurrently(
     """租户份额（code-capacity.html）：几个人并发新建，合计不超过份额（2）；复用已有的不判。"""
     capacity = CapacityService(RuntimeConfig(get_settings(), get_sessionmaker()))
 
-    async def tenant_quota(session: Any, user: UUID) -> str | None:
-        admission = await capacity.admit_sandbox(session, user)
-        return None if admission.allowed else admission.message
+    async def tenant_quota() -> Any:
+        limits = await capacity.limits()
+
+        async def check(session: Any, user: UUID) -> str | None:
+            admission = await capacity.admit_sandbox(session, user, limits)
+            return None if admission.allowed else admission.message
+
+        return check
 
     prov = SandboxProvisioning(
         env["runtime"],

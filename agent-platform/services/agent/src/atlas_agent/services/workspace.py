@@ -143,8 +143,10 @@ class WorkspaceService:
                     quota=limits.quota,
                 )
         if self._capacity is not None:
+            # 份额配置先读好再进准入（capacity.py：准入里不再另借连接）
+            quota_limits = await self._capacity.limits()
             admission = await self._capacity.admit_storage(
-                self._session, owner, measure=measure, adding=size
+                self._session, owner, measure=measure, adding=size, limits=quota_limits
             )
             if not admission.allowed:
                 raise UploadTooLarge(

@@ -25,6 +25,7 @@ from atlas_agent.repositories.run_queue import RunQueue
 from atlas_agent.runtime_config import RuntimeConfig
 from atlas_tenancy import TenantScope
 from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from tests.fake_uc import TEST_TENANT
 
@@ -102,11 +103,12 @@ async def _finish(run_id: UUID) -> None:
 
 
 async def _take(capacity: CapacityService, run_id: UUID, owner: str) -> Any:
-    """仓库层抢锁 + 准入，同一个事务（与 RunWorker.try_take 一样）。"""
+    """仓库层抢锁 + 准入，同一个事务（与 RunWorker.try_take 一样：配置在开事务之前读）。"""
+    limits = await capacity.limits()
     async with get_sessionmaker()() as s:
         taken = await RunQueue(s).take(run_id, owner=owner, lease_s=30.0)
         assert taken is not None
-        admission = await capacity.admit_run(s, run_id)
+        admission = await capacity.admit_run(s, run_id, limits)
         if admission.allowed:
             await s.commit()
         else:
@@ -132,6 +134,37 @@ async def test_runs_over_the_quota_stay_queued_until_one_finishes(
 
     await _finish(first)
     assert await worker.try_take(second), "有空了，兜底下一轮再来就抢得到"
+
+
+async def test_more_runs_starting_at_once_than_db_connections_do_not_deadlock() -> None:
+    """准入不在认领事务里另借连接（capacity.py 模块说明）：池里只有 2 个连接、同时开跑 8 个，
+    都要很快认领成功，不能「拿着一个、等第二个」卡到超时。
+
+    2026-11-26 日本服务器压测：24 个同时开跑就卡死 30 秒。
+    """
+    settings = get_settings()
+    engine = create_async_engine(settings.database_url, pool_size=2, max_overflow=0, pool_timeout=5)
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    segment = _ParkedSegment()
+    w = RunWorker(
+        sm,
+        settings,
+        instance="cap-small",
+        segment=segment,  # type: ignore[arg-type]
+        continuation=Continuation(sm, settings, instance="cap-small"),
+        capacity=CapacityService(RuntimeConfig(settings, sm)),
+    )
+    runs = [await _queued() for _ in range(8)]
+    try:
+        taken = await asyncio.wait_for(asyncio.gather(*(w.try_take(r) for r in runs)), 20)
+        assert all(taken), taken
+    finally:
+        segment.release.set()
+        await asyncio.sleep(0)
+        for slot in list(w._slots.values()):
+            if slot.task is not None:
+                slot.task.cancel()
+        await engine.dispose()
 
 
 async def test_taking_over_an_orphan_is_not_blocked_by_itself(capacity: CapacityService) -> None:
@@ -210,8 +243,11 @@ async def test_storage_sums_everyones_last_measured_usage(capacity: CapacityServ
         measured.append(30)
         return 30
 
+    limits = await capacity.limits()
     async with get_sessionmaker()() as s:
-        allowed = await capacity.admit_storage(s, uuid4(), measure=measure, adding=10**9)
+        allowed = await capacity.admit_storage(
+            s, uuid4(), measure=measure, adding=10**9, limits=limits
+        )
     assert allowed.allowed and measured == [], "份额不限：不现算"
 
     await _set_quota(capacity, Quota(storage_bytes=100))
@@ -219,10 +255,12 @@ async def test_storage_sums_everyones_last_measured_usage(capacity: CapacityServ
     async with get_sessionmaker()() as s:
         await capacity.record_storage(s, other, 60)
         await s.commit()
+    limits = await capacity.limits()
     async with get_sessionmaker()() as s:
-        refused = await capacity.admit_storage(s, me, measure=measure, adding=20)
+        refused = await capacity.admit_storage(s, me, measure=measure, adding=20, limits=limits)
         assert not refused.allowed and refused.used == 90 and refused.limit == 100
-        assert (await capacity.admit_storage(s, me, measure=measure, adding=10)).allowed
+        ok = await capacity.admit_storage(s, me, measure=measure, adding=10, limits=limits)
+        assert ok.allowed
         await s.commit()
     async with get_sessionmaker()() as s:
         mine = await s.scalar(select(StorageUsageRow.bytes).where(StorageUsageRow.user_uuid == me))

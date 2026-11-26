@@ -43,7 +43,7 @@
       "methods": [
         [
           "+",
-          "try_take(run_uuid)：认领事务里 admit_run"
+          "try_take(run_uuid)：先 limits()，再在认领事务里 admit_run"
         ]
       ],
       "at": [
@@ -61,7 +61,7 @@
       "methods": [
         [
           "+",
-          "ensure：登记新沙箱的事务里 admit_sandbox"
+          "ensure：开事务前取份额检查（limits），登记新沙箱的事务里 admit_sandbox"
         ]
       ],
       "at": [
@@ -131,6 +131,10 @@
       "name": "CapacityService",
       "attributes": [],
       "methods": [
+        [
+          "+",
+          "limits() -> Limits（默认份额、每人上限；在准入事务之前调）"
+        ],
         [
           "+",
           "admit_run(session, tenant_uuid, user_uuid) -> Admission"
@@ -524,13 +528,13 @@
   "capabilities": [
     {
       "name": "run 准入",
-      "entry": "admit_run(session, tenant_uuid, user_uuid)",
+      "entry": "limits() → admit_run(session, tenant_uuid, user_uuid, limits)",
       "callers": "Run 执行器（RunWorker.try_take，认领 run 的事务里）",
       "description": "满了 run 留在队列里，界面显示「排队中：本租户（或你）同时运行的任务已满」；挂起、排队的 run 不占份额"
     },
     {
       "name": "沙箱准入",
-      "entry": "admit_sandbox(session, tenant_uuid, user_uuid)",
+      "entry": "limits() → admit_sandbox(session, tenant_uuid, user_uuid, limits)",
       "callers": "沙箱 · 通用供给（登记新沙箱的事务里）",
       "description": "复用已有的沙箱不用问；满了直接拒绝，提示空闲的沙箱会被回收"
     },
@@ -575,6 +579,10 @@
     {
       "decision": "没有份额行的租户用默认份额（系统参数），第一次准入时才建行",
       "reason": "开通租户时 Atlas 不用做任何事；运营中心改默认份额，所有没单独定过的租户跟着变。"
+    },
+    {
+      "decision": "准入要读的配置（默认份额、每人上限）在打开准入事务之前读，事务里只锁份额行、数数",
+      "reason": "读配置要另借一个数据库连接：持有事务连接时再借，同时准入的一多，整个连接池会被「拿着一个、等第二个」占满，一起等到超时（2026-11-26 日本服务器并发压测：24 个同时开跑就卡死 30 秒）。代价：配置在开事务前读，和锁份额行之间有极短的时间差，期间改了配置这一次按旧值判"
     }
   ],
   "schemaNote": "主键约定：id 是自增主键，只在库内使用；引用和 API 都用 uuid。两张表都继承 TenantOwned（租户隔离库），按租户自动过滤；运营接口在系统范围里读写全部租户。不建外键约束。类型写的是 db/types.py 和 SQLAlchemy 的通用类型。",

@@ -32,7 +32,7 @@ from .base.network.egress import OpenSandboxEgress
 from .exec import ExecutionLedger
 from .native import ImagePolicy, NativeSandboxKind, NativeSandboxService
 from .provisioning.model import QuotaPolicy
-from .provisioning.service import SandboxProvisioning
+from .provisioning.service import SandboxProvisioning, TenantQuotaCheck
 from .session_pod import BridgeLauncher, CliPodKind, SessionPods
 
 if TYPE_CHECKING:
@@ -111,9 +111,15 @@ class SandboxComponent:
 
         capacity = CapacityService(config)
 
-        async def tenant_quota(session: AsyncSession, user: UUID) -> str | None:
-            admission = await capacity.admit_sandbox(session, user)
-            return None if admission.allowed else admission.message
+        async def tenant_quota() -> TenantQuotaCheck:
+            # 份额配置在打开供给事务之前读，事务里只锁行、数数（capacity.py）
+            limits = await capacity.limits()
+
+            async def check(session: AsyncSession, user: UUID) -> str | None:
+                admission = await capacity.admit_sandbox(session, user, limits)
+                return None if admission.allowed else admission.message
+
+            return check
 
         provisioning = SandboxProvisioning(
             runtime,

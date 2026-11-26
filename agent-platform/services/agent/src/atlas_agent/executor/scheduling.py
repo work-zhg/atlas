@@ -163,12 +163,14 @@ class RunWorker:
         if not self.admission.reserve():
             return False
         try:
+            # 准入要读的配置先读好：读配置另借一个连接，不能在持有认领事务的连接时借（capacity.py）
+            limits = await self._capacity.limits() if self._capacity is not None else None
             async with self._sessionmaker() as session:
                 taken = await RunQueue(session).take(
                     run_id, owner=self._instance, lease_s=self._settings.run_lease_s
                 )
-                if taken is not None and self._capacity is not None:
-                    admission = await self._capacity.admit_run(session, run_id)
+                if taken is not None and self._capacity is not None and limits is not None:
+                    admission = await self._capacity.admit_run(session, run_id, limits)
                     if not admission.allowed:
                         # 份额满了：回滚抢锁，run 留在排队里，兜底任务下一轮再来
                         await session.rollback()
