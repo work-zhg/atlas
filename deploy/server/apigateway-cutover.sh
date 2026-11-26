@@ -9,7 +9,7 @@
 #   · .env：ATLAS_PUBLIC_HOST（已解析到本机，80 对公网开放：证书用 HTTP-01 验证）；CERTBOT_EMAIL 可空；
 #     要从外面开 Langfuse 就再写 ATLAS_LANGFUSE_HOST（同样要解析到本机）
 #
-# 步骤（站点从第 2 步断开，第 4 步结束恢复；单节点上几分钟）：
+# 步骤（站点从第 2 步断开，第 4 步结束恢复；单节点上几分钟。日本服务器 2026-11-26 已做过）：
 #   1. 拉 OpenResty 镜像、装 certbot、写 systemd 服务（gateway.sh install；可重复，不占端口，Traefik 照常对外）
 #   2. 部署新版（deploy.sh app）：各服务的内部 Ingress、去掉 nginx 的前端、用户中心的 JWT、系统租户
 #   3. Traefik 退回集群内：不占 80/443、固定 ClusterIP（traefik-values.yaml），从宿主机试一次内部 Ingress
@@ -69,7 +69,7 @@ check() {  # check <路径> <期望状态码>
   [ "$got" = "$2" ]
 }
 ok=1
-check /atlas-ui/ 200 || ok=0
+check /atlas-ui 200 || ok=0          # /atlas-ui/ 会被 Next.js 308 到不带斜杠的
 check /uc-ui/login 200 || ok=0
 check /atlas/v1/threads 401 || ok=0
 check /uc/api/v1/auth/jwks 200 || ok=0
