@@ -96,7 +96,7 @@ if [ "$TARGET" = local ] || ssh -o BatchMode=yes -o ConnectTimeout=5 "$TARGET" t
       [ -z "$img" ] || grep -qxF "docker.io/library/$img" <<<"$have" || missing+=("服务器上没有指定的镜像 $img")
     done
     # 对外入口是宿主机上的 API 网关：没装就部署，前端的新路径（/<名>-ui）从外面一个都打不开
-    if [ "${ATLAS_GATEWAY_CUTOVER:-}" != 1 ] && ! on_server "test -x /usr/local/openresty/nginx/sbin/nginx"; then
+    if [ "${ATLAS_GATEWAY_CUTOVER:-}" != 1 ] && ! on_server "test -f /etc/systemd/system/atlas-gateway.service"; then
       missing+=("服务器上没装 API 网关：第一次从 Traefik 对外换过来，跑 deploy/server/apigateway-cutover.sh")
     fi
   fi

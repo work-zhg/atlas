@@ -10,7 +10,7 @@
 #     要从外面开 Langfuse 就再写 ATLAS_LANGFUSE_HOST（同样要解析到本机）
 #
 # 步骤（站点从第 2 步断开，第 4 步结束恢复；单节点上几分钟）：
-#   1. 装 OpenResty、certbot（gateway.sh install；不占端口，Traefik 照常对外）
+#   1. 拉 OpenResty 镜像、装 certbot、写 systemd 服务（gateway.sh install；可重复，不占端口，Traefik 照常对外）
 #   2. 部署新版（deploy.sh app）：各服务的内部 Ingress、去掉 nginx 的前端、用户中心的 JWT、系统租户
 #   3. Traefik 退回集群内：不占 80/443、固定 ClusterIP（traefik-values.yaml），从宿主机试一次内部 Ingress
 #   4. 申请证书并起网关（gateway.sh cert：先只起 80 做 ACME 验证，再全量）
@@ -18,7 +18,7 @@
 #
 # ★ Traefik 以前的 Let's Encrypt 证书在它的 PVC 里，网关不用：certbot 重新申请（同一域名每周最多 5 张，
 #   先演练就 CERTBOT_STAGING=1，正式前把 /etc/letsencrypt/live/<域名> 删掉再跑 gateway.sh cert）。
-# ★ 回退：helm upgrade traefik 用切换前的值（hostPort 80/443）、systemctl stop openresty；前端镜像要换回旧标签。
+# ★ 回退：systemctl disable --now atlas-gateway；helm upgrade traefik 用切换前的值（hostPort 80/443）；前端镜像要换回旧标签。
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -33,8 +33,8 @@ command -v helm >/dev/null || { echo "缺 helm（cluster-setup.sh 装的）"; ex
 HOST="$ATLAS_PUBLIC_HOST"
 INGRESS_IP="$(awk '$1 == "clusterIP:" {print $2}' deploy/server/traefik-values.yaml)"
 
-echo "── 1. 装 OpenResty、certbot"
-[ -x /usr/local/openresty/nginx/sbin/nginx ] || deploy/server/gateway.sh install
+echo "── 1. OpenResty 镜像、certbot、systemd 服务"
+deploy/server/gateway.sh install
 
 echo "── 2. 部署新版"
 ATLAS_GATEWAY_CUTOVER=1 ATLAS_PUBLIC_SCHEME=https deploy/server/deploy.sh app
@@ -73,6 +73,6 @@ check /atlas-ui/ 200 || ok=0
 check /uc-ui/login 200 || ok=0
 check /atlas/v1/threads 401 || ok=0
 check /uc/api/v1/auth/jwks 200 || ok=0
-[ "$ok" = 1 ] || { echo "✗ 有地址不对：journalctl -u openresty、/var/log/atlas-gateway/ 看原因"; exit 1; }
+[ "$ok" = 1 ] || { echo "✗ 有地址不对：journalctl -u atlas-gateway、/var/log/atlas-gateway/ 看原因"; exit 1; }
 echo "✓ 切换完成：https://${HOST}/（跳 /atlas-ui/）；统一登录 https://${HOST}/uc-ui/login"
 echo "  运营中心 https://${HOST}/opscenter-ui/：系统租户的 admin 登录（临时密码见第 2 步的输出），在用户中心给运营人员授运营模块"

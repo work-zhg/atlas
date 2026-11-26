@@ -3,6 +3,10 @@
 服务器上唯一对外的入口：宿主机上由 systemd 管的 OpenResty，占 80 / 443。设计见
 `c4-model/apigateway/design-api-gateway.html`。
 
+OpenResty 跑在固定版本的官方镜像里（`openresty/openresty:1.27.1.2-bookworm-fat`，host 网络，systemd 服务
+`atlas-gateway` 管 `docker run`），和端到端测试是同一个镜像。没用 apt 包：官方 apt 源的签名密钥是 SHA1 绑定的，
+Debian 13 的 apt 拒收。
+
 - **routes.yaml** 是站点和对外服务的唯一来源：每个对外的后端或前端只登记名字、种类、子路径、认证模式和转发档位，不写地址。
 - **render**（`python -m atlas_gateway`）按硬规则校验后渲染成 Nginx 配置；违反任何一条就不生成。
 - **Lua**（`src/atlas_gateway/lua/atlas_gw/`）只做三件事：本地验 Ed25519 访问 JWT、校 CSRF、封登录失败太多的 IP。转发、SSE、WebSocket、大文件、证书都是 Nginx 原生指令。
