@@ -20,7 +20,7 @@ gateway:
   # 内部 Ingress（集群里的 Traefik）的固定 ClusterIP:端口 —— 网关唯一的上游
   internal_ingress: "${GATEWAY_INTERNAL_INGRESS}"
   internal_suffix: "${GATEWAY_INTERNAL_SUFFIX:-internal.techstz.com}"
-  root_redirect: /atlas-ui/
+  root_redirect: /atlas-ui
   cert_dir: "${GATEWAY_CERT_DIR:-/etc/letsencrypt/live}"
   acme_root: "${GATEWAY_ACME_ROOT:-/var/www/acme}"
   log_dir: "${GATEWAY_LOG_DIR:-/var/log/atlas-gateway}"

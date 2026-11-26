@@ -38,7 +38,7 @@ location {{ loc.match }} {
 
 # 旧页面地址：{{ rd.source }} → {{ rd.target }}（过渡期）
 location = {{ rd.source }} {
-  return 301 {{ rd.target }}/;
+  return 301 {{ rd.target }};
 }
 location {{ rd.source }}/ {
   rewrite ^{{ rd.source }}/(.*)$ {{ rd.target }}/$1 permanent;

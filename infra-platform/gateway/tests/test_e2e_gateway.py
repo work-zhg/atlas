@@ -121,17 +121,19 @@ def test_unregistered_is_404(gw: Gateway, path: str) -> None:
     assert_error(gw.get(path), 404, "NOT_FOUND")
 
 
-def test_root_and_trailing_slash_redirects(gw: Gateway) -> None:
+def test_root_redirect_and_bare_ui_root(gw: Gateway) -> None:
     r = gw.get("/")
-    assert (r.status, r.header("location")) == (302, "/atlas-ui/")
-    r = gw.get("/atlas-ui")
-    assert r.status == 301 and r.header("location") == "/atlas-ui/"
+    assert (r.status, r.header("location")) == (302, "/atlas-ui")
+    # 不带斜杠的前端根原样转给前端（Next.js 把 /atlas-ui/ 308 到这里；网关再 301 回去就成了死循环）
+    r = gw.get("/atlas-ui?x=1")
+    assert r.status == 200 and r.json()["uri"] == "/atlas-ui?x=1"
+    assert r.json()["host"] == "atlas-ui.internal.techstz.com"
 
 
 @pytest.mark.parametrize(
     ("old", "new"),
     [
-        ("/atlas", "/atlas-ui/"),
+        ("/atlas", "/atlas-ui"),
         ("/atlas/threads/1?x=1", "/atlas-ui/threads/1?x=1"),
         ("/uc/login?next=/atlas", "/uc-ui/login?next=/atlas"),
         ("/teamflow/processes", "/teamflow-ui/processes"),

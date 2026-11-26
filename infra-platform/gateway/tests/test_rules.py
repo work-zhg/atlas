@@ -138,6 +138,8 @@ def test_plan_strips_name_for_api_and_keeps_ui() -> None:
     assert legacy.upstream_uri == "/v1/"
     ui = locs["/atlas-ui/"]
     assert ui.upstream_uri is None and ui.host == "atlas-ui.internal.techstz.com"
+    root = locs["= /atlas-ui"]
+    assert root.upstream_uri is None and root.route is ui.route
     exact = locs["= /device/connect"]
     assert exact.upstream_uri == "/connect"
     events = locs["~ ^/atlas/v1/threads/[^/]+/events$"]

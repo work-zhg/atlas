@@ -1,7 +1,7 @@
 """路由 → Nginx location 的对应规则（渲染和硬规则共用一份，免得两边对不上）。
 
   后端 /<名><子路径>：去掉 /<名> 转发；前端 /<名><子路径>：原样转发（basePath = /<名>）。
-  子路径 /         → location /<名>/              （整个服务）
+  子路径 /         → location /<名>/              （整个服务；前端另加 = /<名>，即 basePath 本身）
   以 / 结尾        → location /<名>/a/b/          （前缀）
   不以 / 结尾      → location = /<名>/a/b         （精确）
   含 *（占一整段） → location ~ ^/<名>/a/[^/]+/b$  （正则；以 / 结尾时不加 $）
@@ -73,6 +73,10 @@ def service_locations(service: Service, internal_host: str) -> list[Location]:
     for route in service.routes:
         for prefix in prefixes:
             out.append(_location(route, prefix, internal_host))
+            if route.kind is Kind.UI and route.subpath == "/":
+                # 前端的根（不带斜杠的 basePath）原样转过去：Next.js 把 /<名>-ui/ 308 到 /<名>-ui，
+                # 只有前缀 location 的话 Nginx 又会 301 回 /<名>-ui/，来回跳
+                out.append(Location(route, f"= {prefix}", prefix, None, None, None, internal_host))
         for lp in route.legacy_paths:
             out.append(_location(route, "", internal_host, legacy_path=lp))
     return out

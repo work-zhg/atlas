@@ -151,7 +151,7 @@ class Settings:
     #: 内部 Ingress 的固定地址（IP:端口）——网关唯一的上游
     internal_ingress: str
     internal_suffix: str = "internal.techstz.com"
-    root_redirect: str = "/atlas-ui/"
+    root_redirect: str = "/atlas-ui"
     cert_dir: str = "/etc/letsencrypt/live"
     acme_root: str = "/var/www/acme"
     log_dir: str = "/var/log/atlas-gateway"
