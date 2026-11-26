@@ -78,7 +78,7 @@ def _platform_spec(base: str, name: str = "kb", **over: Any) -> dict[str, Any]:
     }
 
 
-async def _register_platform(spec: dict[str, Any]) -> Any:
+async def _register_platform(spec: dict[str, Any], settings: Any = None) -> Any:
     """运维命令行（service --platform add）做的事：不在任何租户里。"""
     from atlas_mcpgateway import wiring
     from atlas_mcpgateway.__main__ import add_service
@@ -86,7 +86,7 @@ async def _register_platform(spec: dict[str, Any]) -> Any:
     from atlas_mcpgateway.settings import get_settings
     from atlas_mcpgateway.upstream.gateway import UpstreamGateway
 
-    settings = get_settings()
+    settings = settings or get_settings()
     upstream = UpstreamGateway(settings)
     try:
         async with get_sessionmaker()() as s:
@@ -228,3 +228,14 @@ async def test_platform_upstreams_skip_the_address_check() -> None:
         await upstream.check_addresses(UpstreamSpec("rest", connection, platform=True))
     finally:
         await upstream.aclose()
+
+
+async def test_registering_a_platform_service_at_an_internal_address(
+    client: httpx.AsyncClient,
+) -> None:
+    """运维命令行登记平台服务（如集群内的知识库）：登记这一步也不查地址，只有租户填的才查。"""
+    from atlas_mcpgateway.settings import get_settings
+
+    strict = get_settings().model_copy(update={"upstream_allow_cidrs": []})
+    row = await _register_platform(_platform_spec("http://127.0.0.1:9", name="kb-internal"), strict)
+    assert row.platform and row.connection["base_url"] == "http://127.0.0.1:9/rest/api"

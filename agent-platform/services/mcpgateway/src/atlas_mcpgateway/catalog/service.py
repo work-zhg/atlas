@@ -180,7 +180,9 @@ class ServiceCatalog:
                 descriptor = previous.descriptor
             else:
                 raise Invalid("请上传描述文件（FileDescriptorSet）")
-        spec = UpstreamSpec(kind, conn, UpstreamCredential.of(cred, secret), descriptor)
+        spec = UpstreamSpec(
+            kind, conn, UpstreamCredential.of(cred, secret), descriptor, platform=self.platform
+        )
         await self._check_addresses(spec)
         try:
             found = await self.upstream.discover(spec)
@@ -372,7 +374,9 @@ class ServiceCatalog:
         row = await self._editable(name)
         conn = validate_connection(row.kind, connection)
         await self._check_addresses(
-            UpstreamSpec(row.kind, conn, UpstreamCredential.of(row.credential, None))
+            UpstreamSpec(
+                row.kind, conn, UpstreamCredential.of(row.credential, None), platform=self.platform
+            )
         )
         if row.kind == "grpc":
             conn["services"] = row.connection.get("services") or []
@@ -388,7 +392,9 @@ class ServiceCatalog:
         row = await self._editable(name)
         cred = UpstreamCredential.validate(row.kind, credential, secret, previous=row.credential)
         await self._check_addresses(
-            UpstreamSpec(row.kind, row.connection, UpstreamCredential.of(cred, None))
+            UpstreamSpec(
+                row.kind, row.connection, UpstreamCredential.of(cred, None), platform=self.platform
+            )
         )
         if secret:
             row.credential_secret = secret
