@@ -74,7 +74,7 @@
       "id": "gateway",
       "kind": "container",
       "shape": "server",
-      "technology": "OpenResty 1.27（宿主机 systemd 进程，不在 K8s 里）",
+      "technology": "OpenResty 1.27（宿主机上 systemd 管的 Docker 容器，不在 K8s 里）",
       "name": "网关服务",
       "description": "占 80 / 443：按域名分站点、终结 TLS、80 跳 HTTPS（ACME 验证路径除外）；Atlas 站点挡畸形路径和内部端点、清伪造身份头、按名字白名单路由，Lua 在 access 阶段验 JWT、校 CSRF，登录接口失败太多的 IP 封 30 分钟；按转发档位把请求发给内部 Ingress：/<名>/… 去掉 /<名>、/<名>-ui/… 原样，Host 写 <名>.internal.techstz.com；reload 时旧 worker 等长连接收尾。",
       "at": [

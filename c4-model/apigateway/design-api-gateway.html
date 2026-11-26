@@ -471,6 +471,7 @@
     <tbody>
       <tr><td><a href="system-context.html" target="_blank" rel="noopener">API 网关 · 系统上下文</a></td><td>网关是服务器上唯一的入口：经内部 Ingress 到用户中心、前端、业务应用、数据面子网关，以及透传的 Langfuse、gitea；证书找 Let's Encrypt。</td></tr>
       <tr><td><a href="container.html" target="_blank" rel="noopener">API 网关 · 容器</a></td><td>三个容器都在宿主机上：网关服务、路由表与配置生成器、证书续期；网关的上游只有集群里的内部 Ingress。</td></tr>
+      <tr><td><a href="deployment-jp.html" target="_blank" rel="noopener">部署 · 日本服务器</a></td><td>atlas.techstz.com 的实际部署：宿主机上 systemd 管的 OpenResty 容器占 80 / 443，集群里的 Traefik 只在集群内（ClusterIP 10.96.0.80），按 Host 分给用户中心、前端、业务应用和数据面子网关。</td></tr>
       <tr><td><a href="component-gateway.html" target="_blank" rel="noopener">网关服务 · 组件</a></td><td>八个组件按请求阶段排：TLS 与站点、入口与边界防护、白名单路由表（Nginx）→ 登录失败封禁、访问阶段编排、JWT 认证器、公钥环（Lua）→ 流式转发（Nginx）。</td></tr>
     </tbody>
   </table>
