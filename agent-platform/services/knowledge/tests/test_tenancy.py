@@ -12,7 +12,7 @@ from uuid import UUID
 import httpx
 from atlas_knowledge.db.models import Dataset, Document, IndexVersion
 from atlas_knowledge.db.session import get_sessionmaker
-from atlas_knowledge.document.runner import IndexingRunner, recover_stalled, run_queued
+from atlas_knowledge.document.runner import recover_stalled, run_queued
 from atlas_tenancy import TenantScope
 from conftest import OTHER_TENANT, TEST_TENANT, ops_request, run_indexing
 from sqlalchemy import select
@@ -54,9 +54,11 @@ async def _status(doc_uuid: str, tenant: str = TEST_TENANT) -> str:
             return "gone" if doc is None else doc.indexing_status
 
 
-async def _ops(client: Any, action: str, tenant: str = TEST_TENANT) -> httpx.Response:
-    path = f"/ops/v1/tenants/{tenant}/{action}"
-    return await client.request("POST", path, **ops_request("POST", path))  # type: ignore[no-any-return]
+async def _ops(
+    client: Any, method: str, tenant: str = TEST_TENANT, body: object = None
+) -> httpx.Response:
+    path = f"/ops/v1/tenants/{tenant}"
+    return await client.request(method, path, **ops_request(method, path, body))  # type: ignore[no-any-return]
 
 
 # ───────────────────────────────────────────── 库归租户
@@ -73,7 +75,7 @@ async def test_all_datasets_owner_sees_only_his_tenant(client: Any, rt: Any) -> 
     assert listed["data"] == []
     assert (await client.get(f"/v1/datasets/{ds['id']}", headers=BOB_ELSEWHERE)).status_code == 404
     r = await client.post(
-        "/internal/v1/retrieve",
+        "/v1/retrieve",
         json={"dataset_ids": [ds["id"]], "query": "怎么退款"},
         headers=BOB_ELSEWHERE,
     )
@@ -91,7 +93,7 @@ async def test_tenant_header_is_required_and_checked(client: Any, rt: Any) -> No
     async with bare:
         r = await bare.get("/v1/datasets", headers=ALICE)
         assert r.status_code == 401 and "X-Tenant-Id" in r.json()["detail"]
-        r = await bare.post("/internal/v1/retrieve", json={"dataset_ids": [str(UUID(int=1))]})
+        r = await bare.post("/v1/retrieve", json={"dataset_ids": [str(UUID(int=1))]})
         assert r.status_code == 401
 
     # 用户中心说他在别的租户：请求头写的租户不认
@@ -122,46 +124,76 @@ async def test_worker_enters_the_documents_tenant(client: Any, rt: Any) -> None:
     queued, rt.dispatcher.queued = list(rt.dispatcher.queued), []
     assert queued == [doc["id"]]
     with TenantScope.isolated():
-        assert await run_queued(rt, get_sessionmaker(), doc["id"]) is False
+        await run_queued(rt, get_sessionmaker(), doc["id"])
     assert await _status(doc["id"]) == "completed"
 
 
-# ───────────────────────────────────────────── 停用 / 恢复
+# ───────────────────────────────────────────── 停用（只在用户中心）
 
 
-async def test_suspended_tenant_is_shut_out_and_its_ingest_waits(client: Any, rt: Any) -> None:
+async def test_blocked_tenant_gets_no_permission_but_its_ingest_finishes(
+    client: Any, rt: Any
+) -> None:
+    """不知道租户状态、只认权限：租户停用后用户中心说这个人没有 Atlas 的访问权 → 403。
+    在排、在跑的入库照常做完（设计接受的代价），巡检也照常接手。"""
+    from conftest import _ANYONE, fake_user_center
+
     ds = await _dataset(client)
     doc = await _upload(client, ds["id"])
     queued, rt.dispatcher.queued = list(rt.dispatcher.queued), []
 
-    assert (await _ops(client, "suspend")).status_code == 200
+    def blocked(req: httpx.Request) -> httpx.Response:
+        tenant = req.headers.get("x-tenant-id")
+        user = {"status": "active", "tenant_id": tenant}
+        if tenant == TEST_TENANT:
+            return httpx.Response(200, json={"can_access": False, "permissions": [], "user": user})
+        return httpx.Response(200, json={**_ANYONE, "user": user})
+
+    rt.user_center_gateway = fake_user_center(blocked)
     r = await client.get("/v1/datasets", headers=ALICE)
-    assert r.status_code == 403 and "停用" in r.json()["detail"]
-    assert (await client.post("/internal/v1/datasets/readable", json={})).status_code == 403
+    assert r.status_code == 403
     # 别的租户照常
     assert (await client.get("/v1/datasets", headers=BOB_ELSEWHERE)).status_code == 200
+    # 停用、恢复的运营接口没有了
+    path = f"/ops/v1/tenants/{TEST_TENANT}/suspend"
+    assert (await client.post(path, **ops_request("POST", path))).status_code in (404, 405)
 
-    # 入库不开始：文档留在排队中，交回给任务过一会儿再投
-    rt.tenant_gate = client._transport.app.state.tenant_gate
-    with TenantScope.isolated():
-        assert await run_queued(rt, get_sessionmaker(), queued[0]) is True
-    assert await _status(doc["id"]) == "waiting"
-
-    # 巡检也跳过它（停在中间状态、没人持锁的文档）
+    # 入库照常：worker 不查租户状态
     async with get_sessionmaker()() as s:
         row = await s.scalar(select(Document).where(Document.uuid == UUID(doc["id"])))
         assert row is not None
         row.indexing_status = "indexing"
         await s.commit()
     with TenantScope.isolated():
-        assert await recover_stalled(rt, get_sessionmaker()) == []
-
-    assert (await _ops(client, "resume")).status_code == 200
-    with TenantScope.isolated():
         assert await recover_stalled(rt, get_sessionmaker()) == [doc["id"]]
-    await IndexingRunner(rt, get_sessionmaker()).run(doc["id"])
+    with TenantScope.isolated():
+        await run_queued(rt, get_sessionmaker(), queued[0])
     assert await _status(doc["id"]) == "completed"
-    assert (await client.get("/v1/datasets", headers=ALICE)).status_code == 200
+
+
+# ───────────────────────────────────────────── 创建
+
+
+async def test_create_records_the_storage_quota_and_can_be_redone(client: Any) -> None:
+    usage = f"/ops/v1/usage/{OTHER_TENANT}"
+
+    async def quota() -> Any:
+        r = await client.request("GET", usage, **ops_request("GET", usage))
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    # 没填份额：不建行，用默认份额
+    assert (await _ops(client, "PUT", OTHER_TENANT, {})).status_code == 200
+    assert (await quota())["is_default"] is True
+    # 开通时填了：记下；超时后重做，结果一样
+    for _ in range(2):
+        r = await _ops(client, "PUT", OTHER_TENANT, {"storage_bytes": 1024})
+        assert r.status_code == 200, r.text
+    got = await quota()
+    assert got["is_default"] is False and got["quota"]["storage_bytes"] == 1024
+    # 参数不对：被拒绝（要人看）
+    assert (await _ops(client, "PUT", OTHER_TENANT, {"storage_bytes": -1})).status_code == 409
+    assert (await _ops(client, "PUT", OTHER_TENANT, {"storage_bytes": "1G"})).status_code == 409
 
 
 # ───────────────────────────────────────────── 删除
@@ -188,8 +220,7 @@ async def test_purge_deletes_only_this_tenants_rows_vectors_and_files(client: An
         async with get_sessionmaker()() as s:
             other_names = set(await s.scalars(select(IndexVersion.collection_name)))
 
-    assert (await _ops(client, "suspend")).status_code == 200
-    r = await _ops(client, "purge")
+    r = await _ops(client, "DELETE")
     assert r.status_code == 200, r.text
     assert r.json()["remaining"] is False
 

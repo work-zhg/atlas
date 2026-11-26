@@ -1,14 +1,15 @@
 """账号：对接一个供应商接口的凭据（地址、密钥、格式、出网方式）。一个供应商可以有多个账号。
 
-    登记、修改    地址只能是这家供应商提供的格式；写死了内部 IP 的直接拒绝（网关每次连接前还会按
-                  解析出来的 IP 再查一次）；密钥只写不读，界面只显示末 4 位
-    测试连接      连通 → 拉模型列表（验证密钥）→ 用一个上游模型发 1 token 的请求；能查余额的顺带查
+    登记、修改    地址只能是这家供应商提供的格式；写死内部 IP 或内网域名的直接拒绝（网关直连前还会按
+                  解析出的 IP 绑定建连防重绑定）；密钥只写不读，界面只显示末 4 位
+    测试连接      连通 → 拉模型列表 → 按已配线路或模型类型发最小探测请求（对话/向量/重排）；
+                  能查余额的顺带查
     状态          正常 / 冷却中（被限流，自动恢复）/ 已停用 /
                   异常（余额不足、密钥失效，修好后自动恢复）
                   冷却、异常在网关状态里（网关写，这里读）
     删除          还有线路在用的不能删（先在模型里移除线路）
 
-★ 改完把配置版本号加一（notify.mark），网关下一次请求就用新配置。
+★ 改完按租户递增配置版本号（notify.mark），别的租户不受影响。
 """
 
 from __future__ import annotations
@@ -27,16 +28,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import audit, notify
 from .crypto import SecretCipher
-from .db.models import GwAccount, GwRoute
+from .db.models import GwAccount, GwModel, GwRoute
 from .errors import Conflict, Invalid, NotFound
-from .gateway.format import AddressGuard, UpstreamClient, UpstreamError
-from .gateway.kernel import AccountRef, Egress, Format
-from .gateway.routing import IssueRecord, RouteHealth
 from .provider import Op, ProviderCatalog
+from .shared.health import IssueRecord, RouteHealth
+from .shared.kernel import AccountRef, Egress, Format, ModelKind
+from .shared.presets import PresetRules
+from .shared.upstream import AddressGuard, UpstreamClient, UpstreamError
 
-__all__ = ["AccountInput", "AccountService", "AccountStatus", "ProbeResult"]
+__all__ = ["AccountInput", "AccountService", "AccountStatus", "ProbeResult", "account_fields"]
 
 logger = logging.getLogger(__name__)
+
+_PRESETS = PresetRules()
 
 
 @dataclass(frozen=True)
@@ -202,7 +206,7 @@ class AccountService:
             target=f"account:{row.uuid}",
             name=row.name,
         )
-        notify.mark(self.session)
+        notify.mark(self.session, tenant=row.tenant_uuid, tenant_changed=True)
         return row
 
     async def update(self, row: GwAccount, data: AccountInput, *, actor: str) -> GwAccount:
@@ -228,7 +232,7 @@ class AccountService:
             target=f"account:{row.uuid}",
             secret_changed=data.secret is not None,
         )
-        notify.mark(self.session)
+        notify.mark(self.session, tenant=row.tenant_uuid, tenant_changed=True)
         return row
 
     async def set_enabled(self, row: GwAccount, enabled: bool, *, actor: str) -> None:
@@ -240,7 +244,7 @@ class AccountService:
             action="account.enable" if enabled else "account.disable",
             target=f"account:{row.uuid}",
         )
-        notify.mark(self.session)
+        notify.mark(self.session, tenant=row.tenant_uuid, tenant_changed=True)
 
     async def delete(self, row: GwAccount, *, actor: str) -> None:
         used = await self.session.scalar(
@@ -248,6 +252,7 @@ class AccountService:
         )
         if used:
             raise Conflict(f"还有 {used} 条线路用着「{row.name}」，先在这些模型里移除线路再删除")
+        tenant_uuid = row.tenant_uuid
         audit.record(
             self.session,
             actor=actor,
@@ -257,7 +262,7 @@ class AccountService:
         )
         await self.session.delete(row)
         await self.session.flush()
-        notify.mark(self.session)
+        notify.mark(self.session, tenant=tenant_uuid, tenant_changed=True)
 
     def _set_secret(self, row: GwAccount, secret: str) -> None:
         secret = secret.strip()
@@ -270,10 +275,32 @@ class AccountService:
 
     # ── 测试连接、余额、恢复 ────────────────────────────────────────────
 
+    async def _configured_target(self, account_uuid: UUID) -> tuple[str | None, ModelKind | None]:
+        """优先用本账号已挂线路与模型类型来探测（兼容不支持 list_models 或纯向量/重排账号）。"""
+        if account_uuid == UUID(int=0):
+            return None, None
+        row = (
+            await self.session.execute(
+                select(GwRoute.upstream_model, GwModel.kind)
+                .join(GwModel, GwModel.uuid == GwRoute.model_uuid)
+                .where(GwRoute.account_uuid == account_uuid)
+                .order_by(GwRoute.priority, GwRoute.created_at)
+                .limit(1)
+            )
+        ).first()
+        if row is None:
+            return None, None
+        return str(row[0]), ModelKind(str(row[1]))
+
     async def probe(
-        self, ref: AccountRef, client: UpstreamClient, *, upstream_model: str | None = None
+        self,
+        ref: AccountRef,
+        client: UpstreamClient,
+        *,
+        upstream_model: str | None = None,
+        model_kind: ModelKind | None = None,
     ) -> ProbeResult:
-        """连通 → 拉模型列表（验证密钥）→ 1 token 的请求 → 余额（能查的话）。"""
+        """连通 → 拉模型列表（验证密钥）→ 按模型类型发最小探测请求 → 余额（能查的话）。"""
         dialect = self.catalog.dialect(ref.provider)
         result = ProbeResult(ok=True)
         http = client.client(ref.egress)
@@ -285,9 +312,17 @@ class AccountService:
         except Exception as exc:
             result.ok = False
             result.steps.append(ProbeStep("拉模型列表", False, _brief(exc)))
-        model = upstream_model or (result.upstream_models or [None])[0]
+
+        cfg_model, cfg_kind = (
+            await self._configured_target(ref.uuid) if not upstream_model else (None, None)
+        )
+        model = upstream_model or cfg_model or (result.upstream_models or [None])[0]
+        kind = model_kind or cfg_kind
         if model:
-            step = await self._one_token(ref, client, model)
+            if kind is None:
+                preset = _PRESETS.caps_for(ref.provider, model)
+                kind = preset.kind if preset is not None else ModelKind.CHAT
+            step = await self._probe_call(ref, client, model, kind)
             result.steps.append(step)
             result.ok = result.ok and step.ok
         try:
@@ -299,30 +334,57 @@ class AccountService:
                     result.ok = False
         except Exception as exc:
             result.steps.append(ProbeStep("查余额", False, _brief(exc)))
+
+        if not result.steps:
+            # 不支持拉模型列表、不支持查余额、又没配线路和上游模型：不能空跑一趟假装恢复成功
+            result.ok = False
+            result.steps.append(
+                ProbeStep(
+                    "检查凭据", False, "这家供应商不支持拉模型列表，请指定上游模型或先配线路再测试"
+                )
+            )
         return result
 
-    async def _one_token(self, ref: AccountRef, client: UpstreamClient, model: str) -> ProbeStep:
+    async def _probe_call(
+        self, ref: AccountRef, client: UpstreamClient, model: str, kind: ModelKind
+    ) -> ProbeStep:
         dialect = self.catalog.dialect(ref.provider)
-        fmt = next(
-            (f for f in (Format.ANTHROPIC, Format.OPENAI, Format.GOOGLE) if ref.endpoints.get(f)),
-            None,
-        )
-        if fmt is None:
-            return ProbeStep("发 1 token 的请求", False, "没有登记地址")
-        hello = [{"role": "user", "content": "hi"}]
-        match fmt:
-            case Format.ANTHROPIC:
-                op, body = Op.MESSAGES, {"model": model, "max_tokens": 1, "messages": hello}
-            case Format.OPENAI:
-                op, body = Op.CHAT, {"model": model, "max_tokens": 1, "messages": hello}
-            case _:
-                op, body = (
-                    Op.GENERATE,
-                    {
-                        "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
-                        "generationConfig": {"maxOutputTokens": 1},
-                    },
-                )
+        if kind in (ModelKind.EMBEDDING, ModelKind.RERANK):
+            if not ref.endpoints.get(Format.OPENAI):
+                return ProbeStep(f"探测 {model}", False, "向量与重排需要登记 OpenAI 格式地址")
+            fmt = Format.OPENAI
+            if kind is ModelKind.EMBEDDING:
+                step_name = f"用 {model} 探测向量接口"
+                op, body = Op.EMBEDDINGS, {"model": model, "input": "hi"}
+            else:
+                step_name = f"用 {model} 探测重排接口"
+                op, body = Op.RERANK, {"model": model, "query": "hi", "documents": ["hi"]}
+        else:
+            fmt = next(
+                (
+                    f
+                    for f in (Format.ANTHROPIC, Format.OPENAI, Format.GOOGLE)
+                    if ref.endpoints.get(f)
+                ),
+                None,
+            )
+            step_name = f"用 {model} 发 1 token 的请求"
+            if fmt is None:
+                return ProbeStep("发 1 token 的请求", False, "没有登记地址")
+            hello = [{"role": "user", "content": "hi"}]
+            match fmt:
+                case Format.ANTHROPIC:
+                    op, body = Op.MESSAGES, {"model": model, "max_tokens": 1, "messages": hello}
+                case Format.OPENAI:
+                    op, body = Op.CHAT, {"model": model, "max_tokens": 1, "messages": hello}
+                case _:
+                    op, body = (
+                        Op.GENERATE,
+                        {
+                            "contents": [{"role": "user", "parts": [{"text": "hi"}]}],
+                            "generationConfig": {"maxOutputTokens": 1},
+                        },
+                    )
         headers = {"content-type": "application/json", **dialect.auth(fmt, ref.secret)}
         if fmt is Format.ANTHROPIC:
             headers.setdefault("anthropic-version", "2023-06-01")
@@ -336,13 +398,11 @@ class AccountService:
                 read_timeout_s=60.0,
             )
         except UpstreamError as exc:
-            return ProbeStep(f"用 {model} 发 1 token 的请求", False, exc.failure.message)
+            return ProbeStep(step_name, False, exc.failure.message)
         if resp.status_code >= 400:
             failure = dialect.classify(resp.status_code, resp.headers, resp.content)
-            return ProbeStep(
-                f"用 {model} 发 1 token 的请求", False, f"{failure.kind.value}：{failure.message}"
-            )
-        return ProbeStep(f"用 {model} 发 1 token 的请求", True, "正常")
+            return ProbeStep(step_name, False, f"{failure.kind.value}：{failure.message}")
+        return ProbeStep(step_name, True, "正常")
 
     async def record_check(self, row: GwAccount, result: ProbeResult) -> None:
         row.checked_at = datetime.now(UTC)

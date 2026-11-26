@@ -3,8 +3,8 @@
 级别：READ 看到、检索、召回测试 < WRITE 上传、编辑分段、改检索设置 < OWNER 删除、共享。
 「全部知识库 · Owner」是用户中心的数据编码级授权（取代原 kb:manage_all 操作码）。
 
-★ 公有的库不靠这里：可见性记在库上（kb_dataset.visibility），本服务自己判。
-★ 文档级权限（主体标签 u:/d:/r:）不在这里：见 principals.py。
+★ 公有的库不靠这里：可见性记在库上（kb_dataset.visibility），本服务自己判 —— 任何人至少可读。
+★ 私有的库只按这里判：不按角色、部门、本人自己推断，也没有文档级权限（能读库就能读库里全部文档）。
 
 两个实现：
   UserCenterGateway   用户中心开放接口（usercenter.py，调用户中心的唯一客户端）

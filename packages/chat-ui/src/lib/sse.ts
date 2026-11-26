@@ -136,6 +136,8 @@ export async function streamThreadEvents(opts: ThreadStreamOptions): Promise<voi
 
   let lastSeq = opts.lastSeq ?? 0;
   let attempt = 0;
+  // 访问令牌过期时只刷新一次就重连：刷新之后还 401 才算被拒
+  let refreshed = false;
 
   while (!signal.aborted) {
     try {
@@ -150,6 +152,10 @@ export async function streamThreadEvents(opts: ThreadStreamOptions): Promise<voi
         credentials: "same-origin",
       });
 
+      if (res.status === 401 && client.refresh && !refreshed) {
+        refreshed = true;
+        if (await client.refresh()) continue; // 换了新令牌：马上带游标重连，不算一次失败
+      }
       if (res.status >= 400 && res.status < 500) {
         throw new FatalError(res.status, `事件流被拒绝（${res.status}）`);
       }
@@ -158,6 +164,7 @@ export async function streamThreadEvents(opts: ThreadStreamOptions): Promise<voi
       }
 
       attempt = 0; // 连上了就重置退避
+      refreshed = false;
       onOpen?.();
 
       await readFrames(res.body, (frame) => {

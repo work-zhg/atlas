@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from atlas_jobs import JobScheduler
-from atlas_opsapi import TenantGate
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..capacity import CapacityService
@@ -37,14 +36,12 @@ def build_executor(
     cli_runtime: Any = None,
     memory: MemoryRuntime | None = None,
     instance: str | None = None,
-    gate: TenantGate | None = None,
 ) -> RunWorker:
     """装配一个实例上的 Run 执行器。兜底和续租要另外注册到定时任务库（register_jobs）。
 
     model_builder  可注入：单测塞一个假模型，整条执行链路即可脱离网络运行
     cli_runtime    None = 本部署没接会话 Pod：kind="cli" 的智能体明确报错，不悄悄按 native 跑
     instance       租约的 owner；默认取本进程的实例号（测试里可以在一个进程里扮演几个实例）
-    gate           租户状态（运营接口）：停用的租户的 run 不接、在跑的交出去；None = 不查
     """
     build_model = model_builder or default_model_builder
     owner = instance or instance_id()
@@ -77,7 +74,6 @@ def build_executor(
         continuation=continuation,
         model_builder=build_model,
         capacity=CapacityService(RuntimeConfig(settings, sessionmaker)),
-        gate=gate,
     )
     return worker
 

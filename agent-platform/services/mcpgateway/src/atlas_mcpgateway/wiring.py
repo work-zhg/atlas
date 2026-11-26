@@ -25,9 +25,17 @@ __all__ = ["api_keys", "authorization", "catalog"]
 
 
 def catalog(
-    session: AsyncSession, settings: GatewaySettings, uc: UserCenter, upstream: UpstreamGateway
+    session: AsyncSession,
+    settings: GatewaySettings,
+    uc: UserCenter,
+    upstream: UpstreamGateway,
+    *,
+    platform: bool = False,
 ) -> ServiceCatalog:
-    return ServiceCatalog(session, settings, upstream, CatalogEventHandler(session, uc))
+    """platform=True：平台服务的目录（只有运维命令行用）。"""
+    return ServiceCatalog(
+        session, settings, upstream, CatalogEventHandler(session, uc), platform=platform
+    )
 
 
 def authorization(session: AsyncSession, uc: UserCenter, cache: AccessCache) -> Authorization:

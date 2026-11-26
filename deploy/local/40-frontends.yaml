@@ -1,257 +1,13 @@
-# 三个前端（Atlas、用户中心、AI TeamFlow）放在一个 Pod 里：
-#   nginx（:80，按路径路由）+ atlas-web（:3000）+ uc-web（:3100）+ tf-web（:3200），Pod 内经 localhost 互通。
+# 三个前端（Atlas、用户中心、AI TeamFlow）放在一个 Pod 里：atlas-web（:3000）、uc-web（:3100）、tf-web（:3200）。
 #
-#   /atlas/*             → atlas-web（basePath=/atlas）     /                   → 302 到 /atlas
-#   /v1/previews/*       → atlas-server（会话文件预览站点）
-#   /atlas-api/*         → atlas-server（集群内）            /skill-api/*        → atlas-skill（集群内；/internal 不对外）
-#   /atlas-knowledge-api/* → atlas-knowledge（集群内；/internal、/mcp 不对外）
-#   /mcp-gateway-api/*     → atlas-mcpgateway 的管理端；/mcp-gateway-api/mcp/* 是数据面（外部客户端带
-#                            自己的用户 Key 调，不经登录校验；/internal 不对外）
-#   /model-gateway-api/*   → atlas-modelgateway 的管理端（集群内；/internal、/v1 不对外）
-#   /llm/v1/*、/llm/universal/v1/* → atlas-llmgateway 模型网关（只放调用接口；不经登录校验，网关自己认 Key）
-#   /device-api/*          → atlas-devicegw（本机 CLI：连接器的控制连接 WebSocket、配对、电脑上 CLI 的能力代理；
-#                            不经登录校验，网关自己认设备令牌、会话令牌；/internal 不对外）
-#   /uc/*                → uc-web（basePath=/uc）           /uc/api/*           → 用户中心后端（atlas-usercenter）
-#   /teamflow/*          → tf-web（basePath=/teamflow）     /teamflow/api/*     → TeamFlow 后端（atlas-teamflow）
-#
-# ★ 这是网关（doc/identity-propagation-design.html §4）：唯一对外的入口（LoadBalancer），也是唯一
-#   校验登录的地方。各组应用接口（atlas-api、skill-api、atlas-knowledge-api、teamflow/api …）
-#   先 auth_request 到用户中心 /api/v1/auth/verify（会话 Cookie uc_session；写请求在那里校验 CSRF），
-#   通过后写入 X-Uid、X-Tenant-Id、X-Caller-App: gateway，转给后端；后端之间内网免令牌。
-#   外部带进来的身份请求头一律丢弃，X-Auth-Uid 永远写不进来。未登录 → 401，前端跳 /uc/login。
-# ★ 不经 auth_request：用户中心自己的接口（它就是登录的地方，自己校验会话）、静态页面、
-#   会话文件预览站点（令牌在路径里）。
-# ★ 接口由 nginx 直接转到后端，不经过 Next：后端地址只在这里，换地址不用重新构建镜像；
-#   浏览器全部同源访问，没有 CORS。
-# ★ __HOST_IP__ 由 frontends.sh 替换为宿主 LAN IP；宿主上的后端要监听 0.0.0.0。
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: atlas-frontends-nginx
-  namespace: atlas-system
-data:
-  # 公共的转发头。★ nginx 的 proxy_set_header 只要 location 里写了一条，server 级的就全部不继承 ——
-  # 所以抽成文件，server 级与需要追加身份头的 location 各 include 一次
-  common-headers.inc: |
-    # $http_host 带端口：后端据此生成的绝对地址（如 Atlas 预览站点）才指向网关的 :8080
-    proxy_set_header Host              $http_host;
-    proxy_set_header X-Forwarded-Host  $http_host;
-    proxy_set_header X-Real-IP         $remote_addr;
-    proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-    proxy_set_header Connection        "";
-  # 不经 auth_request 的转发：外部带来的身份请求头一律丢掉（空值 = 不转发）
-  no-identity.inc: |
-    proxy_set_header X-Uid        "";
-    proxy_set_header X-Auth-Uid   "";
-    proxy_set_header X-Tenant-Id  "";
-    proxy_set_header X-Caller-App "";
-  # 经 auth_request 的转发：身份只取用户中心的校验结果
-  identity.inc: |
-    auth_request     /_auth;
-    auth_request_set $gw_uid    $upstream_http_x_uid;
-    auth_request_set $gw_tenant $upstream_http_x_tenant_id;
-    include /etc/nginx/conf.d/common-headers.inc;
-    proxy_set_header X-Uid        $gw_uid;
-    proxy_set_header X-Tenant-Id  $gw_tenant;
-    proxy_set_header X-Auth-Uid   "";          # 外部永远不能指定「按谁的权限判」
-    proxy_set_header X-Caller-App gateway;
-    # auth_request 的拒绝换成 JSON（后端自己的 4xx 不拦截，原样透传）
-    error_page 401 = @gw_401;
-    error_page 403 = @gw_403;
-  default.conf: |
-    # WebSocket（/device-api/connect）：有 Upgrade 头时转成 upgrade，否则照旧 keepalive
-    map $http_upgrade $connection_upgrade {
-      default upgrade;
-      ''      "";
-    }
-    server {
-      listen 80;
-      client_max_body_size 20m;
-      # 跳转只给路径（Location: /atlas），浏览器沿用当前主机与端口；
-      # 否则 nginx 会拼成自己的 :80，经 LoadBalancer 的 :8080 访问时跳错端口
-      absolute_redirect off;
-
-      proxy_http_version 1.1;
-      include /etc/nginx/conf.d/common-headers.inc;
-      include /etc/nginx/conf.d/no-identity.inc;
-      # 连接空闲上限：SSE 有心跳（TeamFlow 15 秒、Atlas 定时 ping），不会因此断开；
-      # 这不是工作时长上限 —— Agent 运行多久都可以，断线后前端按游标续传。
-      proxy_read_timeout 1h;
-      proxy_send_timeout 1h;
-
-      location = /healthz { access_log off; return 200 "ok\n"; }
-
-      # ── 登录校验（auth_request 的子请求）：带上原请求的头（Cookie、X-UC-CSRF），不带请求体。
-      #    SSE 只在建连时校验一次。用户中心侧有秒级的进程内缓存
-      location = /_auth {
-        internal;
-        proxy_pass http://atlas-usercenter.atlas-system.svc.cluster.local:8030/api/v1/auth/verify;
-        proxy_pass_request_body off;
-        proxy_set_header Content-Length    "";
-        proxy_set_header X-Original-Method $request_method;   # 写请求在 verify 里校验 CSRF
-        proxy_set_header X-Original-URI    $request_uri;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header Connection        "";
-      }
-      location @gw_401 {
-        default_type application/json;
-        return 401 '{"error":{"kind":"unauthenticated","message":"请先登录"},"code":"NOT_LOGGED_IN","message":"请先登录","detail":"请先登录"}';
-      }
-      location @gw_403 {
-        default_type application/json;
-        return 403 '{"error":{"kind":"csrf_failed","message":"请求校验失败，请刷新页面后重试"},"code":"CSRF_FAILED","message":"请求校验失败，请刷新页面后重试","detail":"请求校验失败，请刷新页面后重试"}';
-      }
-
-      # ── 用户中心（它自己就是登录的地方：会话 Cookie 由它校验，不经 auth_request）
-      location ^~ /uc/api/ {
-        proxy_pass http://atlas-usercenter.atlas-system.svc.cluster.local:8030/api/;
-      }
-      location ~ ^/uc(/|$) {
-        proxy_pass http://127.0.0.1:3100;
-      }
-
-      # ── AI TeamFlow（流程实时事件是 SSE：关闭缓冲）
-      location ^~ /teamflow/api/ {
-        include /etc/nginx/conf.d/identity.inc;
-        proxy_pass http://atlas-teamflow.atlas-system.svc.cluster.local:8040/api/;
-        proxy_buffering off;
-        proxy_cache off;
-      }
-      location ~ ^/teamflow(/|$) {
-        proxy_pass http://127.0.0.1:3200;
-      }
-
-      # ── Atlas（会话事件是 SSE：关闭缓冲）
-      # 服务间接口不对外（内网免令牌，挡在这里）
-      # 运营接口（/ops/v1）只给运营中心在集群内调：网关一律不转发（多租户设计；还要验签名，这里是第一道）
-      location ^~ /atlas-api/ops/ { return 404; }
-      location ^~ /skill-api/ops/ { return 404; }
-      location ^~ /atlas-knowledge-api/ops/ { return 404; }
-      location ^~ /mcp-gateway-api/ops/ { return 404; }
-      location ^~ /model-gateway-api/ops/ { return 404; }
-      location ^~ /atlas-api/internal/ { return 404; }
-      location ^~ /atlas-api/ {
-        include /etc/nginx/conf.d/identity.inc;
-        proxy_pass http://atlas-server.atlas-system.svc.cluster.local:8000/;
-        proxy_buffering off;
-        proxy_cache off;
-        # 浏览器的实时画面（WebSocket，c4-model/agent/browser/design-browser.html）：同样经 auth_request
-        #   取身份，只是要 upgrade —— identity.inc 带的公共转发头里 Connection 是空的，这里逐条写。
-        #   画面连着的时候是长连接（server 级 proxy_read_timeout 1h；noVNC 断了会提示重连）
-        location ~ ^/atlas-api/v1/threads/[^/]+/browser/view$ {
-          auth_request     /_auth;
-          auth_request_set $gw_uid    $upstream_http_x_uid;
-          auth_request_set $gw_tenant $upstream_http_x_tenant_id;
-          proxy_set_header Host              $http_host;
-          proxy_set_header X-Forwarded-Host  $http_host;
-          proxy_set_header X-Real-IP         $remote_addr;
-          proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-          proxy_set_header X-Forwarded-Proto $scheme;
-          proxy_set_header Upgrade           $http_upgrade;
-          proxy_set_header Connection        $connection_upgrade;
-          proxy_set_header X-Uid             $gw_uid;
-          proxy_set_header X-Tenant-Id       $gw_tenant;
-          proxy_set_header X-Auth-Uid        "";
-          proxy_set_header X-Caller-App      gateway;
-          error_page 401 = @gw_401;
-          error_page 403 = @gw_403;
-          # 正则 location 里 proxy_pass 不能带路径：先去掉 /atlas-api 前缀
-          rewrite ^/atlas-api(/.*)$ $1 break;
-          proxy_pass http://atlas-server.atlas-system.svc.cluster.local:8000;
-          proxy_buffering off;
-        }
-      }
-      # Atlas 会话文件预览站点：地址由 atlas-server 按 PREVIEW_BASE_URL 生成（/v1/previews/{令牌}/…），
-      # 令牌在路径里、不需要身份头。内容隔离靠后端的 CSP sandbox 响应头（不透明 origin），与域名无关。
-      location ^~ /v1/previews/ {
-        proxy_pass http://atlas-server.atlas-system.svc.cluster.local:8000;
-      }
-      # 技能应用（用户中心里的独立应用「技能」）。/internal 给 Atlas 取技能目录，只走集群内地址
-      location ^~ /skill-api/internal/ { return 404; }
-      location ^~ /skill-api/ {
-        include /etc/nginx/conf.d/identity.inc;
-        proxy_pass http://atlas-skill.atlas-system.svc.cluster.local:8020/;
-      }
-      # 知识库：/internal 给运行时、/mcp 给会话 Pod，都只走集群内地址
-      location ^~ /atlas-knowledge-api/internal/ { return 404; }
-      location ^~ /atlas-knowledge-api/mcp { return 404; }
-      location ^~ /atlas-knowledge-api/ {
-        include /etc/nginx/conf.d/identity.inc;
-        proxy_pass http://atlas-knowledge.atlas-system.svc.cluster.local:8050/;
-        # 上传文档（服务端上限 50MB）
-        client_max_body_size 60m;
-        proxy_read_timeout 300s;
-      }
-      # MCP 网关。/internal 给 Atlas，只走集群内地址。
-      # /mcp/{服务名} 是数据面：外部客户端（Claude Code、Cursor）带自己的用户 Key 调，网关认 Key、判权，
-      # 不经登录校验；身份请求头按 server 级的 no-identity.inc 丢掉（这里不写 proxy_set_header，才继承得到）
-      location ^~ /mcp-gateway-api/internal/ { return 404; }
-      location ^~ /mcp-gateway-api/mcp/ {
-        proxy_pass http://atlas-mcpgateway.atlas-system.svc.cluster.local:8070/mcp/;
-        proxy_buffering off;
-      }
-      location ^~ /mcp-gateway-api/ {
-        include /etc/nginx/conf.d/identity.inc;
-        proxy_pass http://atlas-mcpgateway.atlas-system.svc.cluster.local:8070/;
-      }
-      # 模型管理平台的管理端接口（agent-platform/doc/design/model-design.html）。/internal 给 Atlas、
-      # 知识库取客户端 Key，只走集群内地址；/v1 已经没有了（模型调用走模型网关），保留 404 防误配
-      # 设备网关（本机 CLI）。★ 不经 auth_request：凭据是设备令牌、会话令牌，网关自己认。
-      #   /connect 是长连接 WebSocket（双方每 20 秒心跳，server 级 proxy_read_timeout 1h 足够）；
-      #   能力代理转发模型的流式回复，不缓冲。请求体可能是大的模型上下文
-      location ^~ /device-api/internal/ { return 404; }
-      location ^~ /device-api/ {
-        # 公共转发头里 Connection 是空的（keepalive），WebSocket 要 upgrade：这里逐条写，不 include 它
-        proxy_set_header Host              $http_host;
-        proxy_set_header X-Forwarded-Host  $http_host;
-        proxy_set_header X-Real-IP         $remote_addr;
-        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header Upgrade           $http_upgrade;
-        proxy_set_header Connection        $connection_upgrade;
-        include /etc/nginx/conf.d/no-identity.inc;
-        proxy_pass http://atlas-devicegw.atlas-system.svc.cluster.local:8095/;
-        proxy_buffering off;
-        proxy_request_buffering off;
-        client_max_body_size 64m;
-      }
-      # 模型网关（数据面，38-modelgateway.yaml 的 atlas-llmgateway）：Claude Code、Cursor、OpenAI SDK
-      #   这类外部工具带自己的 Key 调。通用接口（按 Anthropic 格式传，网关按线路转换）填 {域名}/llm/universal；
-      #   只走同格式线路、不转换的：Anthropic 格式填 {域名}/llm，OpenAI 格式填 {域名}/llm/v1。
-      #   只放调用接口，/healthz、/readyz 不对外。不经登录校验；身份请求头按 server 级的 no-identity.inc
-      #   丢掉（这里不写 proxy_set_header，才继承得到）。流式回答不缓冲；请求体可能是带截图的大上下文
-      location ~ ^/llm/universal/v1/(messages|messages/count_tokens|models)$ {
-        rewrite ^/llm(/.*)$ $1 break;
-        proxy_pass http://atlas-llmgateway.atlas-system.svc.cluster.local:8091;
-        proxy_buffering off;
-        client_max_body_size 64m;
-      }
-      location ~ ^/llm/v1/(messages|messages/count_tokens|chat/completions|embeddings|rerank|models)$ {
-        rewrite ^/llm(/.*)$ $1 break;
-        proxy_pass http://atlas-llmgateway.atlas-system.svc.cluster.local:8091;
-        proxy_buffering off;
-        client_max_body_size 64m;
-      }
-      location ^~ /model-gateway-api/internal/ { return 404; }
-      location ^~ /model-gateway-api/v1/ { return 404; }
-      location ^~ /model-gateway-api/ {
-        include /etc/nginx/conf.d/identity.inc;
-        proxy_pass http://atlas-modelgateway.atlas-system.svc.cluster.local:8090/;
-      }
-      location ~ ^/atlas(/|$) {
-        proxy_pass http://127.0.0.1:3000;
-      }
-
-      # 根路径不承载任何前端：跳到 Atlas（旧书签 / 直接输入域名都能落到可用页面）
-      location = / {
-        return 302 /atlas;
-      }
-      location / {
-        return 404;
-      }
-    }
----
+# ★ 对外入口是 API 网关（宿主机上的 OpenResty，infra-platform/gateway/routes.yaml）：
+#   页面 /<名>-ui/… 原样发往集群里的内部 Ingress，Host = <名>-ui.internal.techstz.com（basePath = /<名>-ui）；
+#   接口 /<名>/… 去掉 /<名> 发往 <名>.internal.techstz.com —— 各后端的 Ingress 写在它自己的清单里。
+#   登录校验（验 JWT、写身份头、CSRF）都在网关，这里只是页面。
+# ★ 内部 Ingress（Traefik）只在集群内，不占宿主机端口（deploy/server/traefik-values.yaml）；
+#   这些域名不进 DNS，只是网关写进 Host 的名字。
+# ★ 本机（Docker Desktop）没有网关和 Traefik：kubectl -n atlas-system port-forward svc/atlas-frontends 3000
+#   只能看页面，接口要经网关。
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -265,22 +21,9 @@ spec:
   template:
     metadata:
       labels: {app: atlas-frontends}
-      annotations:
-        # nginx 配置变了要滚动重建（ConfigMap 更新不会自动重启 nginx）
-        atlas/nginx-config-sha: "__CONFIG_SHA__"
     spec:
+      enableServiceLinks: false
       containers:
-        - name: nginx
-          image: nginx:1.27-alpine
-          ports: [{containerPort: 80, name: http}]
-          volumeMounts:
-            - {name: nginx-conf, mountPath: /etc/nginx/conf.d}
-          readinessProbe:
-            httpGet: {path: /healthz, port: 80}
-            periodSeconds: 5
-          resources:
-            requests: {cpu: 20m, memory: 32Mi}
-            limits: {memory: 128Mi}
         - name: atlas-web
           image: atlas-frontends:dev
           imagePullPolicy: Never   # 本机构建的镜像（Docker Desktop 与 K8s 共用镜像存储）
@@ -317,9 +60,6 @@ spec:
           resources:
             requests: {cpu: 50m, memory: 96Mi}
             limits: {memory: 384Mi}
-      volumes:
-        - name: nginx-conf
-          configMap: {name: atlas-frontends-nginx}
 ---
 apiVersion: v1
 kind: Service
@@ -327,7 +67,30 @@ metadata:
   name: atlas-frontends
   namespace: atlas-system
 spec:
-  type: LoadBalancer   # Docker Desktop：映射到宿主 localhost:8080
+  type: ClusterIP
   selector: {app: atlas-frontends}
   ports:
-    - {name: http, port: 8080, targetPort: 80}
+    - {name: atlas-ui, port: 3000, targetPort: 3000}
+    - {name: uc-ui, port: 3100, targetPort: 3100}
+    - {name: teamflow-ui, port: 3200, targetPort: 3200}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlas-frontends
+  namespace: atlas-system
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: atlas-ui.internal.techstz.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: atlas-frontends, port: {number: 3000}}}}
+    - host: uc-ui.internal.techstz.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: atlas-frontends, port: {number: 3100}}}}
+    - host: teamflow-ui.internal.techstz.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: atlas-frontends, port: {number: 3200}}}}

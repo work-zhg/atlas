@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from datetime import timedelta
+from typing import Any
 from uuid import UUID
 
 from ..db.models import McpService, McpTool
@@ -28,8 +29,9 @@ logger = logging.getLogger(__name__)
 __all__ = ["DefinitionSync", "tool_from"]
 
 
-def tool_from(d: ToolDefinition) -> McpTool:
-    return McpTool(
+def tool_from(d: ToolDefinition, model: Any = McpTool) -> McpTool:
+    """model：McpTool（租户的服务）或 McpPlatformTool（平台服务），列一样。"""
+    return model(
         name=d.name,
         description=d.description,
         input_schema=d.input_schema,

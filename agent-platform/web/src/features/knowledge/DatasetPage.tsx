@@ -48,6 +48,7 @@ import {
   METHOD_LABEL,
   STATUS_LABEL,
   kbApi,
+  parseWarnings,
   pathLabel,
   useDataset,
   useDocuments,
@@ -226,6 +227,11 @@ function DocumentsTab({ ds }: { ds: Dataset }) {
                 </Tag>
                 {d.archived && <Tag>已归档</Tag>}
                 {!d.is_current && <Tag>已被新版本取代</Tag>}
+                {parseWarnings(d).length > 0 && (
+                  <Tag color="warning" title={parseWarnings(d).join("\n")}>
+                    解析警告
+                  </Tag>
+                )}
               </Space>
             ),
           },

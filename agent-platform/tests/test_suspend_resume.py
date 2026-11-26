@@ -864,3 +864,30 @@ async def test_settling_a_cancel_happens_once_and_never_on_a_claimed_run(client_
     assert await status_of(second) == "running"
     assert not [e for e in await events_of(second) if e.type == "run.cancelled"]
     await set_status(second, "succeeded")  # 别让清库前的兜底任务去接管它
+
+
+async def test_cancelling_a_queued_run_settles_it_right_away(client_factory) -> None:
+    """★ 排队中的 run 也没有进程在跑：租户停用、实例满了时它会排很久，而取消位一小时就过期，
+    过期后再被领走就照常跑了。所以取消要当场收尾，不等它被领走时再看取消位。"""
+    from sqlalchemy import update
+
+    parent = TurnModel(scripts=[[AIMessageChunk(content="好的")]])
+    client, _ = await client_factory(parent, TurnModel(scripts=[]))
+    thread_id = await setup_thread(client)
+    run_id = await start_run(client, thread_id, "第一轮")
+    await wait_status(client, run_id, TERMINAL)
+    async with get_sessionmaker()() as session:
+        # queued_at 取现在：刚排队的，兜底任务不会去抢
+        await session.execute(
+            update(Run)
+            .where(Run.run_uuid == UUID(run_id))
+            .values(status="queued", owner=None, queued_at=datetime.now(UTC))
+        )
+        await session.commit()
+
+    assert (await client.post(f"/v1/runs/{run_id}/cancel")).status_code == 200
+
+    async with get_sessionmaker()() as session:
+        run = await fetch_one(session, Run, Run.run_uuid == UUID(run_id))
+        assert run is not None and run.status == "cancelled"
+    assert [e.type for e in await events_of(run_id)].count("run.cancelled") == 1

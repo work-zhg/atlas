@@ -1,8 +1,7 @@
 """入库任务（同 Dify tasks/document_indexing_task.py）。
 
-★ 消息里只有文档 / 索引版本的 id：租户从那一行取，进入它再干活（run_queued、rebuild_queued）。
-★ 租户停用了就过一会儿再投一次（不设次数上限）：恢复后接着做；删除后行没了，查不到就结束。
-  不靠运营接口的「恢复」钩子重新投递 —— 钩子在租户状态改回可用之前调，那时投出去的任务还会被挡。
+★ 消息里只有文档 / 索引版本的 id：租户从那一行取，进入它再干活（run_queued、rebuild_queued）；
+  租户删除后行没了，查不到就结束。不查租户状态（业务系统不知道它）。
 """
 
 from __future__ import annotations
@@ -17,9 +16,6 @@ __all__ = ["indexing_task", "rebuild_index_task"]
 
 logger = logging.getLogger(__name__)
 
-#: 租户停用时多久再看一次
-SUSPENDED_RETRY_S = 300
-
 
 @celery_app.task(name="kb.indexing", queue="dataset")
 def indexing_task(document_uuid: str | list[str]) -> None:
@@ -28,8 +24,7 @@ def indexing_task(document_uuid: str | list[str]) -> None:
         for one in document_uuid:
             indexing_task.delay(one)
         return
-    if run_async(run_queued(get_runtime(), get_sessionmaker(), document_uuid)):
-        indexing_task.apply_async(args=[document_uuid], countdown=SUSPENDED_RETRY_S)
+    run_async(run_queued(get_runtime(), get_sessionmaker(), document_uuid))
 
 
 @celery_app.task(name="kb.rebuild_index", queue="dataset")
@@ -37,5 +32,4 @@ def rebuild_index_task(version_uuid: str) -> None:
     """索引版本重建（换向量模型，§6.2）。中途 worker 被杀由巡检重新投递，从记下的进度续跑。"""
     from ..index.versions import rebuild_queued
 
-    if run_async(rebuild_queued(get_runtime(), get_sessionmaker(), version_uuid)):
-        rebuild_index_task.apply_async(args=[version_uuid], countdown=SUSPENDED_RETRY_S)
+    run_async(rebuild_queued(get_runtime(), get_sessionmaker(), version_uuid))

@@ -1,7 +1,7 @@
 """转换器：只有通用入口用。账号没有 Anthropic 格式地址时，把整个请求转过去、把回答转回来。
 
-★ 只从 Anthropic 格式往外转：它表达得更细，往粗的格式转丢什么事先就知道
-  （缓存标记、思考的签名去掉；document 块 OpenAI 格式里没有对应，去掉并记下）。
+★ 只从 Anthropic 格式往外转：不影响回答正确性的字段去掉并记下（缓存标记、思考签名）；
+  会影响回答正确性但目标格式无法承载的内容（如二进制 PDF 转 OpenAI）明确拒绝，绝不静默丢弃。
 ★ 用量、思考字段这些各家不一样的地方问供应商方言；流式回答由 StreamTranscoder 一段段转。
 """
 
@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from typing import Any, Protocol
 
 from ...provider import ProviderDialect
-from ..kernel import Format, ParamPlan, Usage
+from ...shared.kernel import ErrorCategory, Format, GatewayError, ParamPlan, Usage
 from .sse import SSEEvent
 
 __all__ = ["AnthropicToOpenAI", "Converter", "StreamTranscoder", "anthropic_usage"]
@@ -25,6 +25,8 @@ _STOP = {
     "function_call": "tool_use",
     "content_filter": "refusal",
 }
+#: 单次工具调用参数最大缓冲长度（防失控输出撑爆内存）
+_MAX_TOOL_ARGS_CHARS = 2_000_000
 
 
 def anthropic_usage(u: Usage) -> dict[str, int]:
@@ -77,9 +79,23 @@ def _text_of(content: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "".join(
-            b.get("text", "") for b in content if isinstance(b, Mapping) and b.get("type") == "text"
-        )
+        chunks = []
+        for b in content:
+            if not isinstance(b, Mapping):
+                continue
+            if b.get("type") == "text":
+                chunks.append(str(b.get("text", "")))
+            elif b.get("type") == "document":
+                src = b.get("source") or {}
+                if isinstance(src, Mapping) and src.get("type") == "text":
+                    chunks.append(str(src.get("data", "")))
+                else:
+                    raise GatewayError(
+                        ErrorCategory.BEYOND_CAPABILITY,
+                        "当前模型的线路是 OpenAI 格式，不支持直接读取 PDF 等二进制文档",
+                        no_retry=True,
+                    )
+        return "".join(chunks)
     return ""
 
 
@@ -220,6 +236,16 @@ class AnthropicToOpenAI:
                 image = _image_part(block.get("source") or {})
                 if image:
                     parts.append(image)
+            elif kind == "document":
+                src = block.get("source") or {}
+                if isinstance(src, Mapping) and src.get("type") == "text":
+                    parts.append({"type": "text", "text": str(src.get("data", ""))})
+                else:
+                    raise GatewayError(
+                        ErrorCategory.BEYOND_CAPABILITY,
+                        "当前模型的线路是 OpenAI 格式，不支持直接读取 PDF 等二进制文档",
+                        no_retry=True,
+                    )
             else:
                 dropped.add(str(kind))
         out_messages = list(tools)
@@ -269,7 +295,8 @@ class AnthropicToOpenAI:
 class _OpenAIToAnthropicStream:
     """OpenAI 的增量 → Anthropic 的块：记着现在在写哪一块，内容类型一变就关上旧块、开新块。
 
-    工具参数先攒着，块关上时一次给出（参数不是合法 JSON 就原文放进专门的字段）。
+    工具参数先在有界缓冲区攒着，块关上时校验 JSON 后一次给出（非法 JSON 兜底放进 _raw_arguments，
+    避免开源模型拼错 JSON 让整轮失败；攒参数期间外层流泵按 keepalive_s 发保活注释）。
     停止原因和用量在最后一段给出。
     """
 
@@ -280,6 +307,7 @@ class _OpenAIToAnthropicStream:
         self.open: str | None = None  # "text" | "thinking" | "tool"
         self.tool_index: int | None = None
         self.tool_args: list[str] = []
+        self.tool_args_len = 0
         self.usage = Usage()
         self.finish_reason: str | None = None
         self.finished = False
@@ -308,6 +336,7 @@ class _OpenAIToAnthropicStream:
             payload = json.dumps(_tool_input("".join(self.tool_args)), ensure_ascii=False)
             out.append(self._delta({"type": "input_json_delta", "partial_json": payload}))
             self.tool_args = []
+            self.tool_args_len = 0
             self.tool_index = None
         out.append(
             SSEEvent.of({"type": "content_block_stop", "index": self.index}, "content_block_stop")
@@ -372,8 +401,10 @@ class _OpenAIToAnthropicStream:
                         },
                     )
                     self.tool_index = index
-                if fn.get("arguments"):
-                    self.tool_args.append(fn["arguments"])
+                if fn.get("arguments") and self.tool_args_len < _MAX_TOOL_ARGS_CHARS:
+                    chunk = str(fn["arguments"])
+                    self.tool_args.append(chunk)
+                    self.tool_args_len += len(chunk)
             if choice.get("finish_reason"):
                 self.finish_reason = choice["finish_reason"]
         return out

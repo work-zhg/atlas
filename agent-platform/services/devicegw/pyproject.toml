@@ -15,6 +15,7 @@ dependencies = [
   "redis>=5.2",
   "pydantic-settings>=2.6",
   "atlas-devicelink",
+  "atlas-redis",
 ]
 
 [build-system]

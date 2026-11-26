@@ -1,25 +1,23 @@
 /** 运营服务和各系统运营接口的返回形状（只有元数据和数字，没有任何租户的业务内容）。 */
 
-export type Role = "ADMIN" | "OBSERVER";
+/** 模块级别（用户中心数据编码的「全部」级别）：只读看，读写改，Owner 还能做不可恢复的操作 */
+export type Level = "NONE" | "READ" | "WRITE" | "OWNER";
 
-export interface Me {
-  id: string;
-  account: string;
+export interface ModuleAccess {
+  /** 数据编码，如 OpsTenant、OpsMcp */
+  code: string;
   name: string;
-  role: Role;
-  must_change_password: boolean;
+  /** 对应的系统；租户模块为空 */
+  system: string | null;
+  level: Level;
 }
 
-export interface Operator {
-  id: string;
-  account: string;
-  name: string;
-  role: Role;
-  status: "active" | "disabled";
-  locked: boolean;
-  must_change_password: boolean;
-  last_login_at: string | null;
-  created_at: string;
+/** 当前运营人员（GET /api/me）：用户中心里系统租户的人 */
+export interface Me {
+  user: { id: string; name: string; tenant_id: string };
+  modules: ModuleAccess[];
+  /** 有操作码 ops:audit（内置角色「运营审计员」）：能看全部模块的运营审计 */
+  can_audit: boolean;
 }
 
 export interface SystemInfo {
@@ -27,6 +25,8 @@ export interface SystemInfo {
   name: string;
   capabilities: string[];
   key_configured: boolean;
+  /** 这个系统的运营模块（数据编码） */
+  module: string;
 }
 
 export interface OperationBrief {
@@ -45,11 +45,13 @@ export interface Tenant {
   expires_at: string | null;
   created_at: string;
   version: number;
+  /** 系统租户：运营团队所在的租户，不能停用、关闭 */
+  is_system?: boolean;
   users?: number;
   operation?: OperationBrief | null;
 }
 
-export type OperationKind = "OPEN" | "SUSPEND" | "RESUME" | "CLOSE";
+export type OperationKind = "OPEN" | "SUSPEND" | "RESUME" | "CLOSE" | "BACKFILL";
 
 export interface OperationStep {
   id: string;
@@ -190,6 +192,8 @@ export interface AuditEntry {
   operator_id: string | null;
   operator: string | null;
   action: string;
+  /** 模块的数据编码（OpsTenant、OpsMcp……）；升级前的记录为空 */
+  module: string | null;
   target: string | null;
   tenant_id: string | null;
   detail: Record<string, unknown> | null;

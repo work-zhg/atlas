@@ -23,7 +23,7 @@ from ..capacity import CapacityService
 from ..config import Settings
 from ..errors import AppError, Conflict, DependencyUnavailable, NotFound
 from ..providers.filesystem import PathEscape, UserFiles, WorkspaceRouting, make_user_files
-from ..redisx import make_redis
+from ..redisx import shared_redis
 from ..repositories.thread import ThreadRepository
 from ..runtime_config import WorkspaceLimits
 from ..sandbox.component import SandboxComponent
@@ -216,8 +216,7 @@ class _Routed:
     async def __aenter__(self) -> UserFiles:
         routing = None
         if self._settings.sandbox_enabled:
-            self._redis = make_redis(self._settings)
-            sandbox = SandboxComponent.build(self._settings, self._redis)
+            sandbox = SandboxComponent.build(self._settings, shared_redis())
             # ★ 文件区不属于哪个会话：绑定键用人的 id 占位，选路落到这个人任一个 READY 的原生沙箱
             routing = WorkspaceRouting(
                 sandbox.native, sandbox.exec, WorkspaceRef(self._owner, self._owner)
@@ -228,8 +227,7 @@ class _Routed:
         return files
 
     async def __aexit__(self, *exc: object) -> None:
-        if self._redis is not None:
-            await self._redis.aclose()
+        return None
 
 
 async def _call(fn: Any, *args: Any, **kwargs: Any) -> Any:

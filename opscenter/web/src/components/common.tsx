@@ -266,4 +266,6 @@ export function OneTimeSecret({ label, value }: { label: string; value: string }
 }
 
 /** 观察员：按钮照样显示但置灰，悬停说明为什么（不直接藏掉，免得以为没有这个功能） */
-export const OBSERVER_TIP = "运营观察员只能查看";
+/** 级别不够时按钮置灰的提示（不隐藏：让人知道有这个操作、去找系统租户的管理员要权限） */
+export const OBSERVER_TIP = "你在这个模块只能查看；要改请找系统租户的管理员在用户中心授「读写」";
+export const OWNER_TIP = "这个操作不可恢复，要这个模块的 Owner 权限";

@@ -14,8 +14,8 @@
 ★ 进程被杀（部署、OOM）：锁一个 TTL 内自然释放，文档停在中间状态 —— 由巡检 recover_stalled
   重新投递，从已完成的阶段之后续跑。不靠 Celery 重新投递：整个 Pod 被杀时，消息要等
   visibility_timeout（7 天）才回到队列。
-★ 多租户：任务消息里只有文档 id，租户从文档这一行取（run_queued），进入它再入库；租户已停用的
-  不开始，过一会儿再看（tasks/indexing.py），恢复后接着入、删除后就查不到了。
+★ 多租户：任务消息里只有文档 id，租户从文档这一行取（run_queued），进入它再入库；租户删除后
+  就查不到了。不查租户状态：停用不会叫停在跑、在排的入库（设计接受的代价）。
 """
 
 from __future__ import annotations
@@ -93,21 +93,16 @@ async def recover_stalled(rt: Runtime, sm: async_sessionmaker[AsyncSession]) -> 
     redis = rt.redis
     if redis is None:
         return []
-    # 跨租户巡检：系统范围里只取 (文档, 租户)；投递出去的任务再按文档行进入各自的租户
+    # 跨租户巡检：系统范围里只取文档 id；投递出去的任务再按文档行进入各自的租户。
+    # 不查租户状态（不知道它）：停用的租户在跑的照常做完
     with TenantScope.system(SystemReason.SWEEP):
         async with sm() as s:
             rows = (
-                await s.execute(
-                    select(Document.uuid, Document.tenant_uuid).where(
-                        Document.indexing_status.in_(IN_PROGRESS)
-                    )
+                await s.scalars(
+                    select(Document.uuid).where(Document.indexing_status.in_(IN_PROGRESS))
                 )
             ).all()
-    stalled = [
-        str(u)
-        for u, tenant in rows
-        if not await redis.exists(lock_key(u)) and await rt.gate.is_active(tenant)
-    ]
+    stalled = [str(u) for u in rows if not await redis.exists(lock_key(u))]
     if stalled:
         logger.warning("%d 个文档的入库任务已中断，重新投递：%s", len(stalled), stalled)
         for doc_uuid in stalled:
@@ -115,13 +110,12 @@ async def recover_stalled(rt: Runtime, sm: async_sessionmaker[AsyncSession]) -> 
     return stalled
 
 
-async def run_queued(rt: Runtime, sm: async_sessionmaker[AsyncSession], document_uuid: str) -> bool:
+async def run_queued(rt: Runtime, sm: async_sessionmaker[AsyncSession], document_uuid: str) -> None:
     """worker 的入口：进入文档所属的租户再入库（租户从文档行取，不认任何自称的）。
 
-    已删的文档查不到，直接跳过；租户已停用的不开始（文档留在原状态）。→ 是不是因为租户停用没入。
+    已删的文档查不到，直接跳过。不查租户状态（不知道它）：租户停用后在跑、在排的照常做完。
     """
     wanted = UUID(str(document_uuid))
-    suspended = False
 
     async def fetch() -> list[tuple[UUID, UUID]]:
         async with sm() as s:
@@ -131,15 +125,9 @@ async def run_queued(rt: Runtime, sm: async_sessionmaker[AsyncSession], document
             return [(u, t) for u, t in rows]
 
     async def handle(doc_uuid: UUID) -> None:
-        nonlocal suspended
-        if not await rt.gate.is_active(TenantScope.require()):
-            logger.info("文档 %s 所在的租户已停用，暂不入库", doc_uuid)
-            suspended = True
-            return
         await IndexingRunner(rt, sm).run(doc_uuid)
 
     await TenantSweep.each(fetch, handle)
-    return suspended
 
 
 class IndexingRunner:
@@ -221,25 +209,14 @@ class IndexingRunner:
                 span.set_attribute("knowledge.blocks", len(ir.blocks))
                 span.set_attribute("knowledge.images", len(ir.images))
                 docir_key = await self._store_docir(ds, doc, ir)
-            review: dict[str, Any] = {}
-            report = ir.report or {}
-            if (
-                self._rt.settings.parse_review
-                and report.get("needs_review")
-                and doc.review_status == "none"
-            ):
-                # 解析质量有严重问题：先进待审核（不参与检索），人看过预览再放行（§4.7）
-                review = {
-                    "review_status": "pending",
-                    "review_note": "解析质量待确认：" + "；".join(report.get("warnings") or []),
-                }
+            # ★ 解析质量有问题（扫描页、乱码）只记进解析报告，控制台标出警告；不卡检索：
+            #   不做 OCR 时人看了也只能放行或删掉，卡住反倒让文档在检索里悄悄消失
             await self._set(
                 doc_uuid,
                 indexing_status="splitting",
                 parsing_completed_at=utcnow(),
-                parse_report=report or None,
+                parse_report=ir.report or None,
                 docir_key=docir_key,
-                **review,
             )
 
             await self._check_pause(doc_uuid)
@@ -272,7 +249,7 @@ class IndexingRunner:
                     tables=tables_of(ir),
                     cfg=normalize_enhancements(ds.enhancements),
                     llm=self._rt.llm,
-                    redis=self._rt.redis,
+                    cache=self._rt.enhance_cache,
                     doc_chars=self._rt.settings.contextual_doc_chars,
                     concurrency=self._rt.settings.llm_concurrency,
                 )

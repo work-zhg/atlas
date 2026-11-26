@@ -5,7 +5,7 @@
 # ★ 库是宿主 Postgres 上的独立 database atlas_mcpgateway（docker compose 的 mcpgateway-init-db；
 #   服务器部署由 deploy/server/deploy.sh 建）。不用 Redis：数据面无状态，判权结果按 Key 进程内缓存 30 秒。
 # ★ 上游凭据由管理员在管理端登记，存在网关库里、不回显；Atlas、Pod 只拿到智能体自己的 Key。
-# ★ 管理端接口经网关（nginx）登录后访问；/mcp 数据面对外（外部客户端带用户 Key），/internal 只在集群内。
+# ★ 管理端接口经 API 网关（/mcp/…，验 JWT）访问；/mcp 数据面对外（外部客户端带用户 Key），/internal 只在集群内。
 #   多副本、无状态：/health 就绪即可接流量。
 # ★ Trace：OTLP/HTTP 发给 otel-collector（服务名 atlas-mcpgateway）；调用方带来的 traceparent 会接上。
 apiVersion: apps/v1
@@ -33,12 +33,15 @@ spec:
             # 运营接口（/ops/v1）的签名密钥：运营中心（48-opscenter.yaml）调用时核对（apply.sh 建 atlas-ops-keys）
             - name: ATLAS_MCPGW_OPS_API_KEY
               valueFrom: {secretKeyRef: {name: atlas-ops-keys, key: mcpgateway}}
+            # 验 Atlas 签发的身份凭据（X-Identity-Grant）：和 Atlas 的 MCP_IDENTITY_GRANT_SECRET 同一个
+            - name: ATLAS_MCPGW_IDENTITY_GRANT_SECRET
+              valueFrom: {secretKeyRef: {name: atlas-mcp-identity-grant, key: secret}}
             # 多租户迁移把已有数据归到原平台租户（apply.sh 按 .env 的 TENANT_BACKFILL_UUID 建；只有迁移读它）
             - name: TENANT_BACKFILL_UUID
               valueFrom: {configMapKeyRef: {name: atlas-tenancy, key: backfill_uuid, optional: true}}
             - {name: ATLAS_MCPGW_UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
-            # 外部客户端连网关的地址（管理端显示配置示例用）：经前端网关的 /mcp-gateway-api/mcp/{服务名}
-            - {name: ATLAS_MCPGW_PUBLIC_URL, value: "__PUBLIC_ORIGIN__/mcp-gateway-api"}
+            # 外部客户端连网关的地址（管理端显示配置示例用）：经 API 网关的 /mcp/mcp/{服务名}
+            - {name: ATLAS_MCPGW_PUBLIC_URL, value: "__PUBLIC_ORIGIN__/mcp"}
             - {name: OTEL_EXPORTER_OTLP_ENDPOINT, value: "http://__HOST_IP__:4318"}
             - {name: OTEL_SERVICE_NAME, value: atlas-mcpgateway}
       containers:
@@ -63,3 +66,18 @@ spec:
   type: ClusterIP
   selector: {app: atlas-mcpgateway}
   ports: [{port: 8070, targetPort: 8070}]
+---
+# 内部 Ingress：API 网关把 /mcp/… 去掉前缀后发到这里，Host = mcp.internal.techstz.com
+#   （infra-platform/gateway/routes.yaml；Traefik 只在集群内，见 deploy/server/traefik-values.yaml）
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlas-mcpgateway
+  namespace: atlas-system
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: mcp.internal.techstz.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: atlas-mcpgateway, port: {number: 8070}}}}

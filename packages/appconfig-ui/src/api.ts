@@ -57,6 +57,8 @@ export const SYSTEM = "system";
 export interface AppConfigClient {
   endpoint: string;
   headers?: () => Record<string, string>;
+  /** 回 401 时换一个新的访问令牌（宿主的统一登录），返回 true 就重发一次 */
+  refresh?: () => Promise<boolean>;
 }
 
 export class AppConfigError extends Error {
@@ -100,15 +102,18 @@ async function toError(res: Response): Promise<AppConfigError> {
 }
 
 async function call<T>(client: AppConfigClient, method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${client.endpoint.replace(/\/+$/, "")}${path}`, {
-    method,
-    credentials: "same-origin",
-    headers: {
-      ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-      ...(client.headers?.() ?? {}),
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  const send = () =>
+    fetch(`${client.endpoint.replace(/\/+$/, "")}${path}`, {
+      method,
+      credentials: "same-origin",
+      headers: {
+        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(client.headers?.() ?? {}),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  let res = await send();
+  if (res.status === 401 && client.refresh && (await client.refresh())) res = await send();
   if (!res.ok) throw await toError(res);
   return (await res.json()) as T;
 }

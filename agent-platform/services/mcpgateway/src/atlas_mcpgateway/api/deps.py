@@ -108,7 +108,7 @@ async def verified_tenant(request: Request, authz: AuthzDep) -> UUID:
     """管理接口、内部接口的入口：取请求头里的租户，核对后进入它（之后的读写按它自动过滤）。
 
     带了用户的经授权核对他在这个租户里；没带的（应用替自己的租户调内部接口）按请求头。
-    租户已停用（运营接口）的一律 403。
+    不知道租户状态：租户停用、到期后，用户中心给的授权快照里没有操作码，私有服务的授权也为空。
     """
     tenant = parse_tenant(request.headers.get("x-tenant-id"))
     if tenant is None:
@@ -116,9 +116,6 @@ async def verified_tenant(request: Request, authz: AuthzDep) -> UUID:
     who = _identity(request)
     if who is not None:
         await authz.operator(who[0], who[1], tenant)
-    gate = getattr(request.app.state, "tenant_gate", None)
-    if gate is not None and not await gate.is_active(tenant):
-        raise Forbidden("所在的组织已停用")
     TenantScope.bind(tenant)
     return tenant
 

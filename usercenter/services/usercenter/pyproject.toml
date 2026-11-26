@@ -15,6 +15,8 @@ dependencies = [
   "alembic>=1.14",
   "pydantic-settings>=2.6",
   "argon2-cffi>=23.1",
+  # 访问 JWT：Ed25519 签名（网关本地验签，c4-model/apigateway/code-auth.html）
+  "pyjwt[crypto]>=2.9",
   "email-validator>=2.2",
   # 运营接口（c4-model/opscenter/code-gateway.html）：只认运营中心的签名。用户中心自己的租户
   # 过滤仍是 db/tenancy.py（上下文挂在会话上），不用 atlas_tenancy

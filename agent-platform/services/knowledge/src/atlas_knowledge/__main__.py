@@ -3,6 +3,8 @@
 python -m atlas_knowledge serve      起 HTTP 服务（默认 :8050）
 python -m atlas_knowledge worker     起 Celery worker（队列 dataset）
 python -m atlas_knowledge migrate    升级知识库库到最新
+python -m atlas_knowledge sync-doc-ok
+                                     修数据：按库里的文档状态重写向量库的 doc_ok（去掉审核后跑一次）
 """
 
 from __future__ import annotations
@@ -32,8 +34,6 @@ def serve() -> None:
     from .api.app import create_app
 
     settings = get_settings()
-    if not settings.mcp_secret:
-        logger.warning("ATLAS_KB_MCP_SECRET 未设置：会话 Pod 里的知识库 MCP 一律拒绝")
     uvicorn.run(
         create_app(cors_origins=settings.cors_origins),
         host=os.environ.get("ATLAS_KB_HOST", "0.0.0.0"),
@@ -70,7 +70,7 @@ def migrate(revision: str = "head") -> None:
 
 
 async def _upgrade_opsapi() -> None:
-    """嵌入的公共库的表：运营接口（租户状态、运营请求）、应用配置（系统参数）；各自的版本表。"""
+    """嵌入的公共库的表：运营接口库（只剩版本表）、应用配置（系统参数）；各自的版本表。"""
     from atlas_appconfig import upgrade as upgrade_appconfig
     from atlas_opsapi import upgrade
     from sqlalchemy.ext.asyncio import create_async_engine
@@ -85,6 +85,22 @@ async def _upgrade_opsapi() -> None:
         await engine.dispose()
 
 
+def sync_doc_ok() -> None:
+    """修数据（document/doc_ok_sync.py）：按库里的文档状态重写向量库的 doc_ok。"""
+    from .db.session import get_sessionmaker
+    from .document.doc_ok_sync import sync_doc_ok as sync
+    from .runtime import build_runtime
+
+    async def run() -> int:
+        rt = build_runtime(get_settings())
+        try:
+            return await sync(rt, get_sessionmaker())
+        finally:
+            await rt.aclose()
+
+    logger.info("已按库里的文档状态重写 %d 个知识库的 doc_ok", asyncio.run(run()))
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     parser = argparse.ArgumentParser(prog="python -m atlas_knowledge")
@@ -94,6 +110,7 @@ def main() -> None:
     w = sub.add_parser("worker")
     w.add_argument("--concurrency", type=int, default=None)
     w.add_argument("--queues", default="dataset")
+    sub.add_parser("sync-doc-ok", help="按库里的文档状态重写向量库的 doc_ok（去掉审核后跑一次）")
     args = parser.parse_args()
     if args.command == "serve":
         serve()
@@ -101,6 +118,8 @@ def main() -> None:
         migrate()
     elif args.command == "worker":
         worker(args.concurrency, args.queues)
+    elif args.command == "sync-doc-ok":
+        sync_doc_ok()
 
 
 if __name__ == "__main__":

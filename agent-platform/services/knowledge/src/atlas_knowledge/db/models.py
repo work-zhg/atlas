@@ -49,8 +49,6 @@ INDEXING_STATUSES = (
     "error",
     "paused",
 )
-#: 审核状态：none = 库不要求审核；pending / approved / rejected
-REVIEW_STATUSES = ("none", "pending", "approved", "rejected")
 #: 文档的分段结构（同 Dify doc_form）
 DOC_FORMS = ("text_model", "hierarchical_model", "qa_model")
 #: 知识库的可见性（知识集方案）：public = 大家都能用（任何人至少可读）；private = 按用户中心的
@@ -111,8 +109,6 @@ class Dataset(TenantOwned, _Row, Base):
     retrieval_config: Mapped[dict[str, Any]] = mapped_column(JSONType, nullable=False)
     #: 新文档默认的分段结构
     doc_form: Mapped[str] = mapped_column(String(32), default="text_model", nullable=False)
-    #: Atlas 扩展：入库审核（doc §11.3）
-    review_required: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     #: 入库增强开关（doc/knowledge-enterprise-design.html §5.3 / §5.5）：上下文补全 L2、大表摘要
     enhancements: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
     #: 这个库的文件在对象存储里的目录（原文件、解析结果、图片都在下面）。多租户以后是
@@ -166,14 +162,8 @@ class Document(TenantOwned, _Row, Base):
 
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     archived: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    review_status: Mapped[str] = mapped_column(String(16), default="none", nullable=False)
-    reviewed_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    reviewed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-    review_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     #: 业务元数据（§7.2）：{字段名: 值}，字段由 kb_metadata_field 定义；写进 point payload 的 meta
     doc_metadata: Mapped[dict[str, Any] | None] = mapped_column(JSONType, nullable=True)
-    #: 文档级权限（§7.4）：可访问主体标签，如 ["u:123", "d:45", "r:hr"]；None = 库内公开
-    acl: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
     #: 版本与时效（§7.5）：同一份文档的各版本共用 version_group；新版本入库完成后旧版本
     #: is_current = false；生效区间外的不参与检索
     version_group: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True, index=True)
@@ -187,21 +177,19 @@ class Document(TenantOwned, _Row, Base):
 
     @property
     def available(self) -> bool:
-        """文档级「可被检索」：启用、未归档、审核不卡（none / approved）。"""
-        return self.enabled and not self.archived and self.review_status in ("none", "approved")
+        """文档级「可被检索」：启用、未归档。"""
+        return self.enabled and not self.archived
 
     def join_version(self, old: Document) -> None:
         """成为 old 的新版本：加入它的版本组（旧文档还没有组就以它自己的 uuid 开组）。
 
-        元数据、权限没单独给的沿用旧版本。新版本入库完成后才取代旧版本（入库编排）。
+        元数据没单独给的沿用旧版本。新版本入库完成后才取代旧版本（入库编排）。
         """
         if old.version_group is None:
             old.version_group = old.uuid
         self.version_group = old.version_group
         if self.doc_metadata is None:
             self.doc_metadata = old.doc_metadata
-        if self.acl is None:
-            self.acl = old.acl
 
 
 class Segment(TenantOwned, _Row, Base):
@@ -373,6 +361,24 @@ class MetadataField(TenantOwned, _Row, Base):
     llm_extract: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     __table_args__ = (UniqueConstraint("dataset_uuid", "name"),)
+
+
+class EnhanceCacheEntry(TenantOwned, _Row, Base):
+    """入库增强（上下文补全、大表摘要）的结果缓存：重跑入库、只改子块规则重新分段时不用再调模型
+    （segment/enhance.py、segment/enhance_cache.py）。
+
+    键 = 种类、模型、提示词版本、内容哈希；保留 30 天（jobs.EnhanceCacheCleanup 每天清一次）。
+    ★ 放数据库而不是 Redis：读得少、对延迟不敏感，却要留 30 天、随入库量增长；平台的 Redis 是
+      共用的一个实例，还装着任务队列和锁。
+    ★ 带租户：删除租户时一起删；别的租户上传同一份文件也不会命中。
+    """
+
+    __tablename__ = "kb_enhance_cache"
+
+    cache_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+
+    __table_args__ = (UniqueConstraint("tenant_uuid", "cache_key"), Index(None, "created_at"))
 
 
 class TenantCapacity(TenantOwned, _Row, Base):

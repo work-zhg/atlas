@@ -112,7 +112,7 @@ async def test_multi_dataset_stages(client: Any, rt: Any) -> None:
         client, rt, b["id"], text="请假需要提前一天申请。\n\n报销每周三处理。", process_rule=CUSTOM
     )
     r = await client.post(
-        "/internal/v1/retrieve",
+        "/v1/retrieve",
         json={
             "dataset_ids": [a["id"], b["id"]],
             "query": "请假",

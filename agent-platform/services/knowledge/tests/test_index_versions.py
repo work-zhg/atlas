@@ -228,7 +228,7 @@ async def test_payload_has_doc_fields_and_follows_status(client: Any, rt: Any) -
     store = rt.vectors.for_collection(f"kb_{ds['id'].replace('-', '')}")
     hits = await store.search_by_vector(FakeEmbedding().embed_query("请假"), top_k=1)
     payload = hits[0].payload
-    assert payload["kind"] == "segment" and payload["acl"] == ["public"]
+    assert payload["kind"] == "segment" and "acl" not in payload
     assert payload["is_current"] is True
     assert payload["meta"]["doc_type"] == "txt" and payload["meta"]["author"] == "alice"
     assert "valid_to" not in payload
@@ -245,7 +245,7 @@ async def test_payload_has_doc_fields_and_follows_status(client: Any, rt: Any) -
 async def test_completion_resyncs_doc_fields_changed_mid_ingest(
     client: Any, rt: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """入库中途改了 ACL（改字段时那一批还没写进向量库）：完成时按文档再同步一次，不留旧值。"""
+    """入库中途改了文档元数据（改字段时那一批还没写进向量库）：完成时按文档再同步一次，不留旧值。"""
     import atlas_knowledge.document.runner as runner_mod
     from atlas_knowledge.db.models import Document
     from atlas_knowledge.db.session import get_sessionmaker
@@ -253,21 +253,21 @@ async def test_completion_resyncs_doc_fields_changed_mid_ingest(
 
     original = runner_mod.index_segments
 
-    async def write_then_change_acl(session: Any, rt_: Any, ds: Any, doc: Any, segs: Any) -> int:
-        n = await original(session, rt_, ds, doc, segs)  # 这一批带着旧 ACL 写进去
-        async with get_sessionmaker()() as s:  # 同时另一个请求改了 ACL
+    async def write_then_change_meta(session: Any, rt_: Any, ds: Any, doc: Any, segs: Any) -> int:
+        n = await original(session, rt_, ds, doc, segs)  # 这一批带着旧元数据写进去
+        async with get_sessionmaker()() as s:  # 同时另一个请求改了元数据
             row = await s.scalar(select(Document).where(Document.uuid == doc.uuid))
             assert row is not None
-            row.acl = ["u:bob"]
+            row.doc_metadata = {"region": "华东"}
             await s.commit()
         return n
 
-    monkeypatch.setattr(runner_mod, "index_segments", write_then_change_acl)
+    monkeypatch.setattr(runner_mod, "index_segments", write_then_change_meta)
     ds = await _dataset(client)
     await _upload(client, rt, ds["id"], "请假需要提前一天申请。", "a.txt")
     store = rt.vectors.for_collection(f"kb_{ds['id'].replace('-', '')}")
     hits = await store.search_by_vector(FakeEmbedding().embed_query("请假"), top_k=1)
-    assert hits and hits[0].payload["acl"] == ["u:bob"]
+    assert hits and hits[0].payload["meta"]["region"] == "华东"
 
 
 # ───────────────────────────────────────────── 重建可续跑

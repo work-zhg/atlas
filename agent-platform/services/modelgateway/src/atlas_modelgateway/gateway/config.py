@@ -1,11 +1,12 @@
 """配置快照（c4-model/modelgateway/code-gateway-config.html）：调用路径上不查库。
 
-账号、模型、线路、Key 由管理平台写，网关只读一份内存副本；管理平台改完把网关状态里的配置版本号
-加一，网关最多每秒看一次，变了就在后台重新加载、整个替换，加载期间继续用旧的。
+账号、模型、线路、Key 由管理平台写，网关只读一份内存副本；管理平台改完按租户递增配置版本号并通过
+Pub/Sub 广播即时失效。
 
-★ 按租户分开加载（不整份加载全部租户）：多租户的规则不许在系统范围里通读业务数据。
-    认 Key       按全局唯一的摘要只查那一行（SystemReason.CREDENTIAL），查到就知道是哪个租户
-    租户的配置   进入这个租户，加载它的模型、线路、账号（第一次用到时加载）
+★ 按租户分开加载与按租户独立版本号：
+    认 Key       按全局唯一的摘要只查那一行（SystemReason.CREDENTIAL），查到就知道是哪个租户；
+                 Key 版本变化或收到停用/删除/重置广播时立即驱逐并单飞回源，绝不放行已吊销的 Key
+    租户的配置   进入这个租户，加载它的模型、线路、账号；租户 A 改配置只刷新 A，别的租户不重拉解密
 ★ 平台库暂时不可用时，用内存里最后一份继续服务；新改的配置等恢复后才生效。
 ★ 账号密钥只在加载时解密，明文只在内存里。
 """
@@ -13,6 +14,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from collections.abc import Callable
@@ -22,19 +24,31 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from atlas_redis import PubSubHub, Resubscribed
 from atlas_tenancy import SystemReason, TenantScope
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..crypto import CipherError, SecretCipher
 from ..db.models import GwAccount, GwApiKey, GwModel, GwRoute
-from .kernel import AccountRef, Egress, Format, ModelCaps, ModelKind, Price, Route
+from ..shared.kernel import AccountRef, Egress, Format, ModelCaps, ModelKind, Price, Route
+from ..shared.sync import (
+    CONFIG_INVALIDATE_CHANNEL,
+    VERSION_KEY,
+    ConfigInvalidation,
+    VersionWatch,
+)
 
-__all__ = ["ConfigSnapshot", "KeyEntry", "ModelEntry", "TenantConfig", "VersionWatch"]
+__all__ = [
+    "VERSION_KEY",
+    "ConfigSnapshot",
+    "KeyEntry",
+    "ModelEntry",
+    "TenantConfig",
+    "VersionWatch",
+]
 
 logger = logging.getLogger(__name__)
-
-VERSION_KEY = "modelgw:config:version"
 
 
 @dataclass(frozen=True)
@@ -72,44 +86,6 @@ class TenantConfig:
     models: dict[str, ModelEntry] = field(default_factory=dict)
 
 
-class VersionWatch:
-    """配置版本号：管理平台改配置后加一，网关最多每 check_s 秒看一次。
-
-    网关状态不可用时退回按时间：每 fallback_s 秒「变一次」，也就是定期重新加载。
-    """
-
-    def __init__(
-        self, redis: Any | None, *, check_s: float = 1.0, fallback_s: float = 30.0
-    ) -> None:
-        self._redis = redis
-        self._check_s = check_s
-        self._fallback_s = fallback_s
-        self._value = "0"
-        self._checked = 0.0
-
-    async def current(self) -> str:
-        now = time.monotonic()
-        if now - self._checked < self._check_s:
-            return self._value
-        self._checked = now
-        if self._redis is None:
-            self._value = f"t{int(time.time() // self._fallback_s)}"
-            return self._value
-        try:
-            raw = await self._redis.get(VERSION_KEY)
-            self._value = (raw.decode() if isinstance(raw, bytes) else str(raw)) if raw else "0"
-        except Exception:
-            logger.warning("读不到配置版本号，按时间重新加载", exc_info=True)
-            self._value = f"t{int(time.time() // self._fallback_s)}"
-        return self._value
-
-    @staticmethod
-    async def bump(redis: Any | None) -> None:
-        """管理平台改完配置调用。"""
-        if redis is not None:
-            await redis.incr(VERSION_KEY)
-
-
 @dataclass
 class _Cached:
     value: Any
@@ -124,22 +100,75 @@ class ConfigSnapshot:
         cipher: SecretCipher,
         watch: VersionWatch,
         *,
+        pubsub: PubSubHub | None = None,
         negative_ttl_s: float = 10.0,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._sm = sessionmaker
         self._cipher = cipher
         self._watch = watch
+        self._pubsub = pubsub
         self._negative_ttl = negative_ttl_s
         self._clock = clock
         self._keys: dict[str, _Cached] = {}
         self._tenants: dict[UUID, _Cached] = {}
+        self._inflight_keys: dict[str, asyncio.Future[KeyEntry | None]] = {}
         self._reloading: set[Any] = set()
+        self._listener: asyncio.Task[None] | None = None
+
+    # ── 跨副本即时失效监听 ─────────────────────────────────────────────
+
+    def start_invalidation_listener(self) -> None:
+        if self._pubsub is None:
+            return
+        if self._listener is not None and not self._listener.done():
+            return
+        with TenantScope.isolated():
+            self._listener = asyncio.create_task(self._listen(), name="modelgw-config-invalidation")
+
+    async def stop_invalidation_listener(self) -> None:
+        if self._listener is not None:
+            self._listener.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._listener
+            self._listener = None
+
+    async def _listen(self) -> None:
+        assert self._pubsub is not None
+        async with self._pubsub.subscribe(CONFIG_INVALIDATE_CHANNEL) as queue:
+            while True:
+                msg = await queue.get()
+                if isinstance(msg, Resubscribed):
+                    # 断线重连期间可能漏掉停用广播：清空 Key 缓存并立刻重拉版本号
+                    self._keys.clear()
+                    self._watch.invalidate_poll()
+                    continue
+                event = ConfigInvalidation.from_json(msg)
+                if event is None:
+                    continue
+                for digest in event.evict_digests:
+                    self._keys.pop(digest, None)
+                self._watch.invalidate_poll()
+                if (
+                    event.tenant_changed
+                    and event.tenant_uuid is not None
+                    and event.tenant_uuid in self._tenants
+                ):
+                    tid = event.tenant_uuid
+                    self._background(("tenant", tid), self._refresh_tenant_now(tid))
+
+    async def _refresh_tenant_now(self, tenant_uuid: UUID) -> None:
+        version = await self._watch.tenant_version(tenant_uuid, tuple(self._tenants))
+        await self._reload_tenant(tenant_uuid, version)
 
     # ── Key ────────────────────────────────────────────────────────────
 
+    def evict_key(self, digest: str) -> None:
+        """立即驱逐单把 Key 的内存缓存。"""
+        self._keys.pop(digest, None)
+
     async def key_by_digest(self, digest: str) -> KeyEntry | None:
-        version = await self._watch.current()
+        version = await self._watch.key_version(tuple(self._tenants))
         hit = self._keys.get(digest)
         if hit is not None:
             if (
@@ -148,11 +177,30 @@ class ConfigSnapshot:
                 and hit.version == version
             ):
                 return None
-            if hit.value is not None:
-                if hit.version != version:
-                    self._background(("key", digest), self._reload_key(digest, version))
+            if hit.value is not None and hit.version == version:
                 return hit.value
-        return await self._reload_key(digest, version)
+        # 版本已变或未命中：按 digest 单飞同步重查这一行，杜绝已停用 / 已收回权限的 Key 被旧缓存放行
+        existing = self._inflight_keys.get(digest)
+        if existing is not None:
+            return await asyncio.shield(existing)
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[KeyEntry | None] = loop.create_future()
+        self._inflight_keys[digest] = fut
+        try:
+            with TenantScope.isolated():
+                result = await self._reload_key(digest, version)
+        except BaseException as exc:
+            if not fut.done():
+                fut.set_exception(exc)
+                fut.exception()
+            raise
+        else:
+            if not fut.done():
+                fut.set_result(result)
+            return result
+        finally:
+            if self._inflight_keys.get(digest) is fut:
+                self._inflight_keys.pop(digest, None)
 
     async def _reload_key(self, digest: str, version: str) -> KeyEntry | None:
         try:
@@ -197,7 +245,7 @@ class ConfigSnapshot:
     # ── 租户的模型、线路、账号 ───────────────────────────────────────────
 
     async def tenant(self, tenant_uuid: UUID) -> TenantConfig:
-        version = await self._watch.current()
+        version = await self._watch.tenant_version(tenant_uuid, tuple(self._tenants))
         hit = self._tenants.get(tenant_uuid)
         if hit is not None:
             if hit.version != version:
@@ -305,6 +353,7 @@ class ConfigSnapshot:
             asyncio.get_running_loop().create_task(run())
 
     def forget(self) -> None:
-        """测试用：清空缓存。"""
+        """测试用：清空缓存并让下一次读取重新拉取版本号。"""
         self._keys.clear()
         self._tenants.clear()
+        self._watch.invalidate_poll()

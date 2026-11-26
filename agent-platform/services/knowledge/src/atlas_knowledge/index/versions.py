@@ -159,12 +159,8 @@ async def _valid_point_ids(session: AsyncSession, ds: Dataset) -> set[str]:
 
 async def rebuild_queued(
     rt: Runtime, sm: async_sessionmaker[AsyncSession], version_uuid: str
-) -> bool:
-    """worker 的入口：进入索引版本所属的租户再重建（租户从版本这一行取）。
-
-    租户已停用的不开始。→ 是不是因为租户停用没做。
-    """
-    suspended = False
+) -> None:
+    """worker 的入口：进入索引版本所属的租户再重建（租户从版本这一行取）。不查租户状态。"""
 
     async def fetch() -> list[tuple[str, UUID]]:
         async with sm() as s:
@@ -174,15 +170,9 @@ async def rebuild_queued(
         return [] if tenant is None else [(version_uuid, tenant)]
 
     async def handle(vid: str) -> None:
-        nonlocal suspended
-        if not await rt.gate.is_active(TenantScope.require()):
-            logger.info("索引版本 %s 所在的租户已停用，暂不重建", vid)
-            suspended = True
-            return
         await rebuild(rt, sm, vid)
 
     await TenantSweep.each(fetch, handle)
-    return suspended
 
 
 #: 重建锁的 TTL。不是工作时长上限：持有期间看门狗每 TTL/3 续一次，它只决定进程死后锁空悬多久
@@ -225,17 +215,9 @@ async def recover_rebuilds(rt: Runtime, sm: async_sessionmaker[AsyncSession]) ->
     with TenantScope.system(SystemReason.SWEEP):
         async with sm() as s:
             rows = (
-                await s.execute(
-                    select(IndexVersion.uuid, IndexVersion.tenant_uuid).where(
-                        IndexVersion.status == "building"
-                    )
-                )
+                await s.scalars(select(IndexVersion.uuid).where(IndexVersion.status == "building"))
             ).all()
-    stalled = [
-        str(u)
-        for u, tenant in rows
-        if not await redis.exists(rebuild_lock_key(u)) and await rt.gate.is_active(tenant)
-    ]
+    stalled = [str(u) for u in rows if not await redis.exists(rebuild_lock_key(u))]
     for vid in stalled:
         rt.dispatcher.rebuild_index(vid)
     return stalled

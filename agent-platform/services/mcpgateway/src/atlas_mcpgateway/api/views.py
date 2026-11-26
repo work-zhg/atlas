@@ -75,6 +75,7 @@ def service_out(svc: McpService, tools: list[McpTool], my: MyAccessOut | None = 
         tool_count=len(current),
         active_tool_count=sum(1 for t in current if t.callable()),
         my=my or MyAccessOut(),
+        platform=svc.platform,
     )
 
 
@@ -109,8 +110,8 @@ def service_detail(
         **service_out(svc, tools, my).model_dump(),
         tools=[tool_out(svc.name, t) for t in current],
         removed_tools=sorted(t.name for t in tools if t.removed_at is not None),
-        can_manage=can_manage,
-        can_assign=can_assign,
+        can_manage=can_manage and not svc.platform,
+        can_assign=can_assign and not svc.platform,
     )
 
 

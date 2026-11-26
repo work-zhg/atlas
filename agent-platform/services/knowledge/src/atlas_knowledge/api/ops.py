@@ -1,7 +1,7 @@
-"""运营接口（/ops/v1）：租户的停用、恢复、删除，容量，系统参数，系统任务。只给运营中心（先验签名）。
+"""运营接口（/ops/v1）：租户的创建、删除，容量，系统参数，系统任务。只给运营中心（先验签名）。
 
-    POST /ops/v1/tenants/{tenant}/suspend|resume|purge   运营接口库给的
-    GET  /ops/v1/tenant-states
+    PUT    /ops/v1/tenants/{tenant}                       创建（运营接口库给的）：{storage_bytes}
+    DELETE /ops/v1/tenants/{tenant}                       删除（运营接口库给的），分批
     GET  /ops/v1/configs …                                系统参数（应用配置库，如默认份额）
     GET  /ops/v1/jobs …                                   系统任务（原来的 /v1/jobs）
     GET  /ops/v1/capacity                                 全平台的知识库文件用量
@@ -13,7 +13,7 @@
 ★ 容量只有存储（知识库文件）一项，接口形状和 Atlas 的一样（运营中心按同一套契约调）；
   份额 null = 不限。
 
-★ 停用、删除租户时知识库做什么：见 ops/lifecycle.py。
+★ 创建、删除租户时知识库做什么：见 ops/lifecycle.py。
 """
 
 from __future__ import annotations
@@ -24,16 +24,16 @@ from typing import Annotated
 from uuid import UUID
 
 from atlas_jobs import JobScheduler
-from atlas_opsapi import OperatorStamp, OpsGuard, OpsRoutes, TenantGate, TenantLifecycleService
-from atlas_tenancy import SystemReason, TenantDataPurge, TenantScope
+from atlas_opsapi import OperatorStamp, OpsGuard, OpsRoutes
+from atlas_tenancy import SystemReason, TenantScope
 from fastapi import APIRouter, Depends, FastAPI, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
-from ..db.models import Base, Document, TenantCapacity
+from ..db.models import Document, TenantCapacity
 from ..db.session import get_sessionmaker
 from ..ops.capacity import MB, KnowledgeCapacity, TenantStorage
-from ..ops.lifecycle import PURGE_ORDER, KnowledgeTenantLifecycle
+from ..ops.lifecycle import KnowledgeTenantLifecycle
 from ..settings import get_settings
 
 __all__ = ["mount_ops"]
@@ -44,14 +44,12 @@ logger = logging.getLogger(__name__)
 def mount_ops(app: FastAPI, jobs: JobScheduler) -> None:
     settings = get_settings()
     key = settings.ops_api_key.get_secret_value() if settings.ops_api_key else None
-    sessions = get_sessionmaker()
     app.state.ops_guard = guard = OpsGuard(key)
-    app.state.tenant_gate = gate = TenantGate(sessions)
     # 存储份额：上传前判（runtime 在 lifespan 里接上它），默认份额是系统参数
-    app.state.capacity = capacity = KnowledgeCapacity(sessions)
-    purge = TenantDataPurge(PURGE_ORDER, base=Base)
-    lifecycle = TenantLifecycleService(sessions, KnowledgeTenantLifecycle(app), gate, purge)
-    ops = OpsRoutes(guard, lifecycle, config=capacity.config, jobs=jobs)
+    app.state.capacity = capacity = KnowledgeCapacity(get_sessionmaker())
+    ops = OpsRoutes(
+        guard, KnowledgeTenantLifecycle(app, capacity), config=capacity.config, jobs=jobs
+    )
     ops.router.include_router(_capacity_router)
     app.include_router(ops.router)
 

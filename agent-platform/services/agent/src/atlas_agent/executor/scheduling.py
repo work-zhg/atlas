@@ -31,14 +31,13 @@ from uuid import UUID
 
 import redis.asyncio as aioredis
 from atlas_jobs import Job, JobContext, NoParams
-from atlas_opsapi import TenantGate
 from atlas_tenancy import SystemReason, TenantScope
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ..capacity import CapacityService
 from ..config import Settings
 from ..redisx import shared_redis
-from ..repositories.run import SUSPENDED_STATUSES, LeaseLost, RunRepository
+from ..repositories.run import LeaseLost
 from ..repositories.run_queue import RunQueue
 from ..stream.relay import EventRelay
 from .continuation import Continuation
@@ -122,13 +121,10 @@ class RunWorker:
         continuation: Continuation,
         model_builder: Any = None,
         capacity: CapacityService | None = None,
-        gate: TenantGate | None = None,
     ) -> None:
         self._sessionmaker = sessionmaker
         #: 租户份额和每人上限（code-capacity.html）：抢锁的同一个事务里判，不行就回滚
         self._capacity = capacity
-        #: 租户停用了不接它的 run（运营接口，code-ops.html）：留在库里，恢复后兜底任务照常接
-        self.gate = gate
         self._settings = settings
         self._segment = segment
         self._continuation = continuation
@@ -164,8 +160,6 @@ class RunWorker:
 
     async def try_take(self, run_id: UUID) -> bool:
         """占槽 → 按 run 号抢锁 → 起执行槽。抢到返回 True；没槽、没抢到返回 False。"""
-        if self.gate is not None and not await self.gate.is_active(TenantScope.require()):
-            return False
         if not self.admission.reserve():
             return False
         try:
@@ -211,10 +205,12 @@ class RunWorker:
         #
         #   ★ 不等子 run。用户要的是**现在**停下；子 run 已经被级联取消
         #     （RunService.cancel），它自己会收自己的尾。
-        async with self._sessionmaker() as session:
-            run = await RunRepository(session).get(run_id)
-        if run is not None and run.status in SUSPENDED_STATUSES:
-            await self._continuation.settle_cancelled(run_id)
+        #   ★ 排队中的同样当场收：租户停用、实例满了时它可能排很久，取消位一小时就过期，
+        #     过期后再被领走就照常跑了。
+        #   ★ 不在这里先读状态再判：要不要收由 settle_cancelled 锁住行之后判（lock_unclaimed：
+        #     挂起或排队中的才收，已被领走的由在跑的进程看取消位自己收）。这里另判一遍的话，
+        #     两份状态列表迟早对不上 —— 原先这里只认挂起，排队中的就漏了
+        await self._continuation.settle_cancelled(run_id)
 
     async def resume_if_ready(self, run_id: UUID) -> bool:
         """等的事都有结果了就放回排队，并在本实例抢锁。返回是否放回了排队 ——
@@ -241,32 +237,6 @@ class RunWorker:
     def live_slots(self) -> dict[UUID, ExecutionSlot]:
         """在跑、要续租的 run：已在收尾的和已被抢走的不算。"""
         return {rid: s for rid, s in self._slots.items() if not s.settled and not s.lost}
-
-    def pause_tenant(self, tenant: UUID) -> int:
-        """租户停用：本实例上这个租户在跑的 run 交出去（与停机交接同一套：native 到安全点、CLI
-        直接断开），清掉租约后状态不变。停用期间谁也接不了它（try_take 先问 TenantGate），恢复后
-        兜底任务照常接走、从检查点接着跑。返回交出了几个。
-
-        ★ 不设到点中止：一个工具跑很久就等它跑完（不设运行上限的原则）。
-        """
-        paused = 0
-        for slot in self.live_slots().values():
-            if slot.tenant != tenant or slot.drain:
-                continue
-            slot.drain = True
-            if slot.cli and slot.task is not None:
-                slot.task.cancel()
-            paused += 1
-        return paused
-
-    async def pause_inactive_tenants(self) -> None:
-        """续租时顺带查：本实例在跑的 run 里有没有租户已停用的（停用请求打到了别的实例）。"""
-        if self.gate is None:
-            return
-        tenants = {s.tenant for s in self.live_slots().values() if s.tenant and not s.drain}
-        for tenant in tenants:
-            if not await self.gate.is_active(tenant) and (n := self.pause_tenant(tenant)):
-                logger.info("租户 %s 已停用：交出本实例上它的 %d 个 run", tenant, n)
 
     # ------------------------------------------------------------------ 执行
 
@@ -530,10 +500,6 @@ class LeaseRenewer(Job):
         live = self._worker.live_slots()
         if not live:
             return
-        try:
-            await self._worker.pause_inactive_tenants()
-        except Exception:
-            logger.warning("查租户状态失败，这一轮不交出", exc_info=True)
         # 本实例持有的 run 可能属于不同租户：按 run 号和持有者一条 SQL 续，在系统范围里做
         with TenantScope.system(SystemReason.SWEEP):
             async with self._sessionmaker() as session:

@@ -9,8 +9,11 @@
 #     同步为「全部 MCP 工具 · 所有者」）
 #   · 仓库根 .env 有 SERPAPI_KEY
 #
-# 做一件事：把 serpapi 登记成 REST 转换（deploy/server/mcp-serpapi.yaml，直连 serpapi.com，私有），
-# 登记人 / 所有者 = 用户中心的 admin。已存在就跳过。
+# 做两件事（已存在就跳过）：
+#   · 把知识库登记成平台服务（deploy/server/mcp-knowledge.yaml）：CLI 智能体经它调知识库的检索接口，
+#     所有租户可见，不用分配
+#   · 把 serpapi 登记成 REST 转换（deploy/server/mcp-serpapi.yaml，直连 serpapi.com，私有），
+#     登记人 / 所有者 = 用户中心的 admin
 #
 # ★ 之后在 MCP 管理端「API Key · 智能体 Key」里给要用它的智能体分配 serpapi（智能体的 Key 由 Atlas
 #   在编辑、运行智能体时自动申请）。也可以在服务详情里把它改成公开：任何 Key 都能用。
@@ -23,6 +26,10 @@ SERVER_IP="${ATLAS_SERVER_IP:-192.168.0.112}"
 if [ -z "${ATLAS_KUBECONFIG:-}" ] && [ -r /etc/kubernetes/admin.conf ]; then ATLAS_KUBECONFIG=/etc/kubernetes/admin.conf; fi
 export KUBECONFIG="${ATLAS_KUBECONFIG:-$HOME/.kube/atlas-${SERVER_IP}.yaml}"
 export NO_PROXY="${NO_PROXY:+${NO_PROXY},}${SERVER_IP}" no_proxy="${no_proxy:+${no_proxy},}${SERVER_IP}"
+echo "── 登记知识库（平台服务，REST 转换，集群内的检索接口）"
+kubectl -n atlas-system exec -i deploy/atlas-mcpgateway -- \
+  python -m atlas_mcpgateway service --platform add --file - < deploy/server/mcp-knowledge.yaml
+
 [ -n "${SERPAPI_KEY:-}" ] || { echo "✗ .env 没有 SERPAPI_KEY"; exit 1; }
 # 服务归租户（多租户）：登记到哪个租户。用户中心里 SELECT uuid FROM uc_tenant WHERE code = 'default'
 [ -n "${TENANT_BACKFILL_UUID:-}" ] || { echo "✗ .env 没有 TENANT_BACKFILL_UUID（登记到哪个租户）"; exit 1; }

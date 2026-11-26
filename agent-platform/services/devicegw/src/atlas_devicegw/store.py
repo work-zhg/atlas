@@ -8,9 +8,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import redis.asyncio as aioredis
+from atlas_redis import RedisClient, ScriptRegistry
 
 __all__ = ["BindingStore", "PresenceTable"]
+
+_SCRIPT_TOUCH = "devicegw.presence.touch_if_mine"
+_SCRIPT_DROP = "devicegw.presence.drop_if_mine"
 
 _PRESENCE = "devicegw:presence:{}"
 _SESSION = "devicegw:session:{}"
@@ -37,9 +40,18 @@ return 0
 class PresenceTable:
     """设备 → {device, owner, name, instance, link, report, connected_at}。"""
 
-    def __init__(self, redis: aioredis.Redis, ttl_s: int) -> None:
+    def __init__(self, redis: Any, ttl_s: int, *, scripts: ScriptRegistry | None = None) -> None:
         self._redis = redis
         self._ttl = ttl_s
+        if scripts is not None:
+            self._scripts: ScriptRegistry | None = scripts
+        elif isinstance(redis, RedisClient):
+            self._scripts = ScriptRegistry(redis)
+        else:
+            self._scripts = None
+        if self._scripts is not None:
+            self._scripts.register(_SCRIPT_TOUCH, _TOUCH_IF_MINE)
+            self._scripts.register(_SCRIPT_DROP, _DROP_IF_MINE)
 
     async def put(self, presence: dict[str, Any]) -> None:
         await self._redis.set(
@@ -47,22 +59,39 @@ class PresenceTable:
         )
 
     async def touch(self, device: str, link: str) -> bool:
-        return bool(
-            await self._redis.eval(_TOUCH_IF_MINE, 1, _PRESENCE.format(device), link, self._ttl)
-        )
+        key = _PRESENCE.format(device)
+        if self._scripts is not None:
+            return bool(
+                await self._scripts.run(
+                    _SCRIPT_TOUCH,
+                    keys=(key,),
+                    args=(link, self._ttl),
+                    key_pattern="devicegw:presence:*",
+                )
+            )
+        return bool(await self._redis.eval(_TOUCH_IF_MINE, 1, key, link, self._ttl))
 
     async def get(self, device: str) -> dict[str, Any] | None:
         raw = await self._redis.get(_PRESENCE.format(device))
         return json.loads(raw) if raw else None
 
     async def drop(self, device: str, link: str) -> None:
-        await self._redis.eval(_DROP_IF_MINE, 1, _PRESENCE.format(device), link)
+        key = _PRESENCE.format(device)
+        if self._scripts is not None:
+            await self._scripts.run(
+                _SCRIPT_DROP,
+                keys=(key,),
+                args=(link,),
+                key_pattern="devicegw:presence:*",
+            )
+            return
+        await self._redis.eval(_DROP_IF_MINE, 1, key, link)
 
 
 class BindingStore:
     """会话登记：按会话、按令牌摘要、按设备三个索引。"""
 
-    def __init__(self, redis: aioredis.Redis, ttl_s: int) -> None:
+    def __init__(self, redis: Any, ttl_s: int) -> None:
         self._redis = redis
         self._ttl = ttl_s
 

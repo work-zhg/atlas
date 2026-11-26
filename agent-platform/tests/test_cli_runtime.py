@@ -160,6 +160,8 @@ class Env:
             model_gateway_url="http://gw.test/universal",
             # 会话没选凭据档案
             credential_profiles={},
+            # 没配身份凭据的密钥：CLI 经网关调服务时不带凭据
+            mcp_identity_grant_secret=None,
         )
         self.settings = settings
         self.runtime = CliRuntime(

@@ -26,7 +26,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 TEST_DB = "atlas_knowledge_test"
-_ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
+_ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/postgres"
 TEST_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{TEST_DB}"
 TEST_REDIS = "redis://localhost:6380/12"
 #: 没指定租户的都在这个租户里
@@ -47,8 +47,7 @@ _TABLES = (
     "kb_index_version",
     "kb_metadata_field",
     "kb_tenant_capacity",
-    "app_tenant_state",
-    "app_ops_request",
+    "kb_enhance_cache",
 )
 
 
@@ -298,7 +297,7 @@ def _in_test_tenant() -> Iterator[None]:
 #: 用户中心授权快照的替身：没有免鉴权模式（dev 模式已删），谁都能用、操作码全有
 _ANYONE = {
     "can_access": True,
-    "permissions": ["kb:create", "kb:review", "chat:use", "agent:create"],
+    "permissions": ["kb:create", "chat:use", "agent:create"],
 }
 
 
@@ -320,11 +319,6 @@ def fake_user_center(handler: Any = None) -> Any:
         return httpx.Response(200, json={"id": uid, "name": f"用户{uid}"})
 
     return UserCenterGateway("http://uc", transport=httpx.MockTransport(handler or anyone))
-
-
-async def own_tags(user_id: str) -> list[str]:
-    """主体展开的替身：只有 u:用户（展开部门与角色要用户中心，测试里不接）。"""
-    return [f"u:{user_id}"]
 
 
 @pytest.fixture
@@ -356,7 +350,6 @@ async def rt() -> AsyncIterator[Any]:
         storage_factory=lambda: storage,
         user_center_gateway=fake_user_center(),
         data_permissions=FakeDataPermissions(),
-        principal_resolver=own_tags,
     )
     try:
         yield runtime

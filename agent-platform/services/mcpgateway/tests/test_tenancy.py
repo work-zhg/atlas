@@ -106,7 +106,7 @@ async def test_address_guard_rules() -> None:
             await guard.check(bad)
 
 
-async def test_suspend_shuts_out_admins_and_keys_and_purge_deletes_only_this_tenant(
+async def test_delete_removes_only_this_tenants_data(
     client: httpx.AsyncClient, upstream_base: str
 ) -> None:
     theirs = in_tenant(OTHER_TENANT, **as_user(ADMIN))
@@ -116,18 +116,16 @@ async def test_suspend_shuts_out_admins_and_keys_and_purge_deletes_only_this_ten
     assert (
         await client.post("/api/v1/services", json=_rest(upstream_base), headers=theirs)
     ).status_code == 201
-    key = await apply_user_key(client, ALICE)
-
-    def ops(action: str) -> dict[str, Any]:
-        return ops_request("POST", f"/ops/v1/tenants/{TEST_TENANT}/{action}")
+    await apply_user_key(client, ALICE)
 
     path = f"/ops/v1/tenants/{TEST_TENANT}"
-    assert (await client.post(f"{path}/suspend", **ops("suspend"))).status_code == 200
-    assert (await client.get("/api/v1/services", headers=as_user(ADMIN))).status_code == 403
-    r = await _tools_list(client, "crm", key["secret"])
-    assert r.status_code == 401 and r.json()["error"]["data"]["reason"] == "key_invalid"
+    # 创建：新租户不用准备什么，能重做；停用、恢复的运营接口没有了（停用只在用户中心）
+    for _ in range(2):
+        assert (await client.put(path, **ops_request("PUT", path, {}))).status_code == 200
+    r = await client.post(f"{path}/suspend", **ops_request("POST", f"{path}/suspend"))
+    assert r.status_code in (404, 405)
 
-    r = await client.post(f"{path}/purge", **ops("purge"))
+    r = await client.request("DELETE", path, **ops_request("DELETE", path))
     assert r.status_code == 200 and r.json()["remaining"] is False
     assert r.json()["deleted"]["mcp_service"] == 1 and r.json()["deleted"]["mcp_api_key"] == 1
     listed = (await client.get("/api/v1/services", headers=theirs)).json()

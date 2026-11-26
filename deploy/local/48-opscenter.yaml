@@ -1,12 +1,14 @@
-# 运营中心后端（c4-model/opscenter/）：自己的运营账号（不在用户中心任何租户里），只经各系统的运营接口
-# （/ops/v1，HMAC 签名）管租户、应用目录、容量、系统设置。前端是 49-opscenter-web.yaml。
+# 运营中心后端（c4-model/opscenter/design-opscenter.html）：运营人员是用户中心里系统租户的人（统一登录，
+# 经 API 网关写身份头），按模块授权；只经各系统的运营接口（/ops/v1，HMAC 签名）做事。前端是 49-opscenter-web.yaml。
 #
 # ★ 库是宿主 Postgres 上的独立 database atlas_opscenter（服务器部署由 deploy/server/deploy.sh 建）。
 # ★ 系统登记（地址、能力）写在这里的 ATLAS_OPS_SYSTEMS；每个系统一把运营密钥在 Secret atlas-ops-keys
 #   （apply.sh 建）：各系统自己的 ops_api_key 取对应的那一项，运营中心取全部（system_keys）。
-# ★ 首个运营管理员：kubectl -n atlas-system exec deploy/atlas-opscenter -- python -m atlas_opscenter
-#   bootstrap --account ops --name 运营管理员（临时密码只输出这一次，首次登录须修改）
-# ★ ClusterIP：只由运营中心前端（Next 把 /ops/api 转过来）调；不经租户网关（atlas-frontends 的 nginx）。
+# ★ 运营人员：先在用户中心建系统租户（只做一次）——kubectl -n atlas-system exec deploy/atlas-usercenter --
+#   python -m atlas_usercenter bootstrap-system --code platform --company 平台运营 --account … --name … --email …；
+#   运营中心启动后把自己的应用目录同步进用户中心、给系统租户开通（定时补；想马上做：python -m atlas_opscenter
+#   sync-catalog），系统租户的管理员再在用户中心里给人授运营模块（数据编码的「全部」级别）。
+# ★ ClusterIP：经 API 网关的 /opscenter/（auth 路由，网关验访问 JWT、写 X-Uid、X-Tenant-Id）。
 # ★ 只能 1 个副本：推进租户操作、到期检查是实例任务。
 apiVersion: apps/v1
 kind: Deployment
@@ -39,21 +41,19 @@ spec:
           ports: [{containerPort: 8100, name: http}]
           env:
             - {name: ATLAS_OPS_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_opscenter"}
-            # 前端与后端同源（Next 转发），不需要 CORS
+            # 前端与后端同源（都经 API 网关），不需要 CORS
             - {name: ATLAS_OPS_CORS_ORIGINS, value: "[]"}
-            # 挂在 {域名}/ops 下：Cookie 只带给 /ops，不带给同域名的租户入口；HTTPS 时加 Secure
-            - {name: ATLAS_OPS_COOKIE_PATH, value: "/ops"}
-            - {name: ATLAS_OPS_COOKIE_SECURE, value: "__PUBLIC_HTTPS__"}
-            # 系统登记（按顺序：挂起、删除时依次调）。TeamFlow 这次不接（只给已有租户开通）
+            # 系统登记（按顺序：开通、删除时依次调）；module_code 是这个系统在运营中心里那个模块的数据编码。
+            # TeamFlow 这次不接（只给已有租户开通）
             - name: ATLAS_OPS_SYSTEMS
               value: >-
-                [{"code":"usercenter","name":"用户中心","base_url":"http://atlas-usercenter.atlas-system.svc.cluster.local:8030","capabilities":["user_center"]},
-                {"code":"atlas","name":"Atlas","base_url":"http://atlas-server.atlas-system.svc.cluster.local:8000","capabilities":["lifecycle","capacity","settings","jobs","runtime_env"]},
-                {"code":"knowledge","name":"知识库","base_url":"http://atlas-knowledge.atlas-system.svc.cluster.local:8050","capabilities":["lifecycle","capacity","settings","jobs"]},
-                {"code":"skill","name":"技能","base_url":"http://atlas-skill.atlas-system.svc.cluster.local:8020","capabilities":["lifecycle","skill_market"]},
-                {"code":"mcpgateway","name":"MCP 网关","base_url":"http://atlas-mcpgateway.atlas-system.svc.cluster.local:8070","capabilities":["lifecycle","jobs"]},
-                {"code":"modelgateway","name":"模型平台","base_url":"http://atlas-modelgateway.atlas-system.svc.cluster.local:8090","capabilities":["lifecycle","jobs"]},
-                {"code":"memory","name":"记忆服务","base_url":"http://atlas-memory.atlas-system.svc.cluster.local:8060","capabilities":["lifecycle","memory_scopes"]}]
+                [{"code":"usercenter","name":"用户中心","base_url":"http://atlas-usercenter.atlas-system.svc.cluster.local:8030","capabilities":["user_center"],"module_code":"OpsUserCenter"},
+                {"code":"atlas","name":"Atlas","base_url":"http://atlas-server.atlas-system.svc.cluster.local:8000","capabilities":["lifecycle","capacity","settings","jobs","runtime_env"],"module_code":"OpsAtlas"},
+                {"code":"knowledge","name":"知识库","base_url":"http://atlas-knowledge.atlas-system.svc.cluster.local:8050","capabilities":["lifecycle","capacity","settings","jobs"],"module_code":"OpsKnowledge"},
+                {"code":"skill","name":"技能","base_url":"http://atlas-skill.atlas-system.svc.cluster.local:8020","capabilities":["lifecycle","skill_market"],"module_code":"OpsSkill"},
+                {"code":"mcpgateway","name":"MCP 网关","base_url":"http://atlas-mcpgateway.atlas-system.svc.cluster.local:8070","capabilities":["lifecycle","jobs"],"module_code":"OpsMcp"},
+                {"code":"modelgateway","name":"模型平台","base_url":"http://atlas-modelgateway.atlas-system.svc.cluster.local:8090","capabilities":["lifecycle","jobs"],"module_code":"OpsModel"},
+                {"code":"memory","name":"记忆服务","base_url":"http://atlas-memory.atlas-system.svc.cluster.local:8060","capabilities":["lifecycle","memory_scopes"],"module_code":"OpsMemory"}]
             - name: ATLAS_OPS_SYSTEM_KEYS
               valueFrom: {secretKeyRef: {name: atlas-ops-keys, key: system_keys}}
           readinessProbe:
@@ -71,3 +71,18 @@ spec:
   type: ClusterIP
   selector: {app: atlas-opscenter}
   ports: [{port: 8100, targetPort: 8100}]
+---
+# 内部 Ingress：API 网关把 /opscenter/… 去掉前缀后发到这里，Host = opscenter.internal.techstz.com
+#   （infra-platform/gateway/routes.yaml；Traefik 只在集群内，见 deploy/server/traefik-values.yaml）
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlas-opscenter
+  namespace: atlas-system
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: opscenter.internal.techstz.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: atlas-opscenter, port: {number: 8100}}}}

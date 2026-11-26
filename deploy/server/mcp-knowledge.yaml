@@ -1,0 +1,48 @@
+# 知识库：在 MCP 网关登记成平台服务（REST 转换），CLI 智能体经它调知识库的检索接口（mcp-cutover.sh 用）。
+#
+#   python -m atlas_mcpgateway service --platform add --file - < 本文件
+#
+# ★ 平台服务：不属于任何租户，所有租户可见；公开（任何有效的 Key 都能用），不在用户中心登记数据对象；
+#   只能由运维命令行登记、修改。上游地址是集群内的知识库，平台服务不查地址。
+# ★ 传递调用者身份：网关给知识库写 X-Auth-Uid（Atlas 签发的身份凭据里的按谁判；没带凭据时是 Key 的
+#   主体）、X-Uid、X-Tenant-Id。知识库按 X-Auth-Uid 判库级、文档级权限 —— 和 Atlas 调的是同一个接口。
+# ★ 工具名、参数和原生智能体的 knowledge_list / knowledge_search 一样；知识库只返回数据，给模型看哪些
+#   字段在这里挑（knowledge_list 只要知识集列表，knowledge_search 整个结果，含跳过的库）。
+kind: rest
+name: knowledge
+display_name: 知识库
+description: 平台的知识库：按知识集查资料
+pass_identity: true
+connection:
+  base_url: http://atlas-knowledge.atlas-system.svc.cluster.local:8050
+  spec_url: ""
+credential:
+  type: none
+tools:
+  - name: knowledge_list
+    description: >-
+      列出知识集和其中你能查的知识库：名称、介绍、文档数、最近更新时间。
+      参数 knowledge_set 填「可查的知识」里的知识集名称（不填 = 你能查的全部知识集）。只读。
+    effect: read
+    mapping:
+      method: POST
+      path: /v1/knowledge-sets/readable
+      params:
+        - {name: knowledge_set, in: body, type: string, required: false, description: 知识集名称, field: name}
+      pick: $.data
+      limit_kb: 32
+  - name: knowledge_search
+    description: >-
+      在知识集里查资料，返回最相关的几段，每段带出处（文档、章节、所在的库）。不指定知识库就查整个知识集；
+      指定时只查这几个库（最多 5 个，名称来自 knowledge_list 的结果）。
+      参数 knowledge_set 填「可查的知识」里的知识集名称（只有一个知识集时可以不填）。只读。
+    effect: read
+    mapping:
+      method: POST
+      path: /v1/retrieve
+      params:
+        - {name: query, in: body, type: string, required: true, description: 要查的内容，关键词或一句话，越具体越好}
+        - {name: knowledge_set, in: body, type: string, required: false, description: 知识集名称}
+        - {name: knowledge_bases, in: body, type: array, required: false, description: 可选：只查这几个库，名称来自 knowledge_list 的结果}
+        - {name: source, in: body, type: string, fixed: mcp}
+      limit_kb: 32

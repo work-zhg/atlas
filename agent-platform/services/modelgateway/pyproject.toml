@@ -25,6 +25,8 @@ dependencies = [
   # 多租户：数据按当前租户自动过滤；运营接口（开通、停用、清除租户）
   "atlas-tenancy",
   "atlas-opsapi",
+  # 统一 Redis 客户端中间件（三池隔离、原子限流、Singleflight 协同缓存与跨副本失效广播）
+  "atlas-redis",
   # 网关几个实例共用的状态
   "redis>=5",
   # 账号密钥的信封加密

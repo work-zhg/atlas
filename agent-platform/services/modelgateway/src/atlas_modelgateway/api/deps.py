@@ -17,13 +17,13 @@ from ..auth import TenantDep
 from ..calls import CallLog
 from ..crypto import SecretCipher
 from ..db.session import get_session
-from ..gateway.format import AddressGuard, UpstreamClient
-from ..gateway.routing import RouteHealth
 from ..keys import KeyService
 from ..perms import Permissions, SubjectsCache
 from ..provider import ProviderCatalog
 from ..registry import ModelRegistry
 from ..settings import GatewaySettings, get_settings
+from ..shared.health import RouteHealth
+from ..shared.upstream import AddressGuard, UpstreamClient
 
 __all__ = [
     "AccountsDep",

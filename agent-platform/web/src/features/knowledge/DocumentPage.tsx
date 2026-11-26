@@ -11,6 +11,7 @@ import {
   type Segment,
   STATUS_LABEL,
   kbApi,
+  parseWarnings,
   pathLabel,
   useDataset,
   useKbDocument,
@@ -151,9 +152,22 @@ export function DocumentPage({ datasetId, documentId }: { datasetId: string; doc
             <Descriptions.Item label="状态">
               <Tag color={STATUS_LABEL[d.indexing_status].color}>{STATUS_LABEL[d.indexing_status].label}</Tag>
             </Descriptions.Item>
-            <Descriptions.Item label="审核">
-              {{ none: "不需要", pending: "待审核", approved: "已通过", rejected: "已驳回" }[d.review_status]}
-            </Descriptions.Item>
+            {parseWarnings(d).length > 0 && (
+              <Descriptions.Item label="解析警告">
+                <Alert
+                  type="warning"
+                  showIcon={false}
+                  message={
+                    <Space direction="vertical" size={2}>
+                      {parseWarnings(d).map((w) => (
+                        <span key={w}>{w}</span>
+                      ))}
+                      <Typography.Text type="secondary">照常参与检索；内容缺失的可以换解析器重新分段</Typography.Text>
+                    </Space>
+                  }
+                />
+              </Descriptions.Item>
+            )}
             <Descriptions.Item label="分段">{d.segment_count}</Descriptions.Item>
             <Descriptions.Item label="字数">{d.word_count.toLocaleString()}</Descriptions.Item>
             <Descriptions.Item label="大小">{((d.data_source_info.size ?? 0) / 1024).toFixed(1)} KB</Descriptions.Item>

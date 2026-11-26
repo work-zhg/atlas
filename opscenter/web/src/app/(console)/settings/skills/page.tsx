@@ -12,7 +12,7 @@ import { ErrorBox, OBSERVER_TIP, PageHead, SquareIcon, colorOf, errorText } from
 import { Icon } from "@/components/Icon";
 import { sys } from "@/lib/api";
 import { bytes, dateTime } from "@/lib/format";
-import { useMe, useSystems, withCapability } from "@/lib/session";
+import { useAccess, useSystems, withCapability } from "@/lib/session";
 import type { MarketSkill, MarketVersion } from "@/lib/types";
 
 export default function SkillsPage() {
@@ -32,8 +32,9 @@ function Market({ code }: { code: string }) {
   const ops = sys(code);
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { data: me } = useMe();
-  const admin = me?.role === "ADMIN";
+  // 这个系统的运营模块：改要读写
+  const acc = useAccess();
+  const admin = acc.write(acc.moduleOf(code));
   const key = ["market", code];
   const q = useQuery({ queryKey: key, queryFn: () => ops.get<MarketSkill[]>("/market/skills") });
   const [upload, setUpload] = useState(false);

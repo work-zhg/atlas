@@ -16,7 +16,6 @@ import hashlib
 import logging
 import secrets
 from typing import Any
-from urllib.parse import unquote
 
 import httpx
 from fastapi import Request
@@ -164,10 +163,11 @@ class CapabilityProxy:
         upstream = binding["upstreams"].get(upstream_id)
         if upstream is None:
             return _error(404, "not_found", f"这个会话没有上游 {upstream_id}")
-        if any(unquote(segment) in (".", "..") for segment in path.split("/")):
-            # ★ httpx 会把点段规整掉：上游地址是 …/mcp/serpapi 时，../../internal 就出了这个上游
-            #   的范围，带着换上的真实凭据和身份去调同一台主机上的别的接口
-            return _error(400, "bad_path", "路径里不能有 . 或 .. 段")
+        if path and not _sent_as_is(path):
+            # ★ httpx 会改写路径：上游地址是 …/mcp/serpapi 时，../../internal（或 ..%3f、..%23
+            #   解码后的 ..? ..#）就出了这个上游的范围，带着换上的真实凭据和身份去调同一台主机上的
+            #   别的接口
+            return _error(400, "bad_path", "路径里不能有点段、? 或 #")
         await self._store.touch(binding)
         target = upstream["url"] if not path else upstream["url"].rstrip("/") + "/" + path
         if request.url.query:
@@ -189,6 +189,19 @@ class CapabilityProxy:
             headers=HeaderPolicy.back(resp.headers),
             background=BackgroundTask(resp.aclose),
         )
+
+
+def _sent_as_is(path: str) -> bool:
+    """httpx 会不会原样发出这个路径（path 是解码后的、不带开头的 /）。
+
+    ★ 只认一条：发出去的路径就是收到的那个。点段被规整、? # 之后被当成查询串和片段、%2f 被当成 /，
+      都是改写，一律不转发（不逐个列举危险字符）。
+    """
+    try:
+        url = httpx.URL(f"http://upstream/{path}")
+    except httpx.InvalidURL:  # 换行等控制字符
+        return False
+    return url.path == f"/{path}" and not url.query and not url.fragment
 
 
 def _error(status: int, kind: str, message: str) -> JSONResponse:

@@ -45,6 +45,8 @@ class UpstreamSpec:
     )
     #: gRPC：FileDescriptorSet。发现时给了就不反射；调用只用它
     descriptor: bytes | None = None
+    #: 平台服务：地址是部署时平台自己写的（运维命令行登记），不查地址（AddressGuard）
+    platform: bool = False
 
     def targets(self) -> list[str]:
         return upstream_targets(self.kind, self.connection, self.credential.fields)

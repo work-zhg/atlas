@@ -23,10 +23,13 @@ export function limit(n: number | null | undefined): string {
 
 export const GB = 1024 * 1024 * 1024;
 
-export const KIND_LABEL: Record<string, string> = { OPEN: "开通", SUSPEND: "停用", RESUME: "恢复", CLOSE: "关闭" };
+export const KIND_LABEL: Record<string, string> = { OPEN: "开通", SUSPEND: "停用", RESUME: "恢复", CLOSE: "关闭", BACKFILL: "补建" };
 
 export const ACTION_LABEL: Record<string, string> = {
   CREATE_TENANT: "建租户和首个管理员",
+  CREATE: "创建",
+  DELETE: "删除数据",
+  // 升级前排的步骤（业务系统改成只有创建、删除之前）
   SET_QUOTA: "设份额",
   INSTALL_SKILLS: "装默认技能",
   BLOCK: "挡住入口",

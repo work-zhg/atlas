@@ -1,9 +1,14 @@
-"""租户（c4-model/opscenter/code-tenants.html）：开通、停用、恢复、关闭，每种拆成按系统的步骤。
+"""租户（c4-model/opscenter/code-tenants.html）：开通、停用、恢复、关闭、补建，拆成按系统的步骤。
 
-    开通   用户中心建租户（含根部门、首个管理员、开通的应用）→ 各系统设份额 → 技能应用装默认技能
-    停用   用户中心挡住入口 → 各系统挂起（「各系统」= 登记里声明了租户生命周期的，按登记顺序）
-    恢复   各系统恢复 → 用户中心放开入口
+    开通   用户中心建租户（含根部门、首个管理员、开通的应用）→ 各系统创建（带上开通时给它填的
+          参数：Atlas、知识库的份额，技能应用装不装默认技能）。「各系统」= 登记里声明了租户
+          生命周期的，按登记顺序
+    停用   只让用户中心挡住：这个租户的人登录不了，取角色权限、数据权限一律无权限。不通知业务系统
+    恢复   只让用户中心放开
     关闭   各系统删数据（分批，删完为止）→ 用户中心删租户
+    补建   新登记的系统：对现有每个租户调一次它的创建
+
+★ 业务系统不知道租户状态：契约里只有创建、删除。到期不另外发起停用 —— 用户中心把到期算作挡住。
 
 ★ 一次操作记成 TenantOperation（ops_tenant_operation + ops_operation_step），后台任务推进，每做完
   一步保存一次；失败不放弃，退避后一直重试（对方明确拒绝的退避更长、界面标红），可以立即重做。
@@ -28,6 +33,7 @@ from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from .access import TENANT_MODULE
 from .audit import Who, complete, record
 from .db.models import OperationStep, TenantOperation
 from .db.types import utcnow
@@ -35,7 +41,6 @@ from .errors import Conflict, Invalid, NotFound, OpsError, Upstream
 from .gateway import CallFailed, Capability, OpsClient, SystemRegistry, stamp_of
 
 __all__ = [
-    "ExpiryWatcher",
     "OpenRequest",
     "OperationSweeper",
     "StepRunner",
@@ -66,9 +71,11 @@ class OpenRequest:
     expires_at: datetime | None = None
     #: 开通的应用编码
     apps: list[str] = field(default_factory=list)
-    #: 各系统的份额：{系统编码: 份额}；没给的系统用默认份额
+    #: 各系统的创建参数：{系统编码: 参数}。没给的系统按它自己的默认（份额用默认份额）
+    params: dict[str, dict[str, Any]] = field(default_factory=dict)
+    #: 控制台的两个便捷项，开通时并进 params：各系统的份额（{系统编码: 份额}），以及技能应用
+    #: 装不装技能市场里「默认安装」的技能
     quotas: dict[str, dict[str, Any]] = field(default_factory=dict)
-    #: 装技能市场里「创建租户时默认安装」的技能
     install_default_skills: bool = True
 
 
@@ -82,22 +89,15 @@ class Planner:
         uc = self.registry.user_center.code
         life = [e.code for e in self.registry.with_capability(Capability.LIFECYCLE)]
         if kind == "OPEN":
-            steps = [(uc, "CREATE_TENANT")]
-            for e in self.registry.with_capability(Capability.CAPACITY):
-                if e.code in (params.get("quotas") or {}):
-                    steps.append((e.code, "SET_QUOTA"))
-            if params.get("install_default_skills"):
-                steps += [
-                    (e.code, "INSTALL_SKILLS")
-                    for e in self.registry.with_capability(Capability.SKILL_MARKET)
-                ]
-            return steps
+            return [(uc, "CREATE_TENANT"), *[(s, "CREATE") for s in life]]
         if kind == "SUSPEND":
-            return [(uc, "BLOCK"), *[(s, "SUSPEND") for s in life]]
+            return [(uc, "BLOCK")]
         if kind == "RESUME":
-            return [*[(s, "RESUME") for s in life], (uc, "UNBLOCK")]
+            return [(uc, "UNBLOCK")]
         if kind == "CLOSE":
-            return [*[(s, "PURGE") for s in life], (uc, "DELETE_TENANT")]
+            return [*[(s, "DELETE") for s in life], (uc, "DELETE_TENANT")]
+        if kind == "BACKFILL":
+            return [(params["system"], "CREATE")]
         raise ValueError(kind)
 
 
@@ -220,24 +220,26 @@ class StepRunner:
                 out = await call(step.system, "POST", "/tenants", params["create"], stamp=stamp)
                 # ★ 临时密码不留：同步那一次已经交给运营人员；重做出来的不管（要的话补发）
                 return True, {"admin_account": (out or {}).get("admin", {}).get("account")}
-            case "SET_QUOTA":
-                quota = (params.get("quotas") or {}).get(step.system) or {}
-                await call(step.system, "PUT", f"/quotas/{t}", quota, stamp=stamp)
+            case "CREATE":
+                body = (params.get("params") or {}).get(step.system) or {}
+                await call(step.system, "PUT", f"/tenants/{t}", body, stamp=stamp)
                 return True, None
-            case "INSTALL_SKILLS":
-                out = await call(
-                    step.system, "POST", f"/tenants/{t}/market-skills", {"skills": []}, stamp=stamp
-                )
-                return True, {"installed": len(out or [])}
             case "BLOCK" | "UNBLOCK":
                 await call(step.system, "POST", f"/tenants/{t}/{step.action.lower()}", stamp=stamp)
                 return True, None
-            case "SUSPEND" | "RESUME":
-                await call(step.system, "POST", f"/tenants/{t}/{step.action.lower()}", stamp=stamp)
-                return True, None
-            case "PURGE":
-                out = await call(step.system, "POST", f"/tenants/{t}/purge", stamp=stamp) or {}
+            case "DELETE" | "PURGE":
+                out = await call(step.system, "DELETE", f"/tenants/{t}", stamp=stamp) or {}
                 return not out.get("remaining", False), {"deleted": out.get("deleted") or {}}
+            # ★ 升级前排好的步骤（各系统改成只有创建、删除之前）：照新契约做完
+            case "SET_QUOTA":
+                quota = (params.get("quotas") or {}).get(step.system) or {}
+                await call(step.system, "PUT", f"/tenants/{t}", quota, stamp=stamp)
+                return True, None
+            case "INSTALL_SKILLS":
+                await call(step.system, "PUT", f"/tenants/{t}", {}, stamp=stamp)
+                return True, None
+            case "SUSPEND" | "RESUME":
+                return True, {"skipped": "业务系统不再参与停用、恢复"}
             case "DELETE_TENANT":
                 out = await call(step.system, "DELETE", f"/tenants/{t}", stamp=stamp) or {}
                 return True, {"deleted": out.get("deleted") or {}}
@@ -344,15 +346,7 @@ class TenantOps:
             "expires_at": req.expires_at.isoformat() if req.expires_at else None,
             "apps": req.apps,
         }
-        for system in req.quotas:
-            entry = self.registry.get(system)
-            if entry is None or not entry.has(Capability.CAPACITY):
-                raise Invalid("VALIDATION_FAILED", f"系统 {system} 没有份额", field="quotas")
-        params = {
-            "create": create,
-            "quotas": req.quotas,
-            "install_default_skills": req.install_default_skills,
-        }
+        params = {"create": create, "params": self._create_params(req)}
         op, steps = await self._start(tenant_uuid, create["code"], "OPEN", by, params, None)
         first = steps[0]
         stamp = stamp_of(
@@ -382,7 +376,7 @@ class TenantOps:
         first.finished_at = utcnow()
         first.result = {"admin_account": out["admin"]["account"]}
         if len(steps) == 1:
-            # 只有建租户这一步（没给份额、没有技能市场）：这次开通就做完了
+            # 只有建租户这一步（没有登记存租户数据的系统）：这次开通就做完了
             op.status, op.finished_at = "DONE", utcnow()
             entry_uuid = op.audit_uuid
             if entry_uuid is not None:
@@ -397,10 +391,27 @@ class TenantOps:
             "message": None,
         }
 
+    def _create_params(self, req: OpenRequest) -> dict[str, dict[str, Any]]:
+        """各系统的创建参数：显式给的 params，并上控制台的份额和「装默认技能」两项。"""
+        out = {code: dict(p) for code, p in req.params.items()}
+        for code in out:
+            entry = self.registry.get(code)
+            if entry is None or not entry.has(Capability.LIFECYCLE):
+                raise Invalid("VALIDATION_FAILED", f"系统 {code} 不接租户", field="params")
+        for code, quota in req.quotas.items():
+            entry = self.registry.get(code)
+            if entry is None or not entry.has(Capability.CAPACITY):
+                raise Invalid("VALIDATION_FAILED", f"系统 {code} 没有份额", field="quotas")
+            out.setdefault(code, {}).update(quota)
+        for e in self.registry.with_capability(Capability.SKILL_MARKET):
+            out.setdefault(e.code, {}).setdefault("install_defaults", req.install_default_skills)
+        return out
+
     # ── 停用、恢复、关闭
 
     async def suspend(self, tenant_uuid: UUID, reason: str | None, by: Who) -> dict[str, Any]:
         t = await self.get(tenant_uuid, by)
+        _guard_system(t, "停用")
         op, steps = await self._start(tenant_uuid, t["code"], "SUSPEND", by, {}, reason or "停用")
         return operation_view(op, steps)
 
@@ -413,12 +424,37 @@ class TenantOps:
 
     async def close(self, tenant_uuid: UUID, confirm_code: str, by: Who) -> dict[str, Any]:
         t = await self.get(tenant_uuid, by)
+        _guard_system(t, "关闭")
         if t["status"] != "suspended":
             raise Conflict("TENANT_NOT_SUSPENDED", "只能关闭已停用的租户：先停用")
         if (confirm_code or "").strip().lower() != t["code"]:
             raise Invalid("CONFIRM_MISMATCH", "企业代码输得不对", field="confirm_code")
         op, steps = await self._start(tenant_uuid, t["code"], "CLOSE", by, {}, None)
         return operation_view(op, steps)
+
+    # ── 补建
+
+    async def backfill(self, system: str, by: Who) -> dict[str, Any]:
+        """新登记的系统：对用户中心里现有的每个租户发起一个只有「这个系统创建」一步的操作。
+
+        创建能重做，补多了也没事。还有进行中操作的租户跳过（之后再补一次就行）。
+        """
+        entry = self.registry.get(system)
+        if entry is None or not entry.has(Capability.LIFECYCLE):
+            raise Invalid("VALIDATION_FAILED", f"系统 {system} 不接租户", field="system")
+        started, skipped = 0, []
+        for t in await self._uc_call("GET", "/tenants", who=by) or []:
+            if t.get("status") == "closed":
+                continue
+            try:
+                async with self.session.begin_nested():
+                    await self._start(
+                        UUID(t["id"]), t["code"], "BACKFILL", by, {"system": system}, None
+                    )
+                started += 1
+            except Conflict:
+                skipped.append(t["code"])
+        return {"started": started, "skipped": skipped}
 
     async def _was_suspended(self, tenant_uuid: UUID) -> bool:
         """用户中心那边已经放开了，但上一次停用可能做了一半：看最后一次操作是不是停用。"""
@@ -449,6 +485,7 @@ class TenantOps:
             self.session,
             by,
             f"tenant.{kind.lower()}",
+            module=TENANT_MODULE,
             target=code,
             tenant_uuid=tenant_uuid,
             detail=_audit_detail(params, reason),
@@ -499,7 +536,14 @@ class TenantOps:
         for s in steps:
             if s.status == "FAILED":
                 s.next_attempt_at = utcnow()
-        record(self.session, by, "tenant.retry", target=op.tenant_code, tenant_uuid=op.tenant_uuid)
+        record(
+            self.session,
+            by,
+            "tenant.retry",
+            module=TENANT_MODULE,
+            target=op.tenant_code,
+            tenant_uuid=op.tenant_uuid,
+        )
         return operation_view(op, steps)
 
     # ── 不属于某个操作的
@@ -510,6 +554,7 @@ class TenantOps:
             self.session,
             by,
             "tenant.update",
+            module=TENANT_MODULE,
             target=out["code"],
             tenant_uuid=tenant_uuid,
             detail=data,
@@ -524,11 +569,18 @@ class TenantOps:
             self.session,
             by,
             "tenant.reissue_admin_password",
+            module=TENANT_MODULE,
             target=out["admin"]["account"],
             tenant_uuid=tenant_uuid,
             result="OK",
         )
         return out  # type: ignore[no-any-return]
+
+
+def _guard_system(t: dict[str, Any], what: str) -> None:
+    """系统租户不能停用、关闭：运营人员都靠它登录运营中心（用户中心也会拒绝，这里先挡、说清原因）。"""
+    if t.get("is_system"):
+        raise Conflict("SYSTEM_TENANT", f"系统租户不能{what}：运营人员靠它登录运营中心")
 
 
 def _audit_detail(params: dict[str, Any], reason: str | None) -> dict[str, Any] | None:
@@ -546,8 +598,10 @@ def _audit_detail(params: dict[str, Any], reason: str | None) -> dict[str, Any] 
                 "apps": create.get("apps"),
             }
         )
-    if params.get("quotas"):
-        detail["quotas"] = params["quotas"]
+    if params.get("params"):
+        detail["params"] = params["params"]
+    if params.get("system"):
+        detail["system"] = params["system"]
     return detail or None
 
 
@@ -562,7 +616,7 @@ class OperationSweeper(Job):
     """每个实例都跑：分页取有到期步骤的操作，逐个抢租约推进。重启、某一步失败后都靠它接着做。"""
 
     type = "opscenter.operation_sweep"
-    description = "推进租户操作（开通、停用、恢复、关闭）的下一步"
+    description = "推进租户操作（开通、停用、恢复、关闭、补建）的下一步"
 
     def __init__(
         self, sessions: async_sessionmaker[AsyncSession], runner: StepRunner, lease_s: float
@@ -642,37 +696,3 @@ class OperationSweeper(Job):
                 if op.status == "RUNNING":
                     op.lease_owner = op.lease_until = None
                     await s.commit()
-
-
-class ExpiryWatcher(Job):
-    """到期的租户自动走停用流程（原因：到期）。已有进行中的操作就跳过，下一轮再看。"""
-
-    type = "opscenter.tenant_expiry"
-    description = "给已过到期时间的租户发起停用"
-
-    def __init__(self, sessions: async_sessionmaker[AsyncSession], client: OpsClient) -> None:
-        self._sessions = sessions
-        self._client = client
-
-    async def execute(self, ctx: JobContext, params: NoParams) -> None:
-        await self.tick()
-
-    async def tick(self) -> int:
-        who = Who.system()
-        async with self._sessions() as s:
-            ops = TenantOps(s, self._client)
-            try:
-                expired = await ops._uc_call("GET", "/tenants/expired", who=who) or []
-            except OpsError as exc:
-                logger.warning("问用户中心到期的租户失败：%s", exc.message)
-                return 0
-            started = 0
-            for t in expired:
-                try:
-                    async with s.begin_nested():
-                        await ops._start(UUID(t["id"]), t["code"], "SUSPEND", who, {}, "到期")
-                    started += 1
-                except Conflict:
-                    continue  # 有进行中的操作：下一轮再看
-            await s.commit()
-            return started

@@ -5,7 +5,7 @@
 #
 # ★ Service 名与 compose 的服务名一致（redis、jaeger、langfuse-web …）：collector 的配置里
 #   写的就是这些名字，原样可用。
-# ★ 只开 ClusterIP：局域网访问不到这些依赖；对外只有 traefik 上的 Ingress（20-ingress.yaml、11-observability.yaml）。
+# ★ 只开 ClusterIP：局域网访问不到这些依赖；对外只有宿主机上的 API 网关（deploy/server/gateway.sh）。
 # ★ 数据卷用 local-path-retain：误删 PVC 时数据还在节点的 /opt/local-path-provisioner 下。
 # ★ 凭据：PG 沿用 atlas/atlas（应用清单里写死的连接串，且 PG 只在集群内可达）；MinIO 的口令 = .env 的 OSS_*；
 #   Langfuse 的密钥由 deploy.sh 随机生成（Secret langfuse；不装 Langfuse 也建，collector 的环境变量引用它）。

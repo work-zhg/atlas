@@ -4,12 +4,14 @@
  * 接入的系统：部署配置里登记的系统（ATLAS_OPS_SYSTEMS）。运营中心用各自的运营密钥签名调它们的运营接口；
  * 能力决定这个系统出现在哪些页面。这里只看不改：改了要重新部署。
  */
-import { Alert, Tag } from "antd";
+import { Alert, App, Button, Tag } from "antd";
 import Link from "next/link";
+import { useState } from "react";
 
-import { ErrorBox, PageHead, SystemIcon } from "@/components/common";
+import { ErrorBox, PageHead, SystemIcon, errorText } from "@/components/common";
 import { Icon } from "@/components/Icon";
-import { useSystems } from "@/lib/session";
+import { api } from "@/lib/api";
+import { TENANT_MODULE, useAccess, useSystems } from "@/lib/session";
 
 /** 能力 → 名称、对应的页面（没有页面的只显示名称） */
 const CAPS: Record<string, { label: string; href?: string }> = {
@@ -25,6 +27,33 @@ const CAPS: Record<string, { label: string; href?: string }> = {
 
 export default function SystemsPage() {
   const q = useSystems();
+  // 给新登记的系统补建租户：租户模块读写
+  const acc = useAccess();
+  const admin = acc.write(TENANT_MODULE);
+  const { message, modal } = App.useApp();
+  const [busy, setBusy] = useState<string | null>(null);
+
+  /** 新登记的系统：给现有每个租户调一次它的「创建」（能重做，补多了也没事） */
+  function backfill(code: string, name: string) {
+    modal.confirm({
+      title: `给现有的全部租户补建「${name}」？`,
+      content: "对每个租户调一次这个系统的创建（份额等用默认）。已经建过的再建一次结果一样。",
+      okText: "补建",
+      onOk: async () => {
+        setBusy(code);
+        try {
+          const out = await api.post<{ started: number; skipped: string[] }>(`/systems/${code}/backfill`);
+          message.success(
+            `已为 ${out.started} 个租户发起补建` + (out.skipped.length ? `；${out.skipped.join("、")} 还有进行中的操作，之后再补一次` : ""),
+          );
+        } catch (e) {
+          message.error(errorText(e));
+        } finally {
+          setBusy(null);
+        }
+      },
+    });
+  }
   return (
     <>
       <PageHead title="接入的系统" sub="部署配置里登记的系统。运营中心用各自的运营密钥签名调它们的运营接口；能力决定这个系统出现在哪些页面" />
@@ -64,7 +93,14 @@ export default function SystemsPage() {
             </div>
             {!s.key_configured && (
               <div className="ops-sub" style={{ color: "var(--danger)" }}>
-                运营中心调不了它：开通、停用、关闭租户到这一步会一直失败
+                运营中心调不了它：开通、关闭租户到这一步会一直失败
+              </div>
+            )}
+            {s.capabilities.includes("lifecycle") && (
+              <div>
+                <Button size="small" disabled={!admin || !s.key_configured} loading={busy === s.code} onClick={() => backfill(s.code, s.name)}>
+                  给现有租户补建
+                </Button>
               </div>
             )}
           </div>

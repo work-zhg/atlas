@@ -183,7 +183,6 @@ class DatasetService:
             retrieval_config=normalize_retrieval_config(body.get("retrieval_config")),
             enhancements=normalize_enhancements(body.get("enhancements")),
             doc_form=doc_form,
-            review_required=bool(body.get("review_required", False)),
             # 第一层目录是租户：删租户时整个目录一起删
             storage_prefix=TenantNaming.object_prefix(
                 self._rt.settings.oss_prefix, str(dataset_uuid)
@@ -233,8 +232,6 @@ class DatasetService:
             ds.icon = str(body["icon"] or "📚")[:64]
         if "retrieval_config" in body:
             ds.retrieval_config = normalize_retrieval_config(body["retrieval_config"])
-        if "review_required" in body:
-            ds.review_required = bool(body["review_required"])
         if "enhancements" in body:
             # 只影响之后入库（或重新入库）的文档
             ds.enhancements = normalize_enhancements(body["enhancements"])

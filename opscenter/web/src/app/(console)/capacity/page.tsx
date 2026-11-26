@@ -15,7 +15,7 @@ import { Icon } from "@/components/Icon";
 import { QuotaModal } from "@/components/quota";
 import { api, sys } from "@/lib/api";
 import { dateTime } from "@/lib/format";
-import { useMe, useSystems, withCapability } from "@/lib/session";
+import { useAccess, useSystems, withCapability } from "@/lib/session";
 import type { CapacityTotal, Quota, Quotas, SystemInfo, Tenant, TenantUsage } from "@/lib/types";
 
 export default function CapacityPage() {
@@ -36,8 +36,9 @@ export default function CapacityPage() {
 type Own = Quota & { tenant_uuid: string; updated_by: string; updated_at: string };
 
 function SystemCapacity({ system, tenants }: { system: SystemInfo; tenants: Tenant[] }) {
-  const { data: me } = useMe();
-  const admin = me?.role === "ADMIN";
+  // 份额存在各系统里：改这个系统的份额，要这个系统的模块读写
+  const acc = useAccess();
+  const admin = acc.write(system.module);
   const qc = useQueryClient();
   const { message } = App.useApp();
   const ops = sys(system.code);

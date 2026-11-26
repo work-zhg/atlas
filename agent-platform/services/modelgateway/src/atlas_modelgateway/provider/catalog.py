@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from ..gateway.kernel import Format
+from ..shared.kernel import Format
 from .dialect import ProviderDialect, StandardDialect
 from .dialects import DIALECTS
 from .spec import PROVIDERS, ProviderSpec

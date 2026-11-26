@@ -1,11 +1,11 @@
 """设备网关的接口。
 
-公网（前端网关 nginx 把 /device-api/ 转过来，不经登录校验，网关自己认令牌）：
+公网（API 网关把 /device/ 转过来，不验 JWT，这里自己认令牌）：
     POST /pair                  连接器配对：配对码换设备令牌
     WS   /connect               连接器的控制连接
     *    /u/{上游编号}/…        能力代理：本机 CLI 拿会话令牌调模型、MCP、知识库
 
-内部（只走集群内地址，nginx 挡掉 /internal）：
+内部（只走集群内地址，API 网关挡掉 /internal）：
     GET    /internal/presence/{设备}           查在线
     POST   /internal/devices/{设备}/disconnect 吊销：断开设备、作废它上面所有会话的登记
     PUT    /internal/sessions/{会话}           登记本轮能力
@@ -24,7 +24,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 import httpx
-import redis.asyncio as aioredis
+from atlas_redis import RedisConfig, RedisRuntime
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
@@ -87,7 +87,7 @@ class FileIn(BaseModel):
 def create_app(
     settings: GatewaySettings | None = None,
     *,
-    redis: aioredis.Redis | None = None,
+    redis: Any | None = None,
     agent_transport: httpx.AsyncBaseTransport | None = None,
     proxy_transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
@@ -95,7 +95,14 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        r = redis or aioredis.from_url(settings.redis_url)
+        redis_rt: RedisRuntime | None = None
+        if redis is None:
+            redis_rt = RedisRuntime(RedisConfig(url=settings.redis_url, service="devicegw"))
+            r: Any = redis_rt.commands
+            scripts = redis_rt.scripts
+        else:
+            r = redis
+            scripts = None
         agent_client = httpx.AsyncClient(timeout=10.0, transport=agent_transport, trust_env=False)
         proxy_client = httpx.AsyncClient(
             timeout=httpx.Timeout(None, connect=settings.proxy_connect_timeout_s),
@@ -105,7 +112,7 @@ def create_app(
         bindings = BindingStore(r, settings.binding_ttl_s)
         registry = SessionRegistry(bindings, settings.public_url)
         links = LinkServer(
-            PresenceTable(r, settings.presence_ttl_s),
+            PresenceTable(r, settings.presence_ttl_s, scripts=scripts),
             DeviceAuth(settings.agent_url, agent_client),
             instance_url=settings.own_url(),
             min_version=settings.min_connector_version,
@@ -124,8 +131,8 @@ def create_app(
         finally:
             await agent_client.aclose()
             await proxy_client.aclose()
-            if redis is None:
-                await r.aclose()
+            if redis_rt is not None:
+                await redis_rt.aclose()
 
     app = FastAPI(title="Atlas device gateway", lifespan=lifespan)
 

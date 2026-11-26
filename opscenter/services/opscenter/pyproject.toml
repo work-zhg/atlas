@@ -4,9 +4,9 @@ version = "0.1.0"
 description = "运营中心 —— 管平台本身：租户的开通与关闭、应用目录、容量、运行环境、系统参数与系统任务。"
 requires-python = ">=3.13"
 
-# ★ 独立系统（c4-model/opscenter/）：自己的运营账号、自己的库（只存运营账号、审计和租户操作的进度），
-#   不在用户中心的任何租户里。只经各系统的运营接口（/ops/v1，签名）做事，看不到任何租户的业务内容；
-#   与 atlas 其它服务包互不 import（根 pyproject 的 import-linter 守着）。
+# ★ 独立系统（c4-model/opscenter/design-opscenter.html）：运营人员是用户中心里系统租户的人（统一登录、
+#   按模块授权）；自己的库只存运营审计和租户操作的进度。只经各系统的运营接口（/ops/v1，签名）做事，
+#   看不到任何租户的业务内容；与 atlas 其它服务包互不 import（根 pyproject 的 import-linter 守着）。
 dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
@@ -14,7 +14,6 @@ dependencies = [
   "asyncpg>=0.30",
   "alembic>=1.14",
   "pydantic-settings>=2.6",
-  "argon2-cffi>=23.1",
   "httpx>=0.27",
   # 运营接口的签名与 OperatorStamp（和各业务系统用同一份实现）
   "atlas-opsapi",

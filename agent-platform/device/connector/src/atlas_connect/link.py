@@ -51,11 +51,11 @@ class Fatal(Exception):
 
 
 def gateway_url(server: str) -> str:
-    """平台地址 → 设备网关的地址（公网入口 + /device-api）。
+    """平台地址 → 设备网关的地址（公网入口 + /device，经 API 网关）。
 
-    开发时可以用 --gateway 直接给网关地址。
+    开发时可以用 --gateway 直接给网关地址。旧版连接器连的 /device-api 网关还认（过渡期的旧名字）。
     """
-    return server.rstrip("/") + "/device-api"
+    return server.rstrip("/") + "/device"
 
 
 _WS_SCHEME = {"https": "wss", "http": "ws"}

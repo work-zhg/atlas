@@ -1,0 +1,9 @@
+# 由 atlas_gateway 生成，勿手改。网关自己产生的错误统一成 JSON（带 request_id）。
+# ★ 不开 proxy_intercept_errors：上游自己的 4xx / 5xx 原样透传，这里只管 Nginx 自己的拒绝和连不上、超时。
+{% for e in errors %}
+error_page {{ e.status }} @gw_{{ e.status }};
+location @gw_{{ e.status }} {
+  default_type application/json;
+  return {{ e.status }} '{{ e.body }}';
+}
+{% endfor %}

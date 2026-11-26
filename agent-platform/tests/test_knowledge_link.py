@@ -25,7 +25,6 @@ from atlas_agent.providers.knowledge import (
     TurnKnowledge,
     base_labels,
     make_knowledge_tools,
-    mcp_server_entry,
     resolve_knowledge,
     set_labels,
 )
@@ -98,7 +97,7 @@ def _client(
             return httpx.Response(200, json={"data": data})
         return httpx.Response(200, json={"records": RECORDS, "skipped": skipped or []})
 
-    return KnowledgeClient("http://kb:8040", "s3cret", transport=httpx.MockTransport(handler))
+    return KnowledgeClient("http://kb:8040", transport=httpx.MockTransport(handler))
 
 
 class _Settings:
@@ -342,8 +341,9 @@ async def test_single_set_has_no_set_param_and_reports_skipped() -> None:
 
 
 def test_same_names_are_told_apart() -> None:
-    """同一个知识集里重名的库，名称后加 id 前 6 位；规则与知识库服务的 MCP 一致。"""
-    from atlas_knowledge.api.mcp import labels
+    """同一个知识集里重名的库，名称后加 id 前 6 位；规则与知识库检索接口按名称换库的一致
+    （CLI 经 MCP 网关按名称查，原生按库查，两边的库名要对得上）。"""
+    from atlas_knowledge.api.search import base_labels as labels
 
     bases = (
         KnowledgeBase(id="aaaaaa11", name="制度"),
@@ -414,33 +414,62 @@ async def test_native_turn_sees_catalog_and_uses_both_tools() -> None:
 # ───────────────────────────────────────────── CLI：MCP
 
 
-def test_mcp_token_matches_knowledge_service() -> None:
-    from atlas_knowledge.api.mcp import TokenInvalid, token_sets, verify_token
+async def test_cli_reaches_knowledge_through_the_gateway_with_an_identity_grant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CLI 不直连知识库：下发 MCP 网关上的知识库平台服务（智能体的 Key + 身份凭据），网关验签后
+    给知识库写这一轮的 auth-uid。凭据的算法两边各自实现，这里核对网关验得过。"""
+    from types import SimpleNamespace
+    from uuid import UUID
 
-    thread = uuid4()
-    turn = TurnKnowledge((HR, FIN))
-    # u = 按谁判（auth-uid），o = 发起人（只进检索记录）—— 取自这一轮 run 的出站身份
-    uid, auth_uid = uuid4(), uuid4()
+    from atlas_agent.cli import capabilities as caps_mod
+    from atlas_agent.config import get_settings
+    from atlas_agent.providers.knowledge import Resolution
+    from atlas_agent.providers.mcp.gateway import AgentAccess
+    from atlas_mcpgateway.invocation.grant import verify
+    from atlas_tenancy import TenantScope
+    from pydantic import SecretStr
+
+    settings = get_settings().model_copy(
+        update={
+            "mcp_gateway_url": "http://gw:8070",
+            "mcp_identity_grant_secret": SecretStr("grant-s3cret"),
+            "knowledge_mcp_service": "knowledge",
+        }
+    )
+
+    async def resolved(_settings: Any, _spec: Any) -> Resolution:
+        return Resolution(TurnKnowledge((HR, FIN)))
+
+    async def access(*_a: Any, **_k: Any) -> AgentAccess:
+        return AgentAccess(subject="key-subject", key="agent-key")
+
+    monkeypatch.setattr(caps_mod, "resolve_knowledge", resolved)
+    monkeypatch.setattr(caps_mod, "mcp_agent_access", access)
+    thread, owner, uid, auth_uid = uuid4(), uuid4(), uuid4(), uuid4()
+    segment = SimpleNamespace(
+        spec=SimpleNamespace(tool_names=(), knowledge=KnowledgeSpec(), name="助手"),
+        thread=SimpleNamespace(agent_uuid=uuid4(), created_by_uuid=owner),
+        thread_id=thread,
+    )
     use_identity(CallIdentity(uid=uid, auth_uid=auth_uid))
     try:
-        entry = mcp_server_entry(_client([]), turn, thread_id=thread)
+        with TenantScope.enter(UUID(TEST_TENANT)):
+            assembly = caps_mod.CliCapabilityAssembly(settings, None)  # type: ignore[arg-type]
+            servers, notices, catalog = await assembly._mcp_servers(segment, None)  # type: ignore[arg-type]
     finally:
         use_identity(None)
-    # 名称不带应用名（数字员工设计 §7.4）；旧名同值过渡一个版本
-    assert entry["url"] == "http://kb:8040/mcp/"
-    assert [h["name"] for h in entry["headers"]] == ["X-Knowledge-Token", "X-Atlas-Knowledge-Token"]
-    token = entry["headers"][0]["value"]
-    assert entry["headers"][1]["value"] == token
-    claims = verify_token("s3cret", token)
-    assert claims["u"] == str(auth_uid) and claims["o"] == str(uid) and claims["t"] == str(thread)
-    # 租户取会话所在的租户：知识库按它进入，Pod 发来的请求头不认
-    assert claims["tenant"] == TEST_TENANT
-    assert token_sets(claims) == [
-        {"n": "人事制度", "d": ["hr", "manual"], "k": 2},
-        {"n": "财务", "d": ["fin", "trip"], "k": 4},
-    ]
-    with pytest.raises(TokenInvalid):
-        verify_token("other", token)
+
+    (entry,) = servers
+    assert entry["name"] == "knowledge" and entry["url"] == "http://gw:8070/mcp/knowledge"
+    headers = {h["name"]: h["value"] for h in entry["headers"]}
+    assert headers["Authorization"] == "Bearer agent-key"
+    assert headers["X-Uid"] == str(owner)
+    grant = verify("grant-s3cret", headers["X-Identity-Grant"], tenant=UUID(TEST_TENANT))
+    assert (grant.auth_uid, grant.uid, grant.thread) == (str(auth_uid), str(uid), str(thread))
+    # 目录追加进 CLI 的系统提示词，工具名是网关上的服务名
+    assert catalog is not None and "mcp__knowledge__knowledge_search" in catalog
+    assert notices == []
 
 
 # ───────────────────────────────────────────── 保存校验、编辑器

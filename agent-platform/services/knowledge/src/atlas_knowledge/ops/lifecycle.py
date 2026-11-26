@@ -1,7 +1,8 @@
-"""知识库的租户生命周期：停用、恢复、删除（运营接口 /ops/v1/tenants/{tenant}/…，api/ops.py）。
+"""知识库的租户接入：创建、删除（运营接口 PUT / DELETE /ops/v1/tenants/{tenant}，api/ops.py）。
 
-★ 停用：管理接口、内部接口、MCP 一律 403；入库、重建开始前查租户状态，停用的不开始，过一会儿再
-  看（tasks/indexing.py），恢复后接着入。正在入的那一份做完为止。
+★ 创建：开通时运营中心给知识库填了存储份额（storage_bytes）就记下；没填不建行，用默认份额
+  （系统参数 capacity.default_storage_mb）。能重做：再记一次结果一样。
+★ 不知道租户状态：停用、恢复只在用户中心；停用后用户中心对这个租户的人回答无权限。
 ★ 删除：先删外部资源 —— 向量库里这个租户的 collection、对象存储里这个租户的文件 —— 再分批删
   数据库里的行。对象只删知识库自己的子目录（{租户}/_knowledge/），不删整个 {租户}/：桶和 Atlas
   的工作空间、技能共用。多租户之前建的库在桶根 _knowledge/{库} 下，按库记着的目录逐个删。
@@ -11,17 +12,21 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 from uuid import UUID
 
+from atlas_opsapi import Rejected, TenantLifecycle
 from atlas_tenancy import PurgeReport, TenantNaming
 from fastapi import FastAPI
 from sqlalchemy import select
 
 from ..db.models import (
     LIVE_INDEX_STATUSES,
+    Base,
     ChildChunk,
     Dataset,
     Document,
+    EnhanceCacheEntry,
     IndexVersion,
     KnowledgeSet,
     MetadataField,
@@ -34,6 +39,7 @@ from ..db.models import (
 from ..db.session import get_sessionmaker
 from ..document.storage import StorageNotConfigured
 from ..runtime import Runtime
+from .capacity import KnowledgeCapacity
 
 __all__ = ["PURGE_ORDER", "KnowledgeTenantLifecycle"]
 
@@ -49,26 +55,37 @@ PURGE_ORDER = (
     ProcessRule,
     Dataset,
     KnowledgeSet,
+    EnhanceCacheEntry,
     TenantCapacity,
 )
 
 
-class KnowledgeTenantLifecycle:
-    """知识库的租户生命周期。钩子都在这个租户的上下文里调（TenantLifecycleService）。"""
+class KnowledgeTenantLifecycle(TenantLifecycle):
+    """知识库的租户接入。create、delete_external 都在这个租户的上下文里调（运营接口库）。"""
 
-    def __init__(self, app: FastAPI) -> None:
+    purge_order = PURGE_ORDER
+
+    def __init__(self, app: FastAPI, capacity: KnowledgeCapacity) -> None:
+        super().__init__(get_sessionmaker(), base=Base)
         self._app = app
+        self._capacity = capacity
 
-    async def on_suspend(self, tenant_uuid: UUID) -> None:
-        return None
+    async def create(self, tenant_uuid: UUID, params: dict[str, Any]) -> None:
+        if "storage_bytes" not in params:
+            return
+        quota = params["storage_bytes"]
+        if quota is not None and (
+            not isinstance(quota, int) or isinstance(quota, bool) or quota < 0
+        ):
+            raise Rejected("storage_bytes 必须是非负整数，或 null（不限）")
+        async with self._sessions() as session:
+            await self._capacity.set_quota(session, quota, by="运营中心（开通租户）")
+            await session.commit()
 
-    async def on_resume(self, tenant_uuid: UUID) -> None:
-        return None
-
-    async def purge_external(self, tenant_uuid: UUID, limit: int) -> PurgeReport:
+    async def delete_external(self, tenant_uuid: UUID, budget: int) -> PurgeReport:
         rt: Runtime = self._app.state.runtime
         report = PurgeReport()
-        async with get_sessionmaker()() as session:
+        async with self._sessions() as session:
             datasets = list(await session.scalars(select(Dataset)))
             collections = set(
                 await session.scalars(

@@ -40,7 +40,6 @@ export interface Dataset {
   embedding_model: string | null;
   retrieval_config: RetrievalConfig;
   doc_form: DocForm;
-  review_required: boolean;
   document_count: number;
   word_count: number;
   created_at: string;
@@ -78,7 +77,6 @@ export interface KbDocument {
   enabled: boolean;
   archived: boolean;
   available: boolean;
-  review_status: "none" | "pending" | "approved" | "rejected";
   /** false = 已被新版本取代（重新分段、上传新版本）；只在按时间点检索时还能查到 */
   is_current: boolean;
   word_count: number;
@@ -88,6 +86,21 @@ export interface KbDocument {
   data_source_info: { filename?: string; size?: number; extension?: string };
   created_at: string;
   process_rule?: { mode: string; rules: ProcessRules } | null;
+  /** 解析报告：解析质量有问题（扫描页、乱码、没识别出标题）时 warnings 非空。只提示，不卡检索 */
+  parse_report?: ParseReport | null;
+}
+
+export interface ParseReport {
+  parser?: string;
+  pages?: number;
+  scanned_pages?: number[];
+  garbled_ratio?: number;
+  warnings?: string[];
+}
+
+/** 解析警告（没有就是空数组）：控制台在文档列表、详情里标出来 */
+export function parseWarnings(d: Pick<KbDocument, "parse_report">): string[] {
+  return d.parse_report?.warnings ?? [];
 }
 
 export interface Segmentation {
@@ -410,8 +423,6 @@ export const kbApi = {
     knowledgeHttp.post<KbDocument>(`/v1/datasets/${ds}/documents/${doc}/${action}`),
   docsStatus: (ds: string, action: string, ids: string[]) =>
     knowledgeHttp.post(`/v1/datasets/${ds}/documents-status/${action}`, { document_ids: ids }),
-  review: (ds: string, ids: string[], approve: boolean, note?: string) =>
-    knowledgeHttp.post(`/v1/datasets/${ds}/documents-review`, { document_ids: ids, approve, note }),
   deleteDoc: (ds: string, doc: string) => knowledgeHttp.del<void>(`/v1/datasets/${ds}/documents/${doc}`),
   renameDoc: (ds: string, doc: string, name: string) =>
     knowledgeHttp.patch(`/v1/datasets/${ds}/documents/${doc}`, { name }),

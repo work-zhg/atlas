@@ -27,33 +27,41 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
 import httpx
-from atlas_opsapi import TenantGate
+from atlas_redis import PubSubHub, RedisConfig, RedisRuntime
 from atlas_tenancy import TenantScope
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
+from sqlalchemy import func, select
 from starlette.types import Receive, Scope, Send
 
 from ..crypto import SecretCipher
+from ..db.models import GwModelCall
 from ..db.session import get_sessionmaker
 from ..provider import ProviderCatalog
 from ..settings import GatewaySettings, get_settings
+from ..shared.health import RouteHealth
+from ..shared.kernel import Entry, ErrorCategory, GatewayError, ModelKind
+from ..shared.partitions import PartitionKeeper
+from ..shared.sync import VersionWatch
+from ..shared.upstream import AddressGuard, UpstreamClient
 from .admission import Admission, QuotaGuard
 from .capability import CapabilityGate
-from .config import ConfigSnapshot, VersionWatch
-from .format import AddressGuard, FormatGateway, UpstreamClient
+from .config import ConfigSnapshot
+from .format import FormatGateway
 from .invocation import Answer, Invocation, Timeouts
-from .kernel import Entry, ErrorCategory, GatewayError, ModelKind
-from .metering import Metering, PartitionKeeper, RecordQueue
-from .routing import RouteHealth, RouteSelector
+from .metering import Metering, RecordQueue
+from .routing import RouteSelector
 
-__all__ = ["GatewayRuntime", "create_gateway_app"]
+__all__ = ["GatewayRuntime", "build_runtime", "create_gateway_app"]
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +85,9 @@ def build_runtime(
     settings: GatewaySettings,
     *,
     redis: Any | None = None,
+    pubsub: PubSubHub | None = None,
     transport: httpx.AsyncBaseTransport | None = None,
     guard: AddressGuard | None = None,
-    tenant_active: Callable[[UUID], Awaitable[bool]] | None = None,
 ) -> GatewayRuntime:
     sm = get_sessionmaker()
     watch = VersionWatch(
@@ -88,13 +96,29 @@ def build_runtime(
         fallback_s=settings.config_fallback_reload_s,
     )
     config = ConfigSnapshot(
-        sm, SecretCipher(settings.master_keys()), watch, negative_ttl_s=settings.key_negative_ttl_s
+        sm,
+        SecretCipher(settings.master_keys()),
+        watch,
+        pubsub=pubsub,
+        negative_ttl_s=settings.key_negative_ttl_s,
     )
-    # ★ 租户停用后这个租户的 Key 一律无效（运营接口，api/app.py）：没注入就按本库的租户状态判，
-    #   不能默认不查 —— 那样运营中心停用了租户，它的 Key 照样能调模型。TenantGate 进程内缓存几秒
-    admission = Admission(
-        config, QuotaGuard(redis), tenant_active=tenant_active or TenantGate(sm).is_active
-    )
+
+    async def _load_monthly_spend(
+        tenant_uuid: UUID, key_uuid: UUID, month_start: datetime
+    ) -> Decimal:
+        with TenantScope.enter(tenant_uuid):
+            async with sm() as session:
+                total = await session.scalar(
+                    select(func.coalesce(func.sum(GwModelCall.cost), 0)).where(
+                        GwModelCall.key_uuid == key_uuid,
+                        GwModelCall.started_at >= month_start,
+                    )
+                )
+        return Decimal(str(total or 0))
+
+    # ★ 不查租户状态（业务系统不知道它）：租户停用后，用户 Key 的私有模型由「重算有效模型」
+    #   任务收回（用户中心回答无权限）；已经发出去的客户端 Key 照常，直到租户被删除
+    admission = Admission(config, QuotaGuard(redis, spend_loader=_load_monthly_spend))
     health = RouteHealth(redis)
     upstream = UpstreamClient(
         guard=guard or AddressGuard(settings.upstream_allow_cidrs),
@@ -116,13 +140,22 @@ def build_runtime(
         Metering(records),
         Timeouts(
             first_content_s=settings.first_content_timeout_s,
+            total_first_content_s=settings.total_first_content_timeout_s,
             idle_s=settings.idle_timeout_s,
             keepalive_s=settings.keepalive_interval_s,
             max_attempts=settings.max_attempts,
         ),
     )
     return GatewayRuntime(
-        invocation, admission, fmt, config, records, PartitionKeeper(sm), health, redis, upstream
+        invocation,
+        admission,
+        fmt,
+        config,
+        records,
+        PartitionKeeper(sm),
+        health,
+        redis,
+        upstream,
     )
 
 
@@ -232,27 +265,39 @@ def create_gateway_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         owned_redis = None
+        redis_rt: RedisRuntime | None = None
         rt = runtime
         if rt is None:
             if settings.redis_url:
-                import redis.asyncio as aioredis
-
-                owned_redis = (redis_factory or aioredis.from_url)(settings.redis_url)
-            rt = build_runtime(settings, redis=owned_redis)
+                if redis_factory is not None:
+                    owned_redis = redis_factory(settings.redis_url)
+                else:
+                    redis_rt = RedisRuntime(RedisConfig(url=settings.redis_url, service="modelgw"))
+                    redis_rt.pubsub.start()
+                    owned_redis = redis_rt.commands
+            rt = build_runtime(
+                settings,
+                redis=owned_redis,
+                pubsub=redis_rt.pubsub if redis_rt is not None else None,
+            )
         app.state.gw = rt
         app.state.ready = False
         await rt.partitions.ensure()
         rt.records.start()
+        rt.config.start_invalidation_listener()
         keeper = asyncio.get_running_loop().create_task(_daily(rt.partitions))
         app.state.ready = True
         try:
             yield
         finally:
             keeper.cancel()
+            await rt.config.stop_invalidation_listener()
             await rt.records.stop()
             if runtime is None:
                 await rt.upstream.aclose()
-                if owned_redis is not None:
+                if redis_rt is not None:
+                    await redis_rt.aclose()
+                elif owned_redis is not None:
                     await owned_redis.aclose()
 
     app = FastAPI(title="Model Gateway", version="1.0.0", lifespan=lifespan)

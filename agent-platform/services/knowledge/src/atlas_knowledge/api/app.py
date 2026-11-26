@@ -13,12 +13,11 @@ from fastapi.responses import JSONResponse
 from ..access.auth import IdentityHeadersMiddleware
 from ..document.storage import StorageNotConfigured
 from ..errors import KnowledgeError
-from ..jobs import IngestSweep
+from ..jobs import EnhanceCacheCleanup, IngestSweep
 from ..runtime import Runtime, build_runtime
 from ..settings import get_settings
 from ..telemetry import setup_telemetry, shutdown_telemetry, trace_requests
-from . import datasets, internal, sets
-from .mcp import build_mcp, mcp_app
+from . import datasets, search, sets
 from .ops import mount_ops
 
 __all__ = ["create_app"]
@@ -27,9 +26,12 @@ logger = logging.getLogger(__name__)
 
 
 def create_app(*, runtime: Runtime | None = None, cors_origins: list[str] | None = None) -> FastAPI:
-    """runtime 可注入 —— 测试用内存 Qdrant、假模型、内联投递。"""
+    """runtime 可注入 —— 测试用内存 Qdrant、假模型、内联投递。
 
-    mcp = build_mcp(lambda: app.state.runtime)
+    入口按功能分：管理接口（api/datasets.py、api/sets.py）和检索接口（api/search.py），都在 /v1，
+    不按调用方分。CLI 智能体经 MCP 网关调检索接口（知识库登记成网关上的平台服务），
+    本服务不开 MCP 端点。
+    """
     # 定时任务（入库巡检）：lifespan 里注册、启动；运营接口 /ops/v1/jobs 看运行情况
     jobs = JobScheduler()
 
@@ -44,8 +46,6 @@ def create_app(*, runtime: Runtime | None = None, cors_origins: list[str] | None
     async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         owned = runtime is None
         app.state.runtime = runtime or build_runtime(get_settings())
-        # 和运营接口用同一个：停用后本进程的入库巡检立刻跳过它
-        app.state.runtime.tenant_gate = app.state.tenant_gate
         # 存储份额：上传前判，和运营接口改份额用同一个；系统参数在这里登记（没有的补默认值）
         app.state.runtime.capacity = app.state.capacity
         await app.state.capacity.config.register()
@@ -54,10 +54,11 @@ def create_app(*, runtime: Runtime | None = None, cors_origins: list[str] | None
         interval = app.state.runtime.settings.ingest_sweep_interval_s
         if interval > 0:
             jobs.register(IngestSweep(app.state.runtime), scope="instance", every=interval)
+            # 入库增强缓存每天清一次过期的（保留 30 天）
+            jobs.register(EnhanceCacheCleanup(), scope="instance", every=24 * 3600)
         jobs.start()
         try:
-            async with mcp.session_manager.run():
-                yield
+            yield
         finally:
             await jobs.stop()
             if owned:
@@ -77,7 +78,7 @@ def create_app(*, runtime: Runtime | None = None, cors_origins: list[str] | None
 
     # 取请求头里的 traceparent：检索 span 挂在 atlas-server 那次调用之下
     trace_requests(app)
-    # 身份请求头透传：本请求里调用户中心 / atlas-server 都带上（access/auth.py）
+    # 身份请求头透传：本请求里调用户中心都带上（access/auth.py）
     app.add_middleware(IdentityHeadersMiddleware)
 
     @app.exception_handler(KnowledgeError)
@@ -95,11 +96,9 @@ def create_app(*, runtime: Runtime | None = None, cors_origins: list[str] | None
     async def health() -> dict[str, str]:
         return {"status": "ok"}
 
-    app.include_router(internal.router)
     app.include_router(datasets.router)
+    app.include_router(search.router)
     app.include_router(sets.router)
-    # 运营接口：租户的停用、恢复、删除，系统任务
+    # 运营接口：租户的创建、删除，存储份额，系统参数，系统任务
     mount_ops(app, jobs)
-    # Pod 里的 ACP CLI 经它调 knowledge_search（令牌鉴权，见 api/mcp.py）
-    app.mount("/mcp", mcp_app(mcp))
     return app

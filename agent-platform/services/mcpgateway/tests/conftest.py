@@ -24,7 +24,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 TEST_DB = "atlas_mcpgateway_test"
-_ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
+_ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/postgres"
 TEST_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{TEST_DB}"
 _TABLES = (
     "mcp_service",
@@ -32,8 +32,8 @@ _TABLES = (
     "mcp_api_key",
     "mcp_audit",
     "mcp_data_object",
-    "app_tenant_state",
-    "app_ops_request",
+    "mcp_platform_service",
+    "mcp_platform_tool",
 )
 
 # 本机的服务不走代理：开着 HTTP(S)_PROXY 时，httpx2（FastMCP）会把发往 127.0.0.1 的请求也送进代理

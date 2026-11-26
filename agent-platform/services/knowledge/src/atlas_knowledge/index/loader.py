@@ -62,7 +62,7 @@ def point_kind(child: ChildChunk | None) -> str:
 
 
 def doc_payload(doc: Document) -> dict[str, Any]:
-    """文档级 payload（§6.3）：可用、元数据、权限、版本与时效。变更时按文档整体覆盖。
+    """文档级 payload（§6.3）：可用、元数据、版本与时效。变更时按文档整体覆盖。
 
     时间存 epoch 秒；没有生效区间的键为 None（写入时不写、更新时删掉），检索按「不限」处理。
     """
@@ -77,7 +77,6 @@ def doc_payload(doc: Document) -> dict[str, Any]:
     return {
         "doc_ok": doc.available,
         "meta": {**{k: v for k, v in builtin.items() if v}, **(doc.doc_metadata or {})},
-        "acl": list(doc.acl) if doc.acl else ["public"],
         "is_current": bool(doc.is_current),
         "valid_from": doc.valid_from.timestamp() if doc.valid_from else None,
         "valid_to": doc.valid_to.timestamp() if doc.valid_to else None,

@@ -1,6 +1,6 @@
 """防击穿协同缓存（c4-model/infra-platform/code-redis.html）。
 
-解决模型网关 TenantGate、授权快照等高频读场景的三类典型故障：
+解决授权快照、网关配置这类高频读场景的三类典型故障：
   1. 缓存击穿（惊群）：TTL 到期瞬间，按 key 经 Singleflight 只放 1 个协程回源，同键并发共享 Future；
   2. 上游瞬断 500：回源抛异常时，若存在未过 stale_ttl_s 的旧值，记告警日志并降级返旧值；
   3. 多副本延迟生效：可选接入 PubSubHub，一处 invalidate(key, broadcast=True) 立刻通知全集群驱逐；

@@ -8,7 +8,14 @@ from typing import Any
 
 import httpx
 import pytest
-from memory_testkit import TEST_TENANT, USERS_ELSEWHERE, FakePermissions, add_scope, ops_request
+from memory_testkit import (
+    BLOCKED_TENANTS,
+    TEST_TENANT,
+    USERS_ELSEWHERE,
+    FakePermissions,
+    add_scope,
+    ops_request,
+)
 
 U = "/v1/scopes/user/instances/uid=u1"
 
@@ -608,22 +615,23 @@ async def test_a_user_cannot_claim_another_tenant(
     assert r.status_code == 200
 
 
-async def test_suspended_tenants_are_shut_out_and_purge_deletes_their_data(
+async def test_blocked_tenants_get_no_permission_and_delete_removes_their_data(
     client: httpx.AsyncClient, user_scope: None
 ) -> None:
     await topic(client, "偏好")
     await write(client, topic="偏好", content="默认中文", occurred_at=at(9))
     await client.post(f"{U}/topics", json={"code": "别人的"}, headers={"X-Tenant-Id": OTHER})
 
-    def ops(action: str) -> dict[str, object]:
-        return ops_request("POST", f"/ops/v1/tenants/{TEST_TENANT}/{action}")
+    # 不知道租户状态、只认权限：租户停用后用户中心说这个人没有权限 → 403。
+    # 不带用户的内网调用（服务替自己的租户调）不经用户中心，照常 —— 设计接受的代价
+    BLOCKED_TENANTS.add(TEST_TENANT)
+    from atlas_memory import auth
+
+    auth._cache = auth._Cache()
+    assert (await client.get(f"{U}/topics", headers=as_user("u1"))).status_code == 403
 
     path = f"/ops/v1/tenants/{TEST_TENANT}"
-    assert (await client.post(f"{path}/purge", **ops("purge"))).status_code == 409
-    assert (await client.post(f"{path}/suspend", **ops("suspend"))).status_code == 200
-    r = await client.get(f"{U}/topics")
-    assert r.status_code == 403
-    r = await client.post(f"{path}/purge", **ops("purge"))
+    r = await client.request("DELETE", path, **ops_request("DELETE", path))
     assert r.status_code == 200 and r.json()["remaining"] is False
     assert r.json()["deleted"] == {
         "mem_revision": 1,
@@ -633,3 +641,11 @@ async def test_suspended_tenants_are_shut_out_and_purge_deletes_their_data(
     }
     r = await client.get(f"{U}/topics", headers={"X-Tenant-Id": OTHER})
     assert [t["code"] for t in r.json()["topics"]] == ["别人的"], "别的租户的不动"
+
+
+async def test_create_tenant_needs_nothing_and_can_be_redone(client: httpx.AsyncClient) -> None:
+    path = f"/ops/v1/tenants/{OTHER}"
+    for _ in range(2):
+        r = await client.request("PUT", path, **ops_request("PUT", path, {}))
+        assert r.status_code == 200, r.text
+    assert (await client.put(path, json={})).status_code == 401, "没有运营中心的签名"

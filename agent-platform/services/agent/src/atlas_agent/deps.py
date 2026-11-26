@@ -11,7 +11,7 @@ from .config import Settings, get_settings
 from .db.session import SessionDep
 from .executor.base import RunExecutor
 from .identity import current_user
-from .redisx import get_redis_component, shared_redis
+from .redisx import get_redis_component, shared_pubsub, shared_redis
 from .services.agent import AgentService
 from .services.catalog import CatalogService
 from .services.meta import MetaService
@@ -61,7 +61,9 @@ async def get_approval_service(
     ★ 接线放在依赖注入里、不放在路由里：路由只认审批，审批只认 DecisionListener 接口，
       谁来续跑由组合根决定（c4-model/agent/code-approval.html）。
     """
-    return ApprovalService(session, listener=executor, channel=DecisionChannel(redis))
+    return ApprovalService(
+        session, listener=executor, channel=DecisionChannel(redis, pubsub=shared_pubsub())
+    )
 
 
 ApprovalServiceDep = Annotated[ApprovalService, Depends(get_approval_service)]

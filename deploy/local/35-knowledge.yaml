@@ -3,9 +3,9 @@
 # ★ 库是宿主 Postgres 上的独立 database atlas_knowledge（docker compose 的 knowledge-init-db）；
 #   Redis 用 3 号库作 Celery broker 与缓存；Qdrant 与记忆共用一个实例（collection 前缀 kb_）。
 # ★ 内网免令牌（内网身份传递 §3、§8）：身份在请求头里；操作码按 X-Auth-Uid 取用户中心快照。
-#   只剩知识库 MCP 的签名密钥（Secret atlas-knowledge-mcp，与 atlas-server 共用）—— 那是给会话
-#   Pod（不可信代码）的能力凭据，不是服务间令牌。
-# ★ 浏览器经网关 /atlas-knowledge-api 访问，Service 只需 ClusterIP。
+#   接口按功能分（管理接口、检索接口，都在 /v1）；不开 MCP 端点：CLI 智能体经 MCP 网关上的
+#   平台服务调检索接口（deploy/server/mcp-knowledge.yaml）。
+# ★ 浏览器经 API 网关 /knowledge 访问，Service 只需 ClusterIP。
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -54,8 +54,6 @@ spec:
               valueFrom: {secretKeyRef: {name: atlas-oss-creds, key: oss_access_key_id}}
             - name: ATLAS_KB_OSS_ACCESS_KEY_SECRET
               valueFrom: {secretKeyRef: {name: atlas-oss-creds, key: oss_access_key_secret}}
-            - name: ATLAS_KB_MCP_SECRET
-              valueFrom: {secretKeyRef: {name: atlas-knowledge-mcp, key: secret}}
             # 模型平台（agent-platform/doc/design/model-gateway-design.html）：按平台上的服务级客户端 Key
             #   调模型网关（atlas-llmgateway）的 OpenAI 格式入口（/v1/chat/completions、embeddings、rerank）。
             #   入库增强（上下文补全、表格摘要）与查询理解用 ATLAS_KB_ENRICH_MODEL（ConfigMap
@@ -125,8 +123,6 @@ spec:
               valueFrom: {secretKeyRef: {name: atlas-oss-creds, key: oss_access_key_id}}
             - name: ATLAS_KB_OSS_ACCESS_KEY_SECRET
               valueFrom: {secretKeyRef: {name: atlas-oss-creds, key: oss_access_key_secret}}
-            - name: ATLAS_KB_MCP_SECRET
-              valueFrom: {secretKeyRef: {name: atlas-knowledge-mcp, key: secret}}
             # 模型平台（agent-platform/doc/design/model-gateway-design.html）：按平台上的服务级客户端 Key
             #   调模型网关（atlas-llmgateway）的 OpenAI 格式入口（/v1/chat/completions、embeddings、rerank）。
             #   入库增强（上下文补全、表格摘要）与查询理解用 ATLAS_KB_ENRICH_MODEL（ConfigMap
@@ -149,3 +145,18 @@ metadata:
 spec:
   selector: {app: atlas-knowledge}
   ports: [{port: 8050, targetPort: 8050}]
+---
+# 内部 Ingress：API 网关把 /knowledge/… 去掉前缀后发到这里，Host = knowledge.internal.techstz.com
+#   （infra-platform/gateway/routes.yaml；Traefik 只在集群内，见 deploy/server/traefik-values.yaml）
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlas-knowledge
+  namespace: atlas-system
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: knowledge.internal.techstz.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: atlas-knowledge, port: {number: 8050}}}}

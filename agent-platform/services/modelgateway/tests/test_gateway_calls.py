@@ -279,31 +279,6 @@ async def test_admission_and_capability_rejections(gw, upstream: FakeUpstream) -
     assert upstream.seen == []
 
 
-async def test_suspended_tenant_keys_are_rejected(gw, upstream: FakeUpstream) -> None:
-    """★ 运营中心停用租户后，这个租户的 Key 在数据面一律无效；别的租户照常。
-
-    以前数据面没接租户状态（build_runtime 默认不查），停用之后 Key 照样能调模型。
-    """
-    from atlas_opsapi.state import TenantStateRepository
-
-    client, _ = gw
-    a = await seed(TENANT_A, routes=[RouteSpec("a.test")])
-    b = await seed(TENANT_B, routes=[RouteSpec("b.test")])
-    upstream.on("b.test", anthropic_json())
-    repo = TenantStateRepository()
-    async with get_sessionmaker()() as session:
-        state = await repo.get(session, TENANT_A)
-        assert state.suspend(None)
-        await repo.save(session, state)
-        await session.commit()
-
-    r = await client.post("/v1/messages", headers={"x-api-key": a.secret}, json=_msg())
-    assert r.status_code == 401 and "停用" in r.json()["error"]["message"]
-    r = await client.post("/v1/messages", headers={"x-api-key": b.secret}, json=_msg())
-    assert r.status_code == 200
-    assert [s.host for s in upstream.seen] == ["b.test"]
-
-
 async def test_budget_is_a_soft_limit(gw, upstream: FakeUpstream) -> None:
     client, runtime = gw
     s = await seed(

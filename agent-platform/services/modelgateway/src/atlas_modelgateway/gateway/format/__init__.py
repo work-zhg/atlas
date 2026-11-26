@@ -4,6 +4,8 @@
 按 ParamPlan 改几个参数，别的原样带过去。同一种格式下各家写法不一样的地方交给供应商方言。
 ★ 只有通用入口转换（Anthropic 格式转成账号有的 OpenAI / Google 格式）；Anthropic、OpenAI 两个入口
   只走同格式的线路，模型没有这种线路就报错。
+★ 二进制文档（PDF 等）在通用入口只挑能承载文档的线路（Anthropic 原生或 Google inlineData）；
+  若只有 OpenAI 线路则直接报 BEYOND_CAPABILITY，绝不静默丢弃。
 ★ 只按入口格式读回答：转换过的回答已经是入口格式。
 """
 
@@ -17,7 +19,7 @@ from typing import Any
 import httpx
 
 from ...provider import Op, ProviderCatalog, ProviderDialect
-from ..kernel import (
+from ...shared.kernel import (
     Entry,
     ErrorCategory,
     FailureKind,
@@ -30,11 +32,11 @@ from ..kernel import (
     UpstreamFailure,
     Usage,
 )
+from ...shared.upstream import AddressGuard, UpstreamClient, UpstreamError
 from .codecs import AnthropicCodec, FormatCodec, OpenAICodec, OutContext
 from .convert import AnthropicToOpenAI, Converter, StreamTranscoder
 from .convert_google import AnthropicToGoogle
 from .sse import KEEPALIVE, SSEEvent, iter_sse
-from .upstream import AddressGuard, UpstreamClient, UpstreamError
 
 __all__ = [
     "KEEPALIVE",
@@ -101,25 +103,29 @@ class PathChooser:
 
     @staticmethod
     def _target(
-        entry: Entry, route: Route
+        entry: Entry, route: Route, *, has_documents: bool = False
     ) -> tuple[Format, Callable[[ProviderDialect], Converter] | None] | None:
         endpoints = route.account.endpoints
         if endpoints.get(entry.format):
             return entry.format, None
         if entry.converts:
             for fmt, converter in _CONVERT_TO:
+                if has_documents and fmt is Format.OPENAI:
+                    continue
                 if endpoints.get(fmt):
                     return fmt, converter
         return None
 
     @classmethod
-    def serves(cls, entry: Entry, route: Route) -> bool:
+    def serves(cls, entry: Entry, route: Route, *, has_documents: bool = False) -> bool:
         """这条线路能不能接这个入口的请求。"""
-        return cls._target(entry, route) is not None
+        return cls._target(entry, route, has_documents=has_documents) is not None
 
     @classmethod
-    def choose(cls, entry: Entry, route: Route, dialect: ProviderDialect) -> Path:
-        target = cls._target(entry, route)
+    def choose(
+        cls, entry: Entry, route: Route, dialect: ProviderDialect, *, has_documents: bool = False
+    ) -> Path:
+        target = cls._target(entry, route, has_documents=has_documents)
         if target is None:
             # 调用编排选线路前已经按 serves 筛过，正常走不到这里
             raise UpstreamError(
@@ -196,8 +202,14 @@ class FormatGateway:
         return self.codec(entry.format).summarize(body, headers, kind)
 
     @staticmethod
-    def routes_for(entry: Entry, model: str, routes: Sequence[Route]) -> list[Route]:
-        """这个入口能走的线路。不转换的入口：模型有线路、却没有一条是这种格式，报错。"""
+    def routes_for(
+        entry: Entry,
+        model: str,
+        routes: Sequence[Route],
+        *,
+        summary: RequestSummary | None = None,
+    ) -> list[Route]:
+        """筛这个入口能走的线路（直通缺格式或文档无承载线路直接报错）。"""
         usable = [r for r in routes if PathChooser.serves(entry, r)]
         if routes and not usable:
             raise GatewayError(
@@ -206,6 +218,15 @@ class FormatGateway:
                 "对话请改用通用接口 /universal/v1/messages（按 Anthropic 格式传，网关按线路转换）",
                 no_retry=True,
             )
+        if summary is not None and summary.has_documents and entry is Entry.UNIVERSAL:
+            doc_usable = [r for r in usable if PathChooser.serves(entry, r, has_documents=True)]
+            if usable and not doc_usable:
+                raise GatewayError(
+                    ErrorCategory.BEYOND_CAPABILITY,
+                    f"模型 {model} 当前的线路是 OpenAI 格式，不支持直接读取 PDF 等二进制文档",
+                    no_retry=True,
+                )
+            return doc_usable
         return usable
 
     async def open(
@@ -220,10 +241,11 @@ class FormatGateway:
         model: str,
         stream: bool,
         read_timeout_s: float | None,
+        has_documents: bool = False,
     ) -> UpstreamCall:
         """发出一次尝试。拿到 2xx 响应头就返回；连不上、超时、错误状态码抛 UpstreamError。"""
         dialect = self.catalog.dialect(route.account.provider)
-        path = PathChooser.choose(entry, route, dialect)
+        path = PathChooser.choose(entry, route, dialect, has_documents=has_documents)
         codec = self.codec(entry.format)
         payload = codec.apply(body, plan)
         dropped: list[str] = []

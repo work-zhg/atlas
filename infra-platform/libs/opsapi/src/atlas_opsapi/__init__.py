@@ -1,39 +1,35 @@
-"""Atlas 运营接口（c4-model/infra-platform/code-opsapi.html）：业务服务实现运营中心要求的契约。
+"""Atlas 运营接口（c4-model/infra-platform/code-opsapi.html）：业务系统接入运营中心的中间件。
 
-通用的部分都在这里：路由挂在 /ops/v1、只认运营中心（签名 + 时间窗）、在系统范围里执行、
-按幂等键去重并记下每个运营请求、本地记一份租户状态给后台工作查。宿主只实现 TenantLifecycle。
+通用的部分都在这里：路由挂在 /ops/v1、只认运营中心（签名 + 时间窗）；租户的创建在这个租户的
+上下文里执行，删除先外部、后数据库，分批。宿主只继承 TenantLifecycle，写创建和删除。
 
-    gate = TenantGate(sessions)
-    lifecycle = TenantLifecycleService(sessions, MyHooks(), gate, TenantDataPurge([...子表在前...]))
-    ops = OpsRoutes(OpsGuard(settings.ops_api_key), lifecycle, config=app_config, jobs=jobs)
-    app.include_router(ops.router)
+    class MyLifecycle(TenantLifecycle):
+        purge_order = (Child, Parent)              # 本系统的租户表，子表在前
 
-    # 后台工作开始前
-    await gate.require_active(run.tenant_uuid)
+        async def create(self, tenant_uuid, params): …   # 新租户先准备什么
+
+    ops = OpsRoutes.mount(app, OpsGuard(settings.ops_api_key), MyLifecycle(sessions, base=Base),
+                          config=app_config, jobs=jobs)
+
+★ 业务系统不知道租户状态：没有停用、恢复，后台工作也不查状态（用户中心对停用、到期租户的人
+  一律返回无权限）。
 """
 
 from .guard import OpsGuard
-from .lifecycle import NoExternal, OpsRequestLedger, TenantLifecycle, TenantLifecycleService
+from .lifecycle import Rejected, TenantLifecycle
 from .migrate import downgrade, upgrade
 from .routes import PREFIX, OpsRoutes
 from .signature import SignatureError, sign, verify
 from .stamp import OperatorStamp
-from .state import Rejected, TenantGate, TenantState, TenantStatus
 
 __all__ = [
     "PREFIX",
-    "NoExternal",
     "OperatorStamp",
     "OpsGuard",
-    "OpsRequestLedger",
     "OpsRoutes",
     "Rejected",
     "SignatureError",
-    "TenantGate",
     "TenantLifecycle",
-    "TenantLifecycleService",
-    "TenantState",
-    "TenantStatus",
     "downgrade",
     "sign",
     "upgrade",

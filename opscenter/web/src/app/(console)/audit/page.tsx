@@ -1,11 +1,13 @@
 "use client";
 
 /**
- * 运营审计：谁在什么时候做了什么。只追加，不记任何密码、临时密码、密钥。
+ * 运营审计：谁在什么时候对哪个模块做了什么。只追加，不记任何密码、临时密码、密钥。
+ * 要操作码 ops:audit（内置角色「运营审计员」），看全部模块。按模块筛 = 后端的 module；
  * 按类别筛 = 后端的 action 前缀；「操作」列写中文说法，下面小字是原始编码，方便对日志。
+ * ★ 登录、改密、开账号这些在用户中心（运营人员是系统租户里的人），那边有自己的审计。
  */
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { Button, Drawer, Input, Segmented, Table } from "antd";
+import { Button, Drawer, Input, Segmented, Select, Table } from "antd";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
@@ -13,7 +15,7 @@ import { ErrorBox, PageHead, PersonAvatar, ResultTag } from "@/components/common
 import { Icon } from "@/components/Icon";
 import { api } from "@/lib/api";
 import { dateTime } from "@/lib/format";
-import { systemName, useSystems } from "@/lib/session";
+import { systemName, useMe, useSystems } from "@/lib/session";
 import type { AuditEntry, SystemInfo } from "@/lib/types";
 
 const PAGE = 50;
@@ -23,11 +25,10 @@ const CATEGORIES: { value: string; label: string }[] = [
   { value: "", label: "全部" },
   { value: "tenant.", label: "租户" },
   { value: "system.", label: "系统与应用目录" },
-  { value: "operator.", label: "运营账号" },
-  { value: "login.", label: "登录" },
 ];
 
 const LABEL: Record<string, string> = {
+  // 升级前（运营中心还有自己的账号时）的记录
   "login.ok": "登录",
   "login.failed": "登录失败",
   "login.locked": "登录失败，账号已锁定",
@@ -70,13 +71,16 @@ function describe(e: AuditEntry, systems: SystemInfo[] | undefined): { label: st
 
 export default function AuditPage() {
   const [action, setAction] = useState("");
+  const [module, setModule] = useState<string>("");
   const [kw, setKw] = useState("");
   const [open, setOpen] = useState<AuditEntry | null>(null);
   const { data: systems } = useSystems();
+  const { data: me } = useMe();
+  const moduleName = useMemo(() => new Map((me?.modules ?? []).map((m) => [m.code, m.name])), [me]);
   const q = useInfiniteQuery({
-    queryKey: ["audit", action],
+    queryKey: ["audit", action, module],
     initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam }) => api.get<AuditEntry[]>("/audit", { action, before: pageParam, limit: PAGE }),
+    queryFn: ({ pageParam }) => api.get<AuditEntry[]>("/audit", { action, module, before: pageParam, limit: PAGE }),
     getNextPageParam: (last) => (last.length === PAGE ? last[last.length - 1]?.at : undefined),
   });
   const rows = useMemo(() => {
@@ -91,8 +95,14 @@ export default function AuditPage() {
 
   return (
     <>
-      <PageHead title="运营审计" sub="每个写操作一条，登录也记；跨系统的操作（开通、停用、关闭）做完后补记结果。只能看，不能改" />
+      <PageHead title="运营审计" sub="每个写操作一条，记在它所属的模块下；跨系统的操作（开通、停用、关闭）做完后补记结果。只能看，不能改" />
       <div className="ops-toolbar">
+        <Select
+          value={module}
+          onChange={setModule}
+          style={{ width: 180 }}
+          options={[{ value: "", label: "全部模块" }, ...(me?.modules ?? []).map((m) => ({ value: m.code, label: m.name }))]}
+        />
         <Segmented value={action} onChange={(v) => setAction(v as string)} options={CATEGORIES} />
         <Input allowClear prefix={<Icon name="search" size={14} />} placeholder="在已加载的记录里搜" style={{ width: 240 }} value={kw} onChange={(e) => setKw(e.target.value)} />
       </div>
@@ -118,6 +128,11 @@ export default function AuditPage() {
               ) : (
                 <span className="ops-muted">—</span>
               ),
+          },
+          {
+            title: "模块",
+            dataIndex: "module",
+            render: (v: string | null) => <span className="ops-nw">{v ? (moduleName.get(v) ?? v) : "—"}</span>,
           },
           {
             title: "操作",

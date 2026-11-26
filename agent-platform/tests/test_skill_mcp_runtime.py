@@ -277,7 +277,7 @@ async def real_skill_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
     )
     skill_settings.cache_clear()
     admin = create_async_engine(
-        "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas", isolation_level="AUTOCOMMIT"
+        "postgresql+asyncpg://atlas:atlas@localhost:5433/postgres", isolation_level="AUTOCOMMIT"
     )
     async with admin.connect() as conn:
         if not await conn.scalar(
@@ -289,9 +289,7 @@ async def real_skill_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
 
     await asyncio.to_thread(skill_main.migrate)
     async with skill_sessions()() as session:
-        await session.execute(
-            text("TRUNCATE skill, skill_version, skill_audit, app_tenant_state, app_ops_request")
-        )
+        await session.execute(text("TRUNCATE skill, skill_version, skill_audit"))
         await session.commit()
     try:
         with mock_aws():

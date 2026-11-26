@@ -7,7 +7,6 @@ import json
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-import httpx
 import pytest
 from atlas_knowledge.errors import Invalid
 from atlas_knowledge.retrieval.filters import (
@@ -127,95 +126,41 @@ def test_rrf_rewards_items_ranked_high_in_many_lists() -> None:
     assert out[0] == "b" and set(out) == {"a", "b", "c", "d"}
 
 
-# ───────────────────────────────────────────── 文档级权限
+# ───────────────────────────────────────────── 库级权限（没有文档级权限）
 
 
-async def test_document_acl_enforced_for_agent_calls(client: Any, rt: Any) -> None:
-    tags = {"bob": ["u:bob", "d:sales", "d:company"], "carol": ["u:carol", "d:hr"]}
+async def test_only_library_visibility_and_data_permission(client: Any, rt: Any) -> None:
+    """公有的库谁都能检索；私有的库只看用户中心数据权限；库里的文档不再分谁能看。"""
+    public = await _dataset(client, name="公有库", visibility="public")
+    private = await _dataset(client, name="私有库")
+    hr = await _upload(client, rt, public["id"], "薪酬调整方案：人力资源部内部。", "hr.txt")
+    await _upload(client, rt, public["id"], "差旅报销制度：全员适用。", "trip.txt")
+    await _upload(client, rt, private["id"], "销售提成方案：按季度结算。", "sales.txt")
+    assert "acl" not in hr
 
-    async def resolver(user_id: str) -> list[str]:
-        return tags.get(user_id, [f"u:{user_id}"])
-
-    rt.principal_resolver = resolver
-    # 全员只读：库级都能读，这里只看文档级
-    ds = await _dataset(client, permission="all_team")
-    await _upload(client, rt, ds["id"], "薪酬调整方案：人力资源部内部。", "hr.txt", acl=["d:hr"])
-    await _upload(client, rt, ds["id"], "差旅报销制度：全员适用。", "public.txt")
-    sales = await _upload(
-        client, rt, ds["id"], "销售提成方案：按季度结算。", "sales.txt", acl=["d:company"]
-    )
-
-    async def internal(actor: str | None) -> set[str]:
-        # 内网免令牌：atlas-server 带这一轮的身份请求头；文档级权限按 X-Auth-Uid
+    async def retrieve(auth_uid: str) -> tuple[set[str], list[str]]:
         r = await client.post(
-            "/internal/v1/retrieve",
-            json={"dataset_ids": [ds["id"]], "query": "方案", "retrieval_config": SEMANTIC},
-            headers={"X-Uid": "zhang", "X-Auth-Uid": actor} if actor else {},
+            "/v1/retrieve",
+            json={
+                "dataset_ids": [public["id"], private["id"]],
+                "query": "方案",
+                "retrieval_config": SEMANTIC,
+            },
+            headers={"X-Uid": "zhang", "X-Auth-Uid": auth_uid},
         )
         assert r.status_code == 200, r.text
-        return {x["document_name"] for x in r.json()["records"]}
+        return {x["document_name"] for x in r.json()["records"]}, r.json()["skipped"]
 
-    # 按 auth-uid：bob 在销售部（上级部门 company 的授权也算）；carol 在人力；没有主体什么都读不到
-    assert await internal("bob") == {"public.txt", "sales.txt"}
-    assert await internal("carol") == {"public.txt", "hr.txt"}
-    assert await internal(None) == set()
-    # 库管理员调试（hit-testing）不受文档级权限限制
-    assert _docs(await _hit(client, ds["id"], "方案")) == {"hr.txt", "public.txt", "sales.txt"}
-
-    # 权限变更即时生效（只改 payload）
-    r = await client.patch(
-        f"/v1/datasets/{ds['id']}/documents/{sales['id']}", json={"acl": ["u:carol"]}, headers=ALICE
+    # bob 没有任何数据权限：公有库的全部文档都看得到，私有库跳过
+    assert await retrieve("bob") == ({"hr.txt", "trip.txt"}, [private["id"]])
+    # 在用户中心给 bob 授私有库的读权限，立即生效
+    r = await client.post(
+        f"/v1/datasets/{private['id']}/grants",
+        json={"level": "READ", "subjects": [{"type": "user", "id": "bob"}]},
+        headers=ALICE,
     )
-    assert r.status_code == 200 and r.json()["acl"] == ["u:carol"]
-    assert await internal("bob") == {"public.txt"}
-    bad = await client.patch(
-        f"/v1/datasets/{ds['id']}/documents/{sales['id']}", json={"acl": ["bob"]}, headers=ALICE
-    )
-    assert bad.status_code == 400
-
-
-async def test_principals_expanded_from_user_center() -> None:
-    """主体展开直接问用户中心：角色、所在部门及各级上级；带出站身份；失败只剩 u: 且不缓存。"""
-    from atlas_knowledge.access.auth import use_identity
-    from atlas_knowledge.access.principals import PrincipalTags
-    from atlas_knowledge.access.usercenter import UserCenterGateway
-
-    seen: list[httpx.Request] = []
-    down = True
-
-    def handler(req: httpx.Request) -> httpx.Response:
-        seen.append(req)
-        if down:
-            return httpx.Response(503)
-        if req.url.path == "/open/v1/users/bob/authz":
-            return httpx.Response(200, json={"can_access": True, "roles": ["ATLAS_MEMBER"]})
-        if req.url.path == "/open/v1/users/bob":
-            return httpx.Response(200, json={"tenant_id": "t-1", "dept": {"id": "sales"}})
-        if req.url.path == "/open/v1/depts/tree":
-            return httpx.Response(
-                200,
-                json=[
-                    {"id": "company", "parent_id": None},
-                    {"id": "sales", "parent_id": "company"},
-                ],
-            )
-        return httpx.Response(404)
-
-    gateway = UserCenterGateway("http://uc", transport=httpx.MockTransport(handler))
-    resolve = PrincipalTags(gateway).resolve
-    use_identity("zhang", "bob", "t-1")
-    # 用户中心不可用：只按用户本人
-    assert await resolve("bob") == ["u:bob"]
-    # 失败不缓存：恢复后重新展开
-    down = False
-    full = ["u:bob", "r:ATLAS_MEMBER", "d:sales", "d:company"]
-    assert await resolve("bob") == full
-    assert seen[-1].headers["x-caller-app"] == "atlas"
-    assert seen[-1].headers["x-auth-uid"] == "bob" and seen[-1].headers["x-tenant-id"] == "t-1"
-    # 成功的结果缓存：不再请求用户中心
-    n = len(seen)
-    assert await resolve("bob") == full
-    assert len(seen) == n
+    assert r.status_code == 201, r.text
+    assert await retrieve("bob") == ({"hr.txt", "trip.txt", "sales.txt"}, [])
 
 
 # ───────────────────────────────────────────── 元数据过滤 + 查询理解抽取

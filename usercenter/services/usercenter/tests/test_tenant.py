@@ -190,6 +190,24 @@ async def test_open_api_is_scoped_to_the_header_tenant() -> None:
     assert r.status_code == 200 and r.json()["status"] == "suspended", r.text
     assert (await dflt.http.get("/open/v1/users", headers=h)).json()["code"] == "TENANT_DISABLED"
     assert (await acme.get("/api/v1/auth/me")).json()["code"] == "TENANT_DISABLED"
+    # 只读的权限查询照常回答「无权限」：业务系统不知道租户状态，按普通的无权限处理（403），
+    # 不会当成「用户中心出错了」（503）
+    r = await dflt.http.get(f"/open/v1/users/{li}/authz", headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["can_access"] is False and r.json()["permissions"] == []
+    r = await dflt.http.post(
+        "/open/v1/authz/check", json={"user_id": li, "permission": "x"}, headers=h
+    )
+    assert r.status_code == 200 and r.json()["allowed"] is False
+    q = {"data_code": "Team", "data_id": "t1", "user_id": li}
+    r = await dflt.http.get("/open/v1/data-permissions/check", params=q, headers=h)
+    assert r.status_code == 200 and r.json()["permission"] == "NONE"
+    r = await dflt.http.get(
+        "/open/v1/data-permissions/accessible",
+        params={"data_code": "Team", "user_id": li},
+        headers=h,
+    )
+    assert r.status_code == 200 and r.json()["items"] == []
     # 放开后恢复
     assert (await ops.post(f"/ops/v1/tenants/{acme_id}/unblock")).json()["status"] == "active"
     assert (await dflt.http.get("/open/v1/users", headers=h)).status_code == 200

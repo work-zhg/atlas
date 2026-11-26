@@ -1,13 +1,13 @@
 """Anthropic（入口）→ Google（Gemini 原生接口）。
 
     请求    system → systemInstruction；消息 → contents（assistant 叫 model）；
-            文字、图片（inlineData）、
+            文字、图片与 base64 文档（inlineData，含 PDF）、
             工具调用（functionCall）、工具结果（functionResponse，函数名从前面的工具调用块查）；
             tools → functionDeclarations（参数 schema 去掉 Gemini 不收的字段）；
             最大输出、温度、停止词、思考（thinkingConfig）写进 generationConfig
     回答    文字（thought=true 的是思考）、functionCall → 工具调用块；
             finishReason、usageMetadata 换过来
-    去掉    缓存标记、思考块的签名、document 块
+    去掉    缓存标记、思考块的签名；不支持的外部 URL 文档明确报错
 
 ★ 没有 Google 的读写器：参数在这里按 ParamPlan 写。模型名在地址里（方言拼地址）。
 ★ 各家写法以文档和实测为准：Gemini 的 schema 只认 OpenAPI 子集，思考额度 -1 = 由模型自己定。
@@ -21,7 +21,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from ...provider import ProviderDialect
-from ..kernel import Format, ParamPlan, Usage
+from ...shared.kernel import ErrorCategory, Format, GatewayError, ParamPlan, Usage
 from .convert import StreamTranscoder, anthropic_usage
 from .sse import SSEEvent
 
@@ -63,6 +63,23 @@ def _text(content: Any) -> str:
     )
 
 
+def _doc_part(source: Mapping[str, Any]) -> dict[str, Any]:
+    if source.get("type") == "base64":
+        return {
+            "inlineData": {
+                "mimeType": source.get("media_type", "application/pdf"),
+                "data": source.get("data", ""),
+            }
+        }
+    if source.get("type") == "text":
+        return {"text": str(source.get("data", ""))}
+    raise GatewayError(
+        ErrorCategory.BEYOND_CAPABILITY,
+        "当前模型的 Google 格式线路只支持 base64 或纯文本的文档块",
+        no_retry=True,
+    )
+
+
 class AnthropicToGoogle:
     entry = Format.ANTHROPIC
     upstream = Format.GOOGLE
@@ -99,6 +116,8 @@ class AnthropicToGoogle:
                             }
                         }
                     )
+                elif kind == "document":
+                    parts.append(_doc_part(b.get("source") or {}))
                 elif kind == "tool_use":
                     names[str(b.get("id"))] = str(b.get("name"))
                     parts.append(
@@ -114,6 +133,25 @@ class AnthropicToGoogle:
                             }
                         }
                     )
+                    if isinstance(b.get("content"), list):
+                        for inner in b["content"]:
+                            if not isinstance(inner, Mapping):
+                                continue
+                            if (
+                                inner.get("type") == "image"
+                                and (inner.get("source") or {}).get("type") == "base64"
+                            ):
+                                src = inner["source"]
+                                parts.append(
+                                    {
+                                        "inlineData": {
+                                            "mimeType": src.get("media_type", "image/png"),
+                                            "data": src.get("data", ""),
+                                        }
+                                    }
+                                )
+                            elif inner.get("type") == "document":
+                                parts.append(_doc_part(inner.get("source") or {}))
                 else:
                     dropped.add(str(kind))
             if parts:

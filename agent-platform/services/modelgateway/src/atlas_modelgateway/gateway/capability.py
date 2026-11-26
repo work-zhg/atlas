@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 
-from .kernel import (
+from ..shared.kernel import (
     ErrorCategory,
     GatewayError,
     Intent,
@@ -19,7 +19,7 @@ from .kernel import (
     RequestSummary,
     Route,
 )
-from .presets import EFFORT_LEVELS, PresetRules, UpstreamRules
+from ..shared.presets import EFFORT_LEVELS, PresetRules, UpstreamRules
 
 __all__ = ["CapabilityCheck", "CapabilityGate", "ParamPolicy", "ThinkingProvenance"]
 
@@ -34,7 +34,7 @@ _KIND_TEXT = {ModelKind.CHAT: "对话", ModelKind.EMBEDDING: "向量", ModelKind
 
 
 class CapabilityCheck:
-    """去掉会让结果出错的，一律拒绝：模型看不到图也会照样回答，调用方发现不了。"""
+    """去掉会让结果出错的，一律拒绝：模型看不到图或文档也会照样回答，调用方发现不了。"""
 
     @staticmethod
     def violations(model: str, caps: ModelCaps, summary: RequestSummary) -> list[str]:
@@ -46,6 +46,8 @@ class CapabilityCheck:
             return found
         if summary.has_images and not caps.vision:
             found.append(f"{model} 不能看图")
+        if summary.has_documents and not caps.vision:
+            found.append(f"{model} 不能读取文档")
         if summary.has_tools and not caps.tools:
             found.append(f"{model} 不能调用工具")
         if (

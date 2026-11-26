@@ -31,9 +31,6 @@ async def test_uc_data_permissions_adapter() -> None:
 
     perms = UserCenterGateway("http://uc", transport=httpx.ASGITransport(app=create_app()))
     try:
-        # 主体展开按部门树找上级：根部门没有 parent_id
-        tree = await perms.dept_tree()
-        assert any(str(d["id"]) == root and not d.get("parent_id") for d in tree)
         # 新建：建库人 OWNER + 全员（根部门含下级）只读
         await perms.create(
             "kb1", "制度库", [Grant("OWNER", "user", li), Grant("READ", "dept", root, True)]

@@ -42,6 +42,8 @@ export interface JobsOut {
 export interface JobsClient {
   endpoint: string;
   headers?: () => Record<string, string>;
+  /** 回 401 时换一个新的访问令牌（宿主的统一登录），返回 true 就重发一次 */
+  refresh?: () => Promise<boolean>;
 }
 
 export class JobsError extends Error {
@@ -71,10 +73,13 @@ async function toError(res: Response): Promise<JobsError> {
 }
 
 export async function listJobs(client: JobsClient): Promise<JobsOut> {
-  const res = await fetch(client.endpoint.replace(/\/+$/, ""), {
-    credentials: "same-origin",
-    headers: client.headers?.() ?? {},
-  });
+  const send = () =>
+    fetch(client.endpoint.replace(/\/+$/, ""), {
+      credentials: "same-origin",
+      headers: client.headers?.() ?? {},
+    });
+  let res = await send();
+  if (res.status === 401 && client.refresh && (await client.refresh())) res = await send();
   if (!res.ok) throw await toError(res);
   return (await res.json()) as JobsOut;
 }

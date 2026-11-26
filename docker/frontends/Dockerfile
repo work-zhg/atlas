@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # 四个前端（Atlas、用户中心、AI TeamFlow、运营中心）一个镜像：各自 Next standalone 产物放在 /app/<名>，
-# Atlas、用户中心、TeamFlow 由同一个 Pod 里的三个容器分别启动（node /app/<名>/server.js），前面是 nginx 容器按路径路由；
-# 运营中心由自己的 Deployment 启动（deploy/local/48-opscenter.yaml）。
+# Atlas、用户中心、TeamFlow 由同一个 Pod 里的三个容器分别启动（node /app/<名>/server.js，40-frontends.yaml）；
+# 运营中心由自己的 Deployment 启动（49-opscenter-web.yaml）。
 #
 # 构建（仓库根目录）：
 # ★ Atlas 与 TeamFlow 在前端 workspace（根 pnpm-workspace.yaml）里，共用 @atlas/chat-ui；用户中心独立。
@@ -9,7 +9,8 @@
 #   docker build -f docker/frontends/Dockerfile -t atlas-frontends:dev .
 #   （npm 源默认官方；需要换源时加 --build-arg NPM_REGISTRY=…）
 #
-# ★ 构建期的地址都是同源相对路径（由 nginx 转发），镜像不绑定任何具体的后端地址。
+# ★ 构建期的地址都是同源相对路径，镜像不绑定任何具体的后端地址。约定（c4-model/apigateway/code-routing.html）：
+#   页面 /<名>-ui（basePath），接口 /<名>，都经 API 网关（infra-platform/gateway/routes.yaml）。
 
 FROM node:22-alpine AS base
 # npm 源（构建期）。lockfile 只记 integrity 不记源地址，换源不影响可复现性。
@@ -41,35 +42,36 @@ COPY teamflow/web/ teamflow/web/
 COPY opscenter/web/ opscenter/web/
 ENV NEXT_TELEMETRY_DISABLED=1
 
-# ── Atlas：/atlas；接口经 nginx 的 /atlas-api、/skill-api 等同源访问
+# ── Atlas：页面 /atlas-ui；接口 /atlas、/skill、/knowledge、/mcp、/model
 FROM ws AS atlas
-ENV NEXT_PUBLIC_BASE_PATH=/atlas \
-    NEXT_PUBLIC_API_BASE=/atlas-api \
-    NEXT_PUBLIC_SKILL_API_BASE=/skill-api \
-    NEXT_PUBLIC_KNOWLEDGE_API_BASE=/atlas-knowledge-api \
-    NEXT_PUBLIC_MCP_GATEWAY_API_BASE=/mcp-gateway-api \
-    NEXT_PUBLIC_MODEL_GATEWAY_API_BASE=/model-gateway-api
+ENV NEXT_PUBLIC_BASE_PATH=/atlas-ui \
+    NEXT_PUBLIC_API_BASE=/atlas \
+    NEXT_PUBLIC_SKILL_API_BASE=/skill \
+    NEXT_PUBLIC_KNOWLEDGE_API_BASE=/knowledge \
+    NEXT_PUBLIC_MCP_GATEWAY_API_BASE=/mcp \
+    NEXT_PUBLIC_MODEL_GATEWAY_API_BASE=/model
 RUN pnpm --filter atlas-web build
 
-# ── 用户中心：/uc
+# ── 用户中心：页面 /uc-ui（统一登录页 /uc-ui/login）；接口 /uc
 FROM base AS uc
 COPY usercenter/web/package.json usercenter/web/pnpm-lock.yaml usercenter/web/pnpm-workspace.yaml ./
 RUN --mount=type=cache,id=pnpm-store,target=/pnpm-store,sharing=locked \
     pnpm install --frozen-lockfile --store-dir /pnpm-store
 COPY usercenter/web/ ./
-ENV NEXT_PUBLIC_BASE_PATH=/uc NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_PUBLIC_BASE_PATH=/uc-ui NEXT_PUBLIC_API_BASE=/uc NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build
 
-# ── AI TeamFlow：/teamflow（人机协同对话区即共享的 Atlas 对话组件）
+# ── AI TeamFlow：页面 /teamflow-ui；接口 /teamflow（人机协同对话区即共享的 Atlas 对话组件，经 TeamFlow 后端转给 Atlas）
 FROM ws AS tf
-ENV NEXT_PUBLIC_BASE_PATH=/teamflow
+ENV NEXT_PUBLIC_BASE_PATH=/teamflow-ui \
+    NEXT_PUBLIC_API_BASE=/teamflow
 RUN pnpm --filter atlas-teamflow-web build
 
-# ── 运营中心：/ops。和租户入口同一个域名，但不经租户网关（nginx 的登录校验）：traefik 直接转给它
-#   （deploy/server/20-ingress.yaml）。/ops/api 由 Next 转给运营中心后端 —— 地址在构建时写进路由表
+# ── 运营中心：页面 /opscenter-ui；接口 /opscenter（统一登录，网关验 JWT，c4-model/opscenter/design-opscenter.html）。
+#   名字不能叫 ops：网关对含 /ops/ 段的路径一律 404
 FROM ws AS ops
-ENV NEXT_PUBLIC_BASE_PATH=/ops \
-    OPS_API_ORIGIN=http://atlas-opscenter.atlas-system.svc.cluster.local:8100
+ENV NEXT_PUBLIC_BASE_PATH=/opscenter-ui \
+    NEXT_PUBLIC_API_BASE=/opscenter
 RUN pnpm --filter atlas-opscenter-web build
 
 # ── 运行镜像：只带 standalone 产物与静态资源（没有 pnpm、源码、构建缓存）

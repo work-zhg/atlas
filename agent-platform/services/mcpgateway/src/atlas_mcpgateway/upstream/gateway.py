@@ -6,7 +6,8 @@
 先按服务类型选上游（扩展点 Upstream），把上游凭据变成请求头、查询参数或 gRPC metadata，再交给它。
 HTTP 连接、OAuth2 Token、gRPC 连接和描述池在这里复用。
 
-★ 租户填的上游地址不能指向平台内部：每次连接前按解析出来的 IP 检查（guard.py）。
+★ 租户填的上游地址不能指向平台内部：每次连接前按解析出来的 IP 检查（guard.py）。平台服务不查：
+  地址是部署时平台自己写的（运维命令行登记），租户改不了。
 """
 
 from __future__ import annotations
@@ -55,13 +56,17 @@ class UpstreamGateway:
 
     async def check_addresses(self, spec: UpstreamSpec) -> None:
         """登记、改连接、改凭据时：地址不能指向平台内部。不行抛 UpstreamBlocked。"""
-        await self.guard.check_all(spec.targets())
+        await self._check(spec)
+
+    async def _check(self, spec: UpstreamSpec) -> None:
+        if not spec.platform:
+            await self.guard.check_all(spec.targets())
 
     async def discover(self, spec: UpstreamSpec) -> Discovered:
         """→ Discovered。拉不到、解析不了抛 DiscoveryFailed（原因给管理员看）。"""
         try:
             if spec.kind != "grpc" or spec.descriptor is None:  # 上传了描述文件的 gRPC 不用连
-                await self.guard.check_all(spec.targets())
+                await self._check(spec)
             return await self._upstream(spec).discover(spec, await self._auth(spec))
         except UpstreamUnavailable as exc:  # 地址不许连、换 OAuth2 Token 失败这类
             raise DiscoveryFailed(str(exc)) from exc
@@ -78,7 +83,7 @@ class UpstreamGateway:
         抛 UpstreamUnavailable（连不上）、UpstreamError（MCP 上游回了 JSON-RPC 错误）、
         InvalidArguments（参数转不成请求）。
         """
-        await self.guard.check_all(spec.targets())
+        await self._check(spec)
         auth = await self._auth(spec)
         return await self._upstream(spec).call(spec, binding, arguments, auth, identity)
 

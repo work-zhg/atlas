@@ -176,7 +176,7 @@ async def test_all_readable_expands_to_readable_sets(monkeypatch: pytest.MonkeyP
     got = await kb.resolve_knowledge(object(), EVERYONE)
     assert got.turn is not None and got.notices() == []
     assert [s.id for s in got.turn.sets] == ids
-    assert seen == ["/internal/v1/knowledge-sets/readable"]
+    assert seen == ["/v1/knowledge-sets/readable"]
 
 
 async def test_all_readable_with_nothing_readable_disables_retrieval(

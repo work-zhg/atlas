@@ -71,6 +71,7 @@ def app_view(a: App, **extra: Any) -> dict[str, Any]:
         "scope_all": a.is_builtin,
         "status": a.status,
         "is_builtin": a.is_builtin,
+        "system_only": a.system_only,
         "home_url": a.home_url,
         "created_at": iso(a.created_at),
         "version": a.version,

@@ -43,17 +43,16 @@ kubectl -n atlas-system create secret generic atlas-server-creds \
   --from-literal=cli_model_base_url="${ATLAS_CLI_MODEL_BASE_URL:-${ATLAS_ACP_MODEL_BASE_URL:-${ATLAS_CLUSTER_MODEL_BASE_URL:-}}}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-# 知识库 MCP 令牌的签名密钥（atlas-server 签、知识库验）：给会话 Pod 的能力凭据（§5.3）。
-# .env 里有就用；没有就沿用集群里已有的（含更早时 atlas-config-creds 里的那份，已签发的令牌
-# 继续有效）；都没有才新生成。★ 必须在删掉 atlas-config-creds（本脚本末尾）之前读。
-MCP_SECRET="${ATLAS_KNOWLEDGE_MCP_SECRET:-$(kubectl -n atlas-system get secret atlas-knowledge-mcp \
+# 身份凭据（X-Identity-Grant）的签名密钥：Atlas 打开 CLI 会话时签、MCP 网关验，网关据此给上游写
+# 这一轮的 auth-uid（知识库按它判权限）。.env 里有就用；没有就沿用集群里已有的；都没有才新生成。
+GRANT_SECRET="${ATLAS_MCP_IDENTITY_GRANT_SECRET:-$(kubectl -n atlas-system get secret atlas-mcp-identity-grant \
   -o jsonpath='{.data.secret}' 2>/dev/null | base64 --decode || true)}"
-[ -n "$MCP_SECRET" ] || MCP_SECRET="$(kubectl -n atlas-system get secret atlas-config-creds \
-  -o jsonpath='{.data.internal_token}' 2>/dev/null | base64 --decode || true)"
-[ -n "$MCP_SECRET" ] || MCP_SECRET="$(openssl rand -hex 24)"
-kubectl -n atlas-system create secret generic atlas-knowledge-mcp \
-  --from-literal=secret="${MCP_SECRET}" \
+[ -n "$GRANT_SECRET" ] || GRANT_SECRET="$(openssl rand -hex 24)"
+kubectl -n atlas-system create secret generic atlas-mcp-identity-grant \
+  --from-literal=secret="${GRANT_SECRET}" \
   --dry-run=client -o yaml | kubectl apply -f -
+# 知识库不再开 MCP 端点（CLI 经 MCP 网关上的平台服务调检索接口）：它的令牌密钥不要了
+kubectl -n atlas-system delete secret atlas-knowledge-mcp --ignore-not-found
 
 # 旧版 MCP 网关的凭据：网关直连上游、上游凭据存在网关库里之后不再需要
 kubectl -n atlas-system delete secret atlas-mcpgateway-creds --ignore-not-found
@@ -99,6 +98,18 @@ if [ -n "${TENANT_BACKFILL_UUID:-}" ]; then
     --from-literal=backfill_uuid="${TENANT_BACKFILL_UUID}" \
     --dry-run=client -o yaml | kubectl apply -f -
 fi
+
+# 用户中心签访问 JWT 的私钥（Ed25519，c4-model/apigateway/code-auth.html）：沿用集群里已有的，没有才新生成。
+# ★ 丢了不要紧（只是所有人的访问令牌失效、前端自动刷新），但不要随便换：换钥要先发布新公钥，
+#   见 usercenter 的 jwt_published_keys 说明。published_keys 是换钥时额外发布的公钥（JSON，平时为空）
+UC_JWT_KEY="$(secret_value atlas-uc-jwt signing_key)"
+[ -n "$UC_JWT_KEY" ] || UC_JWT_KEY="$(openssl genpkey -algorithm ed25519)"
+UC_JWT_PUBLISHED="$(secret_value atlas-uc-jwt published_keys)"
+[ -n "$UC_JWT_PUBLISHED" ] || UC_JWT_PUBLISHED='{}'
+kubectl -n atlas-system create secret generic atlas-uc-jwt \
+  --from-literal=signing_key="${UC_JWT_KEY}" \
+  --from-literal=published_keys="${UC_JWT_PUBLISHED}" \
+  --dry-run=client -o yaml | kubectl apply -f -
 
 # 设备网关的内部令牌（atlas-server 连会话流、调 /internal 时带上）：沿用集群里已有的，没有才新生成
 DEVICEGW_TOKEN="$(secret_value atlas-devicegw internal_token)"
@@ -151,7 +162,7 @@ OSS_ADDR="${ATLAS_OSS_ADDR:-${HOST_IP}:9000}"
 QDRANT_ADDR="${ATLAS_QDRANT_ADDR:-${HOST_IP}:6333}"
 OTEL_ADDR="${ATLAS_OTEL_ADDR:-${HOST_IP}:4318}"
 PUBLIC_ORIGIN="${ATLAS_PUBLIC_ORIGIN:-http://localhost:8080}"
-# 对外是 HTTPS 时登录 Cookie 加 Secure（运营中心）
+# 对外是 HTTPS 时登录 Cookie 加 Secure（用户中心）
 case "$PUBLIC_ORIGIN" in https://*) PUBLIC_HTTPS=true ;; *) PUBLIC_HTTPS=false ;; esac
 APP_IMAGE="${ATLAS_APP_IMAGE:-atlas-app:dev}"
 render() {
@@ -199,5 +210,5 @@ kubectl -n atlas-system rollout status deploy/atlas-opscenter --timeout=180s
 #   服务器上第一次切换走 deploy/server/skill-cutover.sh（先停旧服务、改库名、搬持久指令）
 kubectl -n atlas-system delete deployment/atlas-config service/atlas-config secret/atlas-config-creds \
   --ignore-not-found
-echo "后端只经网关对外（deploy/local/frontends.sh → http://localhost:8080）；"
+echo "后端只经 API 网关对外（infra-platform/gateway，宿主机上的 OpenResty）；"
 echo "运维直连用 kubectl -n atlas-system port-forward svc/<服务> <端口>（评测见 forward.sh）"

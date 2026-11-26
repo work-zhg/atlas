@@ -3,6 +3,9 @@
     mcp_service   服务：类型（MCP 代理 / REST 转换 / gRPC 转换）、可见性、连接、上游凭据、状态；
                   MCP 代理还有从上游拉取定义的结果
     mcp_tool      工具：定义（MCP 代理从上游拉来；REST / gRPC 由管理员定义）、映射、副作用、状态
+    mcp_platform_service、mcp_platform_tool
+                  平台服务和它的工具（例如知识库）：不属于任何租户，所有租户可见，只能由运维命令行
+                  登记。列和 mcp_service、mcp_tool 一样（共用 _ServiceColumns、_ToolColumns）
     mcp_api_key   API Key：用户 Key（本人申请）与智能体 Key（应用创建）。每把 Key 在用户中心有一个
                   主体（subject_uid），授权授给它，网关判权时以它作 X-Auth-Uid
     mcp_data_object  在用户中心登记过的数据对象（McpServer、McpTool），授权据此知道要不要先登记
@@ -13,7 +16,9 @@ mcp_api_key；授权 mcp_data_object；管理审计 mcp_audit 是共享内核。
 
 ★ 自增 id + uuid 逻辑主键；关联与 API 一律用 uuid（字段名 xxx_uuid）。
 ★ 多租户（迁移 g0003）：表都归租户（TenantOwned），查询按当前租户自动过滤；服务名在租户内
-  唯一，「公有」只对本租户公有。数据面先按 Key 认出租户，再在这个租户里找服务。
+  唯一，「公有」只对本租户公有。数据面先按 Key 认出租户，再在这个租户里找服务，没有再找平台服务。
+★ 平台服务单独两张表（迁移 g0005），不是租户表里 tenant_uuid 为空：租户隔离库要求租户表的
+  tenant_uuid 非空、查询都按租户过滤。平台表不继承 TenantOwned，在哪个租户里都查得到。
 ★ 不建外键（与其它服务一致）：引用完整性由 service 层保证。
 ★ 服务没有删除：服务名是工具名前缀、用户中心里的数据标识、智能体配置里的引用，
   停用后也不能复用。
@@ -23,7 +28,7 @@ mcp_api_key；授权 mcp_data_object；管理审计 mcp_audit 是共享内核。
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 from uuid import UUID
 
 from atlas_tenancy import TenantOwned
@@ -80,10 +85,13 @@ class _Row:
     )
 
 
-class McpService(TenantOwned, _Row, Base):
-    __tablename__ = "mcp_service"
+class _ServiceColumns:
+    """服务的列和行为。租户的服务（McpService）和平台服务（McpPlatformService）共用。"""
 
-    #: 租户内唯一
+    #: 平台服务：不属于任何租户，所有租户可见，只能由运维命令行登记和修改
+    platform: ClassVar[bool] = False
+
+    #: 租户内唯一（平台服务的名字全平台保留）
     name: Mapped[str] = mapped_column(String(24), nullable=False)
     display_name: Mapped[str] = mapped_column(String(100), default="", nullable=False)
     description: Mapped[str] = mapped_column(Text, default="", nullable=False)
@@ -115,13 +123,6 @@ class McpService(TenantOwned, _Row, Base):
     #: 多副本只让一个去拉：领到的时间（租约，见 registry.claim_due）
     refresh_claimed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
-    __table_args__ = (
-        UniqueConstraint("tenant_uuid", "name"),
-        CheckConstraint("kind IN ('mcp','rest','grpc')", name="kind"),
-        CheckConstraint("visibility IN ('public','private')", name="visibility"),
-        CheckConstraint("status IN ('enabled','disabled')", name="status"),
-    )
-
     def upstream_spec(self, *, descriptor: bytes | None = None) -> UpstreamSpec:
         """交给上游接入的连接、凭据和描述（它不认识这张表）。descriptor：发现时用别的描述文件。"""
         return UpstreamSpec(
@@ -129,11 +130,32 @@ class McpService(TenantOwned, _Row, Base):
             connection=dict(self.connection or {}),
             credential=UpstreamCredential.of(self.credential, self.credential_secret),
             descriptor=descriptor if descriptor is not None else self.descriptor,
+            platform=self.platform,
         )
 
 
-class McpTool(TenantOwned, _Row, Base):
-    __tablename__ = "mcp_tool"
+_SERVICE_CHECKS = (
+    CheckConstraint("kind IN ('mcp','rest','grpc')", name="kind"),
+    CheckConstraint("visibility IN ('public','private')", name="visibility"),
+    CheckConstraint("status IN ('enabled','disabled')", name="status"),
+)
+
+
+class McpService(TenantOwned, _ServiceColumns, _Row, Base):
+    __tablename__ = "mcp_service"
+    __table_args__ = (UniqueConstraint("tenant_uuid", "name"), *_SERVICE_CHECKS)
+
+
+class McpPlatformService(_ServiceColumns, _Row, Base):
+    """平台服务（例如知识库）：登记一次，所有租户可见；都是公开的，不在用户中心登记数据对象。"""
+
+    __tablename__ = "mcp_platform_service"
+    platform: ClassVar[bool] = True
+    __table_args__ = (UniqueConstraint("name"), *_SERVICE_CHECKS)
+
+
+class _ToolColumns:
+    """工具的列和行为。租户服务的工具（McpTool）和平台服务的工具（McpPlatformTool）共用。"""
 
     service_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
     #: 发给上游 / 模型看到的名字（模型侧是「服务名__工具名」）
@@ -160,12 +182,6 @@ class McpTool(TenantOwned, _Row, Base):
     #: MCP 代理：上游最近一次完整拉取里没有它 = 已删除。留着行，管理端要显示删了哪些
     removed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
-    __table_args__ = (
-        UniqueConstraint("service_uuid", "name"),
-        CheckConstraint("effect IN ('read','write','destructive')", name="effect"),
-        CheckConstraint("status IN ('active','disabled')", name="status"),
-    )
-
     def callable(self) -> bool:
         """可用 = 启用、没被删除、没有不合规的原因。"""
         return self.status == "active" and self.removed_at is None and not self.issues
@@ -173,6 +189,23 @@ class McpTool(TenantOwned, _Row, Base):
     def binding(self) -> ToolBinding:
         """交给上游接入的「怎么调」。"""
         return ToolBinding(self.name, dict(self.mapping or {}))
+
+
+_TOOL_CHECKS = (
+    UniqueConstraint("service_uuid", "name"),
+    CheckConstraint("effect IN ('read','write','destructive')", name="effect"),
+    CheckConstraint("status IN ('active','disabled')", name="status"),
+)
+
+
+class McpTool(TenantOwned, _ToolColumns, _Row, Base):
+    __tablename__ = "mcp_tool"
+    __table_args__ = _TOOL_CHECKS
+
+
+class McpPlatformTool(_ToolColumns, _Row, Base):
+    __tablename__ = "mcp_platform_tool"
+    __table_args__ = _TOOL_CHECKS
 
 
 class McpApiKey(TenantOwned, _Row, Base):

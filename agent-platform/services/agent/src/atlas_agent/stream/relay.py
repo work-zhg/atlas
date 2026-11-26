@@ -20,10 +20,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
+from typing import Any
 from uuid import UUID
 
-import redis.asyncio as aioredis
 from atlas_engine.contracts.events import TERMINAL_EVENTS, EventType, TraceEvent
+from atlas_redis import RedisClient, ScriptRegistry
 from atlas_redislock import RedisLock
 
 logger = logging.getLogger(__name__)
@@ -84,10 +85,24 @@ _STREAM_MAXLEN = 10_000
 _REPLAY_PAGE = 500
 
 
+_SCRIPT_NEXT_SEQ = "atlas_agent.relay.next_thread_seq"
+_SCRIPT_RELEASE_LOCK = "atlas_agent.relay.release_if_owner"
+_SCRIPT_RENEW_LOCK = "atlas_agent.relay.renew_if_owner_or_free"
+
+
 class EventRelay:
-    def __init__(self, redis: aioredis.Redis, *, ttl_s: int = 86_400) -> None:
+    def __init__(self, redis: Any, *, ttl_s: int = 86_400) -> None:
         self._redis = redis
         self._ttl_s = ttl_s
+        # ★ 接入 atlas_redis.RedisClient 时通过 ScriptRegistry 走 EVALSHA，
+        #   测试传原始假客户端时自动回落原始 eval，保持 100% 兼容
+        self._scripts: ScriptRegistry | None = None
+        if isinstance(redis, RedisClient):
+            reg = ScriptRegistry(redis)
+            reg.register(_SCRIPT_NEXT_SEQ, _NEXT_THREAD_SEQ)
+            reg.register(_SCRIPT_RELEASE_LOCK, self._RELEASE_IF_OWNER)
+            reg.register(_SCRIPT_RENEW_LOCK, self._RENEW_IF_OWNER_OR_FREE)
+            self._scripts = reg
 
     # ------------------------------------------------------------------ 序号
 
@@ -106,6 +121,14 @@ class EventRelay:
         floor: DB 里这条会话已有的最大 thread_seq。调用方每段查一次即可
             （不是每事件），见 executor 的 _thread_seq_floor。
         """
+        if self._scripts is not None:
+            value = await self._scripts.run(
+                _SCRIPT_NEXT_SEQ,
+                keys=(thread_seq_key(thread_id),),
+                args=(str(floor), str(_SEQ_TTL_S)),
+                key_pattern="agent:thread:seq",
+            )
+            return int(value)
         value = await self._redis.eval(
             _NEXT_THREAD_SEQ, 1, thread_seq_key(thread_id), str(floor), str(_SEQ_TTL_S)
         )
@@ -170,18 +193,39 @@ class EventRelay:
         key = thread_stream_key(thread_id)
         last_id = "0-0"
 
-        # 先把流里已有的读完，同时把游标推到末尾。★ 分页读：流最多留一万条，一次 XRANGE 全读进
-        #   内存再丢掉游标之前的，重连一次就是一次内存尖峰
-        start = "-"
-        while True:
-            page = await self._redis.xrange(key, min=start, count=_REPLAY_PAGE)
-            for entry_id, fields in page:
-                last_id = entry_id
-                if int(fields.get("thread_seq", 0)) > after_seq:
-                    yield TraceEvent.model_validate_json(fields["payload"])
-            if len(page) < _REPLAY_PAGE:
-                break
-            start = f"({last_id}"  # 不含上一页的最后一条
+        # ★ 末尾快跳（c4-model/infra-platform/design-redis.html）：客户端重连时游标大多已在流尾，
+        #   先 XREVRANGE COUNT 1 看流尾序号，<= after_seq 时直接从流尾进 XREAD，O(1) 跳过全流扫描
+        need_replay = True
+        if hasattr(self._redis, "xrevrange"):
+            latest = await self._redis.xrevrange(key, max="+", min="-", count=1)
+            if not latest:
+                need_replay = False
+            else:
+                tip_id, tip_fields = latest[0]
+                if int(tip_fields.get("thread_seq", 0)) <= after_seq:
+                    last_id = tip_id
+                    need_replay = False
+
+        # 先把流里已有的读完，同时把游标推到末尾。★ 分页读：避免一次拉 1 万条内存尖峰
+        if need_replay:
+            start = "-"
+            while True:
+                page = await self._redis.xrange(key, min=start, count=_REPLAY_PAGE)
+                for entry_id, fields in page:
+                    last_id = entry_id
+                    if int(fields.get("thread_seq", 0)) > after_seq:
+                        try:
+                            yield TraceEvent.model_validate_json(fields["payload"])
+                        except Exception:
+                            logger.warning(
+                                "会话流回放跳过损坏事件：thread=%s entry=%s",
+                                thread_id,
+                                entry_id,
+                                exc_info=True,
+                            )
+                if len(page) < _REPLAY_PAGE:
+                    break
+                start = f"({last_id}"  # 不含上一页的最后一条
 
         while True:
             resp = await self._redis.xread({key: last_id}, block=block_ms, count=100)
@@ -192,7 +236,15 @@ class EventRelay:
                 for entry_id, fields in entries:
                     last_id = entry_id
                     if int(fields.get("thread_seq", 0)) > after_seq:
-                        yield TraceEvent.model_validate_json(fields["payload"])
+                        try:
+                            yield TraceEvent.model_validate_json(fields["payload"])
+                        except Exception:
+                            logger.warning(
+                                "会话流实时跳过损坏事件：thread=%s entry=%s",
+                                thread_id,
+                                entry_id,
+                                exc_info=True,
+                            )
 
     # ------------------------------------------------------------------ 取消
 
@@ -234,6 +286,14 @@ class EventRelay:
         )
 
     async def release_thread_lock(self, thread_id: UUID, *, owner: UUID) -> None:
+        if self._scripts is not None:
+            await self._scripts.run(
+                _SCRIPT_RELEASE_LOCK,
+                keys=(thread_lock_key(thread_id),),
+                args=(str(owner),),
+                key_pattern="agent:thread:lock",
+            )
+            return
         await self._redis.eval(self._RELEASE_IF_OWNER, 1, thread_lock_key(thread_id), str(owner))
 
     #: 续期（或在已过期时重新占上）—— 只要锁不在**别的** run 手里
@@ -252,6 +312,15 @@ class EventRelay:
           被别的 run 占着返回 False —— 那不该发生（DB 里同一会话只有一个未结束的 run），
           只记日志，不影响执行：串行的权威在 DB。
         """
+        if self._scripts is not None:
+            return bool(
+                await self._scripts.run(
+                    _SCRIPT_RENEW_LOCK,
+                    keys=(thread_lock_key(thread_id),),
+                    args=(str(owner), str(int(ttl_s * 1000))),
+                    key_pattern="agent:thread:lock",
+                )
+            )
         return bool(
             await self._redis.eval(
                 self._RENEW_IF_OWNER_OR_FREE,

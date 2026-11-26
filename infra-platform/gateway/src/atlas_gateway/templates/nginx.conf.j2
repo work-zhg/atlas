@@ -1,0 +1,83 @@
+# 由 atlas_gateway 从 routes.yaml 生成，勿手改（改 infra-platform/gateway/routes.yaml 后重跑 deploy/server/gateway.sh）。
+# 设计见 c4-model/apigateway/design-api-gateway.html。
+
+worker_processes auto;
+worker_rlimit_nofile 65536;
+# reload 时旧 worker 最多再等 30 秒（SSE、WebSocket），之后关掉剩下的长连接；前端带游标重连
+worker_shutdown_timeout 30s;
+error_log {{ s.log_dir }}/error.log warn;
+
+events {
+  worker_connections 8192;
+}
+
+http {
+  default_type application/octet-stream;
+  server_tokens off;
+  # 跳转只给路径：经端口映射访问时不会跳到网关自己的端口
+  absolute_redirect off;
+  sendfile on;
+  tcp_nopush on;
+  keepalive_timeout 65s;
+  client_body_buffer_size 128k;
+
+  # ── 访问日志：一行一条 JSON；不记 Authorization、Cookie
+  log_format gw_json escape=json '{"time":"$time_iso8601","request_id":"$request_id","ip":"$remote_addr",'
+    '"host":"$host","method":"$request_method","path":"$uri","route":"$gw_route","uid":"$gw_uid",'
+    '"tenant":"$gw_tenant","carrier":"$gw_carrier","status":$status,"bytes":$body_bytes_sent,'
+    '"rt":$request_time,"upstream":"$upstream_addr","urt":"$upstream_response_time"}';
+  # 路径里带令牌的路由（预览站点）只记路由 id
+  log_format gw_json_nopath escape=json '{"time":"$time_iso8601","request_id":"$request_id","ip":"$remote_addr",'
+    '"host":"$host","method":"$request_method","route":"$gw_route","status":$status,"bytes":$body_bytes_sent,'
+    '"rt":$request_time,"upstream":"$upstream_addr","urt":"$upstream_response_time"}';
+  access_log {{ s.log_dir }}/access.log gw_json;
+
+  # ── Lua：只做 JWT 验签、CSRF 和登录失败封禁（atlas_gw.*）
+  lua_package_path "{{ install_dir }}/lua/?.lua;;";
+  lua_shared_dict gw_jwks 1m;
+  lua_shared_dict gw_ban 16m;
+  init_by_lua_block {
+    require("atlas_gw.config").init("{{ install_dir }}/gateway.json")
+  }
+  init_worker_by_lua_block {
+    require("atlas_gw.keyring").start()
+  }
+
+  # ── 所有站点：进 location 之前清掉外部带来的内网身份头和运营接口的签名头（逐个列出，不用通配符）
+  more_clear_input_headers {{ scrub_headers | join(" ") }};
+  # ── 所有站点：进 location 后先查登录失败封禁表（被封 → 403 IP_BLOCKED）
+  rewrite_by_lua_block {
+    require("atlas_gw.ban").check()
+  }
+
+  # ── server 级边界（Atlas 站点）：只看路径部分，不看查询串
+  map $request_uri $gw_malformed {
+    default 0;
+    "~*^[^?]*(%25|%5c|\x5c|%00|%0a|%0d|%2e)" 1;
+  }
+  # 规范化后的路径有 /internal/、/ops/、/open/ 段 → 404（以这些词结尾的不算）
+  map $uri $gw_forbidden {
+    default 0;
+    "~*/({{ forbidden | join("|") }})/" 1;
+  }
+  # WebSocket：有 Upgrade 头时转成 upgrade，否则照旧 keepalive
+  map $http_upgrade $gw_connection_upgrade {
+    default upgrade;
+    "" "";
+  }
+
+  # ── 唯一的上游：集群里的内部 Ingress（固定 ClusterIP），按 Host 找服务
+  upstream internal_ingress {
+    server {{ s.internal_ingress }};
+    keepalive 64;
+    keepalive_timeout 60s;
+  }
+
+  ssl_protocols TLSv1.2 TLSv1.3;
+  ssl_prefer_server_ciphers off;
+  ssl_session_cache shared:gw_ssl:10m;
+  ssl_session_timeout 1d;
+  ssl_session_tickets off;
+
+  include {{ install_dir }}/sites.conf;
+}

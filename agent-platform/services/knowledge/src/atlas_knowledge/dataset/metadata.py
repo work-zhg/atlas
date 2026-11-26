@@ -1,8 +1,8 @@
-"""元数据、文档级权限、版本与时效（doc/knowledge-enterprise-design.html §7.2 / §7.4 / §7.5）。
+"""元数据、版本与时效（doc/knowledge-enterprise-design.html §7.2 / §7.5）。
 
 字段定义   知识库级：名称、类型、可选值、是否多值、是否允许查询理解抽取；定义后发
            MetadataFieldDefined，向量索引给所有索引版本建 payload 索引
-文档赋值   doc_metadata / acl / valid_from / valid_to；改完只按文档更新 payload，不重新向量化
+文档赋值   doc_metadata / valid_from / valid_to；改完只按文档更新 payload，不重新向量化
 新版本     上传时指定 supersedes：Document.join_version 加入旧文档的 version_group；新版本入库
            完成后旧版本 is_current = false、valid_to 截止到新版本生效（document/runner.py）
 """
@@ -25,10 +25,9 @@ from ..retrieval.filters import BUILTIN_FIELDS, FieldDef, normalize_value
 from ..runtime import Runtime
 from .events import MetadataFieldDefined
 
-__all__ = ["MetadataService", "field_def", "fields_of", "normalize_acl"]
+__all__ = ["MetadataService", "field_def", "fields_of"]
 
 _NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
-_ACL_TAG = re.compile(r"^(?:public|[udrg]:[\w.@-]{1,128})$")
 
 
 def field_def(row: MetadataField) -> FieldDef:
@@ -54,23 +53,6 @@ async def fields_of(
         for r in rows.all():
             out[str(r.dataset_uuid)][r.name] = field_def(r)
     return out
-
-
-def normalize_acl(raw: Any) -> list[str] | None:
-    """None / [] / ["public"] = 库内公开（存 None）。标签：u:用户 d:部门 r:角色 g:用户组。"""
-    if raw is None:
-        return None
-    if not isinstance(raw, list):
-        raise Invalid("acl 必须是数组")
-    tags = list(dict.fromkeys(str(x).strip() for x in raw if str(x).strip()))
-    bad = [t for t in tags if not _ACL_TAG.match(t)]
-    if bad:
-        raise Invalid(
-            f"权限标签格式不对：{'、'.join(bad[:3])}（应为 u:/d:/r:/g: 加 id，或 public）"
-        )
-    if not tags or "public" in tags:
-        return None
-    return tags[:200]
 
 
 def _when(raw: Any, label: str) -> datetime | None:
@@ -173,8 +155,6 @@ class MetadataService:
         access.require_write()
         if "metadata" in body:
             doc.doc_metadata = await self.normalize_metadata(access, body["metadata"])
-        if "acl" in body:
-            doc.acl = normalize_acl(body["acl"])
         if "valid_from" in body:
             doc.valid_from = _when(body["valid_from"], "valid_from")
         if "valid_to" in body:

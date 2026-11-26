@@ -13,7 +13,7 @@ import { AppIcon, DetailHead, ErrorBox, OBSERVER_TIP, OneTimeSecret, SquareIcon,
 import { Icon } from "@/components/Icon";
 import { UC, sys } from "@/lib/api";
 import { dateTime } from "@/lib/format";
-import { useMe } from "@/lib/session";
+import { useAccess } from "@/lib/session";
 import type { AppInfo, DataTypeInfo, MenuInfo, OpInfo, RoleInfo } from "@/lib/types";
 
 const uc = sys(UC);
@@ -37,8 +37,10 @@ function useAct() {
 
 export default function AppPage() {
   const { id } = useParams<{ id: string }>();
-  const { data: me } = useMe();
-  const admin = me?.role === "ADMIN";
+  // 应用目录属于用户中心模块：改要读写；轮换凭据、删目录里的东西要 Owner（接口会再判）
+  const acc = useAccess();
+  const admin = acc.write(acc.moduleOf(UC));
+  const owner = acc.owner(acc.moduleOf(UC));
   const act = useAct();
   const { modal } = App.useApp();
   const q = useQuery({ queryKey: ["app", id], queryFn: () => uc.get<AppInfo>(`/apps/${id}`) });
@@ -89,7 +91,7 @@ export default function AppPage() {
                 placement="bottomRight"
                 menu={{
                   items: [
-                    { key: "rotate", icon: <Icon name="refresh" size={14} />, label: "轮换 App Secret", disabled: !editable },
+                    { key: "rotate", icon: <Icon name="refresh" size={14} />, label: owner ? "轮换 App Secret" : "轮换 App Secret（要 Owner）", disabled: !editable || !owner },
                     app.status === "active"
                       ? { key: "disable", icon: <Icon name="ban" size={14} />, label: "停用", danger: true, disabled: !editable }
                       : { key: "enable", icon: <Icon name="power" size={14} />, label: "启用", disabled: !editable },
@@ -138,7 +140,7 @@ export default function AppPage() {
             { name: "name", label: "名称", required: true },
             { name: "code", label: "应用编码" },
             { name: "icon", label: "图标", extra: "一个 emoji" },
-            { name: "home_url", label: "入口地址", extra: "站内路径（/atlas）或完整地址；不填 = 不在应用切换里出现" },
+            { name: "home_url", label: "入口地址", extra: "站内路径（/atlas-ui/）或完整地址；不填 = 不在应用切换里出现" },
             { name: "description", label: "说明", textarea: true },
           ]}
           onClose={() => setEdit(false)}

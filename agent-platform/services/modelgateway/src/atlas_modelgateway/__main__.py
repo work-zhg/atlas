@@ -45,14 +45,14 @@ from .crypto import SecretCipher
 from .db.models import GwApiKey
 from .db.session import get_engine, get_sessionmaker
 from .errors import GatewayError, Invalid, NotFound
-from .gateway.format import AddressGuard
-from .gateway.kernel import ModelKind, Price
-from .gateway.routing import RouteHealth
 from .keys import KeyService
 from .perms import SubjectsCache, UCPermissions
 from .provider import ProviderCatalog
 from .registry import ModelInput, ModelRegistry, RouteInput
 from .settings import get_settings
+from .shared.health import RouteHealth
+from .shared.kernel import ModelKind, Price
+from .shared.upstream import AddressGuard
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
 

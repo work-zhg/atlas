@@ -1,0 +1,127 @@
+# API 网关的路由表 —— 站点和对外服务的唯一来源（c4-model/apigateway/code-routing.html）。
+#
+# 外部路径第一段 = 名字 = 内部域名第一段：
+#   后端（kind: api）  /<名>/… 去掉 /<名>，发往 <名>.internal.techstz.com
+#   前端（kind: ui）   /<名>-ui/… 原样发往 <名>-ui.internal.techstz.com（Next.js 的 basePath = /<名>-ui）
+# 只登记名字、子路径、认证模式、转发档位，不写地址：服务在集群里怎么被找到，由它自己清单里的 Ingress 负责。
+#
+# 认证模式（mode）：auth（默认，后端）验 JWT 并写身份头；passthrough 原样转给用户中心（登录、刷新）；
+#   self_auth 凭据由后面的子网关自己认；public（默认，前端）不验。
+# 转发档位（proxy）：DEFAULT | SSE | WEBSOCKET | UPLOAD | STREAM（见 src/atlas_gateway/templates/proxy/）。
+# 子路径：/ 是整个服务；以 / 结尾是前缀；否则精确；* 占一整段。同一服务里模式或档位不同的部分单独登记。
+#
+# 改完先跑：uv run python -m atlas_gateway --check --env ATLAS_PUBLIC_HOST=x --env GATEWAY_INTERNAL_INGRESS=10.0.0.1:80
+# 部署：deploy/server/gateway.sh（在服务器上）。
+#
+# ★ 过渡期：legacy_names 是旧的外部名字（/atlas-api/… 等），legacy_paths 是旧的完整路径，redirects 是旧页面地址。
+#   书签、手机 App、已配对的本机连接器都换完以后再删。
+
+gateway:
+  # 内部 Ingress（集群里的 Traefik）的固定 ClusterIP:端口 —— 网关唯一的上游
+  internal_ingress: "${GATEWAY_INTERNAL_INGRESS}"
+  internal_suffix: "${GATEWAY_INTERNAL_SUFFIX:-internal.techstz.com}"
+  root_redirect: /atlas-ui/
+  cert_dir: "${GATEWAY_CERT_DIR:-/etc/letsencrypt/live}"
+  acme_root: "${GATEWAY_ACME_ROOT:-/var/www/acme}"
+  log_dir: "${GATEWAY_LOG_DIR:-/var/log/atlas-gateway}"
+  # 本机监控与运维（/readyz、/bans）：只听本机
+  admin_listen: "${GATEWAY_ADMIN_LISTEN:-127.0.0.1:8081}"
+  https_port: "${GATEWAY_HTTPS_PORT:-443}"
+  http_port: "${GATEWAY_HTTP_PORT:-80}"
+  jwt:
+    issuer: atlas-usercenter
+    audience: atlas-gateway
+    clock_skew: 30
+  jwks:
+    # 公钥集：经内部 Ingress 找用户中心（Host = uc.<internal_suffix>）
+    service: uc
+    path: /api/v1/auth/jwks
+    cache: "${GATEWAY_JWKS_CACHE:-/var/lib/atlas-gateway/jwks.json}"
+    refresh: "${GATEWAY_JWKS_REFRESH:-300}"
+    retry: "${GATEWAY_JWKS_RETRY:-5}"
+  ban:
+    # 登录接口 10 分钟内回 20 次 401 → 封这个 IP 30 分钟
+    window: "${GATEWAY_BAN_WINDOW:-600}"
+    threshold: "${GATEWAY_BAN_THRESHOLD:-20}"
+    duration: "${GATEWAY_BAN_DURATION:-1800}"
+    # 不计不封的网段（公司出口 IP、监控探针），逗号分隔
+    allow: "${GATEWAY_BAN_ALLOW:-}"
+
+sites:
+  - {host: "${ATLAS_PUBLIC_HOST}", kind: atlas}
+  # 透传站点：有自己的登录，网关只清身份头。没给域名就不渲染
+  - {host: "${ATLAS_LANGFUSE_HOST:-}", kind: passthrough, name: langfuse}
+  - {host: "${ATLAS_GITEA_HOST:-}", kind: passthrough, name: gitea}
+
+services:
+  # ── 用户中心：登录、刷新、登出原样转过去（它自己认令牌）；登录接口回 401 计入 IP 封禁
+  - name: uc
+    kind: api
+    routes:
+      - {subpath: /api/v1/auth/login, mode: passthrough, login: true}
+      - {subpath: /api/v1/auth/token, mode: passthrough, login: true}
+      - {subpath: /api/v1/auth/, mode: passthrough}
+      # 改密之前也要能取自己的应用列表、登录记录
+      - {subpath: /api/v1/me/, pending_password_ok: true}
+      - {subpath: /api/}
+  - {name: uc-ui, kind: ui}
+
+  # ── Atlas：会话事件是 SSE；浏览器实时画面是 WebSocket；预览站点的令牌在路径里
+  - name: atlas
+    kind: api
+    legacy_names: [atlas-api]
+    routes:
+      - {subpath: /v1/}
+      - {subpath: /v1/threads/*/events, proxy: SSE}
+      - {subpath: /v1/threads/*/browser/view, proxy: WEBSOCKET}
+      - {subpath: /v1/previews/, mode: public, preview: true, legacy_paths: [/v1/previews/]}
+  - {name: atlas-ui, kind: ui}
+
+  # ── AI TeamFlow：流程实时事件是 SSE
+  - name: teamflow
+    kind: api
+    routes:
+      - {subpath: /api/, proxy: SSE}
+  - {name: teamflow-ui, kind: ui}
+
+  # ── 运营中心：运营人员是系统租户里的人，统一登录（c4-model/opscenter/design-opscenter.html）。
+  #    名字不能叫 ops：/ops/ 是禁区段
+  - {name: opscenter, kind: api}
+  - {name: opscenter-ui, kind: ui}
+
+  # ── 技能应用、知识库：上传大文件
+  - {name: skill, kind: api, legacy_names: [skill-api], proxy: UPLOAD}
+  - {name: knowledge, kind: api, legacy_names: [atlas-knowledge-api], proxy: UPLOAD}
+
+  # ── MCP 网关：管理端验 JWT；数据面 /mcp/<服务> 带用户 Key，网关自己认
+  - name: mcp
+    kind: api
+    legacy_names: [mcp-gateway-api]
+    routes:
+      - {subpath: /}
+      - {subpath: /mcp/, mode: self_auth, proxy: STREAM}
+
+  # ── 模型管理端
+  - {name: model, kind: api, legacy_names: [model-gateway-api]}
+
+  # ── 模型网关数据面：只放调用接口（/healthz、/readyz 不对外），Key 由它自己认
+  - name: llm
+    kind: api
+    routes:
+      - {subpath: /v1/, mode: self_auth, proxy: STREAM}
+      - {subpath: /universal/v1/, mode: self_auth, proxy: STREAM}
+
+  # ── 设备网关（本机 CLI）：设备令牌、会话令牌由它自己认
+  - name: device
+    kind: api
+    legacy_names: [device-api]
+    routes:
+      - {subpath: /connect, mode: self_auth, proxy: WEBSOCKET}
+      - {subpath: /pair, mode: self_auth}
+      - {subpath: /u/, mode: self_auth, proxy: STREAM}
+
+# 旧页面地址 → 新前端（301）。只剩没被后端路由占用的部分：/atlas/v1/… 仍是 Atlas 的接口
+redirects:
+  - {from: /atlas, to: /atlas-ui}
+  - {from: /uc, to: /uc-ui}
+  - {from: /teamflow, to: /teamflow-ui}

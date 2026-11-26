@@ -66,6 +66,11 @@ class GatewaySettings(BaseSettings):
     #: 运营接口（/ops/v1）的签名密钥，和运营中心里登记本服务时的一致。空 = 没启用（一律 403）
     ops_api_key: SecretStr | None = None
 
+    # ── 身份凭据 ──────────────────────────────────────────────────────
+    #: 验 Atlas 签发的身份凭据（X-Identity-Grant）用的密钥，和 Atlas 的 MCP_IDENTITY_GRANT_SECRET
+    #: 一致。空 = 不认身份凭据：带了的一律拒绝（grant_invalid），没带的照旧按 Key 的主体
+    identity_grant_secret: SecretStr | None = None
+
     # ── 智能体 Key ────────────────────────────────────────────────────
     #: 客户端类型 → 能创建、获取、删除这一类型 Key 的应用（用户中心应用编码，即 X-Caller-App）。
     #: 管理员在页面上可以给已登记的类型补申请

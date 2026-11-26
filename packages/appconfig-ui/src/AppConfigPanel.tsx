@@ -37,8 +37,8 @@ function groupLabel(key: string): string {
   return dot > 0 ? `${key.slice(0, dot)}.*` : "其他";
 }
 
-export function AppConfigPanel({ endpoint, headers, readOnly = false, renderUser = defaultUser }: AppConfigPanelProps) {
-  const api = useMemo(() => appConfigApi({ endpoint, headers }), [endpoint, headers]);
+export function AppConfigPanel({ endpoint, headers, refresh, readOnly = false, renderUser = defaultUser }: AppConfigPanelProps) {
+  const api = useMemo(() => appConfigApi({ endpoint, headers, refresh }), [endpoint, headers, refresh]);
   const q = useConfigs(api);
   const { token } = theme.useToken();
   const mono = useMono();

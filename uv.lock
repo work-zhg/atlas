@@ -23,6 +23,7 @@ members = [
     "atlas-devicegw",
     "atlas-devicelink",
     "atlas-engine",
+    "atlas-gateway",
     "atlas-host",
     "atlas-jobs",
     "atlas-jsonrpc",
@@ -348,6 +349,7 @@ dependencies = [
     { name = "atlas-devicegw" },
     { name = "atlas-devicelink" },
     { name = "atlas-engine" },
+    { name = "atlas-gateway" },
     { name = "atlas-host" },
     { name = "atlas-jobs" },
     { name = "atlas-jsonrpc" },
@@ -388,6 +390,7 @@ requires-dist = [
     { name = "atlas-devicegw", editable = "agent-platform/services/devicegw" },
     { name = "atlas-devicelink", editable = "agent-platform/libs/devicelink" },
     { name = "atlas-engine", editable = "agent-platform/libs/engine" },
+    { name = "atlas-gateway", editable = "infra-platform/gateway" },
     { name = "atlas-host", editable = "agent-platform/libs/host" },
     { name = "atlas-jobs", editable = "infra-platform/libs/jobs" },
     { name = "atlas-jsonrpc", editable = "agent-platform/libs/jsonrpc" },
@@ -442,6 +445,7 @@ dependencies = [
     { name = "atlas-jobs" },
     { name = "atlas-jsonrpc" },
     { name = "atlas-opsapi" },
+    { name = "atlas-redis" },
     { name = "atlas-redislock" },
     { name = "atlas-skill" },
     { name = "atlas-tenancy" },
@@ -474,6 +478,7 @@ requires-dist = [
     { name = "atlas-jobs", editable = "infra-platform/libs/jobs" },
     { name = "atlas-jsonrpc", editable = "agent-platform/libs/jsonrpc" },
     { name = "atlas-opsapi", editable = "infra-platform/libs/opsapi" },
+    { name = "atlas-redis", editable = "infra-platform/libs/redis" },
     { name = "atlas-redislock", editable = "infra-platform/libs/redislock" },
     { name = "atlas-skill", editable = "agent-platform/services/skill" },
     { name = "atlas-tenancy", editable = "infra-platform/libs/tenancy" },
@@ -589,6 +594,7 @@ version = "0.1.0"
 source = { editable = "agent-platform/services/devicegw" }
 dependencies = [
     { name = "atlas-devicelink" },
+    { name = "atlas-redis" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "pydantic-settings" },
@@ -599,6 +605,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "atlas-devicelink", editable = "agent-platform/libs/devicelink" },
+    { name = "atlas-redis", editable = "infra-platform/libs/redis" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic-settings", specifier = ">=2.6" },
@@ -638,6 +645,21 @@ requires-dist = [
     { name = "packaging", specifier = ">=23.2" },
     { name = "pydantic", specifier = ">=2.9" },
     { name = "wcmatch", specifier = ">=11.0" },
+]
+
+[[package]]
+name = "atlas-gateway"
+version = "0.1.0"
+source = { editable = "infra-platform/gateway" }
+dependencies = [
+    { name = "jinja2" },
+    { name = "pyyaml" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "jinja2", specifier = ">=3.1" },
+    { name = "pyyaml", specifier = ">=6.0" },
 ]
 
 [[package]]
@@ -681,6 +703,7 @@ dependencies = [
     { name = "atlas-appconfig" },
     { name = "atlas-jobs" },
     { name = "atlas-opsapi" },
+    { name = "atlas-redis" },
     { name = "atlas-redislock" },
     { name = "atlas-tenancy" },
     { name = "beautifulsoup4" },
@@ -691,7 +714,6 @@ dependencies = [
     { name = "fastembed" },
     { name = "httpx" },
     { name = "jieba" },
-    { name = "mcp" },
     { name = "numpy" },
     { name = "openpyxl" },
     { name = "opentelemetry-api" },
@@ -716,6 +738,7 @@ requires-dist = [
     { name = "atlas-appconfig", editable = "infra-platform/libs/appconfig" },
     { name = "atlas-jobs", editable = "infra-platform/libs/jobs" },
     { name = "atlas-opsapi", editable = "infra-platform/libs/opsapi" },
+    { name = "atlas-redis", editable = "infra-platform/libs/redis" },
     { name = "atlas-redislock", editable = "infra-platform/libs/redislock" },
     { name = "atlas-tenancy", editable = "infra-platform/libs/tenancy" },
     { name = "beautifulsoup4", specifier = ">=4.12" },
@@ -726,7 +749,6 @@ requires-dist = [
     { name = "fastembed", specifier = ">=0.8.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jieba", specifier = ">=0.42.1" },
-    { name = "mcp", specifier = ">=2.3,<3" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "openpyxl", specifier = ">=3.1" },
     { name = "opentelemetry-api", specifier = ">=1.30" },
@@ -831,6 +853,7 @@ dependencies = [
     { name = "asyncpg" },
     { name = "atlas-jobs" },
     { name = "atlas-opsapi" },
+    { name = "atlas-redis" },
     { name = "atlas-tenancy" },
     { name = "cryptography" },
     { name = "fastapi" },
@@ -847,6 +870,7 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.30" },
     { name = "atlas-jobs", editable = "infra-platform/libs/jobs" },
     { name = "atlas-opsapi", editable = "infra-platform/libs/opsapi" },
+    { name = "atlas-redis", editable = "infra-platform/libs/redis" },
     { name = "atlas-tenancy", editable = "infra-platform/libs/tenancy" },
     { name = "cryptography", specifier = ">=43" },
     { name = "fastapi", specifier = ">=0.115" },
@@ -888,7 +912,6 @@ version = "0.1.0"
 source = { editable = "opscenter/services/opscenter" }
 dependencies = [
     { name = "alembic" },
-    { name = "argon2-cffi" },
     { name = "asyncpg" },
     { name = "atlas-jobs" },
     { name = "atlas-opsapi" },
@@ -902,7 +925,6 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = ">=1.14" },
-    { name = "argon2-cffi", specifier = ">=23.1" },
     { name = "asyncpg", specifier = ">=0.30" },
     { name = "atlas-jobs", editable = "infra-platform/libs/jobs" },
     { name = "atlas-opsapi", editable = "infra-platform/libs/opsapi" },
@@ -980,6 +1002,7 @@ dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },
     { name = "atlas-jobs" },
+    { name = "atlas-redis" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "pydantic-settings" },
@@ -994,6 +1017,7 @@ requires-dist = [
     { name = "alembic", specifier = ">=1.14" },
     { name = "asyncpg", specifier = ">=0.30" },
     { name = "atlas-jobs", editable = "infra-platform/libs/jobs" },
+    { name = "atlas-redis", editable = "infra-platform/libs/redis" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic-settings", specifier = ">=2.6" },
@@ -1030,6 +1054,7 @@ dependencies = [
     { name = "email-validator" },
     { name = "fastapi" },
     { name = "pydantic-settings" },
+    { name = "pyjwt", extra = ["crypto"] },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -1043,6 +1068,7 @@ requires-dist = [
     { name = "email-validator", specifier = ">=2.2" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic-settings", specifier = ">=2.6" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.9" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.36" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]

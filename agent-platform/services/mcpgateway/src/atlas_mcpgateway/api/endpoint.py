@@ -28,6 +28,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.types import Message, Receive, Scope, Send
 
 from ..invocation import trace
+from ..invocation.grant import GRANT_HEADER
 from ..invocation.rejection import Rejection
 from ..invocation.service import Caller, ToolInvocation
 
@@ -159,6 +160,7 @@ class McpEndpoint:
                         service,
                         _bearer(request.headers),
                         user_uid=(request.headers.get("x-uid") or "").strip() or None,
+                        grant=(request.headers.get(GRANT_HEADER) or "").strip() or None,
                         audit={
                             name: value
                             for name in _AUDIT_HEADERS

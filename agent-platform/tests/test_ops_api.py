@@ -1,32 +1,28 @@
-"""Atlas 的运营接口（c4-model/agent/code-ops.html；dynamic-tenant-suspend、-close、-quota）。
+"""Atlas 的运营接口（c4-model/agent/code-ops.html；dynamic-tenant-open、-close、-quota）。
 
     签名    没签名、签错了的一律 401；没配运营密钥 = 没启用，403
-    停用    本地状态改成停用：这个租户的人的请求 403，它的 run 谁也不接（留在排队里），本实例上
-            在跑的交出去；恢复后一切照常
-    删除    只删已停用的租户；分批删到没有剩，别的租户的数据不动；删过的不能恢复
+    创建    开通时填了份额就记下，没填用默认；能重做；参数不对 409
+    停用    不在这里：Atlas 不知道租户状态。用户中心对停用租户的人回答无权限 → 403；
+            在跑的 run 照常（设计接受的代价）
+    删除    分批删到没有剩，别的租户的数据不动；不查租户状态（只删已停用的由运营中心保证）
     份额    改一个租户的份额 / 回到默认份额 / 改默认份额；用量只有数字
 
-★ 每个用例用一个新的租户 uuid，测完删掉它在运营接口库里的状态和请求记录（测试库共用）。
+★ 每个用例用一个新的租户 uuid。
 """
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator
-from typing import Any
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
 import sqlalchemy as sa
 from atlas_agent.config import get_settings
-from atlas_agent.db.models import AppUser, Device, Run, TenantCapacityRow
+from atlas_agent.db.models import AppUser, Run, TenantCapacityRow
 from atlas_agent.db.session import get_sessionmaker
-from atlas_agent.executor.continuation import Continuation
-from atlas_agent.executor.scheduling import ExecutionSlot, RunWorker
 from atlas_agent.main import create_app
 from atlas_appconfig.db import config_table, revision_table
-from atlas_opsapi.db import request_table, state_table
 from atlas_tenancy import TenantScope
 from fastapi import FastAPI
 from httpx import ASGITransport
@@ -43,13 +39,8 @@ def tenant() -> UUID:
 
 
 @pytest.fixture
-async def app(ops_key: str, tenant: UUID) -> AsyncIterator[FastAPI]:
-    app = create_app()
-    yield app
-    async with get_sessionmaker()() as s:
-        await s.execute(sa.delete(state_table).where(state_table.c.tenant_uuid == tenant))
-        await s.execute(sa.delete(request_table).where(request_table.c.tenant_uuid == tenant))
-        await s.commit()
+async def app(ops_key: str) -> AsyncIterator[FastAPI]:
+    yield create_app()
 
 
 @pytest.fixture
@@ -58,8 +49,8 @@ async def client(app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
         yield c
 
 
-def _tenant_path(tenant: UUID, action: str) -> str:
-    return f"/ops/v1/tenants/{tenant}/{action}"
+def _tenant_path(tenant: UUID) -> str:
+    return f"/ops/v1/tenants/{tenant}"
 
 
 async def _queued_run(tenant: UUID) -> UUID:
@@ -81,167 +72,62 @@ async def _queued_run(tenant: UUID) -> UUID:
 
 
 async def test_only_signed_requests_get_in(client: httpx.AsyncClient, tenant: UUID) -> None:
-    path = _tenant_path(tenant, "suspend")
-    assert (await client.post(path)).status_code == 401
-    assert (await ops_call(client, "POST", path, key="wrong-key")).status_code == 401
-    assert (await ops_call(client, "GET", "/ops/v1/tenant-states")).status_code == 200
+    path = _tenant_path(tenant)
+    assert (await client.put(path, json={})).status_code == 401
+    assert (await ops_call(client, "PUT", path, {}, key="wrong-key")).status_code == 401
+    assert (await ops_call(client, "PUT", path, {})).status_code == 200
 
 
 async def test_without_a_key_the_ops_api_is_off(tenant: UUID) -> None:
     app = create_app()  # 没有 ops_key 夹具：没配运营密钥
     async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
-        r = await ops_call(c, "POST", _tenant_path(tenant, "suspend"))
+        r = await ops_call(c, "PUT", _tenant_path(tenant), {})
     assert r.status_code == 403
 
 
-# --------------------------------------------------------------------------- 停用、恢复
+# --------------------------------------------------------------------------- 创建
 
 
-async def test_suspend_shuts_the_tenant_out_and_resume_lets_it_back(
-    app: FastAPI, client: httpx.AsyncClient, fake_user_center: FakeUC, tenant: UUID
+@pytest.mark.usefixtures("defaults_restored")
+async def test_create_records_the_quota_given_at_opening(
+    client: httpx.AsyncClient, tenant: UUID
 ) -> None:
-    user = {"X-Uid": fake_user_center.add("member", ["chat:use"], tenant=str(tenant))}
-    assert (await client.get("/v1/agents", headers=user)).status_code == 200
-
-    key = uuid4()
-    r = await ops_call(client, "POST", _tenant_path(tenant, "suspend"), idempotency_key=key)
-    assert r.status_code == 200 and r.json() == {"status": "suspended"}
-    again = await ops_call(client, "POST", _tenant_path(tenant, "suspend"), idempotency_key=key)
-    assert again.json() == r.json(), "同一个幂等键：直接返回上次的结果"
-    r = await client.get("/v1/agents", headers=user)
-    assert r.status_code == 403 and "停用" in r.json()["error"]["message"]
-
-    states = (await ops_call(client, "GET", "/ops/v1/tenant-states")).json()
-    assert {"tenant_uuid": str(tenant), "status": "suspended"}.items() <= next(
-        s for s in states if s["tenant_uuid"] == str(tenant)
-    ).items()
-
-    r = await ops_call(client, "POST", _tenant_path(tenant, "resume"))
-    assert r.status_code == 200 and r.json() == {"status": "active"}
-    assert (await client.get("/v1/agents", headers=user)).status_code == 200
+    usage = f"/ops/v1/usage/{tenant}"
+    # 没填份额：不建行，用默认份额
+    assert (await ops_call(client, "PUT", _tenant_path(tenant), {})).status_code == 200
+    assert (await ops_call(client, "GET", usage)).json()["is_default"] is True
+    # 填了：记下；超时后重做，结果一样
+    body = {"running_runs": 3, "sandboxes": 2, "storage_bytes": None}
+    for _ in range(2):
+        r = await ops_call(client, "PUT", _tenant_path(tenant), body)
+        assert r.status_code == 200, r.text
+    got = (await ops_call(client, "GET", usage)).json()
+    assert got["is_default"] is False
+    assert got["quota"] == {"running_runs": 3, "sandboxes": 2, "storage_bytes": None}
+    # 参数不对：被拒绝（要人看）
+    r = await ops_call(client, "PUT", _tenant_path(tenant), {"sandboxes": -1})
+    assert r.status_code == 409
 
 
-async def test_suspend_disconnects_the_tenants_online_devices(
-    client: httpx.AsyncClient, tenant: UUID, monkeypatch: pytest.MonkeyPatch
+# --------------------------------------------------------------------------- 停用（只在用户中心）
+
+
+async def test_a_blocked_tenants_people_get_no_permission(
+    client: httpx.AsyncClient, fake_user_center: FakeUC, tenant: UUID
 ) -> None:
-    """停用时断开这个租户在线的本机设备；不在线的、吊销了的、别的租户的都不碰。"""
-    online, asleep, revoked, other = uuid4(), uuid4(), uuid4(), uuid4()
-    calls: list[tuple[str, str]] = []
-
-    class _Gateway:
-        def __init__(self, _settings: Any) -> None:
-            self.configured = True
-
-        async def presence(self, device: str) -> object | None:
-            return object() if device in (str(online), str(revoked), str(other)) else None
-
-        async def disconnect(self, device: str, reason: str) -> None:
-            calls.append((device, reason))
-
-    monkeypatch.setattr("atlas_agent.ops.lifecycle.DeviceGateway", _Gateway)
-    for owner_tenant, device, status in (
-        (tenant, online, "active"),
-        (tenant, asleep, "active"),
-        (tenant, revoked, "revoked"),
-        (uuid4(), other, "active"),
-    ):
-        with TenantScope.enter(owner_tenant):
-            async with get_sessionmaker()() as s:
-                s.add(
-                    Device(
-                        device_uuid=device,
-                        owner_uuid=uuid4(),
-                        name="MacBook",
-                        token_hash=uuid4().hex * 2,
-                        status=status,
-                    )
-                )
-                await s.commit()
-
-    assert (await ops_call(client, "POST", _tenant_path(tenant, "suspend"))).status_code == 200
-    assert calls == [(str(online), "企业账号已停用")]
-
-
-class _ParkedSegment:
-    def __init__(self) -> None:
-        self.release = asyncio.Event()
-
-    async def run(self, run_id: UUID, slot: Any, takeover: str | None) -> None:
-        await self.release.wait()
-
-
-async def test_a_suspended_tenants_runs_wait_and_running_ones_are_handed_off(
-    app: FastAPI, client: httpx.AsyncClient, tenant: UUID
-) -> None:
-    sm, settings = get_sessionmaker(), get_settings()
-    segment = _ParkedSegment()
-    worker = RunWorker(
-        sm,
-        settings,
-        instance="ops-a",
-        segment=segment,  # type: ignore[arg-type]
-        continuation=Continuation(sm, settings, instance="ops-a"),
-        gate=app.state.tenant_gate,
-    )
-    app.state.executor = worker  # 停用请求打到的就是这个实例
-    try:
-        running, waiting = await _queued_run(tenant), await _queued_run(tenant)
-        with TenantScope.enter(tenant):
-            assert await worker.try_take(running)
-        slot: ExecutionSlot = worker.live_slots()[running]
-        assert slot.tenant == tenant
-
-        assert (await ops_call(client, "POST", _tenant_path(tenant, "suspend"))).status_code == 200
-        assert slot.drain, "本实例上在跑的交出去（native 到安全点）"
-        with TenantScope.enter(tenant):
-            assert not await worker.try_take(waiting), "停用期间谁也不接"
-            async with sm() as s:
-                row = (await s.execute(sa.select(Run).where(Run.run_uuid == waiting))).scalar_one()
-        assert (row.status, row.owner) == ("queued", None)
-
-        assert (await ops_call(client, "POST", _tenant_path(tenant, "resume"))).status_code == 200
-        with TenantScope.enter(tenant):
-            assert await worker.try_take(waiting), "恢复后照常接"
-    finally:
-        segment.release.set()
-        await asyncio.sleep(0)
-        for s in list(worker._slots.values()):
-            if s.task is not None:
-                s.task.cancel()
-
-
-async def test_other_instances_hand_off_on_their_next_renewal(tenant: UUID) -> None:
-    """停用请求打到了别的实例：本实例续租时查到租户已停用，自己交出去。"""
-
-    class _Gate:
-        active = True
-
-        async def is_active(self, t: UUID) -> bool:
-            return self.active or t != tenant
-
-    sm, settings = get_sessionmaker(), get_settings()
-    gate = _Gate()
-    worker = RunWorker(
-        sm,
-        settings,
-        instance="ops-b",
-        segment=_ParkedSegment(),  # type: ignore[arg-type]
-        continuation=Continuation(sm, settings, instance="ops-b"),
-        gate=gate,  # type: ignore[arg-type]
-    )
-    mine, other = ExecutionSlot(tenant=tenant), ExecutionSlot(tenant=uuid4())
-    worker._slots.update({uuid4(): mine, uuid4(): other})
-    await worker.pause_inactive_tenants()
-    assert not mine.drain
-    gate.active = False
-    await worker.pause_inactive_tenants()
-    assert mine.drain and not other.drain
+    """用户中心对停用、到期租户的人回答无权限（can_access 为假）→ 403。
+    停用、恢复的运营接口没有了。"""
+    blocked = {"X-Uid": fake_user_center.add("member", [], can_access=False, tenant=str(tenant))}
+    assert (await client.get("/v1/agents", headers=blocked)).status_code == 403
+    for action in ("suspend", "resume"):
+        r = await ops_call(client, "POST", f"{_tenant_path(tenant)}/{action}")
+        assert r.status_code in (404, 405)
 
 
 # --------------------------------------------------------------------------- 删除
 
 
-async def test_purge_only_after_suspend_and_only_this_tenants_data(
+async def test_delete_removes_only_this_tenants_data_in_batches(
     client: httpx.AsyncClient, tenant: UUID
 ) -> None:
     with TenantScope.enter(tenant):
@@ -253,14 +139,9 @@ async def test_purge_only_after_suspend_and_only_this_tenants_data(
     neighbour = uuid4()
     survivor = await _queued_run(neighbour)
 
-    r = await ops_call(client, "POST", _tenant_path(tenant, "purge"))
-    assert r.status_code == 409 and "先停用" in r.text
-    assert (await ops_call(client, "POST", _tenant_path(tenant, "suspend"))).status_code == 200
-
-    key = uuid4()
     deleted: dict[str, int] = {}
-    for _ in range(10):  # 运营中心用同一个幂等键一批批调，直到没有剩
-        r = await ops_call(client, "POST", _tenant_path(tenant, "purge"), idempotency_key=key)
+    for _ in range(10):  # 运营中心一批批调，直到没有剩
+        r = await ops_call(client, "DELETE", _tenant_path(tenant))
         assert r.status_code == 200, r.text
         for table, n in r.json()["deleted"].items():
             deleted[table] = deleted.get(table, 0) + n
@@ -274,8 +155,9 @@ async def test_purge_only_after_suspend_and_only_this_tenants_data(
         with TenantScope.enter(neighbour):
             left = await s.scalar(sa.select(Run.run_uuid))
     assert left == survivor, "别的租户的数据不动"
-    r = await ops_call(client, "POST", _tenant_path(tenant, "resume"))
-    assert r.status_code == 409, "删过的不能恢复"
+    # 删完再调：照样回 remaining=false（重做安全）
+    again = await ops_call(client, "DELETE", _tenant_path(tenant))
+    assert again.status_code == 200 and again.json()["remaining"] is False
 
 
 # --------------------------------------------------------------------------- 份额

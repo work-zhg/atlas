@@ -39,7 +39,7 @@ spec:
             - {name: ATLAS_SKILL_OSS_ADDRESSING_STYLE, value: path}
             - {name: ATLAS_SKILL_OSS_REGION, value: us-east-1}
             - {name: ATLAS_SKILL_CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000"]'}
-            # 浏览器经网关 /skill-api 访问：网关校验登录、写入 X-Uid；操作码按 X-Auth-Uid
+            # 浏览器经 API 网关 /skill 访问：网关验 JWT、写入 X-Uid；操作码按 X-Auth-Uid
             # 以本应用的身份（X-Caller-App: skill）取用户中心授权快照（内网身份传递 §3）。内网免令牌
             - {name: ATLAS_SKILL_UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
             - name: ATLAS_SKILL_OSS_ACCESS_KEY_ID
@@ -69,3 +69,18 @@ spec:
   type: ClusterIP
   selector: {app: atlas-skill}
   ports: [{port: 8020, targetPort: 8020}]
+---
+# 内部 Ingress：API 网关把 /skill/… 去掉前缀后发到这里，Host = skill.internal.techstz.com
+#   （infra-platform/gateway/routes.yaml；Traefik 只在集群内，见 deploy/server/traefik-values.yaml）
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlas-skill
+  namespace: atlas-system
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: skill.internal.techstz.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: atlas-skill, port: {number: 8020}}}}

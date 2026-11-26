@@ -209,11 +209,16 @@ async def list_services(
     operator: OperatorDep, catalog: CatalogDep, authz: AuthzDep, keys: KeysDep
 ) -> list[ServiceOut]:
     viewer = await _Viewer.load(operator, authz, keys)
-    return [
+    mine = [
         service_out(svc, await catalog.tools(svc), viewer.my(svc))
         for svc in await catalog.list()
         if viewer.sees(svc)
     ]
+    # 平台服务（公开）：所有租户看得到、改不了
+    platform = [
+        service_out(svc, await catalog.tools(svc)) for svc in await catalog.platform_services()
+    ]
+    return mine + platform
 
 
 @router.post("/discover", response_model=DiscoveredOut)

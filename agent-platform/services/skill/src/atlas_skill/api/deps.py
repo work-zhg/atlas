@@ -5,8 +5,8 @@
   /internal/*  运行时进程。网关一律 404（只在内网可达）；内网免令牌。
 
 租户（多租户设计 §5）：两类接口都要 X-Tenant-Id。带了用户的，以本次请求的租户取快照（用户中心只在
-这个租户里找这个人，找不到就是 401），然后进入这个租户，数据按它自动过滤。租户已停用（运营接口）的
-一律 403。
+这个租户里找这个人，找不到就是 401），然后进入这个租户，数据按它自动过滤。
+不知道租户状态、只认权限：租户停用、到期后，用户中心给的快照里没有本应用的访问权 → 403。
 """
 
 from __future__ import annotations
@@ -90,9 +90,6 @@ async def verified_tenant(
     if tenant is None:
         raise Unauthorized("缺少租户（X-Tenant-Id）")
     request.state.principal = await access.principal(request.headers, tenant)
-    gate = getattr(request.app.state, "tenant_gate", None)
-    if gate is not None and not await gate.is_active(tenant):
-        raise Forbidden("所在的组织已停用")
     TenantScope.bind(tenant)
     return tenant
 

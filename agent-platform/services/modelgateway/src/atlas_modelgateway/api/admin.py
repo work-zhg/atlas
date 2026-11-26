@@ -64,10 +64,10 @@ from ..auth import ManagerDep, OperatorDep
 from ..calls import CallFilter
 from ..db.models import GwAccount, GwApiKey, GwModel, GwRoute
 from ..errors import Forbidden, Invalid, NotFound
-from ..gateway.kernel import ModelCaps, ModelKind, Price, ThinkingSupport
 from ..keys import KeyLimits, KeyService
 from ..perms import Grant
 from ..registry import ModelInput, ModelRegistry, RouteInput
+from ..shared.kernel import ModelCaps, ModelKind, Price, ThinkingSupport
 from .deps import (
     AccountsDep,
     CallsDep,
@@ -277,7 +277,12 @@ def _model_input(body: ModelUpdate, kind: str) -> ModelInput:
         visibility=body.visibility,
         description=body.description,
         caps=_caps(body.caps, kind),
-        price=Price(body.price.input, body.price.cache_hit, body.price.output),
+        price=Price(
+            body.price.input,
+            body.price.cache_hit,
+            body.price.output,
+            body.price.cache_write,
+        ),
         enabled=body.enabled,
         routes=[
             RouteInput(r.account_id, r.upstream_model.strip(), r.priority, r.weight)

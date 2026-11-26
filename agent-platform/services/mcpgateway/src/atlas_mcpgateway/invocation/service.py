@@ -1,16 +1,19 @@
 """ToolInvocation：数据面的编排（c4-model/mcpgateway/code-invocation.html），自己不含规则。
 
     ① 认 Key      Authorization: Bearer <Key>（查库，停用、重置立即生效）  -32042 / -32043
-                  Key 说明了是哪个租户：之后都在这个租户里（停用的租户的 Key 无效）
-    ② 服务        在这个租户里存在且启用                      -32040 / -32041
+                  Key 说明了是哪个租户：之后都在这个租户里。不查租户状态（不知道它）：
+                  租户停用后私有服务由用户中心回答无权限（③），公开服务照常，直到租户被删除
+       身份凭据   带了 X-Identity-Grant 就验签，租户要和 Key 的一致       -32047
+    ② 服务        在这个租户里存在且启用（没有再找平台服务）      -32040 / -32041
     ③ 判权        公开服务不判；私有服务以 Key 的主体 uid 问授权（短缓存），
                   这把 Key 在这个服务上一点权限都没有就拒绝          -32044 / -32045
     ④ 列工具      只列可用且这把 Key 能用的
     ⑤ 调工具      工具存在且可用 -32046；工具级判权 -32044；按参数定义查必填和类型 -32602；
                   交给上游接入：连不上 -32050，上游回了 JSON-RPC 错误 -32051
-    ⑥ 身份        上游收到 X-Auth-Uid = Key 的主体 uid、X-Uid = 使用者（用户 Key 是持有人，
-                  智能体 Key 是调用方带来的 X-Uid），以及调用方的 X-Run-Id、X-Thread-Id；
-                  调用方的 Key 和别的请求头不转发
+    ⑥ 身份        上游收到 X-Auth-Uid = 按谁判（带了身份凭据取凭据的，没带是 Key 的主体）、
+                  X-Uid = 使用者（凭据的发起人；没带时用户 Key 是持有人，智能体 Key 是调用方带来的
+                  X-Uid）、X-Tenant-Id = Key 所在的租户，以及调用方的 X-Run-Id、X-Thread-Id
+                  （没带 X-Thread-Id 时取凭据里的会话）；调用方的 Key 和别的请求头不转发
 
 服务和工具在服务目录，Key 在 API Key，权限在授权，协议转换和上游凭据在上游接入。
 
@@ -26,7 +29,6 @@ from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
 
-from atlas_opsapi import TenantGate
 from atlas_tenancy import SystemReason, TenantScope, tenant_headers
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -34,14 +36,16 @@ from ..access.authorization import Authorization
 from ..access.identity import use_outbound
 from ..access.key_access import AccessCache, KeyAccess
 from ..access.usercenter import UserCenter
-from ..catalog.repository import ServiceRepository
-from ..db.models import McpApiKey, McpService, McpTool
+from ..catalog.repository import AnyService, AnyTool, ServiceRepository
+from ..db.models import McpApiKey
 from ..errors import Unavailable
 from ..keys.service import ApiKeys
 from ..upstream import InvalidArguments, UpstreamError, UpstreamUnavailable
 from ..upstream.gateway import UpstreamGateway
 from . import trace
 from .arguments import check_arguments
+from .grant import GrantInvalid, IdentityGrant
+from .grant import verify as verify_grant
 from .rejection import Reason, Rejection
 
 logger = logging.getLogger(__name__)
@@ -54,8 +58,12 @@ class CallerIdentity:
     """带给上游的身份，由网关重写。服务关了「传递调用者身份」就什么都不带。"""
 
     key_uid: str
+    #: Atlas 签发的身份凭据（验过的）：有它时按谁判、谁在用都以它为准
+    grant: IdentityGrant | None = None
     #: 使用者：用户 Key 是持有人；智能体 Key 是调用方带来的 X-Uid（只作审计，网关不校验）
     user_uid: str | None = None
+    #: Key 所在的租户
+    tenant: UUID | None = None
     #: 调用方带来的审计头（X-Run-Id、X-Thread-Id），照转给上游
     audit: Mapping[str, str] = field(default_factory=dict)
     pass_identity: bool = True
@@ -63,18 +71,28 @@ class CallerIdentity:
     def headers(self) -> dict[str, str]:
         if not self.pass_identity:
             return {}
-        return {"X-Auth-Uid": self.key_uid, "X-Uid": self.user_uid or self.key_uid, **self.audit}
+        if self.grant is not None:
+            auth, uid = self.grant.auth_uid, self.grant.uid
+        else:
+            auth, uid = self.key_uid, self.user_uid or self.key_uid
+        out = {"X-Auth-Uid": auth, "X-Uid": uid}
+        if self.tenant is not None:
+            out["X-Tenant-Id"] = str(self.tenant)
+        if self.grant is not None and self.grant.thread:
+            out["X-Thread-Id"] = self.grant.thread
+        return {**out, **self.audit}
 
 
 @dataclass
 class Caller:
     """认过的一次调用：服务、Key、这把 Key 在私有服务上的权限（公开服务为 None = 全部工具）。"""
 
-    service: McpService
+    service: AnyService
     key: McpApiKey
     access: KeyAccess | None
     user_uid: str | None
     audit: dict[str, str] = field(default_factory=dict)
+    grant: IdentityGrant | None = None
 
     def allows(self, tool: str) -> bool:
         return self.access is None or self.access.allows(self.service.name, tool)
@@ -82,7 +100,9 @@ class Caller:
     def identity(self) -> CallerIdentity:
         return CallerIdentity(
             key_uid=str(self.key.subject_uid),
+            grant=self.grant,
             user_uid=self.user_uid,
+            tenant=self.key.tenant_uuid,
             audit=self.audit,
             pass_identity=self.service.pass_identity,
         )
@@ -95,14 +115,15 @@ class ToolInvocation:
         uc: UserCenter,
         cache: AccessCache,
         upstream: UpstreamGateway,
-        gate: TenantGate | None = None,
+        *,
+        grant_secret: str = "",
     ) -> None:
         self._sessions = sessionmaker
         self._uc = uc
         self._cache = cache
         self._upstream = upstream
-        #: 租户状态（运营接口）：停用的租户的 Key 一律无效
-        self._gate = gate
+        #: 验身份凭据的密钥（和 Atlas 共享）；空 = 不认身份凭据
+        self._grant_secret = grant_secret
 
     def _authorization(self, session: AsyncSession) -> Authorization:
         return Authorization(session, self._uc, self._cache, ServiceRepository(session))
@@ -114,10 +135,13 @@ class ToolInvocation:
         *,
         user_uid: str | None,
         audit: Mapping[str, str] | None = None,
+        grant: str | None = None,
     ) -> Caller:
-        """①–③：先认 Key（它说明了是哪个租户），再在这个租户里找服务、判权。不过就抛 Rejection。
+        """①–③：先认 Key（它说明了是哪个租户），带了身份凭据就验签，再在这个租户里找服务
+        （没有再找平台服务）、判权。不过就抛 Rejection。
 
-        ★ 别的租户的服务即使同名也找不到（SERVICE_NOT_FOUND）。停用的租户的 Key 一律无效。
+        ★ 别的租户的服务即使同名也找不到（SERVICE_NOT_FOUND）。
+        ★ 身份凭据只说明身份，不授予服务：判权仍只按 Key 的主体。
         """
         if secret is None:
             raise Rejection(
@@ -129,8 +153,14 @@ class ToolInvocation:
             with TenantScope.system(SystemReason.CREDENTIAL):
                 keys = ApiKeys(session, self._authorization(session))
                 key = await keys.authenticate(secret)
-        if key is None or not await self._tenant_active(key.tenant_uuid):
+        if key is None:
             raise Rejection(Reason.KEY_INVALID, "API Key 无效或已停用")
+        identity: IdentityGrant | None = None
+        if grant:
+            try:
+                identity = verify_grant(self._grant_secret, grant, tenant=key.tenant_uuid)
+            except GrantInvalid as exc:
+                raise Rejection(Reason.GRANT_INVALID, f"身份凭据无效：{exc}") from exc
         with TenantScope.enter(key.tenant_uuid):
             async with self._sessions() as session:
                 svc = await ServiceRepository(session).find(service)
@@ -143,7 +173,7 @@ class ToolInvocation:
             if svc.visibility == "private":
                 access = await self._access(key, service)
         holder = str(key.user_uuid) if key.key_type == "user" else (user_uid or None)
-        return Caller(svc, key, access, holder, dict(audit or {}))
+        return Caller(svc, key, access, holder, dict(audit or {}), identity)
 
     async def _access(self, key: McpApiKey, service: str) -> KeyAccess:
         """授权领域的判权缓存（Authorization.access_of 背后的那一份）：不查库，不占连接。"""
@@ -165,18 +195,19 @@ class ToolInvocation:
             )
         return access
 
-    async def _tenant_active(self, tenant: UUID) -> bool:
-        return self._gate is None or await self._gate.is_active(tenant)
-
     # ------------------------------------------------------------------ ④⑤
 
-    async def _callable_tools(self, svc: McpService) -> list[McpTool]:
-        # ★ MCP SDK 的处理函数跑在会话管理器自己的任务里，拿不到请求的上下文：按服务所属的租户进入
-        with TenantScope.enter(svc.tenant_uuid):
+    async def _callable_tools(self, svc: AnyService) -> list[AnyTool]:
+        # ★ MCP SDK 的处理函数跑在会话管理器自己的任务里，拿不到请求的上下文：按服务所属的租户进入。
+        #   平台服务不属于任何租户，它的工具在哪儿都查得到
+        if svc.platform:
+            async with self._sessions() as session:
+                return [t for t in await ServiceRepository(session).tools(svc) if t.callable()]
+        with TenantScope.enter(svc.tenant_uuid):  # type: ignore[union-attr]
             async with self._sessions() as session:
                 return [t for t in await ServiceRepository(session).tools(svc) if t.callable()]
 
-    async def visible_tools(self, caller: Caller) -> list[McpTool]:
+    async def visible_tools(self, caller: Caller) -> list[AnyTool]:
         """按库里的定义，不转发给上游：只列可用（启用、没被删除、合规）且这把 Key 能用的。"""
         return [t for t in await self._callable_tools(caller.service) if caller.allows(t.name)]
 

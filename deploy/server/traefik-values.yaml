@@ -1,0 +1,48 @@
+# 集群里的 Traefik 只做内部 Ingress（c4-model/apigateway/design-api-gateway.html）：对外的 80 / 443 归宿主机上的
+# API 网关（deploy/server/gateway.sh），Traefik 不占宿主机端口、不管证书，只按 Host（<名>.internal.techstz.com）
+# 把网关转来的请求分给各服务。网关只认一个上游：下面固定的 ClusterIP:80（宿主机经 kube-proxy 直达）。
+#
+#   helm upgrade --install traefik traefik/traefik --version 42.0.0 -n traefik --create-namespace \
+#     -f deploy/server/traefik-values.yaml
+#
+# ★ ClusterIP 建好就不能改：已有的 traefik Service 不是这个地址时，先 kubectl -n traefik delete svc traefik
+#   再 upgrade（deploy/server/apigateway-cutover.sh 会做）。gateway.sh 的 GATEWAY_INTERNAL_INGRESS 默认就取这里的地址。
+# ★ 10.96.0.80 在 serviceSubnet（cluster-setup.sh：10.96.0.0/12）的低段：K8s 动态分配优先用高段，静态地址不易撞上。
+ingressClass:
+  enabled: true
+  isDefaultClass: true
+ports:
+  web:
+    # 不占宿主机端口；HTTP 一跳，TLS 在网关终结
+    expose:
+      default: true
+    exposedPort: 80
+    # 网关是唯一的调用方（经 kube-proxy 进来的源地址不固定）：信任它写的 X-Forwarded-*（真实客户端 IP、https）。
+    #   Traefik 不对外，集群内的 Pod 本来就能直连各服务，信任所有来源不多开口子
+    forwardedHeaders:
+      insecure: true
+    # Traefik v3 默认读请求 60 秒超时：大文件上传（知识库 50MB）慢网速会被截断。长连接的空闲由网关管
+    transport:
+      respondingTimeouts:
+        readTimeout: 0
+        writeTimeout: 0
+        idleTimeout: 300s
+  websecure:
+    expose:
+      default: false
+resources:
+  limits:
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 64Mi
+service:
+  spec:
+    type: ClusterIP
+    clusterIP: 10.96.0.80
+# 先起新的再停旧的：内部 Ingress 断了整个站点就断了（不占宿主机端口，新旧可以同时在）
+updateStrategy:
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+  type: RollingUpdate

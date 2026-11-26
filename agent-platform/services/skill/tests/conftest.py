@@ -22,7 +22,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 TEST_DB = "atlas_skill_test"
-_ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
+_ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/postgres"
 TEST_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{TEST_DB}"
 _TABLES = (
     "skill",
@@ -30,8 +30,6 @@ _TABLES = (
     "skill_audit",
     "market_skill",
     "market_skill_version",
-    "app_tenant_state",
-    "app_ops_request",
 )
 
 
@@ -79,6 +77,9 @@ def _in_test_tenant() -> Iterator[None]:
         yield
 
 
+#: 已停用或到期的租户：用户中心对这些租户的人回答「无权限」（can_access 为假）
+BLOCKED_TENANTS: set[str] = set()
+
 #: 用户中心授权快照的替身：没有免鉴权模式（dev 模式已删），谁都能用、操作码全有
 ANYONE = {
     "can_access": True,
@@ -96,7 +97,10 @@ def uc() -> object:
     from atlas_skill.access.usercenter import UserCenterGateway
 
     def handler(request: httpx.Request) -> httpx.Response:
-        user = {"status": "active", "tenant_id": request.headers.get("x-tenant-id")}
+        tenant = request.headers.get("x-tenant-id")
+        user = {"status": "active", "tenant_id": tenant}
+        if tenant in BLOCKED_TENANTS:
+            return httpx.Response(200, json={"can_access": False, "permissions": [], "user": user})
         return httpx.Response(200, json={**ANYONE, "user": user})
 
     return UserCenterGateway("http://uc.invalid", transport=httpx.MockTransport(handler))
@@ -108,6 +112,7 @@ async def _clean_tables() -> AsyncIterator[None]:
         await session.execute(text(f"TRUNCATE {', '.join(_TABLES)}"))
         await session.commit()
     yield
+    BLOCKED_TENANTS.clear()
     # 引擎绑定 event loop；每个测试一个 loop，所以每个测试结束都要重建（同运行时 conftest）
     await get_engine().dispose()
     get_engine.cache_clear()

@@ -90,4 +90,46 @@ describe("streamThreadEvents", () => {
     });
     expect(asked).toEqual([null, "8"]);
   });
+
+  it("令牌过期（401）先刷新再马上重连；刷新不了才算被拒", async () => {
+    const ctrl = new AbortController();
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        calls += 1;
+        if (calls === 1) return new Response("", { status: 401 });
+        ctrl.abort();
+        return sseResponse([frame(1)]);
+      }),
+    );
+    const refresh = vi.fn(async () => true);
+    const errors: unknown[] = [];
+    const events: string[] = [];
+    await streamThreadEvents({
+      client: { apiBase: "http://atlas.test", refresh },
+      threadId: "t1",
+      signal: ctrl.signal,
+      onEvent: () => undefined,
+      onOpen: () => events.push("open"),
+      onDisconnect: () => events.push("disconnect"),
+      onError: (e) => errors.push(e),
+    });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(calls).toBe(2);
+    expect(errors).toEqual([]);
+    expect(events[0]).toBe("open"); // 刷新后直接重连，中间没有「断线」
+
+    // 刷新也不行：报被拒、不再重连
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 401 })));
+    const failed: unknown[] = [];
+    await streamThreadEvents({
+      client: { apiBase: "http://atlas.test", refresh: async () => false },
+      threadId: "t1",
+      signal: new AbortController().signal,
+      onEvent: () => undefined,
+      onError: (e) => failed.push(e),
+    });
+    expect(failed).toHaveLength(1);
+  });
 });

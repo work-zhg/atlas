@@ -18,6 +18,7 @@ from atlas_skill.market.service import MarketService
 from atlas_skill.store.layout import legacy_prefix
 from atlas_skill.versions.service import SkillService
 from atlas_tenancy import TenantScope
+from conftest import BLOCKED_TENANTS
 from skill_testkit import OTHER_TENANT, TEST_TENANT, make_zip, ops_signed, skill_files
 
 
@@ -158,31 +159,39 @@ async def test_ops_publishes_to_market_and_installs_defaults(client: httpx.Async
     unsigned = await client.post("/ops/v1/market/skills", files=files)
     assert unsigned.status_code == 401
 
-    # 开通租户：空清单 = 装全部默认安装的
-    path = f"/ops/v1/tenants/{OTHER_TENANT}/market-skills"
-    installed = await _ops(client, "POST", path, json={"skills": []})
-    assert installed.json() == [{"slug": "browser", "version": 1, "copied": True}]
+    # 开通租户（创建）：默认装全部「默认安装」的；能重做，装过的不再装一遍
+    path = f"/ops/v1/tenants/{OTHER_TENANT}"
+    for _ in range(2):
+        created = await _ops(client, "PUT", path, json={})
+        assert created.status_code == 200, created.text
     other = {"X-Tenant-Id": OTHER_TENANT}
     catalog = (await client.get("/internal/skills/catalog", headers=other)).json()
-    assert [c["slug"] for c in catalog] == ["browser"]
+    assert [(c["slug"], c["latest"]) for c in catalog] == [("browser", 1)]
     assert (await client.get("/internal/skills/catalog")).json() == []
+    # 开通时说不装：什么都不装；参数不对 → 409（要人看）
+    third = "00000000-0000-0000-0000-00000000000c"
+    none = await _ops(client, "PUT", f"/ops/v1/tenants/{third}", json={"install_defaults": False})
+    assert none.status_code == 200
+    catalog = (await client.get("/internal/skills/catalog", headers={"X-Tenant-Id": third})).json()
+    assert catalog == []
+    bad = await _ops(client, "PUT", f"/ops/v1/tenants/{third}", json={"skills": "browser"})
+    assert bad.status_code == 409
 
 
-# ───────────────────────────────────────────── 停用 / 删除租户
+# ───────────────────────────────────────────── 停用 / 删除租户（停用只在用户中心）
 
 
-async def test_suspended_tenant_is_shut_out_until_resumed(client: httpx.AsyncClient) -> None:
-    base = f"/ops/v1/tenants/{TEST_TENANT}"
-    assert (await _ops(client, "POST", f"{base}/suspend")).status_code == 200
+async def test_blocked_tenant_gets_no_permission(client: httpx.AsyncClient) -> None:
+    """不知道租户状态、只认权限：租户停用后用户中心说这个人没有权限 → 403。"""
+    BLOCKED_TENANTS.add(TEST_TENANT)
     r = await client.get("/api/v1/skills")
-    assert r.status_code == 403 and "停用" in r.json()["detail"]
-    assert (await client.get("/internal/skills/catalog")).status_code == 403
+    assert r.status_code == 403
     # 别的租户不受影响
     other = {"X-Tenant-Id": OTHER_TENANT}
-    assert (await client.get("/internal/skills/catalog", headers=other)).status_code == 200
-
-    assert (await _ops(client, "POST", f"{base}/resume")).status_code == 200
-    assert (await client.get("/api/v1/skills")).status_code == 200
+    assert (await client.get("/api/v1/skills", headers=other)).status_code == 200
+    # 停用、恢复的运营接口没有了
+    base = f"/ops/v1/tenants/{TEST_TENANT}"
+    assert (await _ops(client, "POST", f"{base}/suspend")).status_code in (404, 405)
 
 
 async def test_purge_deletes_only_this_tenants_rows_and_objects(
@@ -198,9 +207,7 @@ async def test_purge_deletes_only_this_tenants_rows_and_objects(
 
     storage.put_tree(f"{TEST_TENANT}/workspace/", {"a.txt": "Atlas 的文件".encode()})
 
-    base = f"/ops/v1/tenants/{TEST_TENANT}"
-    assert (await _ops(client, "POST", f"{base}/suspend")).status_code == 200
-    resp = await _ops(client, "POST", f"{base}/purge")
+    resp = await _ops(client, "DELETE", f"/ops/v1/tenants/{TEST_TENANT}")
     assert resp.status_code == 200, resp.text
     assert resp.json()["remaining"] is False
 

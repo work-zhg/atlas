@@ -9,13 +9,14 @@ import { useState } from "react";
 import { AppIcon, ErrorBox, OBSERVER_TIP, OnceBox, PageHead } from "@/components/common";
 import { Icon } from "@/components/Icon";
 import { UC, sys } from "@/lib/api";
-import { useMe } from "@/lib/session";
+import { useAccess } from "@/lib/session";
 import type { AppInfo } from "@/lib/types";
 
 export default function AppsPage() {
   const router = useRouter();
-  const { data: me } = useMe();
-  const admin = me?.role === "ADMIN";
+  // 应用目录属于用户中心模块
+  const acc = useAccess();
+  const admin = acc.write(acc.moduleOf(UC));
   const q = useQuery({ queryKey: ["apps"], queryFn: () => sys(UC).get<AppInfo[]>("/apps") });
   const [open, setOpen] = useState(false);
 
@@ -127,7 +128,7 @@ function CreateApp({ onClose }: { onClose: () => void }) {
         <Form.Item name="icon" label="图标" extra="一个 emoji，显示在方块里">
           <Input maxLength={4} style={{ width: 120 }} />
         </Form.Item>
-        <Form.Item name="home_url" label="入口地址" extra="站内路径（/atlas）或完整地址；不填 = 不在应用切换里出现">
+        <Form.Item name="home_url" label="入口地址" extra="站内路径（/atlas-ui/）或完整地址；不填 = 不在应用切换里出现">
           <Input />
         </Form.Item>
         <Form.Item name="description" label="说明">

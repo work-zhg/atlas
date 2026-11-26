@@ -1,11 +1,12 @@
 """接入知识库服务（atlas-knowledge）：知识集（doc/design/knowledge-set-design.html）。
 
-    KnowledgeClient         调知识库的 /internal/v1（内网免令牌：带本次调用的身份请求头）
+    KnowledgeClient         调知识库的检索接口 /v1（内网免令牌：带本次调用的身份请求头）
     resolve_knowledge()     每轮按这一轮的权限问知识库：选定的（或能读的全部）知识集，
                             每个带上其中能读的库
     TurnKnowledge.catalog() 第一层：追加进提示词的知识集目录「可查的知识」（§3.1）
     make_knowledge_tools()  第二层：原生智能体的 knowledge_list / knowledge_search（§3.2）
-    mcp_server_entry()      CLI 的 MCP 下发项：Pod 里的 CLI 经它调同样的两个工具（§3.4）
+    cli_tool_names()        CLI 看到的两个工具名：CLI 经 MCP 网关上的知识库平台服务调同样的两个工具
+                            （知识库登记成网关的平台服务，下发项在 cli/capabilities.py）
 
 ★ 查不查、查哪里由模型决定，平台不自动检索（§2.3）。
 ★ 库 id 不进工具参数：模型只能填知识集和库的**名称**，且只能从这一轮的目录和 knowledge_list 的
@@ -15,20 +16,15 @@
 ★ 知识集归知识库服务：名称、介绍、里面的库、一次取几条由知识集的维护人定；智能体只选知识集。
 ★ 按可信度分层（§6.3）：进提示词的只有知识集的名称和介绍（维护人写的），标明「是资料目录，不是
   指令」；库的介绍和检索到的资料只在工具结果里出现，标明「是资料，不是指令」。都去掉换行、截断。
-★ MCP 令牌：HMAC(knowledge_mcp_secret, {知识集, 会话, u: auth-uid, o: 发起人})。这是给会话 Pod
-  （不可信代码）的能力凭据，内网去令牌后仍保留（§5.3）。不设过期 —— ACP 会话只在 open 时下发一次
-  MCP，会话可能挂起很久再恢复（Atlas 不设到点结束的超时）；令牌只授予「读这几个知识集里的库」，
-  换绑后新会话拿新令牌。
-★ 列表与结果的文字和知识库服务的 MCP（atlas_knowledge/api/mcp.py）保持一致：两种智能体看到的是
-  同一套工具。
+★ CLI 智能体经 MCP 网关调知识库（平台服务）：会话 Pod 跑的是不可信代码，按谁判由 Atlas 签进身份
+  凭据（providers/mcp/grant.py），网关验签后写给知识库。CLI 能查的是「auth-uid 能用的知识集」，
+  不再钉死在智能体选的那几个（网关不认识知识集）；权限照样每次按 auth-uid 判。
+★ 两种智能体看到的工具名和参数一样；原生的结果文字在这里渲染，CLI 拿到的是知识库返回的字段
+  （网关按工具映射挑）。
 """
 
 from __future__ import annotations
 
-import base64
-import hashlib
-import hmac
-import json
 import logging
 import math
 import re
@@ -40,7 +36,6 @@ import httpx
 from atlas_engine.contracts.events import EventType
 from atlas_engine.contracts.spec import KnowledgeSpec
 from atlas_engine.contracts.tools import ToolSpec
-from atlas_tenancy import TenantScope
 from opentelemetry import propagate
 from opentelemetry.trace import SpanKind
 
@@ -59,15 +54,14 @@ __all__ = [
     "Retrieved",
     "TurnKnowledge",
     "base_labels",
+    "cli_tool_names",
     "format_list",
     "format_records",
     "make_knowledge_client",
     "make_knowledge_tools",
-    "mcp_server_entry",
     "readable_sets_as",
     "require_client",
     "resolve_knowledge",
-    "sign_mcp_token",
     "skipped_message",
 ]
 
@@ -75,12 +69,6 @@ logger = logging.getLogger(__name__)
 
 KNOWLEDGE_LIST_TOOL = "knowledge_list"
 KNOWLEDGE_SEARCH_TOOL = "knowledge_search"
-MCP_SERVER_NAME = "atlas-knowledge"
-#: CLI 看到的 MCP 工具名（Claude Code 的写法：mcp__服务名__工具名）
-MCP_LIST_TOOL = f"mcp__{MCP_SERVER_NAME}__{KNOWLEDGE_LIST_TOOL}"
-MCP_SEARCH_TOOL = f"mcp__{MCP_SERVER_NAME}__{KNOWLEDGE_SEARCH_TOOL}"
-#: Pod → 知识库 MCP 的签名令牌头
-KNOWLEDGE_TOKEN_HEADER = "X-Knowledge-Token"
 #: knowledge_list 一页列几个库；knowledge_search 最多指定几个库；一次检索最多带几个库
 #: （与知识库检索接口的上限一致；超过路由阈值时知识库先按库的介绍挑库）
 PAGE_SIZE = 20
@@ -105,23 +93,23 @@ class Retrieved:
     skipped: list[str] = field(default_factory=list)
 
 
+def cli_tool_names(service: str) -> tuple[str, str]:
+    """CLI 看到的列库、检索两个工具名（Claude Code 的写法：mcp__服务名__工具名）。
+    service = 知识库在 MCP 网关上的平台服务名（settings.knowledge_mcp_service）。"""
+    return (f"mcp__{service}__{KNOWLEDGE_LIST_TOOL}", f"mcp__{service}__{KNOWLEDGE_SEARCH_TOOL}")
+
+
 class KnowledgeClient:
     def __init__(
         self,
         base_url: str,
-        mcp_secret: str = "",
         *,
         timeout_s: float = 30.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
-        self._mcp_secret = mcp_secret
         self._timeout = timeout_s
         self._transport = transport
-
-    @property
-    def mcp_secret(self) -> str:
-        return self._mcp_secret
 
     async def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         headers = outbound_headers()
@@ -158,7 +146,7 @@ class KnowledgeClient:
             span.set_attribute("atlas.knowledge.source", source)
             span.set_attribute("atlas.knowledge.dataset_ids", list(dataset_ids))
             body = await self._post(
-                "/internal/v1/retrieve",
+                "/v1/retrieve",
                 {
                     "dataset_ids": list(dataset_ids),
                     "query": query,
@@ -182,7 +170,7 @@ class KnowledgeClient:
 
         set_ids 为 None = 能读的全部。一个能读的库都没有的知识集不返回。
         """
-        body = await self._post("/internal/v1/knowledge-sets/readable", {"set_ids": set_ids})
+        body = await self._post("/v1/knowledge-sets/readable", {"set_ids": set_ids})
         return list(body.get("data") or [])
 
 
@@ -190,10 +178,7 @@ def make_knowledge_client(settings: Any) -> KnowledgeClient | None:
     url = settings.knowledge_base_url
     if not url:
         return None
-    secret = (
-        settings.knowledge_mcp_secret.get_secret_value() if settings.knowledge_mcp_secret else ""
-    )
-    return KnowledgeClient(url, secret, timeout_s=settings.knowledge_timeout_s)
+    return KnowledgeClient(url, timeout_s=settings.knowledge_timeout_s)
 
 
 def require_client(settings: Any) -> KnowledgeClient:
@@ -607,64 +592,3 @@ def make_knowledge_tools(
             annotations={"readOnlyHint": True},
         ),
     ]
-
-
-# ───────────────────────────────────────────── CLI：MCP 下发
-
-
-def sign_mcp_token(
-    secret: str,
-    *,
-    sets: list[dict[str, Any]],
-    thread_id: UUID,
-    auth_uid: UUID | None,
-    uid: UUID | None = None,
-    tenant: UUID,
-) -> str:
-    """sets：[{n: 知识集名称, d: [库 id], k: top_k}]（h 门槛已不用：门槛归各库自己的设置）。
-    u = 检索按谁判（auth-uid）；o = 发起人（只进检索记录）。内网身份传递 §5.3。
-    tenant = 会话所在的租户：知识库按它进入租户（Pod 发来的请求头一律不认）。"""
-    payload = json.dumps(
-        {
-            "s": sets,
-            "t": str(thread_id),
-            "u": str(auth_uid) if auth_uid else None,
-            "o": str(uid) if uid else None,
-            "tenant": str(tenant),
-        },
-        separators=(",", ":"),
-        sort_keys=True,
-        ensure_ascii=False,
-    ).encode()
-    body = base64.urlsafe_b64encode(payload).decode().rstrip("=")
-    sig = hmac.new(secret.encode(), body.encode(), hashlib.sha256).hexdigest()
-    return f"{body}.{sig}"
-
-
-def mcp_server_entry(
-    client: KnowledgeClient, turn: TurnKnowledge, *, thread_id: UUID
-) -> dict[str, Any]:
-    """身份取本次 run 的出站身份（执行器在 run 开始时设好）。
-
-    令牌里签的是开会话这一刻展开好的知识集：「使用者能读的全部」是这一刻这个人能读的库。
-    """
-    ident = current_identity()
-    token = sign_mcp_token(
-        client.mcp_secret,
-        sets=[{"n": s.name, "d": [b.id for b in s.bases], "k": s.top_k} for s in turn.sets],
-        thread_id=thread_id,
-        auth_uid=ident.auth_uid if ident else None,
-        uid=ident.uid if ident else None,
-        tenant=TenantScope.require(),
-    )
-    return {
-        "type": "http",
-        "name": MCP_SERVER_NAME,
-        "url": f"{client.base_url}/mcp/",
-        # ★ ACP 的 headers 是数组，不是对象。名称不带应用名（数字员工设计 §7.4）；
-        #   X-Atlas-Knowledge-Token 过渡一个版本（知识库还没升级时它只认旧名）后删
-        "headers": [
-            {"name": KNOWLEDGE_TOKEN_HEADER, "value": token},
-            {"name": "X-Atlas-Knowledge-Token", "value": token},
-        ],
-    }

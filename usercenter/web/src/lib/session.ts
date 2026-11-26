@@ -17,8 +17,7 @@ export function useCan(): (op: string) => boolean {
 }
 
 /**
- * 统一登录（doc/identity-propagation-design.html §4）：Atlas、TeamFlow 未登录时跳到
- * /uc/login?next=<原页面>。登录（或改完密码）后回到 next。
+ * 统一登录：Atlas、TeamFlow、运营中心未登录时跳到 /uc-ui/login?next=<原页面>。登录（或改完密码）后回到 next。
  * ★ 只接受同源的绝对路径（防开放重定向）：以 / 开头、不是 //、也不是协议相对或反斜杠形式。
  */
 export function nextTarget(): string | undefined {

@@ -85,10 +85,10 @@ spec:
             # 凭据经 Credential Vault 交给 Pod 的 egress sidecar，Pod 里看不到（设计 §12）
             - name: CREDENTIAL_PROFILES
               valueFrom: {secretKeyRef: {name: atlas-credential-profiles, key: profiles, optional: true}}
-            # 知识库 MCP 令牌的签名密钥：给会话 Pod（不可信代码）的能力凭据，不是服务间令牌
-            # （内网身份传递 §5.3）。与知识库的 ATLAS_KB_MCP_SECRET 是同一个
-            - name: KNOWLEDGE_MCP_SECRET
-              valueFrom: {secretKeyRef: {name: atlas-knowledge-mcp, key: secret}}
+            # 身份凭据（X-Identity-Grant）的签名密钥：打开 CLI 会话时签，CLI 经 MCP 网关调服务时带上，
+            # 网关验签后给上游写这一轮的 auth-uid。与网关的 ATLAS_MCPGW_IDENTITY_GRANT_SECRET 是同一个
+            - name: MCP_IDENTITY_GRANT_SECRET
+              valueFrom: {secretKeyRef: {name: atlas-mcp-identity-grant, key: secret}}
             # 技能版本的磁盘缓存。容器里放 /tmp：丢了只是重新拉一次
             - {name: SKILL_CACHE_DIR, value: /tmp/atlas-skill}
             # 遥测（可观测性设计 §02）。Collector 跑在宿主的 compose 里，
@@ -120,13 +120,13 @@ spec:
             #   通用接口：按 Anthropic 格式发，线路是哪种格式由网关转换；会话 Pod 里的 CLI 拿到的也是这个地址和这把 Key
             - {name: MODEL_PLATFORM_URL, value: "http://atlas-modelgateway.atlas-system.svc.cluster.local:8090"}
             - {name: MODEL_GATEWAY_URL, value: "http://atlas-llmgateway.atlas-system.svc.cluster.local:8091/universal"}
-            # ★ 会话文件预览的 frame-ancestors（previews.py）：经前端网关（:8080，见 40-frontends.yaml）
-            #   打开的预览页要能 iframe 嵌入预览站点
-            #   __PUBLIC_ORIGIN__ = 前端网关的对外地址（apply.sh 替换；本机 http://localhost:8080）
+            # ★ 会话文件预览的 frame-ancestors（previews.py）：经 API 网关打开的预览页要能 iframe 嵌入预览站点
+            #   __PUBLIC_ORIGIN__ = API 网关的对外地址（apply.sh 替换；服务器上 https://<域名>）
             - {name: CORS_ORIGINS, value: '["http://localhost:3000","http://127.0.0.1:3000","__PUBLIC_ORIGIN__","http://127.0.0.1:8080"]'}
-            # ★ 预览站点的对外地址（config.py preview_base_url）。不配时按请求的 Host 和协议生成，
-            #   而 HTTPS 在 traefik 终结、到这里已是 http：HTTPS 页面读 http 的预览地址，被浏览器当混合内容拦掉
-            - {name: PREVIEW_BASE_URL, value: "__PUBLIC_ORIGIN__"}
+            # ★ 预览站点的对外地址（config.py preview_base_url）+ Atlas 接口的外部前缀 /atlas：
+            #   预览地址 = 它 + /v1/previews/{令牌}/（网关的 public 路由，令牌在路径里）。不配时按请求的 Host 和协议生成，
+            #   而 HTTPS 在网关终结、到这里已是 http，前缀也没了：HTTPS 页面读 http 的预览地址，被浏览器当混合内容拦掉
+            - {name: PREVIEW_BASE_URL, value: "__PUBLIC_ORIGIN__/atlas"}
             - name: OSS_ACCESS_KEY_ID
               valueFrom: {secretKeyRef: {name: atlas-server-creds, key: oss_access_key_id}}
             - name: OSS_ACCESS_KEY_SECRET
@@ -192,3 +192,18 @@ subjects:
   - kind: ServiceAccount
     name: atlas-server
     namespace: atlas-system
+---
+# 内部 Ingress：API 网关把 /atlas/… 去掉前缀后发到这里，Host = atlas.internal.techstz.com
+#   （infra-platform/gateway/routes.yaml；Traefik 只在集群内，见 deploy/server/traefik-values.yaml）
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlas-server
+  namespace: atlas-system
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: atlas.internal.techstz.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: atlas-server, port: {number: 8000}}}}

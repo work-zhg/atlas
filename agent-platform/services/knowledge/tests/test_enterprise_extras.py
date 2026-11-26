@@ -65,38 +65,65 @@ def test_parser_option() -> None:
     assert parse("员工手册.pdf", employee_handbook()).meta["parser"] != "text"
 
 
-# ───────────────────────────────────────────── 解析异常 → 待审核
+# ───────────────────────────────────────────── 解析异常：只警告，不卡检索
 
 
-async def test_parse_problems_go_to_review(client: Any, rt: Any) -> None:
+async def test_parse_problems_are_warned_not_held(client: Any, rt: Any) -> None:
+    """解析质量有问题（扫描页、乱码）记进解析报告，控制台据此标出警告；文档照常参与检索。"""
     ds = await _dataset(client)
     doc = await _upload(client, rt, ds["id"], partly_scanned(), "报销.pdf")
     info = (
         await client.get(f"/v1/datasets/{ds['id']}/documents/{doc['id']}", headers=ALICE)
     ).json()
     assert info["indexing_status"] == "completed"
-    assert info["review_status"] == "pending" and info["available"] is False
-    assert "OCR" in info["review_note"] and info["parse_report"]["needs_review"] is True
-
-    async def hits() -> int:
-        r = await client.post(
-            f"/v1/datasets/{ds['id']}/hit-testing", json={"query": "报销发票"}, headers=ALICE
-        )
-        return len(r.json()["records"])
-
-    assert await hits() == 0  # 待审核的不参与检索
+    assert info["available"] is True
+    assert any("OCR" in w for w in info["parse_report"]["warnings"])
+    assert "needs_review" not in info["parse_report"]
     r = await client.post(
-        f"/v1/datasets/{ds['id']}/documents-review",
-        json={"document_ids": [doc["id"]], "approve": True},
+        f"/v1/datasets/{ds['id']}/hit-testing", json={"query": "报销发票"}, headers=ALICE
+    )
+    assert r.json()["records"], "有警告的文档照常能检索到"
+
+
+async def test_sync_doc_ok_rewrites_vector_store_from_db(client: Any, rt: Any) -> None:
+    """去掉审核后的修数据：向量库里 doc_ok 还是旧值（原来待审核的为 false），按库里的状态重写；
+    停用的文档仍然检索不到。"""
+    from uuid import UUID
+
+    from atlas_knowledge.db.models import Dataset
+    from atlas_knowledge.db.session import get_sessionmaker
+    from atlas_knowledge.document.doc_ok_sync import sync_doc_ok
+    from atlas_knowledge.index.versions import stores
+    from atlas_tenancy import TenantScope
+    from sqlalchemy import select
+
+    ds = await _dataset(client)
+    held = await _upload(client, rt, ds["id"], partly_scanned(), "报销.pdf")
+    off = await _upload(client, rt, ds["id"], partly_scanned(), "发票.pdf")
+    r = await client.post(
+        f"/v1/datasets/{ds['id']}/documents-status/disable",
+        json={"document_ids": [off["id"]]},
         headers=ALICE,
     )
     assert r.status_code == 200, r.text
-    assert await hits() > 0
+    # 回到去掉审核之前的样子：库里可用，向量库里 doc_ok 还是 false
+    async with get_sessionmaker()() as s:
+        row = await s.scalar(select(Dataset).where(Dataset.uuid == UUID(ds["id"])))
+        assert row is not None
+        for store in await stores(s, rt, row):
+            await store.set_doc_ok(held["id"], False)
 
-    # 正常文档不进审核
-    ok = await _upload(client, rt, ds["id"], employee_handbook(), "手册.pdf")
-    info = (await client.get(f"/v1/datasets/{ds['id']}/documents/{ok['id']}", headers=ALICE)).json()
-    assert info["review_status"] == "none"
+    async def found() -> set[str]:
+        r = await client.post(
+            f"/v1/datasets/{ds['id']}/hit-testing", json={"query": "报销发票"}, headers=ALICE
+        )
+        return {x["document_name"] for x in r.json()["records"]}
+
+    assert await found() == set()
+    with TenantScope.isolated():
+        assert await sync_doc_ok(rt, get_sessionmaker()) == 1
+        assert await sync_doc_ok(rt, get_sessionmaker()) == 1, "能重做"
+    assert await found() == {"报销.pdf"}, "停用的仍然检索不到"
 
 
 # ───────────────────────────────────────────── 向量化用量进追踪

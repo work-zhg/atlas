@@ -25,9 +25,8 @@ async def test_jobs_are_listed_for_the_ops_center_only(rt: Any) -> None:
     assert gone.status_code == 404, "租户里没有了"
     assert denied.status_code == 401
     assert ok.status_code == 200
-    [job] = ok.json()["jobs"]
-    assert (job["type"], job["description"], job["every"]) == (
-        "knowledge.ingest_sweep",
-        "入库巡检（含索引版本重建）",
-        30,
-    )
+    jobs = {j["type"]: j for j in ok.json()["jobs"]}
+    assert set(jobs) == {"knowledge.ingest_sweep", "knowledge.enhance_cache_cleanup"}
+    job = jobs["knowledge.ingest_sweep"]
+    assert (job["description"], job["every"]) == ("入库巡检（含索引版本重建）", 30)
+    assert jobs["knowledge.enhance_cache_cleanup"]["every"] == 24 * 3600

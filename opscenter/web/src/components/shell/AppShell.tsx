@@ -3,40 +3,44 @@
 /**
  * 运营中心的骨架：顶部一级菜单 + 左侧二级菜单（可收缩）+ 内容区 —— 与 Atlas、用户中心同一个样子。
  *
- * ★ 运营中心是独立的账号体系：右上角不放应用切换，只放环境名和自己的账号菜单（改密码、退出）。
+ * ★ 运营人员是用户中心里系统租户的人（统一登录）：右上角放环境名和账号菜单（退出登录）；
+ *   改密码、开账号、授模块都在用户中心。菜单按这个人能看的模块显示（nav.ts）。
  * ★ 品牌旁的「平台」标签 + 环境名：浅色之后和 Atlas 长得像，靠这两处提醒「这里改的是整个平台」。
  * ★ 收起状态记在本机（localStorage）。
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Dropdown } from "antd";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { AppIcon, TenantIcon } from "@/components/common";
-import { ChangePassword } from "@/components/ChangePassword";
 import { Icon } from "@/components/Icon";
-import { UC, api, sys } from "@/lib/api";
+import { UC, api, logout as ucLogout, sys } from "@/lib/api";
+import { TENANT_MODULE, access, useSystems } from "@/lib/session";
 import type { AppInfo, Me, Tenant } from "@/lib/types";
 
-import { PLATFORMS, isLink, platformHome, platformOf } from "./nav";
+import { isLink, platformHome, platformOf, visibleItems, visiblePlatforms, type NavCtx } from "./nav";
 import styles from "./shell.module.css";
 
 const MIN_KEY = "ops.sider.min";
 
 export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
   const pathname = usePathname();
-  const router = useRouter();
   const qc = useQueryClient();
+  const { data: systems = [] } = useSystems();
   const [min, setMin] = useState(false);
   const [host, setHost] = useState("");
-  const [pw, setPw] = useState(false);
   useEffect(() => {
     setMin(localStorage.getItem(MIN_KEY) === "1");
     setHost(window.location.host);
   }, []);
 
   const current = platformOf(pathname);
+  const ctx: NavCtx = { access: access(me, systems), systems };
+  const platforms = visiblePlatforms(ctx);
+  const items = visibleItems(current, ctx);
+  const granted = me.modules.filter((m) => m.level !== "NONE").length;
 
   function toggle() {
     setMin((v) => {
@@ -46,24 +50,22 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
   }
 
   async function logout() {
-    await api.post("/auth/logout");
     qc.clear();
-    router.replace("/login");
+    await ucLogout();
   }
 
-  const admin = me.role === "ADMIN";
   return (
     <div className={styles.app}>
       <header className={styles.top}>
-        <Link href="/tenants" className={styles.brand}>
+        <Link href="/" className={styles.brand}>
           <span className={styles.logo}>A</span>运营中心
           <span className={styles.brandTag} title="管的是整个平台：所有租户、所有系统">
             平台
           </span>
         </Link>
         <nav className={styles.platforms} aria-label="一级菜单">
-          {PLATFORMS.map((p) => (
-            <Link key={p.id} href={platformHome(p)} className={styles.platform} aria-current={p.id === current.id ? "page" : undefined}>
+          {platforms.map((p) => (
+            <Link key={p.id} href={platformHome(p, ctx)} className={styles.platform} aria-current={p.id === current.id ? "page" : undefined}>
               <Icon name={p.icon} />
               {p.label}
             </Link>
@@ -85,27 +87,28 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
                   key: "who",
                   disabled: true,
                   label: (
-                    <div style={{ color: "var(--fg)", minWidth: 200 }}>
-                      <div style={{ fontWeight: 600 }}>{me.name}</div>
+                    <div style={{ color: "var(--fg)", minWidth: 220 }}>
+                      <div style={{ fontWeight: 600 }}>{me.user.name}</div>
                       <div style={{ fontSize: 12, color: "var(--fg-3)" }}>
-                        {me.account} · {admin ? "运营管理员" : "运营观察员（只能查看）"}
+                        系统租户 · 能进 {granted} 个模块{me.can_audit ? " · 运营审计" : ""}
                       </div>
+                      <div style={{ fontSize: 12, color: "var(--fg-3)" }}>改密码、要权限请到用户中心</div>
                     </div>
                   ),
                 },
                 { type: "divider" },
-                { key: "password", icon: <Icon name="key" size={14} />, label: "修改密码" },
-                { type: "divider" },
                 { key: "logout", icon: <Icon name="logout" size={14} />, label: "退出登录", danger: true },
               ],
-              onClick: ({ key }) => (key === "logout" ? void logout() : setPw(true)),
+              onClick: ({ key }) => {
+                if (key === "logout") void logout();
+              },
             }}
           >
             <button type="button" className={styles.meChip} aria-label="我的账号">
-              <span className={styles.avatar}>{me.name.slice(-1)}</span>
-              {me.name}
-              <span className={styles.role} data-admin={admin}>
-                {admin ? "运营管理员" : "运营观察员"}
+              <span className={styles.avatar}>{me.user.name.slice(-1)}</span>
+              {me.user.name}
+              <span className={styles.role} data-admin={ctx.access.write(TENANT_MODULE)}>
+                {granted} 个模块
               </span>
               <Icon name="down" size={14} />
             </button>
@@ -116,7 +119,7 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
       <div className={styles.body}>
         <aside className={`${styles.sider} ${min ? styles.siderMin : ""}`} aria-label={`${current.label}菜单`}>
           <div className={styles.siderTop}>
-            {current.items.map((it) =>
+            {items.map((it) =>
               isLink(it) ? (
                 <Link key={it.href} href={it.href} className={styles.item} aria-current={it.match(pathname) ? "page" : undefined} title={it.label}>
                   <Icon name={it.icon} />
@@ -147,7 +150,6 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
           <div className="ops-page">{children}</div>
         </main>
       </div>
-      {pw && <ChangePassword onClose={() => setPw(false)} />}
     </div>
   );
 }

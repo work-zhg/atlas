@@ -12,7 +12,7 @@ import { ErrorBox, OBSERVER_TIP, PageHead, errorText } from "@/components/common
 import { Icon } from "@/components/Icon";
 import { sys } from "@/lib/api";
 import { dateTime } from "@/lib/format";
-import { useMe, useSystems, withCapability } from "@/lib/session";
+import { useAccess, useSystems, withCapability } from "@/lib/session";
 import type { SandboxTemplate } from "@/lib/types";
 
 export default function TemplatesPage() {
@@ -49,8 +49,9 @@ function VersionTags({ t }: { t: SandboxTemplate }) {
 
 function Templates({ code }: { code: string }) {
   const ops = sys(code);
-  const { data: me } = useMe();
-  const admin = me?.role === "ADMIN";
+  // 这个系统的运营模块：改要读写
+  const acc = useAccess();
+  const admin = acc.write(acc.moduleOf(code));
   const q = useQuery({ queryKey: ["templates", code], queryFn: () => ops.get<SandboxTemplate[]>("/sandbox-templates") });
   const [open, setOpen] = useState<string | "new" | null>(null);
   return (

@@ -1,4 +1,6 @@
-"""/v1 知识库、文档、分段接口（路径形状贴近 Dify 知识库 API）。"""
+"""管理接口（c4-model/knowledge/component-api.html · 管理接口）：/v1 下的知识库、文档、分段、共享、
+索引版本、元数据和存储用量（路径形状贴近 Dify 知识库 API）。检索相关的在检索接口（api/search.py）。
+"""
 
 from __future__ import annotations
 
@@ -6,7 +8,6 @@ import asyncio
 import json
 import logging
 import re
-from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
@@ -26,7 +27,7 @@ from ..models.model_platform import parse_client
 from ..parse import SUPPORTED_EXTENSIONS
 from ..retrieval.filters import BUILTIN_FIELDS
 from ..retrieval.pipeline import DEFAULT_RETRIEVAL_CONFIG
-from ..retrieval.service import KnowledgeRetrieval, RetrieveOptions
+from ..retrieval.service import KnowledgeRetrieval
 from ..segment.index_processor import (
     AUTOMATIC_RULES,
     HIERARCHICAL_DEFAULT_RULES,
@@ -40,7 +41,6 @@ from .serializers import (
     document_out,
     index_version_out,
     metadata_field_out,
-    query_out,
     rule_out,
     segment_out,
 )
@@ -101,7 +101,7 @@ async def meta(rt: RuntimeDep, p: PrincipalDep) -> dict[str, Any]:
             {"provider": "fastembed", "model": rt.settings.rerank_model},
             *({"provider": rerank_provider, "model": m} for m in rerankers),
         ],
-        "operations": sorted(p.operations & {"kb:create", "kb:review"}),
+        "operations": sorted(p.operations & {"kb:create"}),
         "trace_url_template": rt.settings.trace_url_template,
     }
 
@@ -123,7 +123,6 @@ class DatasetBody(BaseModel):
     retrieval_config: dict[str, Any] | None = None
     enhancements: dict[str, Any] | None = None
     doc_form: str | None = None
-    review_required: bool | None = None
 
 
 class GrantSubject(BaseModel):
@@ -442,20 +441,13 @@ async def upload_documents(
     process_rule: Annotated[str | None, Form()] = None,
     doc_form: Annotated[str | None, Form()] = None,
     metadata: Annotated[str | None, Form()] = None,
-    acl: Annotated[str | None, Form()] = None,
     valid_from: Annotated[str | None, Form()] = None,
     valid_to: Annotated[str | None, Form()] = None,
     supersedes: Annotated[UUID | None, Form()] = None,
 ) -> dict[str, Any]:
-    """可选：metadata（JSON 对象）、acl（JSON 数组）、生效区间、
+    """可选：metadata（JSON 对象）、生效区间、
     supersedes（作为哪份文档的新版本）。"""
     access = await DatasetService(session, rt).access(dataset_id, p)
-    acl_list = None
-    if acl:
-        try:
-            acl_list = json.loads(acl)
-        except ValueError as exc:
-            raise Invalid("acl 不是合法的 JSON") from exc
     batch, docs = await DocumentService(session, rt).upload(
         access,
         await _files(files),
@@ -463,7 +455,6 @@ async def upload_documents(
         doc_form=doc_form,
         attrs={
             "metadata": _json_form(metadata, "metadata"),
-            "acl": acl_list,
             "valid_from": valid_from,
             "valid_to": valid_to,
             "supersedes": supersedes,
@@ -564,11 +555,10 @@ async def get_document_asset(
 
 
 class RenameBody(BaseModel):
-    """文档属性修改：名称、元数据、权限、生效区间、是否当前版本（改完只更新 payload）。"""
+    """文档属性修改：名称、元数据、生效区间、是否当前版本（改完只更新 payload）。"""
 
     name: str | None = None
     metadata: dict[str, Any] | None = None
-    acl: list[str] | None = None
     valid_from: str | None = None
     valid_to: str | None = None
     is_current: bool | None = None
@@ -689,23 +679,6 @@ async def documents_status(
         return {"result": "success"}
     else:
         await svc.set_status(access, docs, action)
-    return {"result": "success", "documents": [document_out(d) for d in docs]}
-
-
-class ReviewBody(BaseModel):
-    document_ids: list[UUID] = Field(min_length=1)
-    approve: bool
-    note: str | None = None
-
-
-@router.post("/datasets/{dataset_id}/documents-review")
-async def review_documents(
-    dataset_id: UUID, body: ReviewBody, session: SessionDep, rt: RuntimeDep, p: PrincipalDep
-) -> dict[str, Any]:
-    access = await DatasetService(session, rt).access(dataset_id, p)
-    svc = DocumentService(session, rt)
-    docs = await svc.many(access, body.document_ids)
-    await svc.review(access, docs, approve=body.approve, note=body.note)
     return {"result": "success", "documents": [document_out(d) for d in docs]}
 
 
@@ -888,87 +861,4 @@ async def delete_child(
     await svc.delete_child(access, doc, await svc.get(doc, segment_id), child_id)
 
 
-# ───────────────────────────────────────────── 召回测试
-
-
-class ScopeBody(BaseModel):
-    """检索的企业级参数（§7）：对话历史（改写用）、元数据过滤、按时间点、含历史版本。"""
-
-    history: list[dict[str, str]] | None = Field(default=None, max_length=50)
-    filter: dict[str, Any] | None = None
-    as_of: datetime | None = None
-    include_superseded: bool = False
-
-    def options(self) -> RetrieveOptions:
-        return RetrieveOptions(
-            history=self.history,
-            filter=self.filter,
-            as_of=self.as_of,
-            include_superseded=self.include_superseded,
-        )
-
-
-class HitTestingBody(ScopeBody):
-    query: str
-    retrieval_config: dict[str, Any] | None = None
-    #: 用指定的索引版本检索（切换前对比新旧版本，§6.2）；默认 active 版本
-    index_version_id: UUID | None = None
-
-
-@router.post("/datasets/{dataset_id}/hit-testing")
-async def hit_testing(
-    dataset_id: UUID, body: HitTestingBody, session: SessionDep, rt: RuntimeDep, p: PrincipalDep
-) -> dict[str, Any]:
-    access = await DatasetService(session, rt).access(dataset_id, p)
-    version = None
-    if body.index_version_id is not None:
-        version = await IndexVersionService(session, rt).get(access.ds, body.index_version_id)
-    return await KnowledgeRetrieval(session, rt).hit_testing(
-        access, body.query, body.retrieval_config, version=version, opts=body.options()
-    )
-
-
-@router.get("/datasets/{dataset_id}/queries")
-async def list_queries(
-    dataset_id: UUID,
-    session: SessionDep,
-    rt: RuntimeDep,
-    p: PrincipalDep,
-    page: Page = 1,
-    limit: Limit = 20,
-) -> dict[str, Any]:
-    access = await DatasetService(session, rt).access(dataset_id, p)
-    rows = await KnowledgeRetrieval(session, rt).queries(access, page=page, limit=limit)
-    return {"data": [query_out(q) for q in rows], "page": page, "limit": limit}
-
-
-class RetrieveBody(ScopeBody):
-    #: 知识集的检索测试会带上集里全部能读的库（与智能体运行时的上限一致）
-    dataset_ids: list[UUID] = Field(min_length=1, max_length=200)
-    query: str
-    retrieval_config: dict[str, Any] | None = None
-
-
-@router.post("/retrieve")
-async def retrieve(
-    body: RetrieveBody, session: SessionDep, rt: RuntimeDep, p: PrincipalDep
-) -> dict[str, Any]:
-    """多库检索（服务账号 / 前端用）：调用方须能读每个库。"""
-    res = await KnowledgeRetrieval(session, rt).retrieve(
-        p,
-        body.dataset_ids,
-        body.query,
-        body.retrieval_config,
-        source="api",
-        opts=body.options(),
-    )
-    return res.as_dict(body.query)
-
-
-@router.get("/retrievals/{retrieval_id}")
-async def get_retrieval(
-    retrieval_id: UUID, session: SessionDep, rt: RuntimeDep, p: PrincipalDep
-) -> dict[str, Any]:
-    """一次检索的过程：各环节候选的漏斗（排查「为什么没检索到 / 为什么排在后面」）。"""
-    svc = KnowledgeRetrieval(session, rt)
-    return await svc.funnel(await svc.get(p, retrieval_id))
+# 召回测试、检索、检索记录与漏斗在检索接口（api/search.py）

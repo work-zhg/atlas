@@ -149,13 +149,11 @@ class KnowledgeRetrieval:
         source_ref: str | None,
         actor: str,
         single: bool,
-        principals: dict[str, list[str] | None],
         opts: RetrieveOptions | None = None,
     ) -> RetrieveResult:
         """开根 span → 查询理解 → 检索 → 落 kb_retrieval 与 kb_query_log。
 
-        datasets：带着要查的索引版本的知识库（_VersionView）。
-        principals：库 uuid → 主体标签（None = 该库不做文档级权限过滤，库管理员调试用）。
+        datasets：带着要查的索引版本的知识库（_VersionView）。调用方已核对过库级权限。
         """
         opts = opts or RetrieveOptions()
         rec = RetrievalRecorder()
@@ -196,7 +194,6 @@ class KnowledgeRetrieval:
                 conditions = {
                     str(d.uuid): scope_filter(
                         Scope(
-                            principals=principals.get(str(d.uuid)),
                             as_of=opts.as_of,
                             include_superseded=opts.include_superseded,
                             filter=user_filter,
@@ -281,10 +278,6 @@ class KnowledgeRetrieval:
                         "filter": user_filter,
                         "as_of": opts.as_of.isoformat() if opts.as_of else None,
                         "include_superseded": opts.include_superseded,
-                        "acl": {
-                            u: ("bypass" if t is None else "enforced")
-                            for u, t in principals.items()
-                        },
                     },
                 },
                 stages=rec.dump(),
@@ -370,16 +363,9 @@ class KnowledgeRetrieval:
             source_ref=None,
             actor=access.p.uid,
             single=True,
-            principals={str(ds.uuid): await self._acl(access)},
             opts=opts,
         )
         return res.as_dict(query)
-
-    async def _acl(self, access: DatasetAccess) -> list[str] | None:
-        """库管理员不受文档级权限限制（调试、管理）；其他人按主体标签过滤。"""
-        if access.is_admin:
-            return None
-        return await self._rt.principals(access.p.auth_uid)
 
     async def retrieve(
         self,
@@ -391,12 +377,12 @@ class KnowledgeRetrieval:
         source: str,
         source_ref: str | None = None,
         actor: str | None = None,
-        acl_subject: str | None = None,
+        auth_uid: str | None = None,
         opts: RetrieveOptions | None = None,
     ) -> RetrieveResult:
         """p 为 None = 内部调用（智能体运行时、会话 Pod 里的 MCP）。
 
-        库级、文档级权限都按这一轮的 auth-uid（acl_subject）判：以 Agent 为权限时是它的数字员工，
+        库级权限按这一轮的 auth-uid 判：以 Agent 为权限时是它的数字员工，
         以人为权限时是使用者本人（内网身份传递 §8）。读不到的库跳过、记进 skipped，由调用方提示；
         没有主体一个库都读不到。actor 只进检索记录（谁在用）。
         """
@@ -404,13 +390,11 @@ class KnowledgeRetrieval:
         if not dataset_uuids:
             raise Invalid("请选择知识库")
         datasets: list[Dataset] = []
-        principals: dict[str, list[str] | None] = {}
         skipped: list[str] = []
         if p is not None:
             for u in dict.fromkeys(dataset_uuids):
                 access = await load_dataset(self._s, self._rt.perms, u, p)
                 datasets.append(access.ds)
-                principals[str(u)] = await self._acl(access)
         else:
             wanted = list(dict.fromkeys(dataset_uuids))
             rows = {
@@ -419,7 +403,7 @@ class KnowledgeRetrieval:
                     await self._s.scalars(select(Dataset).where(Dataset.uuid.in_(wanted)))
                 ).all()
             }
-            subject = acl_subject or actor
+            subject = auth_uid or actor
             public = {u for u, d in rows.items() if d.visibility == "public"}
             ok = await readable_ids(
                 self._rt.perms, subject, [u for u in wanted if u in rows], public
@@ -430,8 +414,6 @@ class KnowledgeRetrieval:
                 return RetrieveResult(
                     records=[], retrieval_id="", trace_id=None, elapsed_ms=0, skipped=skipped
                 )
-            tags = await self._rt.principals(subject)
-            principals = {str(d.uuid): tags for d in datasets}
         actives = await versions.active_versions(self._s, [d.uuid for d in datasets])
         res = await self._traced(
             [_VersionView(d, actives[d.uuid]) for d in datasets],
@@ -441,7 +423,6 @@ class KnowledgeRetrieval:
             source_ref=source_ref,
             actor=actor or (p.uid if p else "system"),
             single=False,
-            principals=principals,
             opts=opts,
         )
         res.skipped = skipped

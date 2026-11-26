@@ -14,14 +14,17 @@ import { useQueryClient } from "@tanstack/react-query";
 import { App, Button, Empty, Input, Space } from "antd";
 import { useMemo, useState } from "react";
 
-import { api, BASE_PATH, errorText, writeHeaders } from "@/lib/api";
+import { refreshSession } from "@atlas/chat-ui/src/lib/session";
+
+import { api, API_BASE, errorText, writeHeaders } from "@/lib/api";
 import type { NodeDetail, ProcessDetail } from "@/lib/types";
 
 export function NodeConversation({ process, node }: { process: ProcessDetail; node: NodeDetail }) {
   const client = useMemo<AtlasClientConfig>(
     () => ({
-      apiBase: `${BASE_PATH}/api/v1/processes/${process.id}/nodes/${node.node_id}/atlas`,
+      apiBase: `${API_BASE}/api/v1/processes/${process.id}/nodes/${node.node_id}/atlas`,
       headers: writeHeaders,
+      refresh: refreshSession,
     }),
     [process.id, node.node_id],
   );

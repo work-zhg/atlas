@@ -17,7 +17,7 @@
 # ★ 运营接口（/ops/v1）的签名密钥在 Secret atlas-ops-keys 的 modelgateway（apply.sh 建，运营中心持有同一把）
 # ★ 迁移 m0004 把已有数据归到原平台租户：ConfigMap atlas-tenancy 的 backfill_uuid（apply.sh 按 .env 的
 #   TENANT_BACKFILL_UUID 建）。表里有数据却没给，迁移失败、Pod 起不来。
-# ★ 管理接口经网关（nginx）登录后访问；/internal（给 Atlas、知识库）只在集群内，nginx 不转发。
+# ★ 管理接口经 API 网关（/model/…，验 JWT）访问；/internal（给 Atlas、知识库）只在集群内，网关不转发。
 #   ★ /internal 要带 X-Tenant-Id（应用替自己的租户取 Key）。
 apiVersion: apps/v1
 kind: Deployment
@@ -53,7 +53,7 @@ spec:
             - {name: ATLAS_MODELGW_DATABASE_URL, value: "postgresql+asyncpg://atlas:atlas@__HOST_IP__:5433/atlas_modelgateway"}
             - {name: ATLAS_MODELGW_UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
             - {name: ATLAS_MODELGW_REDIS_URL, value: "redis://__HOST_IP__:6380/5"}
-            # 页面上的调用示例：同一个域名的 /llm（nginx 转给模型网关）
+            # 页面上的调用示例：同一个域名的 /llm（API 网关转给模型网关）
             - {name: ATLAS_MODELGW_GATEWAY_PUBLIC_URL, value: "__PUBLIC_ORIGIN__/llm"}
             - name: ATLAS_MODELGW_SECRET_KEYS
               valueFrom: {secretKeyRef: {name: atlas-modelgw-creds, key: secret_keys}}
@@ -143,3 +143,33 @@ spec:
   type: ClusterIP
   selector: {app: atlas-llmgateway}
   ports: [{port: 8091, targetPort: 8091}]
+---
+# 内部 Ingress：API 网关把 /model/… 去掉前缀后发到这里，Host = model.internal.techstz.com
+#   （infra-platform/gateway/routes.yaml；Traefik 只在集群内，见 deploy/server/traefik-values.yaml）
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlas-modelgateway
+  namespace: atlas-system
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: model.internal.techstz.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: atlas-modelgateway, port: {number: 8090}}}}
+---
+# 内部 Ingress：API 网关把 /llm/… 去掉前缀后发到这里，Host = llm.internal.techstz.com
+#   （infra-platform/gateway/routes.yaml；Traefik 只在集群内，见 deploy/server/traefik-values.yaml）
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlas-llmgateway
+  namespace: atlas-system
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: llm.internal.techstz.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: atlas-llmgateway, port: {number: 8091}}}}

@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 
 from atlas_jobs import Job, JobContext, NoParams
-from atlas_opsapi import TenantGate
 from atlas_tenancy import SystemReason, TenantScope
 
 from . import wiring
@@ -28,12 +27,10 @@ async def refresh_due(
     settings: GatewaySettings,
     uc: UserCenter,
     upstream: UpstreamGateway,
-    gate: TenantGate | None = None,
 ) -> list[str]:
     """拉一轮到期的服务，返回拉了哪些。每个服务一个事务：一个出错不影响别的。
 
     ★ 跨租户巡检的固定写法：在系统范围里领（只拿服务名和租户），逐个进入服务所属的租户去拉。
-      停用的租户的不拉（领到了也跳过，租约过期后恢复了再拉）。
     """
     sessionmaker = get_sessionmaker()
     with TenantScope.system(SystemReason.SWEEP):
@@ -42,8 +39,6 @@ async def refresh_due(
             await session.commit()
     done: list[str] = []
     for name, tenant in due:
-        if gate is not None and not await gate.is_active(tenant):
-            continue
         try:
             with TenantScope.enter(tenant):
                 async with sessionmaker() as session:
@@ -65,10 +60,8 @@ class ToolRefresh(Job):
         settings: GatewaySettings,
         uc: UserCenter,
         upstream: UpstreamGateway,
-        gate: TenantGate | None = None,
     ) -> None:
         self._settings, self._uc, self._upstream = settings, uc, upstream
-        self._gate = gate
 
     async def execute(self, ctx: JobContext, params: NoParams) -> None:
-        await refresh_due(self._settings, self._uc, self._upstream, self._gate)
+        await refresh_due(self._settings, self._uc, self._upstream)

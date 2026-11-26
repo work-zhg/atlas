@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from uc_testkit import OPS_KEY
 
 TEST_DB = "atlas_usercenter_test"
-_ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
+_ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/postgres"
 TEST_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{TEST_DB}"
 
 
@@ -30,6 +30,8 @@ def _test_database() -> Iterator[None]:
     os.environ["ATLAS_UC_DATABASE_URL"] = TEST_URL
     # 运营接口的签名密钥（uc_testkit.OpsClient 用同一把）
     os.environ["ATLAS_UC_OPS_API_KEY"] = OPS_KEY
+    # 测试客户端直接访问 /api/…（没有网关的 /uc 前缀）：刷新令牌的 Cookie 路径也不带前缀
+    os.environ["ATLAS_UC_COOKIE_PATH_PREFIX"] = ""
     get_settings.cache_clear()
 
     async def _ensure() -> None:

@@ -37,7 +37,7 @@ from sqlalchemy import delete, select, text
 from tests.fakes import bind_service_model, unbind_service_model
 
 MEMORY_DB = "atlas_memory_test"
-_ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
+_ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/postgres"
 MEMORY_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{MEMORY_DB}"
 
 
@@ -121,12 +121,8 @@ async def memory_app(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Any]:
     from atlas_memory.scopes import ScopeService
 
     async with memory_sessions()() as session:
-        # 租户状态也清：记忆服务自己的测试会停用测试租户
         await session.execute(
-            text(
-                "TRUNCATE mem_scope, mem_instance, mem_topic, mem_entry, mem_revision,"
-                " app_tenant_state, app_ops_request"
-            )
+            text("TRUNCATE mem_scope, mem_instance, mem_topic, mem_entry, mem_revision")
         )
         await ScopeService(session).create(
             code="user",

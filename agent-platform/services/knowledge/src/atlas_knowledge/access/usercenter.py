@@ -4,8 +4,8 @@
                 操作码、角色、所属租户（按 auth-uid + 租户缓存）
     数据权限    /open/v1/data-permissions*
                 库级权限，数据编码 AtlasKnowledgeBase（perms.py）
-    用户与部门  GET /open/v1/users/{id}、/depts/tree
-                主体展开（principals.py）、知识集维护人姓名
+    用户        GET /open/v1/users/{id}
+                知识集维护人姓名
 
 以 Atlas 应用的身份调（知识库是 Atlas 的数据，数据编码登记在它名下）：内网免令牌，请求头写
 X-Caller-App: atlas，并透传本次调用的身份请求头（auth.outbound_headers）。
@@ -123,18 +123,10 @@ class UserCenterGateway:
         self._snapshots.put((auth_uid, tenant), snap, self._ttl)
         return snap
 
-    # ------------------------------------------------------------------ 用户与部门
+    # ------------------------------------------------------------------ 用户
 
     async def user(self, user_id: str) -> dict[str, Any]:
         return dict(await self._call("GET", f"/open/v1/users/{user_id}"))
-
-    async def roles(self, user_id: str) -> list[str]:
-        """Atlas 应用内的角色（授权快照里的，按本次调用的租户）。"""
-        snap = await self._call("GET", f"/open/v1/users/{user_id}/authz")
-        return [str(r) for r in snap.get("roles") or []]
-
-    async def dept_tree(self) -> list[dict[str, Any]]:
-        return list(await self._call("GET", "/open/v1/depts/tree"))
 
     async def user_names(self, user_ids: list[str]) -> dict[str, str]:
         """→ {用户 id: 姓名}（知识集维护人显示用）；查不到的不在结果里。"""

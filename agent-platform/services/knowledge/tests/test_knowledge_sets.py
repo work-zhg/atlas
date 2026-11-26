@@ -130,7 +130,7 @@ async def test_dataset_without_set_gets_its_own(client: Any) -> None:
     assert [g["subject"]["type"] for g in acl] == ["USER"]
 
 
-async def test_internal_readable_sets(client: Any) -> None:
+async def test_readable_sets(client: Any) -> None:
     hr = await _set(client, top_k=5)
     public = await _kb(client, set_id=hr["id"], name="考勤", visibility="public")
     await _kb(client, set_id=hr["id"], name="薪酬")
@@ -140,7 +140,7 @@ async def test_internal_readable_sets(client: Any) -> None:
 
     def call(who: str, set_ids: list[str] | None) -> Any:
         return client.post(
-            "/internal/v1/knowledge-sets/readable",
+            "/v1/knowledge-sets/readable",
             json={"set_ids": set_ids},
             headers={"X-Uid": who, "X-Auth-Uid": who},
         )

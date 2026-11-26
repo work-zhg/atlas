@@ -816,7 +816,7 @@ async def test_admission_is_a_hard_limit_for_concurrent_spawns(client_factory, m
     """★ 同一批并发派出的 SubAgent 不能一起冲过并发上限。
 
     以前准入是「先数再建」、中间不锁：几个并发的 spawn 数到的都是派之前的数，于是一起通过。
-    现在「数 → 建子 run 和任务书」在准入锁里、一个事务里做。派发换成空操作，子 run 留在排队里
+    现在「数 → 找 / 建子会话 → 建子 run 和任务书」都在准入锁里做。派发换成空操作，子 run 留在排队里
     一直算数，结果不受子 run 跑多快影响。
     """
     from atlas_agent.redisx import make_redis
@@ -878,3 +878,10 @@ async def test_admission_is_a_hard_limit_for_concurrent_spawns(client_factory, m
                 await session.execute(select(Message).where(Message.run_uuid == run.run_uuid))
             ).scalars()
             assert len(list(briefs)) == 1
+        # ★ 被拒的那个不留子会话：找 / 建子会话在准入锁里、数过之后
+        children = (
+            await session.execute(
+                select(Thread).where(Thread.parent_thread_uuid == UUID(thread_id))
+            )
+        ).scalars()
+        assert len(list(children)) == 2

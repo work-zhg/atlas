@@ -65,6 +65,13 @@ class FakeRawRedis:
         self.kv[key] = val
         return val
 
+    async def getset(self, key: str, value: Any) -> Any:
+        self.calls.append(("GETSET", (key, value)))
+        self._maybe_fail()
+        previous = self.kv.get(key)
+        self.kv[key] = value
+        return previous
+
     def pipeline(self, transaction: bool = False) -> _FakePipeline:
         return _FakePipeline(self)
 
@@ -221,6 +228,27 @@ async def test_resilience_retries_idempotent_read_but_never_retries_write() -> N
     raw.failures = [RedisConnectionError("reset")]
     with pytest.raises(RedisUnavailable):
         await client.incr("counter")
+    assert len(raw.calls) == 1
+
+
+async def test_getset_returns_the_previous_value_and_is_never_retried() -> None:
+    """★ GETSET 是写：断连不重试。重试的话，第一次其实写进去了时，拿回的是自己刚写的值。"""
+    raw = FakeRawRedis()
+    breaker = CircuitBreaker(service="agent", failure_threshold=3, recovery_s=10.0)
+    client = RedisClient(
+        raw,
+        service="agent",
+        middlewares=(ResilienceMiddleware(breaker, retry_backoff_s=0.0),),
+    )
+
+    assert await client.getset("seen", "a") is None
+    assert await client.getset("seen", "b") == "a"
+    assert raw.kv["seen"] == "b"
+
+    raw.calls.clear()
+    raw.failures = [RedisConnectionError("reset")]
+    with pytest.raises(RedisUnavailable):
+        await client.getset("seen", "c")
     assert len(raw.calls) == 1
 
 

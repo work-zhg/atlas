@@ -1,7 +1,10 @@
-"""用户中心管理台的登录与会话（只服务于用户中心自身，不对外提供 SSO）。
+"""登录与令牌（c4-model/apigateway/code-auth.html）：访问 JWT + 刷新令牌，Web 和手机同一套。
 
-★ 会话首版存 PG（uc_session），令牌只存 SHA-256；Cookie HttpOnly + SameSite=Lax，
-  写请求另校验双提交的 CSRF 令牌（api/deps.py）。
+★ 访问 JWT（15 分钟，Ed25519，auth/tokens.py）：网关本地验签，热路径不回调用户中心。
+★ 刷新令牌（14 天，从登录起算、轮换不续期）存 PG 的 uc_session，只存 SHA-256：停用、重置密码、
+  改密时按人删掉（user/service.py），立刻不能再换新的访问令牌。每次刷新都换一个新的；
+  旧的留 refresh_grace_s 秒（两个标签页同时刷新、弱网重传），过了宽限期还拿旧的来 = 被盗用，
+  整个会话作废。
 ★ 租户（租户设计 §08）：管理台登录 = 企业代码 + 账号 + 密码；账号只在租户内唯一。
   只有一个租户时可以不填企业代码。企业代码不存在与账号密码错误给同一句提示，不让人枚举租户。
 """
@@ -13,7 +16,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..audit import Actor, record
@@ -23,14 +26,18 @@ from ..db.types import utcnow
 from ..errors import Forbidden, Unauthorized
 from ..security import hash_token, new_token, verify_password
 from ..settings import UCSettings
+from .tokens import TokenError, keyring
 
-__all__ = ["AuthService", "LoginResult", "Verified"]
+__all__ = ["AuthService", "Issued", "Verified"]
 
 
 @dataclass
-class LoginResult:
+class Issued:
+    """登录或刷新的结果：一个访问 JWT + 一个刷新令牌（明文只在这次响应里出现）。"""
+
     user: User
-    token: str
+    access_token: str
+    refresh_token: str
     session_uuid: UUID
     must_change_password: bool
 
@@ -117,23 +124,68 @@ class AuthService:
 
     async def login(
         self, account: str, password: str, ip: str | None, tenant_code: str | None = None
-    ) -> LoginResult:
+    ) -> Issued:
         await self.enter_tenant(tenant_code, account, ip)
         user, cred, account = await self._authenticate(account, password, ip)
         now = utcnow()
         user.last_login_at = now
         user.last_login_ip = ip
-        token = new_token()
+        refresh = new_token()
         sess = Session(
-            token_hash=hash_token(token),
+            token_hash=hash_token(refresh),
             user_uuid=user.uuid,
             ip=ip,
-            expires_at=now + timedelta(hours=self.settings.session_hours),
+            expires_at=now + timedelta(days=self.settings.refresh_days),
         )
         self.session.add(sess)
         self._log(account, user, ip, True)
         await self.session.flush()
-        return LoginResult(user, token, sess.uuid, cred.must_change_password)
+        access = self.access_token(user, sess.uuid, cred.must_change_password)
+        return Issued(user, access, refresh, sess.uuid, cred.must_change_password)
+
+    def access_token(self, user: User, session_uuid: UUID | None, must_change: bool) -> str:
+        return keyring(self.settings).issue(user.uuid, user.tenant_uuid, session_uuid, must_change)
+
+    async def refresh(self, raw: str | None) -> Issued:
+        """用刷新令牌换一对新的。每次都轮换；用户停用、租户停用或到期、会话过期 → 401。"""
+        from ..tenant.service import get_tenant, tenant_usable
+
+        if not raw:
+            raise Unauthorized("REFRESH_INVALID", "登录已过期，请重新登录")
+        digest = hash_token(raw)
+        now = utcnow()
+        with platform_scope(self.session):
+            sess = await self.session.scalar(
+                select(Session).where(
+                    or_(Session.token_hash == digest, Session.prev_token_hash == digest)
+                )
+            )
+            if sess is None or sess.expires_at < now:
+                raise Unauthorized("REFRESH_INVALID", "登录已过期，请重新登录")
+            if sess.token_hash != digest:
+                # 拿的是轮换前的旧令牌：宽限期内照常换（并发刷新）；
+                # 过了宽限期 = 被盗用，作废整个会话
+                grace = timedelta(seconds=self.settings.refresh_grace_s)
+                if sess.rotated_at is None or sess.rotated_at + grace < now:
+                    await self.session.delete(sess)
+                    await self.session.flush()
+                    raise Unauthorized("REFRESH_REUSED", "登录状态异常，请重新登录")
+            user = await self.session.scalar(select(User).where(User.uuid == sess.user_uuid))
+            cred = await self.session.scalar(
+                select(Credential).where(Credential.user_uuid == sess.user_uuid)
+            )
+            if user is None or cred is None or user.status == "disabled":
+                raise Unauthorized("REFRESH_INVALID", "账号已停用")
+            tenant = await get_tenant(self.session, user.tenant_uuid)
+            if not tenant_usable(tenant):
+                raise Unauthorized("TENANT_DISABLED", "企业账号已停用或已到期，请联系管理员")
+            fresh = new_token()
+            sess.prev_token_hash = sess.token_hash
+            sess.token_hash = hash_token(fresh)
+            sess.rotated_at = now
+            await self.session.flush()
+        access = self.access_token(user, sess.uuid, cred.must_change_password)
+        return Issued(user, access, fresh, sess.uuid, cred.must_change_password)
 
     async def _authenticate(
         self, account: str, password: str, ip: str | None
@@ -184,7 +236,9 @@ class AuthService:
                     reason=f"连续 {self.settings.lock_after_failures} 次密码错误",
                 )
                 await self.session.flush()
-                raise Forbidden(
+                # ★ 触发锁定的这一次也是「凭据不对」：回 401，网关按 IP 数登录失败时算得上它
+                #   （已经锁定的账号不验密码，回 403、不计数）
+                raise Unauthorized(
                     "ACCOUNT_LOCKED",
                     f"连续 {self.settings.lock_after_failures} 次密码错误，账号已锁定",
                 )
@@ -228,16 +282,25 @@ class AuthService:
         ).scalar_one()
         return user, sess, cred
 
-    async def verify(self, token: str | None) -> Verified:
-        """网关 auth_request（内网身份传递 §4）：会话 → (用户, 租户)。失败抛 Unauthorized。"""
+    async def verify(self, *, access: str | None, legacy: str | None) -> Verified:
+        """旧网关的 auth_request（切到 API 网关之前还在用）：访问 JWT 或旧会话 → (用户, 租户)。
+
+        ★ 访问 JWT 只验签名和有效期（和新网关一样不查库）；旧会话 Cookie 是升级前登录的，查库。
+        """
         from ..tenant.service import get_tenant, tenant_usable
 
-        key = hash_token(token) if token else ""
+        if access:
+            try:
+                c = keyring(self.settings).verify(access)
+            except TokenError as exc:
+                raise Unauthorized(exc.code, "登录已过期，请重新登录") from exc
+            return Verified(c.user_uuid, c.tenant_uuid, c.must_change_password)
+        key = hash_token(legacy) if legacy else ""
         hit = verify_cache.get(key) if key else None
         if hit is not None:
             return hit
         with platform_scope(self.session):
-            user, _, cred = await self.resolve(token)
+            user, _, cred = await self.resolve(legacy)
             tenant = await get_tenant(self.session, user.tenant_uuid)
         if not tenant_usable(tenant):
             raise Unauthorized("TENANT_DISABLED", "企业账号已停用或已到期，请联系管理员")
@@ -245,9 +308,17 @@ class AuthService:
         verify_cache.put(key, v, self.settings.verify_cache_ttl_s)
         return v
 
-    async def logout(self, token: str | None) -> None:
-        if token:
-            verify_cache.drop(hash_token(token))
-            await self.session.execute(
-                delete(Session).where(Session.token_hash == hash_token(token))
-            )
+    async def logout(self, refresh: str | None, *, session_uuid: UUID | None = None) -> None:
+        """作废一个会话：按刷新令牌（登出、手机吊销），
+        或按访问令牌里的 sid（刷新 Cookie 不在时）。"""
+        with platform_scope(self.session):
+            if refresh:
+                verify_cache.drop(hash_token(refresh))
+                digest = hash_token(refresh)
+                await self.session.execute(
+                    delete(Session).where(
+                        or_(Session.token_hash == digest, Session.prev_token_hash == digest)
+                    )
+                )
+            if session_uuid is not None:
+                await self.session.execute(delete(Session).where(Session.uuid == session_uuid))

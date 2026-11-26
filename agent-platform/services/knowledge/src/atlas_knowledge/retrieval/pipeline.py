@@ -12,7 +12,7 @@
 企业级扩展（doc/knowledge-enterprise-design.html §7）：
     查询理解（retrieval/query.py）给出 QueryPlan：多个表述（改写、多查询、HyDE）各自召回，
     RRF（倒数排名融合）合并后再重排；复合问题拆成子问题各走一遍，结果按子问题分组、再 RRF 合并
-    检索范围（retrieval/filters.py）：文档级权限、版本与时效、元数据过滤，作为召回的附加过滤
+    检索范围（retrieval/filters.py）：版本与时效、元数据过滤，作为召回的附加过滤
     多样性：MMR（重排后、组装前，point 级）→ 每文档上限 → 相邻分段合并（组装后，分段级）
 
 每个环节经 RetrievalRecorder 记下候选并开 span（retrieval/recorder.py）：

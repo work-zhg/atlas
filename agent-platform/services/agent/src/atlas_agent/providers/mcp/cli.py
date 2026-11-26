@@ -10,6 +10,8 @@ ACP Agent 的 MCP client 是会话 Pod 里的 CLI：Atlas 只在建会话时把�
     服务仍然对已打开的会话生效（网关每个请求都判）
   · **智能体 Key 进 Pod**：有意接受的风险，Key 的能力不超出授给它的权限
   · Key 停用了、没被授权的服务不下发，并说明原因（与 Native 的装配同一套规则）
+  · **身份凭据**：每一项都带上 X-Identity-Grant（providers/mcp/grant.py），网关据此给上游写这一轮
+    的 auth-uid；能用哪些服务仍只按 Key 判
 """
 
 from __future__ import annotations
@@ -23,8 +25,24 @@ from atlas_engine.contracts.mcp_naming import parse_tool_id
 
 from .catalog import McpCatalog, McpUnavailable
 from .gateway import AgentAccess
+from .grant import GRANT_HEADER
 
-__all__ = ["cli_mcp_servers"]
+__all__ = ["cli_mcp_servers", "gateway_entry"]
+
+
+def gateway_entry(
+    name: str, url: str, *, key: str, user_id: UUID, grant: str | None
+) -> dict[str, Any]:
+    """session.open 里网关上一个服务的 MCP 配置：网关地址、智能体的 Key、身份凭据。"""
+    headers = [
+        {"name": "Authorization", "value": f"Bearer {key}"},
+        # 使用者：只作审计，网关照转；权限主体（Key 的 uid）由网关写入
+        {"name": "X-Uid", "value": str(user_id)},
+    ]
+    if grant:
+        headers.append({"name": GRANT_HEADER, "value": grant})
+    # ★ ACP 的 headers 是数组，不是对象；网关上的地址：Pod 只连网关，看不到上游
+    return {"type": "http", "name": name, "url": url, "headers": headers}
 
 
 async def cli_mcp_servers(
@@ -35,10 +53,12 @@ async def cli_mcp_servers(
     digests: Mapping[str, str],
     drift_policy: str,
     access: AgentAccess,
+    grant: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[tuple[EventType, dict[str, Any]]]]:
     """→ (session.open 的 mcpServers, 要告诉用户的 notices)。
 
     access：这个智能体的 Key 能用什么（服务、工具、Key），建会话前问过网关。
+    grant：这次会话的身份凭据（没配密钥时为 None）。
     """
     wanted: dict[str, list[str]] = {}
     for name in tool_names:
@@ -88,18 +108,7 @@ async def cli_mcp_servers(
 
         assert access.key is not None  # _skip_reason 已拦下没 Key 的
         servers.append(
-            {
-                "type": "http",
-                "name": name,
-                # 网关上的地址：Pod 只连网关，看不到上游
-                "url": config.url,
-                # ★ ACP 的 headers 是数组，不是对象
-                "headers": [
-                    {"name": "Authorization", "value": f"Bearer {access.key}"},
-                    # 使用者：只作审计，网关照转；权限主体（Key 的 uid）由网关写入
-                    {"name": "X-Uid", "value": str(user_id)},
-                ],
-            }
+            gateway_entry(name, config.url, key=access.key, user_id=user_id, grant=grant)
         )
     return servers, notices
 

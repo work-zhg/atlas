@@ -5,6 +5,7 @@ import { Button } from "antd";
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 
 import { useBrowserClipboard, useBrowserViewUrl } from "../api/browser";
+import { useAtlasClient } from "../client";
 import { copyText } from "../lib/clipboard";
 import styles from "./chat.module.css";
 
@@ -48,6 +49,9 @@ const PASTE_FALLBACK_MS = 150;
  */
 export function BrowserView({ threadId, interactive, height = 480 }: Props) {
   const url = useBrowserViewUrl(threadId);
+  const client = useAtlasClient();
+  // 握手被网关拒（访问令牌过期）时浏览器只给 1006、看不到 401：还没连上就断了先刷新一次再重连
+  const refreshedRef = useRef(false);
   const frame = useRef<HTMLDivElement>(null);
   const screen = useRef<HTMLDivElement>(null);
   const rfbRef = useRef<Remote | null>(null);
@@ -74,8 +78,22 @@ export function BrowserView({ threadId, interactive, height = 480 }: Props) {
       if (cancelled || !screen.current) return;
       const sock = new WebSocket(url, ["binary"]);
       sock.binaryType = "arraybuffer";
+      let opened = false;
+      sock.addEventListener("open", () => {
+        opened = true;
+        refreshedRef.current = false;
+      });
       sock.addEventListener("close", (e) => {
-        if (!cancelled) setState({ phase: "closed", message: closeText(e) });
+        if (cancelled) return;
+        if (!opened && e.code === 1006 && client.refresh && !refreshedRef.current) {
+          refreshedRef.current = true;
+          void client.refresh().then((ok) => {
+            if (ok && !cancelled) setAttempt((n) => n + 1);
+            else if (!cancelled) setState({ phase: "closed", message: closeText(e) });
+          });
+          return;
+        }
+        setState({ phase: "closed", message: closeText(e) });
       });
       ws = sock;
       const rfb = new RFB(screen.current, sock);

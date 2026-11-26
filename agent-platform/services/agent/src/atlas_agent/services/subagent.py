@@ -214,19 +214,23 @@ class SubAgentService:
         auth_subject: str | None = None,
         approval_mode: str | None = None,
     ) -> UUID:
-        thread_id = await self._resolve_thread(sub, fresh=fresh)
-
         # 子会话也是 thread，会话串行锁原样适用 —— 同名 SubAgent 因此必然串行。
         # 上面的 _inflight 只是把这个必然的冲突提前到调用时暴露。
         run_id = uuid4()
         # 锁跟随租约（横向扩展设计 §4.4）：领到子 run 的执行器续它
         ttl = max(int(self._settings.run_lease_s), 1)
-        # ★ 准入的「数 → 建」在准入锁里做，一个事务：先数再建、中间不锁的话，同一批并发派出的
+        # ★ 准入的「数 → 建」在准入锁里做：先数再建、中间不锁的话，同一批并发派出的
         #   几个 SubAgent 数到的都是派之前的数，会一起通过（软上限）
+        # ★ 找 / 建子会话也在锁里、数过之后：放在前面的话，被拒时已经建好了一次性子会话（孤儿）、
+        #   fresh=True 已经把旧的持久子会话归档了（下次「恢复」拿到的是空会话）。
+        #   代价是新会话投技能也在锁里，同一租户并发派 SubAgent 时要多等一会儿
         try:
             async with self._relay.subagent_admission_lock(TenantScope.require()).hold(
                 wait_s=_ADMISSION_WAIT_S
             ):
+                async with self._sessionmaker() as session:
+                    await self._check_admission(session, root_run_id)
+                thread_id = await self._resolve_thread(sub, fresh=fresh)
                 await self._create_run(
                     sub,
                     description,
@@ -270,9 +274,8 @@ class SubAgentService:
         auth_subject: str | None,
         approval_mode: str | None,
     ) -> None:
-        """准入锁里：再数一次 → 占子会话 → 建子 run 和它的任务书，一个事务提交。"""
+        """准入锁里、数过之后：占子会话 → 建子 run 和它的任务书，一个事务提交。"""
         async with self._sessionmaker() as session:
-            await self._check_admission(session, root_run_id)
             # ★ 锁的 TTL 不再覆盖整个 run，串行的权威与主会话一样在 DB：还有没跑完的 run
             #   就不能再起一个（排队中没人续锁时，只靠 Redis 锁会放进第二个）
             busy = await RunRepository(session).active_run_of(thread_id) is not None

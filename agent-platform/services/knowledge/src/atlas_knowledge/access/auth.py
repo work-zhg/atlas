@@ -2,16 +2,19 @@
 
 内网免令牌：身份在请求头里 —— 网关按登录态写入；atlas-server 运行时调用时写这一轮的身份。
   X-Uid         谁在用（建库人、上传人、检索记录里的发起人）
-  X-Auth-Uid    按谁的权限判，缺省 = X-Uid：库级、文档级权限都按它（只剩这一套规则）
+  X-Auth-Uid    按谁的权限判，缺省 = X-Uid：库级权限按它（只剩这一套规则）
   X-Tenant-Id   租户（必填）：带了 X-Uid 的经用户中心核对「这个人在这个租户里」，然后进入这个
-                租户，数据按它自动过滤（atlas_tenancy）。租户已停用（运营接口）的一律 403
+                租户，数据按它自动过滤（atlas_tenancy）。不知道租户状态：租户停用、到期后，
+                用户中心给这个人的快照里没有 Atlas 的访问权 → 403
   X-Caller-App  直接调用方：gateway / atlas …
 
   缺 X-Uid → 401；操作码按 auth-uid 取用户中心授权快照（以 Atlas 应用的身份，经
   usercenter.UserCenterGateway —— 调用户中心的唯一客户端）。
   没有免鉴权的模式（原 dev 模式已删除）：测试里用户中心是替身（tests/conftest.py）。
 
-/internal/*：网关一律 404，不再要服务间令牌。/mcp：会话 Pod（不可信）调用，仍凭签名令牌。
+接口按功能分（管理接口、检索接口，都在 /v1），不按调用方分：浏览器经网关、Atlas、MCP 网关调的是
+同一套接口，规则也只有这一套。本服务不判断请求是不是网关转来的 —— 请求头可不可信是网关和平台
+内网约定的事。
 
 ★ 出站透传：本服务调用户中心时原样带上本次请求的身份请求头，X-Caller-App 写
   atlas（知识库属于 Atlas 应用，数据编码登记在它名下）。
@@ -48,7 +51,7 @@ _IDENTITY_HEADERS = {"x-uid": "X-Uid", "x-auth-uid": "X-Auth-Uid", "x-tenant-id"
 
 #: 本服务关心的操作码（在 atlas-server auth/catalog.py 登记到用户中心）。
 #: ★ 没有「管理全部知识库」的操作码：那是数据权限（用户中心的「全部知识库」授权，perms.py）
-KB_OPERATIONS = frozenset({"kb:create", "kb:review"})
+KB_OPERATIONS = frozenset({"kb:create"})
 
 
 @dataclass(frozen=True)
@@ -75,7 +78,7 @@ _outbound: ContextVar[dict[str, str] | None] = ContextVar("kb_outbound_identity"
 
 
 def use_identity(uid: str | None, auth_uid: str | None = None, tenant: str | None = None) -> None:
-    """设置本任务之后的出站身份（MCP 调用按令牌里的身份设）。"""
+    """设置本任务之后的出站身份：没有入站请求、又要以某人的身份调用户中心时用。"""
     h = {}
     if uid:
         h["X-Uid"] = uid
@@ -86,7 +89,7 @@ def use_identity(uid: str | None, auth_uid: str | None = None, tenant: str | Non
 
 
 def outbound_headers() -> dict[str, str]:
-    """出站请求头。没透传到租户（入库任务、MCP）时写当前租户。"""
+    """出站请求头。没透传到租户（入库任务）时写当前租户。"""
     headers = {**(_outbound.get() or {}), "X-Caller-App": get_settings().uc_app_code}
     tenant = TenantScope.current()
     if TENANT_HEADER not in headers and tenant is not None:
@@ -111,7 +114,7 @@ class IdentityHeadersMiddleware:
         }
         token = _outbound.set(got or None)
         try:
-            # 每个请求从「没有租户」开始：由 verified_tenant 核对后进入（MCP 按令牌进入）
+            # 每个请求从「没有租户」开始：由 verified_tenant 核对后进入
             with TenantScope.isolated():
                 await self.app(scope, receive, send)
         finally:
@@ -138,24 +141,23 @@ async def _snapshot(request: Request, auth_uid: str, tenant: UUID) -> dict[str, 
 
 
 async def verified_tenant(request: Request) -> UUID:
-    """管理接口、内部接口的入口：取请求头里的租户，核对后进入它（之后的读写按它自动过滤）。
+    """管理接口、检索接口的入口：取请求头里的租户，核对后进入它（之后的读写按它自动过滤）。
 
-    带了用户的经用户中心核对他在这个租户里；没带的（检索的旧调用方）按请求头。
+    缺 X-Uid 一律 401；带了的经用户中心核对他在这个租户里。
     """
     tenant = parse_tenant(request.headers.get("x-tenant-id"))
     if tenant is None:
         raise HTTPException(status_code=401, detail="缺少租户（X-Tenant-Id）")
     h = request.headers
     uid = (h.get("x-uid") or "").strip()
-    if uid:
-        auth_uid = (h.get("x-auth-uid") or "").strip() or uid
-        snap = await _snapshot(request, auth_uid, tenant)
-        home = parse_tenant((snap.get("user") or {}).get("tenant_id"))
-        if home is not None and home != tenant:
-            raise HTTPException(status_code=401, detail="请求头里的租户和用户所属的不一致")
-    gate = getattr(request.app.state, "tenant_gate", None)
-    if gate is not None and not await gate.is_active(tenant):
-        raise HTTPException(status_code=403, detail="所在的组织已停用")
+    if not uid:
+        # 身份只有请求头一个来源：没有兜底（请求体里的发起人、只信租户请求头都不算）
+        raise HTTPException(status_code=401, detail="请先登录")
+    auth_uid = (h.get("x-auth-uid") or "").strip() or uid
+    snap = await _snapshot(request, auth_uid, tenant)
+    home = parse_tenant((snap.get("user") or {}).get("tenant_id"))
+    if home is not None and home != tenant:
+        raise HTTPException(status_code=401, detail="请求头里的租户和用户所属的不一致")
     TenantScope.bind(tenant)
     return tenant
 

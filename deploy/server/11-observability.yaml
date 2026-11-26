@@ -3,8 +3,8 @@
 #   deploy.sh 默认装；.env 里 ATLAS_OBSERVABILITY=none 时不装，OTel Collector 换成丢弃 trace 的配置
 #   （collector-none.yaml），应用清单不变 —— 照旧往 collector 发。
 #
-# ★ __LANGFUSE_HOST__ 由 deploy.sh 替换（默认 langfuse.<服务器 IP>.nip.io）。
-# ★ Langfuse 的密钥由 deploy.sh 随机生成（Secret langfuse）—— 它的 UI 经 Ingress 对外开放，trace 里有提示词。
+# ★ Langfuse 的 UI 经 API 网关的透传站点对外（.env 的 ATLAS_LANGFUSE_HOST；网关只清身份头，登录归 Langfuse），
+#   网关写的 Host 是 langfuse.internal.techstz.com。密钥由 deploy.sh 随机生成（Secret langfuse）—— trace 里有提示词。
 # ── Jaeger（APM；内存存储，重启即清 —— 与本机一致）────────────────────
 apiVersion: apps/v1
 kind: Deployment
@@ -220,7 +220,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: __LANGFUSE_HOST__
+    - host: langfuse.internal.techstz.com
       http:
         paths:
           - path: /

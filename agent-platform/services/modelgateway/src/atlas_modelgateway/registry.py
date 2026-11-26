@@ -9,7 +9,7 @@
     公有 / 私有  公有的谁都能选；私有的授权给人或部门后才能选（授权在用户中心：数据编码 Model，
                 数据标识 = 模型名）
 
-★ 改完把配置版本号加一（notify.mark）；公有改私有、删除、停用会影响 Key 的有效模型，由调用方
+★ 改完按租户递增配置版本号（notify.mark）；公有改私有、删除、停用会影响 Key 的有效模型，由调用方
   （接口层）接着重算受影响的 Key。
 """
 
@@ -27,9 +27,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from . import audit, notify
 from .db.models import GwAccount, GwModel, GwRoute
 from .errors import Conflict, Invalid, NotFound
-from .gateway.kernel import ModelCaps, ModelKind, Price, ThinkingSupport
-from .gateway.presets import PresetRules
 from .perms import Grant, Permissions
+from .shared.kernel import ModelCaps, ModelKind, Price, ThinkingSupport
+from .shared.presets import PresetRules
 
 __all__ = ["MODEL_NAME_PATTERN", "ModelInput", "ModelRegistry", "RouteInput"]
 
@@ -136,7 +136,7 @@ class ModelRegistry:
         if grants:
             await self.perms.grant(row.name, actor, list(grants))
         audit.record(self.session, actor=actor, action="model.create", target=f"model:{row.name}")
-        notify.mark(self.session)
+        notify.mark(self.session, tenant=row.tenant_uuid, tenant_changed=True)
         return row
 
     async def update(self, row: GwModel, data: ModelInput, *, actor: str) -> bool:
@@ -158,7 +158,7 @@ class ModelRegistry:
         if renamed:
             await self.perms.rename(row.name, row.display_name)
         audit.record(self.session, actor=actor, action="model.update", target=f"model:{row.name}")
-        notify.mark(self.session)
+        notify.mark(self.session, tenant=row.tenant_uuid, tenant_changed=True)
         return affects_keys
 
     async def set_enabled(self, row: GwModel, enabled: bool, *, actor: str) -> None:
@@ -170,15 +170,16 @@ class ModelRegistry:
             action="model.enable" if enabled else "model.disable",
             target=f"model:{row.name}",
         )
-        notify.mark(self.session)
+        notify.mark(self.session, tenant=row.tenant_uuid, tenant_changed=True)
 
     async def delete(self, row: GwModel, *, actor: str) -> None:
+        tenant_uuid = row.tenant_uuid
         await self.session.execute(delete(GwRoute).where(GwRoute.model_uuid == row.uuid))
         audit.record(self.session, actor=actor, action="model.delete", target=f"model:{row.name}")
         await self.session.delete(row)
         await self.session.flush()
         await self.perms.remove(row.name)
-        notify.mark(self.session)
+        notify.mark(self.session, tenant=tenant_uuid, tenant_changed=True)
 
     # ── 线路 ───────────────────────────────────────────────────────────
 
@@ -250,5 +251,8 @@ class ModelRegistry:
     def _check_basics(data: ModelInput) -> None:
         if data.visibility not in ("public", "private"):
             raise Invalid("可见范围只能是公有或私有")
-        if any(p < 0 for p in (data.price.input, data.price.cache_hit, data.price.output)):
+        prices = [data.price.input, data.price.cache_hit, data.price.output]
+        if data.price.cache_write is not None:
+            prices.append(data.price.cache_write)
+        if any(p < 0 for p in prices):
             raise Invalid("价格不能是负数")

@@ -4,6 +4,8 @@
   （缺省按 X-Uid 推，见 deps._open_tenant）。网关不转发 /open/*。
 ★ 每个请求都限定在调用方应用：只能看到本应用的角色 / 菜单 / 数据编码、本应用可访问范围内的用户。
 ★ 也限定在租户（租户设计 §09）：别的租户的用户 / 部门 / 数据一律 404。
+★ 租户停用、到期：只读的权限查询（授权快照、操作码判定、数据权限的 check / type / accessible）
+  照常回答「无权限」，其余接口 403 TENANT_DISABLED。业务系统不知道租户状态、只认权限。
 ★ /auth/token（App Key / Secret 换令牌）留给以后经网关接入的外部应用；内网应用不用它，
   本文件的接口也不认令牌。代为校验密码（verify-password）随各应用自己的登录一起下线。
 """
@@ -13,7 +15,7 @@ from __future__ import annotations
 from typing import Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 
@@ -28,7 +30,15 @@ from ..perm.data import DataService
 from ..perm.effective import authz_snapshot, can_access
 from ..perm.service import GrantService  # noqa: F401  (保持模块加载顺序，避免循环导入)
 from ..user.digital import DigitalEmployeeService, digital_view
-from .deps import OpenActorDep, OpenAppDep, SessionDep, SettingsDep
+from .deps import (
+    OpenActorDep,
+    OpenAppDep,
+    OpenReadActorDep,
+    OpenReadAppDep,
+    SessionDep,
+    SettingsDep,
+    tenant_blocked,
+)
 
 router = APIRouter(prefix="/open/v1", tags=["open"])
 
@@ -345,7 +355,8 @@ async def depts(app: OpenAppDep, session: SessionDep) -> list[dict[str, Any]]:
 
 
 @router.get("/users/{user_id}/authz")
-async def authz(user_id: UUID, app: OpenAppDep, session: SessionDep) -> dict[str, Any]:
+async def authz(user_id: UUID, app: OpenReadAppDep, session: SessionDep) -> dict[str, Any]:
+    """★ 租户停用、到期时照常回答：can_access=false，角色、操作码、菜单都为空（无权限）。"""
     u = await _user(session, user_id)
     snap = await authz_snapshot(session, u, app)
     from ..db.types import utcnow
@@ -365,7 +376,7 @@ async def authz(user_id: UUID, app: OpenAppDep, session: SessionDep) -> dict[str
 
 
 @router.post("/authz/check")
-async def check(body: CheckBody, app: OpenAppDep, session: SessionDep) -> dict[str, Any]:
+async def check(body: CheckBody, app: OpenReadAppDep, session: SessionDep) -> dict[str, Any]:
     u = await _user(session, body.user_id)
     snap = await authz_snapshot(session, u, app)
     return {"allowed": body.permission in snap["permissions"], "roles": snap["roles"]}
@@ -477,15 +488,22 @@ async def data_rename(
     return {"ok": True}
 
 
+#: 租户停用、到期时数据权限的查询结果：无权限（业务系统按普通的无权限处理）
+_NO_PERMISSION: dict[str, Any] = {"permission": "NONE", "sources": []}
+
+
 @router.get("/data-permissions/check")
 async def data_check(
+    request: Request,
     data_code: str,
     data_id: str,
     user_id: UUID,
-    app: OpenAppDep,
-    actor: OpenActorDep,
+    app: OpenReadAppDep,
+    actor: OpenReadActorDep,
     session: SessionDep,
 ) -> dict[str, Any]:
+    if tenant_blocked(request):
+        return _NO_PERMISSION
     return await DataService(session, actor).open_check(
         app, data_code=data_code, data_id=data_id, user=await _user(session, user_id)
     )
@@ -493,9 +511,16 @@ async def data_check(
 
 @router.get("/data-permissions/type")
 async def data_type_level(
-    data_code: str, user_id: UUID, app: OpenAppDep, actor: OpenActorDep, session: SessionDep
+    request: Request,
+    data_code: str,
+    user_id: UUID,
+    app: OpenReadAppDep,
+    actor: OpenReadActorDep,
+    session: SessionDep,
 ) -> dict[str, Any]:
     """用户对某编码下全部数据的级别（数据编码级授权）。"""
+    if tenant_blocked(request):
+        return _NO_PERMISSION
     return await DataService(session, actor).open_type_level(
         app, data_code=data_code, user=await _user(session, user_id)
     )
@@ -503,10 +528,11 @@ async def data_type_level(
 
 @router.get("/data-permissions/accessible")
 async def data_accessible(
+    request: Request,
     data_code: str,
     user_id: UUID,
-    app: OpenAppDep,
-    actor: OpenActorDep,
+    app: OpenReadAppDep,
+    actor: OpenReadActorDep,
     session: SessionDep,
     min: str = "READ",
     scope: Literal["all", "data"] = "all",
@@ -514,6 +540,8 @@ async def data_accessible(
     size: int = Query(100, ge=1, le=500),
 ) -> dict[str, Any]:
     """scope=data：只看授给单条数据的（「我是成员的」），不含编码级授权。"""
+    if tenant_blocked(request):
+        return {"items": [], "total": 0, "type_permission": "NONE"}
     return await DataService(session, actor).open_accessible(
         app,
         data_code=data_code,

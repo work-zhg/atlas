@@ -18,7 +18,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import httpx
 
-from ..gateway.kernel import AccountRef, FailureKind, Format, ParamPlan, UpstreamFailure, Usage
+from ..shared.kernel import AccountRef, FailureKind, Format, ParamPlan, UpstreamFailure, Usage
 from .spec import AuthStyle, ProviderSpec
 
 __all__ = ["Op", "ProviderDialect", "StandardDialect", "error_fields", "join_url"]

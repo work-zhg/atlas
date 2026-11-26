@@ -75,6 +75,35 @@ def test_scanned_pdf_is_flagged_not_ocrd() -> None:
     assert any("OCR" in w for w in report["warnings"])
 
 
+def test_pdf_pages_are_released_as_soon_as_they_are_analyzed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """★ 每页分析完就 close：pdfplumber 把每个字符缓存成一个 dict，不关的话要等整份解析完才释放，
+    内存随页数涨（500 页峰值 2 GB，关了以后约 100 MB）。关了之后结果一样。"""
+    from atlas_knowledge.parse import pdf_layout
+    from pdfplumber.page import Page
+
+    before = parse("员工手册.pdf", employee_handbook())
+    events: list[tuple[str, int]] = []
+    analyze, close = pdf_layout._analyze_page, Page.close
+
+    def analyzing(page: Page, number: int) -> Any:
+        events.append(("analyze", number))
+        return analyze(page, number)
+
+    def closing(page: Page) -> None:
+        events.append(("close", page.page_number))
+        close(page)
+
+    monkeypatch.setattr(pdf_layout, "_analyze_page", analyzing)
+    monkeypatch.setattr(Page, "close", closing)
+    after = parse("员工手册.pdf", employee_handbook())
+    n = after.meta["page_count"]
+    # 分析一页、关一页，而不是全部分析完才关（pdf 退出时还会再关一遍，那一遍不算）
+    assert events[: 2 * n] == [e for i in range(1, n + 1) for e in (("analyze", i), ("close", i))]
+    assert [b.text for b in after.blocks] == [b.text for b in before.blocks]
+
+
 # ───────────────────────────────────────────── Office / 表格
 
 

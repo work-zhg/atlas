@@ -8,8 +8,12 @@
     python -m atlas_mcpgateway service --tenant <租户 uuid> add --file <spec.json|-> \
                                      --owner-account admin
                                      按文件登记一个服务（部署脚本用；已存在就跳过）
+    python -m atlas_mcpgateway service --platform add --file <spec.json|->
+    python -m atlas_mcpgateway service --platform list
+                                     平台服务（例如知识库）：不属于任何租户，所有租户可见，只能这样登记
 
-★ 服务归租户（多租户）：service 命令都要写明是哪个租户的，在它里面登记、列出、刷新。
+★ 服务归租户（多租户）：service 命令都要写明是哪个租户的，在它里面登记、列出、刷新；
+  平台服务写 --platform。
 
 ★ 登记服务、管理 Key、授权都在管理端页面上做（管理接口）；命令行只留部署要用的。
 """
@@ -55,7 +59,7 @@ def serve() -> None:
 
 
 def migrate(revision: str = "head") -> None:
-    """本服务的表，再加运营接口库的两张表（租户状态、运营请求；各自的版本表）。"""
+    """本服务的表，再跑运营接口库的迁移（它已经没有自己的表，0002 删掉存量库里的两张旧表）。"""
     from alembic import command
     from alembic.config import Config
 
@@ -79,13 +83,16 @@ async def _upgrade_opsapi() -> None:
         await engine.dispose()
 
 
-async def _with_catalog(fn: Callable[[ServiceCatalog, UserCenterGateway], Awaitable[Any]]) -> Any:
+async def _with_catalog(
+    fn: Callable[[ServiceCatalog, UserCenterGateway], Awaitable[Any]], *, platform: bool = False
+) -> Any:
     settings = get_settings()
     uc = UserCenterGateway(settings.uc_base_url)
     upstream = UpstreamGateway(settings)
     try:
         async with get_sessionmaker()() as session:
-            result = await fn(wiring.catalog(session, settings, uc, upstream), uc)
+            catalog = wiring.catalog(session, settings, uc, upstream, platform=platform)
+            result = await fn(catalog, uc)
             await session.commit()
             return result
     finally:
@@ -95,7 +102,7 @@ async def _with_catalog(fn: Callable[[ServiceCatalog, UserCenterGateway], Awaita
 
 
 def _print_service(row: Any) -> None:
-    state = "启用" if row.status == "enabled" else "停用"
+    state = ("启用" if row.status == "enabled" else "停用") + ("（平台）" if row.platform else "")
     fetched = f"  拉取失败：{row.fetch_error}" if row.fetch_error else ""
     print(f"{row.name:<16} {row.kind:<5} {row.visibility:<8} {state}{fetched}")
 
@@ -148,21 +155,29 @@ async def add_service(catalog: ServiceCatalog, spec: dict[str, Any], *, owner: s
 
 
 def service_command(args: argparse.Namespace) -> int:
+    if args.platform:
+        return _service_command(args)
     with TenantScope.enter(UUID(args.tenant)):
         return _service_command(args)
 
 
 def _service_command(args: argparse.Namespace) -> int:
+    platform = bool(args.platform)
     if args.action == "add":
         spec = _load_spec(args.file)
 
         async def _add(catalog: ServiceCatalog, uc: UserCenterGateway) -> Any:
+            if platform:
+                # 平台服务不在用户中心登记数据对象，也没有所有者：登记人只记个名字
+                return await add_service(catalog, spec, owner="ops-cli")
+            if not args.owner_account:
+                raise GatewayError("租户的服务要写 --owner-account（登记人成为所有者）")
             user = await uc.user_by_account(args.owner_account)
             if user is None:
                 raise GatewayError(f"用户中心里没有账号 {args.owner_account}")
             return await add_service(catalog, spec, owner=str(user["id"]))
 
-        row = asyncio.run(_with_catalog(_add))
+        row = asyncio.run(_with_catalog(_add, platform=platform))
         if row is not None:
             _print_service(row)
         return 0
@@ -174,7 +189,7 @@ def _service_command(args: argparse.Namespace) -> int:
                 for tool in await catalog.tools(row):
                     print(f"    {tool.name:<32} {tool.effect:<12} {tool.status}")
 
-        asyncio.run(_with_catalog(_list))
+        asyncio.run(_with_catalog(_list, platform=platform))
         return 0
 
     async def _refresh(catalog: ServiceCatalog, _: UserCenterGateway) -> Any:
@@ -191,14 +206,18 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("migrate")
 
     service = sub.add_parser("service")
-    service.add_argument("--tenant", required=True, help="服务所属租户的 uuid")
+    owner = service.add_mutually_exclusive_group(required=True)
+    owner.add_argument("--tenant", help="服务所属租户的 uuid")
+    owner.add_argument(
+        "--platform", action="store_true", help="平台服务：不属于任何租户，所有租户可见"
+    )
     svc = service.add_subparsers(dest="action", required=True)
     svc.add_parser("list")
     ref = svc.add_parser("refresh", help="MCP 代理：立即从上游拉一次工具定义")
     ref.add_argument("name")
     add = svc.add_parser("add", help="按文件登记一个服务（已存在就跳过）")
     add.add_argument("--file", required=True, help="登记文件（JSON / YAML）；- = 标准输入")
-    add.add_argument("--owner-account", required=True, help="登记人（成为所有者）的用户中心账号")
+    add.add_argument("--owner-account", help="登记人（成为所有者）的用户中心账号；平台服务不用")
     return parser
 
 

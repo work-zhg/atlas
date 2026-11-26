@@ -12,7 +12,7 @@ import { ErrorBox, OBSERVER_TIP, PageHead, errorText } from "@/components/common
 import { Icon } from "@/components/Icon";
 import { sys } from "@/lib/api";
 import { dateTime } from "@/lib/format";
-import { useMe, useSystems, withCapability } from "@/lib/session";
+import { useAccess, useSystems, withCapability } from "@/lib/session";
 import type { MemoryScope } from "@/lib/types";
 
 export default function ScopesPage() {
@@ -32,8 +32,9 @@ function Scopes({ code }: { code: string }) {
   const ops = sys(code);
   const qc = useQueryClient();
   const { message } = App.useApp();
-  const { data: me } = useMe();
-  const admin = me?.role === "ADMIN";
+  // 这个系统的运营模块：改要读写
+  const acc = useAccess();
+  const admin = acc.write(acc.moduleOf(code));
   const key = ["scopes", code];
   const q = useQuery({ queryKey: key, queryFn: () => ops.get<{ data: MemoryScope[] }>("/scopes") });
   const [edit, setEdit] = useState<MemoryScope | "new" | null>(null);

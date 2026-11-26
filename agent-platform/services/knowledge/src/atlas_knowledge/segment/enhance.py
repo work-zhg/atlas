@@ -7,7 +7,8 @@
                     （Contextual Retrieval）。
                     文档正文作为固定前缀（同一文档的所有调用前缀相同 → 命中网关的前缀缓存）；
                     超长文档改用分段所在的邻近内容。
-                    结果按（模型, 提示词版本, 文档哈希, 分段哈希）缓存
+                    结果按（模型, 提示词版本, 文档哈希, 分段哈希）缓存在知识库的库里
+                    （segment/enhance_cache.py，保留 30 天）
     table_summary   行数达到阈值的表格生成一段摘要（主题、维度、关键数字），作为子块入口
                     （type=summary）：汇总类的问题（「哪种假期最长」）匹配不到任何单行时，由它召回。
                     表格从 DocIR 取（不从分段里找：普通分段可能把一张表切成很多段），
@@ -25,6 +26,7 @@ from typing import Any
 from ..models.llm import ChatModel
 from ..parse.docir import DocIR, table_markdown
 from ..ragdoc import Document, text_hash
+from .enhance_cache import EnhanceCache
 
 __all__ = [
     "DEFAULT_ENHANCEMENTS",
@@ -42,7 +44,6 @@ DEFAULT_ENHANCEMENTS: dict[str, Any] = {
     "table_summary_min_rows": 8,
 }
 
-_CACHE_TTL_S = 30 * 24 * 3600
 _TABLE = re.compile(r"(^\|.*\|[ \t]*$\n?)+", re.M)
 _SEPARATOR = re.compile(r"^[\s|:\-]+$")
 
@@ -120,21 +121,6 @@ def _doc_excerpt(full: str, chunk: str, limit: int) -> str:
     return full[start : start + limit]
 
 
-async def _cached(redis: Any, key: str, produce: Any) -> str | None:
-    if redis is not None:
-        hit = await redis.get(key)
-        if hit is not None:
-            return hit.decode() if isinstance(hit, bytes) else str(hit)
-    try:
-        value = (await produce()).strip()
-    except Exception:
-        logger.warning("入库增强的 LLM 调用失败，这一项跳过", exc_info=True)
-        return None
-    if value and redis is not None:
-        await redis.set(key, value, ex=_CACHE_TTL_S)
-    return value or None
-
-
 async def enhance(
     nodes: list[Document],
     *,
@@ -142,12 +128,13 @@ async def enhance(
     tables: list[list[list[str]]] | None = None,
     cfg: dict[str, Any],
     llm: ChatModel | None,
-    redis: Any = None,
+    cache: EnhanceCache | None = None,
     doc_chars: int = 30_000,
     concurrency: int = 4,
 ) -> dict[str, int]:
     """就地增强分段：metadata.llm_context（拼进向量化前缀），表格摘要追加为 type=summary 的子块。
 
+    cache：增强结果缓存（重跑入库不用再调模型）；None = 不缓存。
     返回统计（写进解析报告）：生成了多少上下文、多少摘要、失败多少。
     """
     stats = {"contextual": 0, "table_summaries": 0, "failed": 0}
@@ -156,33 +143,64 @@ async def enhance(
     sem = asyncio.Semaphore(max(1, concurrency))
     doc_hash = text_hash(full_text)
 
-    async def call(prompt: str, max_tokens: int) -> str:
-        async with sem:
-            return await llm.complete([{"role": "user", "content": prompt}], max_tokens=max_tokens)
+    # 要增强的：(缓存键, 给模型的提示词, 最多几个 token, 结果怎么用)
+    jobs: list[tuple[str, str, int, Any]] = []
+    if cfg.get("contextual"):
+        for node in nodes:
+            excerpt = _doc_excerpt(full_text, node.page_content, doc_chars)
+            key = f"ctx:{llm.model}:{_CONTEXT_VERSION}:{doc_hash}:{text_hash(node.page_content)}"
+            prompt = _CONTEXT_PROMPT.format(document=excerpt, chunk=node.page_content[:4000])
+            jobs.append((key, prompt, 160, _context_into(node, stats)))
+    if cfg.get("table_summary"):
+        min_rows = cfg["table_summary_min_rows"]
+        for rows in tables or []:
+            node = _owner(nodes, rows) if len(rows) - 1 >= min_rows else None
+            if node is None:
+                continue
+            table = table_markdown(rows)
+            path = " > ".join(node.metadata.get("title_path") or [])
+            key = f"tbl:{llm.model}:{_TABLE_VERSION}:{text_hash(path + table)}"
+            prompt = _TABLE_PROMPT.format(path=path or "（无）", table=table[:6000])
+            jobs.append((key, prompt, 300, _summary_into(node, path, stats)))
+    if not jobs:
+        return stats
 
-    async def contextualize(node: Document) -> None:
-        excerpt = _doc_excerpt(full_text, node.page_content, doc_chars)
-        key = f"kb:enh:ctx:{llm.model}:{_CONTEXT_VERSION}:{doc_hash}:{text_hash(node.page_content)}"
-        prompt = _CONTEXT_PROMPT.format(document=excerpt, chunk=node.page_content[:4000])
-        value = await _cached(redis, key, lambda: call(prompt, 160))
+    # 开始前一次取回全部命中的；没命中的调模型，每次成功就存一条（中途被杀，做完的不丢）
+    hits = await cache.get_many(k for k, *_ in jobs) if cache is not None else {}
+
+    async def run(key: str, prompt: str, max_tokens: int, use: Any) -> None:
+        value = hits.get(key)
+        if value is None:
+            try:
+                async with sem:
+                    raw = await llm.complete(
+                        [{"role": "user", "content": prompt}], max_tokens=max_tokens
+                    )
+                value = raw.strip() or None
+            except Exception:
+                logger.warning("入库增强的 LLM 调用失败，这一项跳过", exc_info=True)
+                value = None
+            if value and cache is not None:
+                await cache.put(key, value)
         if value:
-            node.metadata["llm_context"] = value[:400]
-            stats["contextual"] += 1
+            use(value)
         else:
             stats["failed"] += 1
 
-    async def summarize_table(rows: list[list[str]]) -> None:
-        node = _owner(nodes, rows)
-        if node is None:
-            return
-        table = table_markdown(rows)
-        path = " > ".join(node.metadata.get("title_path") or [])
-        key = f"kb:enh:tbl:{llm.model}:{_TABLE_VERSION}:{text_hash(path + table)}"
-        prompt = _TABLE_PROMPT.format(path=path or "（无）", table=table[:6000])
-        value = await _cached(redis, key, lambda: call(prompt, 300))
-        if not value:
-            stats["failed"] += 1
-            return
+    await asyncio.gather(*(run(*job) for job in jobs))
+    return stats
+
+
+def _context_into(node: Document, stats: dict[str, int]) -> Any:
+    def use(value: str) -> None:
+        node.metadata["llm_context"] = value[:400]
+        stats["contextual"] += 1
+
+    return use
+
+
+def _summary_into(node: Document, path: str, stats: dict[str, int]) -> Any:
+    def use(value: str) -> None:
         node.children = [
             *(node.children or []),
             Document(
@@ -197,12 +215,7 @@ async def enhance(
         ]
         stats["table_summaries"] += 1
 
-    tasks = [contextualize(n) for n in nodes] if cfg.get("contextual") else []
-    if cfg.get("table_summary"):
-        min_rows = cfg["table_summary_min_rows"]
-        tasks += [summarize_table(t) for t in tables or [] if len(t) - 1 >= min_rows]
-    await asyncio.gather(*tasks)
-    return stats
+    return use
 
 
 def apply_llm_context(nodes: list[Document]) -> None:

@@ -8,10 +8,15 @@
  * 前端一律转成 ApiError，组件按 kind 分支而不是猜 HTTP 码。
  */
 
-/** 一个 Atlas 接口端点：根地址（可带同源路径前缀，如 /atlas-api）+ 每次请求附带的头。 */
+/** 一个 Atlas 接口端点：根地址（可带同源路径前缀，如 /atlas）+ 每次请求附带的头。 */
 export interface AtlasClientConfig {
   apiBase: string;
   headers?: () => Record<string, string>;
+  /**
+   * 接口回 401 时先调它换一个新的访问令牌（Web：lib/session.ts 的 refreshSession；手机：用刷新令牌换票），
+   * 返回 true 就重放原请求一次。不给 = 401 直接抛给调用方。
+   */
+  refresh?: () => Promise<boolean>;
 }
 
 /** 后端错误信封（文档 §11） */
@@ -113,17 +118,23 @@ export async function request<T>(client: AtlasClientConfig, path: string, opts: 
   // ★ FormData（上传技能包）不能手设 Content-Type：边界串要由浏览器生成
   const isForm = typeof FormData !== "undefined" && body instanceof FormData;
 
-  const res = await fetch(apiUrl(path, query, client.apiBase), {
-    method,
-    signal,
-    credentials: "same-origin",
-    headers: {
-      ...(body !== undefined && !isForm ? { "Content-Type": "application/json" } : {}),
-      ...(client.headers?.() ?? {}),
-      ...headers,
-    },
-    body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
-  });
+  // ★ 每次现取请求头：刷新之后重放时，手机的 Bearer 要换成新令牌
+  const send = () =>
+    fetch(apiUrl(path, query, client.apiBase), {
+      method,
+      signal,
+      credentials: "same-origin",
+      headers: {
+        ...(body !== undefined && !isForm ? { "Content-Type": "application/json" } : {}),
+        ...(client.headers?.() ?? {}),
+        ...headers,
+      },
+      body: body === undefined ? undefined : isForm ? (body as FormData) : JSON.stringify(body),
+    });
+
+  let res = await send();
+  // 访问令牌过期（15 分钟）：单飞刷新后重放一次，用户感觉不到；刷新也不行就把 401 交给调用方（跳登录页）
+  if (res.status === 401 && client.refresh && (await client.refresh())) res = await send();
 
   if (!res.ok) throw await toApiError(res);
   if (res.status === 204) return undefined as T;

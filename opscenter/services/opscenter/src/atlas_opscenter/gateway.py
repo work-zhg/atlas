@@ -4,8 +4,8 @@
     OpsClient        一个系统的运营接口客户端：每次调用带上运营人员和幂等键，用这个系统的
                      运营密钥签名，统一超时；失败归成可以重做（连不上、超时、5xx）和被拒绝
     proxy_allowed    运营控制台经「系统代理」直接调的接口白名单（应用目录、容量、系统参数、
-                     系统任务、运行环境、技能市场、记忆作用域）。挂起、恢复、删除、建租户这些
-                     不在里面：只能经租户操作（tenants.py）按顺序做
+                     系统任务、运行环境、技能市场、记忆作用域）。建租户、创建、删除、挡住入口
+                     这些不在里面：只能经租户操作（tenants.py）按顺序做
 
 ★ 契约里没有读租户内容的接口 —— 「运营中心看不到租户内容」由各系统的运营接口保证，这里只是通道。
 """
@@ -17,7 +17,6 @@ import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
-from urllib.parse import unquote
 from uuid import UUID
 
 import httpx
@@ -32,6 +31,7 @@ __all__ = [
     "OpsReply",
     "SystemEntry",
     "SystemRegistry",
+    "owner_only",
     "proxy_allowed",
     "stamp_of",
 ]
@@ -42,7 +42,7 @@ PREFIX = "/ops/v1"
 class Capability(StrEnum):
     #: 用户中心专有：租户目录、应用目录
     USER_CENTER = "user_center"
-    #: 存租户数据的系统必选：挂起、恢复、删除
+    #: 存租户数据的系统必选：租户的创建、删除（业务系统不知道租户状态，没有挂起、恢复）
     LIFECYCLE = "lifecycle"
     #: 管共用设施的：份额和用量
     CAPACITY = "capacity"
@@ -64,6 +64,8 @@ class SystemEntry:
     name: str
     base_url: str
     capabilities: frozenset[Capability]
+    #: 这个系统在运营中心里那个模块的数据编码（用户中心里授它的「全部」级别，access.py）
+    module_code: str
 
     def has(self, cap: Capability) -> bool:
         return cap in self.capabilities
@@ -73,6 +75,7 @@ class SystemEntry:
             "code": self.code,
             "name": self.name,
             "capabilities": sorted(c.value for c in self.capabilities),
+            "module": self.module_code,
         }
 
 
@@ -81,7 +84,7 @@ class SystemRegistry:
         entries = []
         for s in systems:
             caps = frozenset(Capability(c) for c in s.capabilities)
-            entries.append(SystemEntry(s.code, s.name, s.base_url.rstrip("/"), caps))
+            entries.append(SystemEntry(s.code, s.name, s.base_url.rstrip("/"), caps, s.module_code))
         codes = [e.code for e in entries]
         if len(set(codes)) != len(codes):
             raise ValueError(f"系统登记里有重复的编码：{codes}")
@@ -162,12 +165,15 @@ class OpsClient:
         key = self._keys.get(system)
         if not key:
             raise CallFailed(system, "没有配置这个系统的运营密钥", retryable=False)
-        if has_dot_segments(path):
-            # 点段会被 httpx 规整掉，签名发出去的就不是调用方给的那个路径了
-            raise CallFailed(system, "路径里不能有 . 或 .. 段", retryable=False)
+        if not sent_as_is(path):
+            # 会被 httpx 改写，签名发出去的就不是调用方给的那个路径了
+            raise CallFailed(system, "路径里不能有点段、? 或 #", retryable=False)
         url = httpx.URL(f"{entry.base_url}{PREFIX}{path}", params=params)
         # 运营头（操作人、幂等键）随签名一起签，见 atlas_opsapi.signature
-        headers = sign(key, method, url.raw_path.decode(), body, stamp=stamp)
+        # ★ 签服务端验的那个：OpsGuard 验的是解码后的路径（request.url.path）加原样的查询串。
+        #   签编码后的 raw_path 的话，路径里有中文、空格时两边对不上，一律 401
+        signed = url.path + (f"?{url.query.decode()}" if url.query else "")
+        headers = sign(key, method, signed, body, stamp=stamp)
         if body and content_type:
             headers["Content-Type"] = content_type
         try:
@@ -246,7 +252,6 @@ _RULES: dict[Capability, list[tuple[frozenset[str], re.Pattern[str]]]] = {
         # 应用目录：应用、凭据、操作码、菜单、数据编码、应用内置角色
         (_ANY, re.compile(r"^/(apps|operations|menus|data-types|roles)(/.*)?$")),
     ],
-    Capability.LIFECYCLE: [(_READ, re.compile(r"^/tenant-states$"))],
     Capability.CAPACITY: [
         (_READ, re.compile(rf"^/(capacity|quotas|usage/{_UUID})$")),
         (frozenset({"PUT"}), re.compile(rf"^/quotas/(default|{_UUID})$")),
@@ -259,18 +264,44 @@ _RULES: dict[Capability, list[tuple[frozenset[str], re.Pattern[str]]]] = {
 }
 
 
-def has_dot_segments(path: str) -> bool:
-    """路径里有没有 `.` / `..` 段（含百分号编码的 %2e）。
+#: 系统代理里不可恢复的操作：要 Owner（其余写操作要读写，见 access.required_level）
+_OWNER_RULES: dict[Capability, list[tuple[frozenset[str], re.Pattern[str]]]] = {
+    Capability.USER_CENTER: [
+        # 轮换应用凭据：接入方会立刻断开
+        (frozenset({"POST"}), re.compile(rf"^/apps/{_UUID}/rotate-secret$")),
+        # 删目录里的东西：删数据编码、角色会连带删掉授给人的权限
+        (frozenset({"DELETE"}), re.compile(r"^/(operations|menus|data-types|roles)/.+$")),
+    ],
+}
 
-    ★ httpx 构造 URL 时会把点段规整掉（/apps/../tenants/x → /tenants/x）：白名单按原样匹配、
-      发出去的却是规整后的路径，带着运营签名直达白名单外的接口。所以有点段的一律不转发。
+
+def owner_only(entry: SystemEntry, method: str, path: str) -> bool:
+    method = method.upper()
+    return any(
+        method in methods and pattern.match(path)
+        for cap in entry.capabilities
+        for methods, pattern in _OWNER_RULES.get(cap, [])
+    )
+
+
+def sent_as_is(path: str) -> bool:
+    """httpx 会不会原样发出这个路径（path 是解码后的，进路由时 Starlette 已解过一次）。
+
+    ★ httpx 构造 URL 时会改写路径：规整点段（/apps/../tenants/x → /tenants/x），把 ? # 之后的
+      当成查询串和片段（/apps/..%23 解码成 /apps/..#，发出去的是 /ops/v1），把 %2f 当成 /。
+      白名单按原样匹配、发出去的却是改写后的路径，就能带着运营签名直达白名单外的接口。
+      所以只认一条：发出去的路径就是匹配过的那个，改写了的一律不转发（不逐个列举危险字符）。
     """
-    return any(unquote(segment) in (".", "..") for segment in path.split("/"))
+    try:
+        url = httpx.URL(f"http://ops{path}")
+    except httpx.InvalidURL:  # 换行等控制字符
+        return False
+    return url.path == path and not url.query and not url.fragment
 
 
 def proxy_allowed(entry: SystemEntry, method: str, path: str) -> bool:
-    """★ 有点段的一律不放行（见 has_dot_segments）：白名单只对规整的路径有意义。"""
-    if has_dot_segments(path):
+    """★ 会被改写的路径一律不放行（见 sent_as_is）：白名单只对原样发出的路径有意义。"""
+    if not sent_as_is(path):
         return False
     method = method.upper()
     for cap in entry.capabilities:

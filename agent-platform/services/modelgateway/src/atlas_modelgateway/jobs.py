@@ -1,6 +1,6 @@
-"""管理平台的定时任务（atlas_jobs 的实例任务，多副本各自跑，做的事都幂等）。
+"""管理平台的定时任务（atlas_jobs 实例任务；接 Redis 时加轻量互斥，多副本不重复探测与刷库）。
 
-    AccountCheck     每 5 分钟：网关标了异常的账号（余额不足、密钥失效）测一次，好了就解除；
+    AccountCheck     每 5 分钟：网关标了异常的账号按已配线路测一次，好了就解除；
                      能查余额的账号顺带查余额，低于提醒线的在账号列表顶部标出来
     KeyRefresh       每 5 分钟：重算用户 Key 的有效模型 —— 用户中心那边的变化（调部门、被停用、
                      授权变了）没有通知，只能定期重算
@@ -26,17 +26,29 @@ from .accounts import AccountService
 from .auth import use_outbound
 from .crypto import SecretCipher
 from .db.models import GwAccount, GwApiKey
-from .gateway.format import AddressGuard, UpstreamClient
-from .gateway.metering import PartitionKeeper
-from .gateway.routing import RouteHealth
 from .keys import KeyService
 from .perms import Permissions, SubjectsCache
 from .provider import ProviderCatalog
 from .registry import ModelRegistry
+from .shared.health import RouteHealth
+from .shared.partitions import PartitionKeeper
+from .shared.upstream import AddressGuard, UpstreamClient
 
 __all__ = ["AccountCheck", "CallRetention", "KeyRefresh"]
 
 logger = logging.getLogger(__name__)
+
+
+async def _try_job_lock(redis: Any | None, name: str, *, ttl_s: int) -> bool:
+    """多副本互斥：同周期只有一个副本跑巡检；无 Redis 或不可达时退回各自执行（幂等）。"""
+    if redis is None or not hasattr(redis, "set"):
+        return True
+    try:
+        ok = await redis.set(f"modelgw:joblock:{name}", "1", nx=True, ex=max(ttl_s, 1))
+        return bool(ok)
+    except Exception:
+        logger.warning("获取定时任务互斥锁失败，退回本实例直接执行：%s", name, exc_info=True)
+        return True
 
 
 class AccountCheck(Job):
@@ -52,6 +64,8 @@ class AccountCheck(Job):
         guard: AddressGuard,
         health: RouteHealth,
         client: UpstreamClient,
+        redis: Any | None = None,
+        lock_ttl_s: int = 240,
     ) -> None:
         self._sm = sessionmaker
         self._cipher = cipher
@@ -59,6 +73,8 @@ class AccountCheck(Job):
         self._guard = guard
         self._health = health
         self._client = client
+        self._redis = redis
+        self._lock_ttl_s = lock_ttl_s
 
     def _service(self, session: AsyncSession) -> AccountService:
         return AccountService(
@@ -70,6 +86,8 @@ class AccountCheck(Job):
         )
 
     async def execute(self, ctx: JobContext, params: NoParams) -> None:
+        if not await _try_job_lock(self._redis, self.type, ttl_s=self._lock_ttl_s):
+            return
         abnormal = set(await self._health.abnormal_accounts())
 
         async def fetch() -> list[tuple[UUID, UUID]]:
@@ -125,13 +143,21 @@ class KeyRefresh(Job):
         perms: Permissions,
         subjects: SubjectsCache,
         cipher: SecretCipher,
+        *,
+        redis: Any | None = None,
+        lock_ttl_s: int = 240,
     ) -> None:
         self._sm = sessionmaker
         self._perms = perms
         self._subjects = subjects
         self._cipher = cipher
+        self._redis = redis
+        self._lock_ttl_s = lock_ttl_s
 
     async def execute(self, ctx: JobContext, params: NoParams) -> None:
+        if not await _try_job_lock(self._redis, self.type, ttl_s=self._lock_ttl_s):
+            return
+
         async def fetch() -> list[tuple[tuple[UUID, UUID | None], UUID]]:
             async with self._sm() as session:
                 rows = await session.execute(
@@ -162,11 +188,22 @@ class CallRetention(Job):
     type = "modelgateway.call_retention"
     description = "删掉保留期之外的调用记录"
 
-    def __init__(self, sessionmaker: async_sessionmaker[AsyncSession], months: int) -> None:
+    def __init__(
+        self,
+        sessionmaker: async_sessionmaker[AsyncSession],
+        months: int,
+        *,
+        redis: Any | None = None,
+        lock_ttl_s: int = 3600,
+    ) -> None:
         self._keeper = PartitionKeeper(sessionmaker)
         self._months = months
+        self._redis = redis
+        self._lock_ttl_s = lock_ttl_s
 
     async def execute(self, ctx: JobContext, params: Any) -> None:
+        if not await _try_job_lock(self._redis, self.type, ttl_s=self._lock_ttl_s):
+            return
         cutoff = datetime.now(UTC).replace(day=1) - timedelta(days=31 * self._months)
         dropped = await self._keeper.drop_before(cutoff)
         if dropped:

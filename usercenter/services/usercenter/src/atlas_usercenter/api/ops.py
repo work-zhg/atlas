@@ -71,6 +71,8 @@ class TenantUpdate(BaseModel):
 
 class AppSwitch(BaseModel):
     enabled: bool
+    #: 开通时顺带设成全员可访问（不给 = 默认无人，由租户自己配范围）
+    scope_all: bool | None = None
 
 
 class AppCreate(BaseModel):
@@ -81,6 +83,8 @@ class AppCreate(BaseModel):
     icon: str | None = None
     #: 入口地址：「应用切换」「我的应用」点开去这里
     home_url: str | None = None
+    #: 仅系统租户（运营中心）
+    system_only: bool = False
 
 
 class AppUpdate(BaseModel):
@@ -89,6 +93,7 @@ class AppUpdate(BaseModel):
     description: str | None = None
     icon: str | None = None
     home_url: str | None = None
+    system_only: bool | None = None
     version: int | None = None
 
 
@@ -144,6 +149,7 @@ def tenant_view(t: Tenant, **extra: Any) -> dict[str, Any]:
         "usable": tenant_usable(t),
         "max_users": t.max_users,
         "expires_at": iso(t.expires_at) if t.expires_at else None,
+        "is_system": t.is_system,
         "created_at": iso(t.created_at),
         "version": t.version,
         **extra,
@@ -259,7 +265,9 @@ async def tenant_apps(tenant_id: UUID, session: SessionDep, actor: OpsDep) -> li
 async def switch_app(
     tenant_id: UUID, app_id: UUID, body: AppSwitch, session: SessionDep, actor: OpsDep
 ) -> dict[str, bool]:
-    await TenantService(session, actor).set_app(tenant_id, app_id, body.enabled)
+    await TenantService(session, actor).set_app(
+        tenant_id, app_id, body.enabled, scope_all=body.scope_all
+    )
     return {"ok": True}
 
 
@@ -280,7 +288,7 @@ async def list_apps(session: CatalogDep, actor: OpsDep) -> list[dict[str, Any]]:
 async def create_app(body: AppCreate, session: CatalogDep, actor: OpsDep) -> dict[str, Any]:
     """接入应用。接入后哪个租户都还没开通，见 PUT /tenants/{id}/apps/{app_id}。"""
     app, secret = await AppService(session, actor).create(
-        body.name, body.description, body.icon, body.code, body.home_url
+        body.name, body.description, body.icon, body.code, body.home_url, body.system_only
     )
     return {"app": app_view(app), "app_secret": secret}
 
@@ -315,6 +323,50 @@ async def enable_app(app_id: UUID, session: CatalogDep, actor: OpsDep) -> dict[s
 async def rotate_secret(app_id: UUID, session: CatalogDep, actor: OpsDep) -> dict[str, Any]:
     app, secret = await AppService(session, actor).rotate_secret(app_id)
     return {"app": app_view(app), "app_secret": secret}
+
+
+class CatalogOp(BaseModel):
+    module: str
+    code: str
+    name: str
+
+
+class CatalogDataType(BaseModel):
+    code: str
+    name: str
+    description: str | None = None
+
+
+class CatalogRole(BaseModel):
+    code: str
+    name: str
+    description: str | None = None
+    #: 操作码编码（本应用的）
+    operations: list[str] = []
+
+
+class AppCatalog(BaseModel):
+    name: str
+    description: str | None = None
+    icon: str | None = None
+    home_url: str | None = None
+    system_only: bool = False
+    operations: list[CatalogOp] = []
+    data_types: list[CatalogDataType] = []
+    roles: list[CatalogRole] = []
+
+
+@router.put("/catalog/apps/{code}")
+async def sync_catalog(
+    code: str, body: AppCatalog, session: CatalogDep, actor: OpsDep
+) -> dict[str, Any]:
+    """按编码把一个应用的目录写成声明的样子：没有就建，名字不同就改，没声明的不删。幂等。
+
+    运营中心启动时用它同步自己的目录（应用 opscenter、每个模块的数据编码、操作码、内置角色）。
+    """
+    svc = AppService(session, actor)
+    app = await svc.sync_catalog({"code": code, **body.model_dump()})
+    return app_view(app, **await svc.counts(app.uuid))
 
 
 # ───────────────────────────── 应用目录：操作码

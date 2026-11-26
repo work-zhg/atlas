@@ -7,6 +7,8 @@ MCP 服务的连接配置（经 MCP 网关）、模型接入（平台的模型�
 
 ★ MCP 和模型在建会话（session.open）时一次性下发，整个会话沿用：CLI 进程启动时读取这些配置，
   中途换不了。
+★ 知识库也是 MCP 网关上的服务（平台服务）：CLI 不直连知识库。每个网关服务的配置都带上这次会话的
+  身份凭据（providers/mcp/grant.py），网关验签后给上游写这一轮的 auth-uid。
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from atlas_engine.contracts.events import EventType
 from atlas_engine.contracts.mcp_naming import MCP_PREFIX
 from atlas_engine.contracts.tool_names import REQUEST_TAKEOVER
 from atlas_engine.runtime import TAKEOVER_DESCRIPTION, TakeoverAsk
+from atlas_tenancy import TenantScope
 
 from ..browser.plan import BrowserPlan, browser_hint
 from ..credentials import (
@@ -29,23 +32,19 @@ from ..credentials import (
     CredentialSubject,
 )
 from ..errors import CapabilityUnavailable
+from ..outbound import current_identity
 from ..providers.filesystem import make_workspace
 from ..providers.filesystem.skill_copy import resolve_skills, seed_session_skills
-from ..providers.knowledge import (
-    MCP_LIST_TOOL,
-    MCP_SEARCH_TOOL,
-    mcp_server_entry,
-    require_client,
-    resolve_knowledge,
-)
+from ..providers.knowledge import cli_tool_names, resolve_knowledge
 from ..providers.llm.model_platform import (
     admit_models,
     agent_key,
     sees_images,
 )
 from ..providers.mcp import GatewayUnavailable, make_mcp_catalog, mcp_agent_access
-from ..providers.mcp.cli import cli_mcp_servers
-from ..providers.mcp.gateway import servers_in
+from ..providers.mcp.cli import cli_mcp_servers, gateway_entry
+from ..providers.mcp.gateway import AgentAccess, servers_in
+from ..providers.mcp.grant import sign_identity_grant
 from ..runtime_config import RuntimeConfig
 from ..sandbox.session_pod import CliModel
 from ..skills import skill_directory
@@ -170,22 +169,60 @@ class CliCapabilityAssembly:
         spec = segment.spec
         servers: list[dict[str, Any]] = []
         notices: list[tuple[EventType, dict[str, Any]]] = []
+        grant = self._identity_grant(segment)
         if any(name.startswith(MCP_PREFIX) for name in spec.tool_names):
-            servers, notices = await self._mcp_from_gateway(segment, redis)
-        # 知识集（知识集方案 §3.4）：Pod 里的 CLI 经知识库的 MCP 调 knowledge_list /
-        # knowledge_search；目录追加进它的系统提示词。令牌里签的是这一刻展开好的知识集
+            servers, notices = await self._mcp_from_gateway(segment, redis, grant)
+        # 知识集（知识集方案 §3.4）：Pod 里的 CLI 经 MCP 网关上的知识库（平台服务）调
+        # knowledge_list / knowledge_search；目录（这一刻展开好的知识集）追加进它的系统提示词
         resolution = await resolve_knowledge(self._settings, spec.knowledge)
         notices.extend(resolution.notices())
         if resolution.turn is None:
             return servers, notices, None
-        servers = [
-            *servers,
-            mcp_server_entry(
-                require_client(self._settings), resolution.turn, thread_id=segment.thread_id
-            ),
-        ]
-        catalog = resolution.turn.catalog(list_tool=MCP_LIST_TOOL, search_tool=MCP_SEARCH_TOOL)
+        servers = [*servers, await self._knowledge_entry(segment, grant)]
+        list_tool, search_tool = cli_tool_names(self._settings.knowledge_mcp_service)
+        catalog = resolution.turn.catalog(list_tool=list_tool, search_tool=search_tool)
         return servers, notices, catalog
+
+    def _identity_grant(self, segment: Segment) -> str | None:
+        """这次会话的身份凭据：会话、按谁判（这一轮的 auth-uid）、发起人、租户。没配密钥 = 不签。"""
+        secret = self._settings.mcp_identity_grant_secret
+        ident = current_identity()
+        if secret is None or ident is None:
+            return None
+        return sign_identity_grant(
+            secret.get_secret_value(),
+            thread=segment.thread_id,
+            auth_uid=ident.auth_uid or ident.uid,
+            uid=ident.uid,
+            tenant=TenantScope.require(),
+        )
+
+    async def _knowledge_entry(self, segment: Segment, grant: str | None) -> dict[str, Any]:
+        """知识库在 MCP 网关上是平台服务（公开）：带智能体的 Key 和身份凭据，知识库按凭据里的
+        auth-uid 判库级权限。网关不可用、Key 停用 = 这一轮用不了知识库，明确失败。"""
+        access = await self._agent_access(segment)
+        if access.key is None:
+            raise CapabilityUnavailable("这个智能体的 MCP Key 已停用，CLI 用不了知识库")
+        service = self._settings.knowledge_mcp_service
+        assert self._settings.mcp_gateway_url  # _agent_access 已核对过
+        return gateway_entry(
+            service,
+            f"{self._settings.mcp_gateway_url.rstrip('/')}/mcp/{service}",
+            key=access.key,
+            user_id=segment.thread.created_by_uuid,
+            grant=grant,
+        )
+
+    async def _agent_access(self, segment: Segment) -> AgentAccess:
+        try:
+            return await mcp_agent_access(
+                self._settings,
+                segment.thread.agent_uuid,
+                name=segment.spec.name,
+                owner=segment.thread.created_by_uuid,
+            )
+        except GatewayUnavailable as exc:
+            raise CapabilityUnavailable(f"MCP 网关不可用，CLI 用不了知识库：{exc}") from exc
 
     def _credentials(self, segment: Segment) -> CredentialSet:
         """每轮按当前的档案和规则重新授权（c4-model/agent/code-credentials.html）。
@@ -229,7 +266,7 @@ class CliCapabilityAssembly:
         )
 
     async def _mcp_from_gateway(
-        self, segment: Segment, redis: aioredis.Redis
+        self, segment: Segment, redis: aioredis.Redis, grant: str | None
     ) -> tuple[list[dict[str, Any]], list[tuple[EventType, dict[str, Any]]]]:
         spec = segment.spec
         catalog = await make_mcp_catalog(self._settings, redis)
@@ -262,6 +299,7 @@ class CliCapabilityAssembly:
             digests=spec.mcp_tool_digests,
             drift_policy=spec.mcp_drift_policy,
             access=access,
+            grant=grant,
         )
 
 

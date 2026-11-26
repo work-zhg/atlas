@@ -34,12 +34,12 @@ dependencies = [
   "pdfplumber>=0.11",
   "python-pptx>=1.0",
   "charset-normalizer>=3.3",
-  # ★ 2.x：FastMCP 改名 MCPServer（mcp.server.mcpserver）；与 atlas-agent 共用一份锁，跟着它升
-  "mcp>=2.3,<3",
   # 遥测（与 atlas-server 同一套：OTLP/HTTP → Collector → Jaeger / Langfuse）
   "opentelemetry-api>=1.30",
   "opentelemetry-sdk>=1.30",
   "opentelemetry-exporter-otlp-proto-http>=1.30",
+  # 统一 Redis 客户端中间件（三池隔离、拦截链与观测）
+  "atlas-redis",
   # 入库锁（短 TTL + 看门狗续租，indexing/runner.py）
   "atlas-redislock",
   # 入库巡检是它的实例任务（jobs.py）

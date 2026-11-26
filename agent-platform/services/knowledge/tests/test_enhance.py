@@ -142,6 +142,82 @@ async def test_enhance_degrades_without_or_with_failing_llm() -> None:
     assert stats["failed"] == 1 and "llm_context" not in nodes[0].metadata
 
 
+# ───────────────────────────────────────────── 增强结果缓存（知识库的库里，带租户）
+
+
+async def test_enhance_results_are_cached_in_the_database_per_tenant(rt: Any) -> None:
+    """重跑入库不用再调模型：结果存在 kb_enhance_cache（带租户），不在共用的 Redis 里。
+    别的租户上传同一份内容不命中；超过保留期的被清掉；删除租户时一起删。"""
+    from datetime import timedelta
+    from uuid import UUID
+
+    from atlas_knowledge.db.models import EnhanceCacheEntry
+    from atlas_knowledge.db.session import get_sessionmaker
+    from atlas_knowledge.db.types import utcnow
+    from atlas_knowledge.ops.lifecycle import PURGE_ORDER
+    from atlas_knowledge.segment.enhance_cache import RETENTION, DbEnhanceCache, cleanup
+    from atlas_tenancy import SystemReason, TenantDataPurge, TenantScope
+    from conftest import OTHER_TENANT, TEST_TENANT
+    from sqlalchemy import func, select, update
+
+    ir = DocIR(
+        blocks=[
+            Block(type="heading", text="假期", level=1),
+            Block(type="paragraph", text="各类假期天数如下。"),
+            Block(type="table", table={"rows": _leave_rows(5), "header_rows": 1}),
+        ]
+    )
+    cfg = normalize_enhancements(
+        {"contextual": True, "table_summary": True, "table_summary_min_rows": 4}
+    )
+    cache = DbEnhanceCache(get_sessionmaker())
+
+    async def run() -> tuple[FakeChat, dict[str, int]]:
+        nodes = ip.transform_ir(ir, doc_form="hierarchical_model", rules=_rules(), doc_title="手册")
+        llm = FakeChat()
+        stats = await enhance(
+            nodes, full_text=ir.plain_text(), tables=tables_of(ir), cfg=cfg, llm=llm, cache=cache
+        )
+        return llm, stats
+
+    first, stats = await run()
+    assert first.calls == 2 and stats == {"contextual": 1, "table_summaries": 1, "failed": 0}
+    again, stats = await run()
+    assert again.calls == 0, "重跑：全部命中，不再调模型"
+    assert stats == {"contextual": 1, "table_summaries": 1, "failed": 0}
+    with TenantScope.enter(UUID(OTHER_TENANT)):
+        theirs, _ = await run()
+    assert theirs.calls == 2, "别的租户同一份内容不命中"
+
+    # 超过保留期：查不到，也被每天的清理删掉
+    async with get_sessionmaker()() as s:
+        with TenantScope.system(SystemReason.SWEEP):
+            await s.execute(
+                update(EnhanceCacheEntry)
+                .where(EnhanceCacheEntry.tenant_uuid == UUID(OTHER_TENANT))
+                .values(created_at=utcnow() - RETENTION - timedelta(days=1))
+            )
+        await s.commit()
+    with TenantScope.enter(UUID(OTHER_TENANT)):
+        stale, _ = await run()
+    assert stale.calls == 2, "过期的不算命中"
+    with TenantScope.isolated():
+        assert await cleanup(get_sessionmaker()) == 2
+
+    # 删除租户：一起删（在删除顺序里）
+    async with get_sessionmaker()() as s:
+        with TenantScope.system(SystemReason.OPS):
+            await TenantDataPurge(PURGE_ORDER).batch(s, UUID(TEST_TENANT))
+            await s.commit()
+        with TenantScope.system(SystemReason.SWEEP):
+            left = await s.scalar(
+                select(func.count())
+                .select_from(EnhanceCacheEntry)
+                .where(EnhanceCacheEntry.tenant_uuid == UUID(TEST_TENANT))
+            )
+    assert left == 0
+
+
 # ───────────────────────────────────────────── 接口：开关 → 入库 → 摘要入口被检索命中
 
 

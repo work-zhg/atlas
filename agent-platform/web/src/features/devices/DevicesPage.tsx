@@ -267,7 +267,7 @@ function StatusDot({ online }: { online: boolean }) {
   );
 }
 
-/** 平台的对外地址：连接器连 {它}/device-api */
+/** 平台的对外地址：连接器连 {它}/device（经 API 网关） */
 function platformUrl(): string {
   return typeof window === "undefined" ? "" : window.location.origin;
 }

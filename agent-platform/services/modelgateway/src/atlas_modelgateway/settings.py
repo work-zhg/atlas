@@ -66,6 +66,8 @@ class GatewaySettings(BaseSettings):
     upstream_allow_cidrs: list[str] = Field(default_factory=list)
     #: 等第一段内容的默认超时（账号上可以单独设）。实测见过近 3 分钟才出第一个字
     first_content_timeout_s: float = 600.0
+    #: 跨多次换线路等第一段内容的总上限（防多条慢线路叠加挂死）；None = 按 1.5 倍单次超时封顶
+    total_first_content_timeout_s: float | None = None
     #: 已经开始输出后，两段之间多久没有新内容算卡住
     idle_timeout_s: float = 300.0
     #: 压着不发（提交点之前）时多久给调用方发一次保活注释

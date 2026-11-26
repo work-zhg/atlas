@@ -45,8 +45,6 @@ from .prompts import EXTRACT_PROMPT, SOURCE_LABELS, SPLIT_PROMPT
 from .runtime import SOURCE_AGENT, SOURCE_BACKFILL, SOURCE_USER, MemoryRuntime
 
 if TYPE_CHECKING:
-    from atlas_opsapi import TenantGate
-
     from ..executor.run_models import ModelBuilder
 
 logger = logging.getLogger(__name__)
@@ -81,15 +79,11 @@ class Backfiller:
         runtime: MemoryRuntime,
         model_builder: ModelBuilder,
         redis_factory: Any,
-        *,
-        gate: TenantGate | None = None,
     ) -> None:
         self.runtime = runtime
         self.settings = runtime.settings
         self._build_model = model_builder
         self._redis_factory = redis_factory
-        #: 租户停用了不替它补记（运营接口）：会话留着，恢复后照常
-        self._gate = gate
 
     # ── 扫描
 
@@ -135,8 +129,6 @@ class Backfiller:
         done = 0
         try:
             for thread_id, tenant in threads:
-                if self._gate is not None and not await self._gate.is_active(tenant):
-                    continue
                 try:
                     async with RedisLock(redis, f"{_LOCK_PREFIX}{thread_id}", ttl_s=60).hold():
                         with TenantScope.enter(tenant):

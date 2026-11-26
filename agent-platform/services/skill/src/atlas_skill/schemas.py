@@ -17,7 +17,6 @@ from pydantic import AliasChoices, BaseModel, Field
 __all__ = [
     "SKILL_SLUG_PATTERN",
     "AuditOut",
-    "MarketInstallIn",
     "MarketInstalled",
     "MarketSkillOut",
     "MarketVersionOut",
@@ -187,12 +186,6 @@ class MarketSkillOut(BaseModel):
     versions: list[MarketVersionOut] = Field(default_factory=list)
     #: 本租户已经装了哪些版本（租户视角才有）
     installed: list[int] = Field(default_factory=list)
-
-
-class MarketInstallIn(BaseModel):
-    """要装的技能，写成 slug 或 slug@版本（缺版本 = 最新的已发布版本）。空 = 装全部默认安装的。"""
-
-    skills: list[str] = Field(default_factory=list)
 
 
 class MarketInstalled(BaseModel):

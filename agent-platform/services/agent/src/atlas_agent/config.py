@@ -404,6 +404,11 @@ class Settings(BaseSettings):
     mcp_metadata_ttl_s: float = 60.0
     #: 「主体能用哪些服务 + 主体的 Key」的进程内缓存时间。★ 只在内存里，不进 Redis
     mcp_access_ttl_s: float = 30.0
+    #: 身份凭据（X-Identity-Grant）的签名密钥，与 MCP 网关的
+    #: ATLAS_MCPGW_IDENTITY_GRANT_SECRET 一致。
+    #: CLI 会话经网关调服务时带上它，网关验签后给上游写这一轮的 auth-uid（例如知识库据此判库级
+    #: 权限）。空 = 不签：网关按 Key 的主体判，知识库那边只读得到公有库
+    mcp_identity_grant_secret: SecretStr | None = None
     #: 单次 tools/call 的上限（全局默认，单个服务可用 call_timeout_s 覆盖）。
     #: 超时交给模型（「稍后重试或换一种方式」），不打死整个 run ——
     #: 一个 MCP 服务抖一下不该让整轮失败（MCP 详设 §06）。
@@ -440,12 +445,11 @@ class Settings(BaseSettings):
 
     # ── 知识库服务（atlas-knowledge，doc/atlas-rag-design.html §10）──────
     #: 空 = 未接入：绑定了知识库的智能体保存与运行都会明确报错（不静默少装能力）。
-    #: ★ Pod 里的 ACP CLI 也按这个地址连知识库的 MCP 端点（同在集群内）。
+    #: 原生智能体按这个地址调知识库的检索接口（/v1）
     knowledge_base_url: str | None = None
-    #: 知识库 MCP 令牌的签名密钥（与知识库服务的 ATLAS_KB_MCP_SECRET 一致）。
-    #: ★ 这是给会话 Pod（不可信代码）的一次性能力凭据，不是服务间令牌 —— 内网去令牌后仍保留
-    #:   （内网身份传递 §5.3）。空 = acp 会话不下发知识库 MCP。
-    knowledge_mcp_secret: SecretStr | None = None
+    #: 知识库在 MCP 网关上登记的平台服务名：CLI 智能体不直连知识库，经网关的 /mcp/{这个名字} 调
+    #: knowledge_list / knowledge_search（deploy/server/mcp-knowledge.yaml）
+    knowledge_mcp_service: str = "knowledge"
     knowledge_timeout_s: float = 30.0
 
     # ── 本机 CLI（agent-platform/doc/design/device-cli-design.html）──────────

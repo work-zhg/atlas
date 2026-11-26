@@ -11,9 +11,7 @@
 from __future__ import annotations
 
 #: Atlas 判断用到的全部操作码（前端菜单、知识库服务按同样的编码判断）
-ALL_OPERATIONS = frozenset(
-    {"chat:use", "agent:create", "kb:create", "kb:review", "settings:manage"}
-)
+ALL_OPERATIONS = frozenset({"chat:use", "agent:create", "kb:create", "settings:manage"})
 
 #: 数据编码（权限设计 §7.1）：一个对象一条数据权限
 AGENT_DATA = "AtlasAgent"

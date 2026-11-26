@@ -183,9 +183,6 @@ async def verified_tenant(
         snap = await _snapshot(settings, auth_uid, tenant)
         if snap.tenant is not None and snap.tenant != tenant:
             raise Unauthorized("请求头里的租户和用户所属的不一致")
-    gate = getattr(request.app.state, "tenant_gate", None)
-    if gate is not None and not await gate.is_active(tenant):
-        raise Forbidden("所在的组织已停用")
     TenantScope.bind(tenant)
     return tenant
 

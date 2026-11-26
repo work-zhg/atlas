@@ -73,7 +73,12 @@ class Audited:
 
 class Tenant(Keys, Audited, Base):
     """租户：一个相互隔离的组织空间（租户设计 §02）。所有租户一律平等，没有平台租户
-    （租户隔离设计 §0）；建、停用、删除都由运营中心经运营接口做。"""
+    （租户隔离设计 §0）；建、停用、删除都由运营中心经运营接口做。
+
+    ★ 系统租户（c4-model/opscenter/design-opscenter.html）：运营团队所在的租户。在业务系统里它和
+      别的租户完全一样；只有两处认它 —— 「仅系统租户」的应用（运营中心）只能开给它；它不能停用、
+      删除、设到期（运营人员都靠它登录运营中心）。只能用部署命令建（bootstrap-system）。
+    """
 
     __tablename__ = "uc_tenant"
 
@@ -88,6 +93,10 @@ class Tenant(Keys, Audited, Base):
     max_users: Mapped[int | None] = mapped_column(Integer)
     #: 到期后视同 suspended
     expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    #: 系统租户：运营中心只能开给它（见类说明）
+    is_system: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
 
     __table_args__ = (
         CheckConstraint("status IN ('active','suspended','closed')", name="status_enum"),
@@ -232,7 +241,10 @@ class Credential(Keys, Base):
 
 
 class Session(Keys, Base):
-    """管理台登录会话。★ 设计里放 Redis；首版放 PG，少一个依赖（见 README 偏差说明）。"""
+    """一次登录 = 一个刷新令牌（auth/service.py）。只存 SHA-256；expires_at 从登录起算，轮换不续期。
+
+    ★ 放 PG 不放 Redis：停用、重置密码、改密时要按人删掉（user/service.py），PG 里有按人的索引。
+    """
 
     __tablename__ = "uc_session"
 
@@ -243,6 +255,9 @@ class Session(Keys, Base):
     ip: Mapped[str | None] = mapped_column(String(45))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+    #: 上一个刷新令牌：轮换后宽限期内还能用；过了宽限期再拿来 = 被盗用，整个会话作废
+    prev_token_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    rotated_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
 
 class LoginLog(Keys, Base):
@@ -279,6 +294,10 @@ class App(Keys, Audited, Base):
     secret_rotated_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
     is_builtin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    #: 仅系统租户：只能开给系统租户；别的租户的人取授权快照一律不可访问（运营中心）
+    system_only: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
     #: 入口地址：「应用切换」「我的应用」点开去这里。同源路径（/teamflow）或完整 http(s) 地址；
     #: 空 = 不在切换列表里提供入口
     home_url: Mapped[str | None] = mapped_column(String(500))

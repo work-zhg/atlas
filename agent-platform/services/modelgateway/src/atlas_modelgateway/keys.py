@@ -11,7 +11,7 @@
     有效模型    勾选的 ∩ 此刻允许的（用户 Key 还要看用户中心的授权、持有人是否在职）。网关只认它；
                 授权收回、模型删除、改成私有时重算，用户中心那边的变化由定期任务补（jobs.py）
 
-★ 改完把配置版本号加一（notify.mark）。
+★ 改完递增 Key 版本号并广播被影响的摘要立即驱逐（notify.mark），停用、删除、重置零时间窗生效。
 """
 
 from __future__ import annotations
@@ -34,9 +34,9 @@ from .crypto import CipherError, SecretCipher
 from .db.models import GwApiKey, GwModel
 from .db.types import uuid7
 from .errors import Forbidden, Invalid, NotFound
-from .gateway.admission import key_digest
 from .perms import SubjectsCache
 from .registry import ModelRegistry
+from .shared.kernel import key_digest
 
 __all__ = ["KeyLimits", "KeyService", "mask"]
 
@@ -53,6 +53,10 @@ def mask(tail: str | None) -> str | None:
 
 def _new_secret() -> str:
     return f"sk-{pysecrets.token_urlsafe(36)}"
+
+
+def _digests_of(key: GwApiKey) -> list[str]:
+    return [d for d in (key.secret_digest, key.prev_digest) if d]
 
 
 @dataclass(frozen=True)
@@ -173,7 +177,13 @@ class KeyService:
         if effective == list(key.effective_models or []):
             return False
         key.effective_models = effective
-        notify.mark(self.session)
+        notify.mark(
+            self.session,
+            tenant=key.tenant_uuid,
+            tenant_changed=False,
+            keys_changed=True,
+            evict_digests=_digests_of(key),
+        )
         return True
 
     async def refresh_many(self, keys: Sequence[GwApiKey], *, fresh: bool = False) -> int:
@@ -225,7 +235,13 @@ class KeyService:
             target=_target(key),
             models=key.models,
         )
-        notify.mark(self.session)
+        notify.mark(
+            self.session,
+            tenant=key.tenant_uuid,
+            tenant_changed=False,
+            keys_changed=True,
+            evict_digests=_digests_of(key),
+        )
         return key, secret
 
     # ── 客户端 Key ─────────────────────────────────────────────────────
@@ -289,7 +305,13 @@ class KeyService:
             target=_target(key),
             models=key.models,
         )
-        notify.mark(self.session)
+        notify.mark(
+            self.session,
+            tenant=key.tenant_uuid,
+            tenant_changed=False,
+            keys_changed=True,
+            evict_digests=_digests_of(key),
+        )
         return key, True
 
     async def rename_client(self, key: GwApiKey, name: str) -> None:
@@ -308,7 +330,13 @@ class KeyService:
         audit.record(
             self.session, actor=actor, action="key.assign", target=_target(key), models=key.models
         )
-        notify.mark(self.session)
+        notify.mark(
+            self.session,
+            tenant=key.tenant_uuid,
+            tenant_changed=False,
+            keys_changed=True,
+            evict_digests=_digests_of(key),
+        )
         return secret
 
     async def update(
@@ -328,23 +356,38 @@ class KeyService:
         if models is not None:
             secret = await self.assign(key, models, actor=actor)
         else:
-            notify.mark(self.session)
+            notify.mark(
+                self.session,
+                tenant=key.tenant_uuid,
+                tenant_changed=False,
+                keys_changed=True,
+                evict_digests=_digests_of(key),
+            )
         return secret
 
     async def reset(self, key: GwApiKey, *, actor: str) -> str:
         """生成新原文。客户端 Key 的旧原文再保留 10 分钟；用户 Key 的旧原文立即失效。"""
         if key.status == "pending":
             raise Invalid("这把 Key 还没有分配模型，没有可重置的 Key")
+        evict = _digests_of(key)
         if key.key_type == "client" and key.secret_digest:
             key.prev_digest, key.prev_until = key.secret_digest, datetime.now(UTC) + RESET_GRACE
         secret = self._issue(key, keep_original=key.key_type == "client")
+        evict.extend(_digests_of(key))
         audit.record(self.session, actor=actor, action="key.reset", target=_target(key))
-        notify.mark(self.session)
+        notify.mark(
+            self.session,
+            tenant=key.tenant_uuid,
+            tenant_changed=False,
+            keys_changed=True,
+            evict_digests=evict,
+        )
         return secret
 
     async def block(self, key: GwApiKey, *, reason: str = "", actor: str) -> None:
         if key.status == "pending":
             raise Invalid("这把 Key 还没有分配模型，不需要停用")
+        evict = _digests_of(key)
         key.status = "blocked"
         key.block_reason = reason.strip()[:200]
         key.prev_digest = key.prev_until = None
@@ -355,7 +398,13 @@ class KeyService:
             target=_target(key),
             reason=key.block_reason,
         )
-        notify.mark(self.session)
+        notify.mark(
+            self.session,
+            tenant=key.tenant_uuid,
+            tenant_changed=False,
+            keys_changed=True,
+            evict_digests=evict,
+        )
 
     async def unblock(self, key: GwApiKey, *, actor: str) -> None:
         if key.status != "blocked":
@@ -363,13 +412,27 @@ class KeyService:
         key.status = "active"
         key.block_reason = ""
         audit.record(self.session, actor=actor, action="key.unblock", target=_target(key))
-        notify.mark(self.session)
+        notify.mark(
+            self.session,
+            tenant=key.tenant_uuid,
+            tenant_changed=False,
+            keys_changed=True,
+            evict_digests=_digests_of(key),
+        )
 
     async def delete(self, key: GwApiKey, *, actor: str) -> None:
+        evict = _digests_of(key)
+        tenant_uuid = key.tenant_uuid
         audit.record(self.session, actor=actor, action="key.delete", target=_target(key))
         await self.session.delete(key)
         await self.session.flush()
-        notify.mark(self.session)
+        notify.mark(
+            self.session,
+            tenant=tenant_uuid,
+            tenant_changed=False,
+            keys_changed=True,
+            evict_digests=evict,
+        )
 
     def ensure_owner(self, key: GwApiKey, uid: UUID) -> None:
         if key.key_type != "user" or key.user_uuid != uid:

@@ -74,7 +74,7 @@ __all__ = [
 ]
 
 GATEWAY_DB = "atlas_mcpgateway_test"
-_ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
+_ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/postgres"
 _GATEWAY_DB_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{GATEWAY_DB}"
 GATEWAY = "http://gateway"
 
@@ -157,7 +157,7 @@ async def gateway(
         await session.execute(
             text(
                 "TRUNCATE mcp_service, mcp_tool, mcp_api_key, mcp_audit, mcp_data_object,"
-                " app_tenant_state, app_ops_request"
+                " mcp_platform_service, mcp_platform_tool"
             )
         )
         await session.commit()

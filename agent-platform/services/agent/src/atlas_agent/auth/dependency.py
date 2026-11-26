@@ -18,13 +18,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Annotated
 from uuid import UUID
 
-from atlas_tenancy import TenantScope
 from fastapi import Depends, Request
 from starlette.requests import HTTPConnection
 
 from ..config import Settings, get_settings
 from ..db.session import SessionDep
-from ..errors import Forbidden, Unauthorized
+from ..errors import Unauthorized
 from ..outbound import CallIdentity, use_identity
 from .principal import Principal
 from .service import AuthService
@@ -76,8 +75,5 @@ async def principal_of(
     )
     # 解析时已进入用户所属的租户；出站身份也换成核对过的租户（请求头可能没带）
     use_identity(CallIdentity(uid=uid, auth_uid=auth_uid, tenant_id=principal.tenant_id))
-    # 运营中心停用了这个租户（运营接口）：用户中心挡登录，这里挡住已经在用的
-    gate = getattr(conn.app.state, "tenant_gate", None)
-    if gate is not None and not await gate.is_active(TenantScope.require()):
-        raise Forbidden("所在的组织已停用")
+    # ★ 不查租户状态：租户停用、到期后，用户中心给的授权快照里没有 Atlas 的访问权（resolve 里 403）
     return principal

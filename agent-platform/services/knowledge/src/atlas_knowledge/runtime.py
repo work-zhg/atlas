@@ -10,10 +10,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
-from atlas_opsapi import TenantGate
+from atlas_redis import RedisConfig, RedisRuntime
 
 from .access.perms import DataPermissions
-from .access.principals import PrincipalResolver, PrincipalTags
 from .access.usercenter import UserCenterGateway
 from .document.storage import FileStorage, make_storage
 from .index.vdb import VectorFactory
@@ -25,6 +24,7 @@ from .settings import KnowledgeSettings
 if TYPE_CHECKING:
     from .dataset.events import DatasetEvents
     from .ops.capacity import KnowledgeCapacity
+    from .segment.enhance_cache import EnhanceCache
 
 __all__ = ["Dispatcher", "Runtime", "build_runtime"]
 
@@ -71,19 +71,18 @@ class Runtime:
     #: 经模型管理平台时取服务级客户端 Key（建库时可选的远程嵌入、重排模型 = Key 的可用模型）。
     #: None = 没接平台
     service_keys: ServiceKeys | None = None
-    #: 调用户中心的唯一客户端（授权快照、数据权限、用户与部门）。None = 按 settings 建
+    #: 调用户中心的唯一客户端（授权快照、数据权限、用户姓名）。None = 按 settings 建
     user_center_gateway: UserCenterGateway | None = None
-    #: 用户 → 主体标签（文档级权限）。None = 经用户中心展开（principals.PrincipalTags）
-    principal_resolver: PrincipalResolver | None = None
     #: 库级权限。None = 用户中心数据权限（就是 user_center）；测试里换成内存实现
     data_permissions: DataPermissions | None = None
-    #: 租户能不能用（运营接口停用的不能用）：入库任务、巡检开始前问它。API 进程里和运营接口
-    #: 用同一个（停用后本进程立刻生效）；None = 按库建（worker 进程）
-    tenant_gate: TenantGate | None = None
     #: 知识库文件的存储份额（ops/capacity.py）。None = 按库建
     capacity: KnowledgeCapacity | None = None
+    #: 入库增强的结果缓存（segment/enhance_cache.py，在知识库的库里）。None = 按库建
+    enhance_results: EnhanceCache | None = None
     #: 知识库的生命周期事件与订阅方。None = 按 wiring.py 建
     dataset_events: DatasetEvents | None = None
+    #: 进程级 Redis 中间件运行时（负责关闭底层连接池；测试传入假 redis 时为 None）
+    redis_runtime: RedisRuntime | None = field(default=None, repr=False)
 
     @property
     def events(self) -> DatasetEvents:
@@ -94,6 +93,15 @@ class Runtime:
         return self.dataset_events
 
     @property
+    def enhance_cache(self) -> EnhanceCache:
+        if self.enhance_results is None:
+            from .db.session import get_sessionmaker
+            from .segment.enhance_cache import DbEnhanceCache
+
+            self.enhance_results = DbEnhanceCache(get_sessionmaker())
+        return self.enhance_results
+
+    @property
     def storage_capacity(self) -> KnowledgeCapacity:
         if self.capacity is None:
             from .db.session import get_sessionmaker
@@ -101,14 +109,6 @@ class Runtime:
 
             self.capacity = KnowledgeCapacity(get_sessionmaker())
         return self.capacity
-
-    @property
-    def gate(self) -> TenantGate:
-        if self.tenant_gate is None:
-            from .db.session import get_sessionmaker
-
-            self.tenant_gate = TenantGate(get_sessionmaker())
-        return self.tenant_gate
 
     @property
     def user_center(self) -> UserCenterGateway:
@@ -124,12 +124,6 @@ class Runtime:
             self.data_permissions = self.user_center
         return self.data_permissions
 
-    async def principals(self, user_id: str) -> list[str]:
-        if self.principal_resolver is None:
-            tags = PrincipalTags(self.user_center, ttl_s=self.settings.principals_ttl_s)
-            self.principal_resolver = tags.resolve
-        return await self.principal_resolver(user_id)
-
     @property
     def storage(self) -> FileStorage:
         if self._storage is None:
@@ -138,7 +132,9 @@ class Runtime:
         return self._storage
 
     async def aclose(self) -> None:
-        if self.redis is not None:
+        if self.redis_runtime is not None:
+            await self.redis_runtime.aclose()
+        elif self.redis is not None and hasattr(self.redis, "aclose"):
             await self.redis.aclose()
         client = getattr(self.vectors, "_client", None)
         if client is not None:
@@ -153,7 +149,6 @@ class Runtime:
 
 
 def build_runtime(settings: KnowledgeSettings, *, dispatcher: Dispatcher | None = None) -> Runtime:
-    import redis.asyncio as aioredis
     from qdrant_client import AsyncQdrantClient
 
     qdrant = AsyncQdrantClient(
@@ -165,12 +160,14 @@ def build_runtime(settings: KnowledgeSettings, *, dispatcher: Dispatcher | None 
         return _platform_runtime(settings, qdrant, dispatcher)
     # 没接模型平台（本机开发）：只有镜像里的本地模型；没有对话模型，增强和查询理解降级为不做。
     # ★ 远程模型一律经模型平台，本服务不持有供应商 Key
+    redis_rt = RedisRuntime(RedisConfig(url=settings.redis_url, service="knowledge"))
     return Runtime(
         settings=settings,
         registry=ModelRegistry(cache_dir=settings.model_cache_dir),
         vectors=VectorFactory(qdrant),
-        redis=aioredis.from_url(settings.redis_url),
+        redis=redis_rt.commands,
         dispatcher=dispatcher or CeleryDispatcher(),
+        redis_runtime=redis_rt,
     )
 
 
@@ -182,8 +179,6 @@ def _platform_runtime(
 
     哪项没配客户端 Key，哪项就不可用（LLM 增强降级为不做；远程嵌入、重排不出现在建库选项里）。
     """
-    import redis.asyncio as aioredis
-
     if not settings.model_gateway_url:
         raise ValueError("经模型平台时要配模型网关地址（ATLAS_KB_MODEL_GATEWAY_URL）")
     gateway = settings.model_gateway_url.rstrip("/")
@@ -211,6 +206,7 @@ def _platform_runtime(
         return PlatformChat(gateway, keys, client, model, timeout_s=settings.llm_timeout_s)
 
     llm = chat(settings.enrich_model)
+    redis_rt = RedisRuntime(RedisConfig(url=settings.redis_url, service="knowledge"))
     return Runtime(
         settings=settings,
         registry=ModelRegistry(
@@ -221,9 +217,10 @@ def _platform_runtime(
             },
         ),
         vectors=VectorFactory(qdrant),
-        redis=aioredis.from_url(settings.redis_url),
+        redis=redis_rt.commands,
         dispatcher=dispatcher or CeleryDispatcher(),
         llm=llm,
         query_llm=chat(settings.query_model) if settings.query_model else None,
         service_keys=keys,
+        redis_runtime=redis_rt,
     )

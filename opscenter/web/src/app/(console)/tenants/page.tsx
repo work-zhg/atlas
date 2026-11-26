@@ -28,7 +28,7 @@ import { Icon } from "@/components/Icon";
 import { useTenantActions } from "@/components/tenantActions";
 import { UC, api, sys } from "@/lib/api";
 import { GB } from "@/lib/format";
-import { useMe, useSystems, withCapability } from "@/lib/session";
+import { TENANT_MODULE, useAccess, useSystems, withCapability } from "@/lib/session";
 import type { AppInfo, OpenResult, Quota, Quotas, SystemInfo, Tenant } from "@/lib/types";
 
 type Filter = "all" | "active" | "expiring" | "suspended" | "closed";
@@ -44,13 +44,13 @@ const FILTERS: Record<Filter, (t: Tenant) => boolean> = {
 
 export default function TenantsPage() {
   const router = useRouter();
-  const { data: me } = useMe();
-  const admin = me?.role === "ADMIN";
+  const acc = useAccess();
+  const admin = acc.write(TENANT_MODULE);
   const q = useQuery({ queryKey: ["tenants"], queryFn: () => api.get<Tenant[]>("/tenants"), refetchInterval: 10_000 });
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [kw, setKw] = useState("");
-  const actions = useTenantActions(admin);
+  const actions = useTenantActions(admin, acc.owner(TENANT_MODULE));
 
   const all = q.data ?? [];
   const rows = useMemo(() => {
@@ -201,10 +201,10 @@ function OpenTenant({ onClose, onOpened }: { onClose: () => void; onOpened: (id:
   }
 
   if (result) {
-    const uc = (apps.data ?? []).find((a) => a.code === "usercenter")?.home_url ?? "/uc";
+    const uc = (apps.data ?? []).find((a) => a.code === "usercenter")?.home_url ?? "/uc-ui";
     const rows: [string, string][] = result.tenant
       ? [
-          ["登录地址", `${window.location.origin}${uc}/login`],
+          ["登录地址", `${window.location.origin}${uc.replace(/\/+$/, "")}/login`],
           ["企业代码", result.tenant.code],
           ["管理员账号", result.admin?.account ?? ""],
           ...(result.temp_password ? ([["临时密码", result.temp_password]] as [string, string][]) : []),
@@ -299,7 +299,7 @@ function OpenTenant({ onClose, onOpened }: { onClose: () => void; onOpened: (id:
           <Form.Item name="max_users" label="人员名额" extra="不填 = 不限">
             <InputNumber min={1} style={{ width: "100%" }} placeholder="不限" />
           </Form.Item>
-          <Form.Item name="expires_on" label="到期日" extra="不填 = 不到期；到期后自动停用">
+          <Form.Item name="expires_on" label="到期日" extra="不填 = 不到期；到期后这个企业的人登录不了、没有权限">
             <Input type="date" />
           </Form.Item>
         </div>

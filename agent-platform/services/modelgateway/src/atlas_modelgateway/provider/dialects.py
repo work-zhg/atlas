@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from ..gateway.kernel import FailureKind, Format, ParamPlan, Usage
+from ..shared.kernel import FailureKind, Format, ParamPlan, Usage
 from .dialect import StandardDialect, _int
 
 __all__ = ["DIALECTS", "DeepSeekDialect", "OpenAIDialect", "QwenDialect"]

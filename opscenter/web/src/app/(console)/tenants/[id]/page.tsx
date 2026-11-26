@@ -28,7 +28,7 @@ import { QuotaModal } from "@/components/quota";
 import { useTenantActions } from "@/components/tenantActions";
 import { UC, api, sys } from "@/lib/api";
 import { ACTION_LABEL, KIND_LABEL, dateTime } from "@/lib/format";
-import { systemName, useMe, useSystems, withCapability } from "@/lib/session";
+import { TENANT_MODULE, systemName, useAccess, useSystems, withCapability } from "@/lib/session";
 import type { Operation, SystemInfo, Tenant, TenantApp, TenantUsage } from "@/lib/types";
 
 interface Detail {
@@ -38,8 +38,8 @@ interface Detail {
 
 export default function TenantPage() {
   const { id } = useParams<{ id: string }>();
-  const { data: me } = useMe();
-  const admin = me?.role === "ADMIN";
+  const acc = useAccess();
+  const admin = acc.write(TENANT_MODULE);
   const q = useQuery({
     queryKey: ["tenant", id],
     queryFn: () => api.get<Detail>(`/tenants/${id}`),
@@ -47,7 +47,7 @@ export default function TenantPage() {
   });
   const { data: systems } = useSystems();
   const [tab, setTab] = useState("overview");
-  const actions = useTenantActions(admin);
+  const actions = useTenantActions(admin, acc.owner(TENANT_MODULE));
   const ops = q.data?.operations ?? [];
   const running = ops.find((o) => o.status === "RUNNING");
   // 详情接口不带进行中的操作摘要：从操作记录里补上，标签、菜单的「一次只做一件」都按它判断
@@ -126,10 +126,10 @@ export default function TenantPage() {
           {
             key: "overview",
             label: "概况",
-            children: <Overview tenant={t} adminAccount={adminAccount} systems={withCapability(systems, "capacity")} onReissue={() => void actions.reissue(t)} admin={admin} onQuota={() => setTab("quota")} />,
+            children: <Overview tenant={t} adminAccount={adminAccount} systems={withCapability(systems, "capacity")} onReissue={() => void actions.reissue(t)} admin={actions.owner} onQuota={() => setTab("quota")} />,
           },
           { key: "apps", label: "应用", children: <TenantApps tenantId={id} admin={admin && t.status !== "closed"} /> },
-          { key: "quota", label: "份额与用量", children: <TenantQuotas tenantId={id} admin={admin && t.status !== "closed"} systems={withCapability(systems, "capacity")} /> },
+          { key: "quota", label: "份额与用量", children: <TenantQuotas tenantId={id} admin={t.status !== "closed"} systems={withCapability(systems, "capacity")} /> },
           { key: "ops", label: `操作记录 ${ops.length}`, children: <Operations ops={ops} systems={systems} admin={admin} /> },
         ]}
       />
@@ -287,10 +287,12 @@ function TenantApps({ tenantId, admin }: { tenantId: string; admin: boolean }) {
 }
 
 function TenantQuotas({ tenantId, admin, systems }: { tenantId: string; admin: boolean; systems: SystemInfo[] }) {
+  const acc = useAccess();
   return (
     <Space direction="vertical" size={14} style={{ width: "100%" }}>
       {systems.map((s) => (
-        <QuotaCard key={s.code} system={s} tenantId={tenantId} admin={admin} />
+        // 份额存在各系统里：改哪个系统的份额，看的是那个系统的模块
+        <QuotaCard key={s.code} system={s} tenantId={tenantId} admin={admin && acc.write(s.module)} />
       ))}
       <Alert type="info" showIcon message="企业里每个人的上限由企业管理员在这份额度内自己定。超了份额的新请求会被拒（已在跑的不打断）" />
     </Space>
@@ -387,7 +389,7 @@ function Operations({ ops, systems, admin }: { ops: Operation[]; systems: System
         return (
           <div key={op.id} className="ops-op">
             <div className="ops-op-head" onClick={() => setOpen({ ...open, [op.id]: !expanded })}>
-              <Tag color={{ OPEN: "processing", SUSPEND: "warning", RESUME: "success", CLOSE: "error" }[op.kind]}>{KIND_LABEL[op.kind]}</Tag>
+              <Tag color={{ OPEN: "processing", SUSPEND: "warning", RESUME: "success", CLOSE: "error", BACKFILL: "default" }[op.kind]}>{KIND_LABEL[op.kind]}</Tag>
               <b>{op.status === "DONE" ? `完成于 ${dateTime(op.finished_at)}` : op.stuck ? "有步骤失败，自动重试中" : "进行中"}</b>
               <span className="ops-muted">
                 {op.requested_by ?? "—"} · {dateTime(op.created_at)}

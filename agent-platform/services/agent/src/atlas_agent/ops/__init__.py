@@ -1,10 +1,9 @@
 """运营接口（c4-model/agent/code-ops.html）：运营中心经它管 Atlas，统一挂在 /ops/v1。
 
-通用的部分在运营接口库（atlas_opsapi）：签名校验、幂等、本地的租户状态（TenantGate）、数据库里
-租户数据的分批删除、系统参数（应用配置库 · SYSTEM）和系统任务（定时任务库）两组接口。这里只接上
-Atlas 特有的：
+通用的部分在运营接口库（atlas_opsapi）：签名校验、租户的创建和删除（数据库里的行分批删）、
+系统参数（应用配置库 · SYSTEM）和系统任务（定时任务库）两组接口。这里只接上 Atlas 特有的：
 
-    lifecycle.py    租户挂起、恢复时 run 和沙箱怎么办；删除时数据库之外还要删什么
+    lifecycle.py    创建时记份额；删除时数据库之外还要删什么（沙箱、文件）
     capacity.py     容量契约：总容量、各租户的份额和用量
     runtime_env.py  运行环境契约：沙箱模板
 
@@ -16,13 +15,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from atlas_opsapi import PREFIX, OpsGuard, OpsRoutes, TenantGate, TenantLifecycleService
+from atlas_opsapi import PREFIX, OpsGuard, OpsRoutes
 from fastapi import APIRouter, FastAPI
 
-from ..db.session import get_sessionmaker
 from ..instance import instance_id
 from . import capacity, runtime_env
-from .lifecycle import AtlasTenantLifecycle, atlas_data_purge
+from .lifecycle import AtlasTenantLifecycle
 
 if TYPE_CHECKING:
     from ..config import Settings
@@ -31,20 +29,13 @@ __all__ = ["mount_ops"]
 
 
 def mount_ops(app: FastAPI, settings: Settings) -> None:
-    """建 TenantGate、OpsGuard 放到 app.state（鉴权、执行器、设备核对都用），挂上 /ops/v1。
-
-    要在 runtime_config、jobs 都放上 app.state 之后调。
-    """
-    sessions = get_sessionmaker()
+    """建 OpsGuard 放到 app.state，挂上 /ops/v1。要在 capacity、runtime_config、jobs 都放上
+    app.state 之后调。"""
     key = settings.ops_api_key.get_secret_value() if settings.ops_api_key else None
     app.state.ops_guard = guard = OpsGuard(key)
-    app.state.tenant_gate = gate = TenantGate(sessions)
-    lifecycle = TenantLifecycleService(
-        sessions, AtlasTenantLifecycle(app.state, settings), gate, atlas_data_purge()
-    )
     ops = OpsRoutes(
         guard,
-        lifecycle,
+        AtlasTenantLifecycle(app.state.capacity, settings),
         config=app.state.runtime_config.config,
         jobs=app.state.jobs,
         instance=instance_id(),  # 和 run 租约的 owner 一致

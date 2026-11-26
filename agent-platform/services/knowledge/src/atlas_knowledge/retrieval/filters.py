@@ -1,6 +1,5 @@
-"""检索范围与过滤（doc/knowledge-enterprise-design.html §7.2 / §7.4 / §7.5）→ Qdrant Filter。
+"""检索范围与过滤（doc/knowledge-enterprise-design.html §7.2 / §7.5）→ Qdrant Filter。
 
-    文档级权限   acl 与调用者的主体标签有交集，或为 public（没有 acl 键的老 point 按 public）
     版本         默认只要当前版本（is_current 不为 false）；
                  as_of 按时间点检索，include_superseded 连历史版本一起查
     时效         t 落在 [valid_from, valid_to)（没有的键 = 不限）；t = as_of 或现在
@@ -12,7 +11,8 @@
      "value": ...}        range 的 value = {"gte": .., "lt": ..}；exists 的 value = true / false
 
 ★ 多库检索时，叶子引用了某库没定义的字段：这个叶子在该库视为「不限」（§7.2）。
-★ 权限、版本由服务端强制附加，与调用方传的过滤表达式、LLM 抽取的条件无关。
+★ 版本由服务端强制附加，与调用方传的过滤表达式、LLM 抽取的条件无关。
+★ 没有文档级权限：能读这个库就能检索库里的全部文档（库级权限见 access/permission.py）。
 """
 
 from __future__ import annotations
@@ -63,9 +63,8 @@ BUILTIN_FIELDS: dict[str, FieldDef] = {
 
 @dataclass
 class Scope:
-    """一次检索的范围。principals = None 表示不做文档级权限过滤（库管理员调试）。"""
+    """一次检索的范围。"""
 
-    principals: list[str] | None = None
     as_of: datetime | None = None
     include_superseded: bool = False
     #: 元数据过滤表达式（已校验）
@@ -202,17 +201,6 @@ def compile_filter(expr: dict[str, Any] | None, fields: dict[str, FieldDef]) -> 
 def scope_filter(scope: Scope, fields: dict[str, FieldDef]) -> Any:
     """检索范围 → 附加到召回上的 Qdrant Filter（与 enabled / doc_ok 取与）。"""
     must: list[Any] = []
-    if scope.principals is not None:
-        must.append(
-            models.Filter(
-                should=[
-                    models.FieldCondition(
-                        key="acl", match=models.MatchAny(any=[*scope.principals, "public"])
-                    ),
-                    models.IsEmptyCondition(is_empty=models.PayloadField(key="acl")),
-                ]
-            )
-        )
     # 按时间点检索时看生效区间（被取代的旧版本入库时已写了 valid_to）；否则只要当前版本
     if scope.as_of is None and not scope.include_superseded:
         must.append(

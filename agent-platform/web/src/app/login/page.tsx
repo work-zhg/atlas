@@ -2,7 +2,7 @@
 
 /**
  * 旧的 Atlas 登录页：登录已统一到用户中心（doc/identity-propagation-design.html §4）。
- * 保留这个地址只为旧书签：整页跳到 /uc/login，登录后回到 next（缺省对话页）。
+ * 保留这个地址只为旧书签：整页跳到统一登录页（/uc-ui/login），登录后回到 next（缺省对话页）。
  */
 import { Spin } from "antd";
 import { useEffect } from "react";

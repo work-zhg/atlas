@@ -1,6 +1,6 @@
 """运营库的表（c4-model/opscenter/code-accounts.html、code-tenants.html 的表结构）。
 
-只存运营中心自己的东西：运营账号、登录会话、运营审计、租户操作的进度。租户名单、应用目录、份额、
+只存运营中心自己的东西：运营审计、租户操作的进度。运营人员的账号、角色、授权都在用户中心。租户名单、应用目录、份额、
 系统参数都留在用它们的系统里，这里不存一份。
 
 ★ 主键约定：id 自增，只在库内用；xxx_uuid 是逻辑主键，引用和接口都用它。不建外键，引用由代码维护。
@@ -32,8 +32,6 @@ __all__ = [
     "AuditEntry",
     "Base",
     "OperationStep",
-    "Operator",
-    "OpsSession",
     "TenantOperation",
 ]
 
@@ -53,51 +51,7 @@ def _id() -> Mapped[int]:
     return mapped_column(BigInteger, primary_key=True, autoincrement=True)
 
 
-# ───────────────────────────── 运营账号与审计
-
-
-class Operator(Base):
-    """运营账号：不属于任何租户。只有两个角色：ADMIN（运营管理员）、OBSERVER（运营观察员，只读）。"""
-
-    __tablename__ = "ops_operator"
-
-    id: Mapped[int] = _id()
-    operator_uuid: Mapped[UUID] = mapped_column(UUIDType, unique=True, default=uuid4)
-    account: Mapped[str] = mapped_column(String(32), unique=True, nullable=False)
-    name: Mapped[str] = mapped_column(String(32), nullable=False)
-    role: Mapped[str] = mapped_column(String(16), nullable=False)
-    status: Mapped[str] = mapped_column(String(16), default="active", nullable=False)
-    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
-    #: 临时密码登录后必须先改密码
-    must_change_password: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
-    failed_logins: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
-    locked_until: Mapped[datetime | None] = mapped_column(UTCDateTime)
-    last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
-    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(
-        UTCDateTime, default=utcnow, onupdate=utcnow, nullable=False
-    )
-
-    __table_args__ = (
-        CheckConstraint("role IN ('ADMIN','OBSERVER')", name="role_enum"),
-        CheckConstraint("status IN ('active','disabled')", name="status_enum"),
-    )
-
-
-class OpsSession(Base):
-    """一次登录：只存令牌的哈希。空闲超时或登录满一定时长失效。"""
-
-    __tablename__ = "ops_session"
-
-    id: Mapped[int] = _id()
-    session_uuid: Mapped[UUID] = mapped_column(UUIDType, unique=True, default=uuid4)
-    operator_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False, index=True)
-    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    ip: Mapped[str | None] = mapped_column(String(45))
-    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
-    last_seen_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(UTCDateTime, nullable=False)
+# ───────────────────────────── 运营审计
 
 
 class AuditEntry(Base):
@@ -108,12 +62,14 @@ class AuditEntry(Base):
     id: Mapped[int] = _id()
     audit_uuid: Mapped[UUID] = mapped_column(UUIDType, unique=True, default=uuid4)
     at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow, nullable=False)
-    #: 后台任务自动发起时（到期停用）为空
+    #: 用户中心里的用户（系统租户的人）；后台任务自动发起时为空
     operator_uuid: Mapped[UUID | None] = mapped_column(UUIDType)
     #: 写入时的名字快照：账号停用后审计里照样看得懂
     operator_name: Mapped[str | None] = mapped_column(String(32))
     action: Mapped[str] = mapped_column(String(64), nullable=False)
-    #: 对象：系统编码、租户企业代码、运营账号等
+    #: 模块的数据编码（OpsTenant、OpsMcp……）；升级前的记录为空
+    module: Mapped[str | None] = mapped_column(String(32))
+    #: 对象：系统编码、租户企业代码、应用等
     target: Mapped[str | None] = mapped_column(String(200))
     tenant_uuid: Mapped[UUID | None] = mapped_column(UUIDType)
     detail: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
@@ -124,6 +80,7 @@ class AuditEntry(Base):
     __table_args__ = (
         Index("ix_ops_audit_at", text("at DESC")),
         Index("ix_ops_audit_tenant", "tenant_uuid", text("at DESC")),
+        Index("ix_ops_audit_module", "module", text("at DESC")),
     )
 
 
@@ -145,12 +102,12 @@ class TenantOperation(Base):
     tenant_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False, index=True)
     #: 企业代码快照：租户删了以后记录里还看得懂
     tenant_code: Mapped[str] = mapped_column(String(32), nullable=False)
-    #: OPEN | SUSPEND | RESUME | CLOSE
+    #: OPEN | SUSPEND | RESUME | CLOSE | BACKFILL
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
     #: RUNNING | DONE
     status: Mapped[str] = mapped_column(String(16), default="RUNNING", nullable=False)
     reason: Mapped[str | None] = mapped_column(String(200))
-    #: 步骤要用的参数（开通：建租户的请求、各系统的份额）。不含任何密码
+    #: 步骤要用的参数（开通：建租户的请求、各系统的创建参数；补建：哪个系统）。不含任何密码
     params: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
     requested_by: Mapped[UUID | None] = mapped_column(UUIDType)
     requested_by_name: Mapped[str | None] = mapped_column(String(32))
@@ -162,7 +119,7 @@ class TenantOperation(Base):
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
 
     __table_args__ = (
-        CheckConstraint("kind IN ('OPEN','SUSPEND','RESUME','CLOSE')", name="kind_enum"),
+        CheckConstraint("kind IN ('OPEN','SUSPEND','RESUME','CLOSE','BACKFILL')", name="kind_enum"),
         CheckConstraint("status IN ('RUNNING','DONE')", name="status_enum"),
         Index(
             "uq_ops_tenant_operation_running",
@@ -187,8 +144,8 @@ class OperationStep(Base):
     operation_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False, index=True)
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
     system: Mapped[str] = mapped_column(String(32), nullable=False)
-    #: CREATE_TENANT | SET_QUOTA | INSTALL_SKILLS | BLOCK | UNBLOCK | SUSPEND | RESUME | PURGE
-    #: | DELETE_TENANT
+    #: CREATE_TENANT | BLOCK | UNBLOCK | DELETE_TENANT（用户中心）；CREATE | DELETE（各系统）。
+    #: 升级前排的还可能是 SET_QUOTA | INSTALL_SKILLS | SUSPEND | RESUME | PURGE（照新契约做完）
     action: Mapped[str] = mapped_column(String(32), nullable=False)
     #: PENDING | DONE | FAILED
     status: Mapped[str] = mapped_column(String(16), default="PENDING", nullable=False)

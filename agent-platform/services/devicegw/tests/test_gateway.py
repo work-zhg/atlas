@@ -225,16 +225,21 @@ async def test_proxy_refuses_dot_segments(gateway: Gateway) -> None:
     """★ httpx 会把点段规整掉：上游是 …/mcp/serpapi 时，../../internal 就出了这个上游的范围，
     带着换上的真实凭据和身份去调同一台主机上的别的接口。
 
-    客户端发 %2e%2e（httpx 不规整编码过的点）。"""
+    客户端发 %2e%2e（httpx 不规整编码过的点）。..%3f、..%23 解码成 ..? ..#，httpx 把它们之后
+    当成查询串和片段、前面的 .. 照样规整；%252f 解码一次是 %2f，发出去被当成 /。"""
     grant = await register(gateway)
     async with httpx.AsyncClient(base_url=gateway.url, trust_env=False) as client:
-        resp = await client.post(
+        for path in (
             "/u/s1/%2e%2e/%2e%2e/internal/v1/x",
-            headers={"Authorization": f"Bearer {grant['token']}"},
-            content=b"{}",
-        )
-    assert resp.status_code == 400
-    assert not [s for s in gateway.upstream.seen if "internal" in str(s.url)]
+            "/u/s1/..%3fx",
+            "/u/s1/..%23",
+            "/u/s1/..%252f..%252finternal",
+        ):
+            resp = await client.post(
+                path, headers={"Authorization": f"Bearer {grant['token']}"}, content=b"{}"
+            )
+            assert resp.status_code == 400, path
+    assert not gateway.upstream.seen
 
 
 async def test_token_stays_the_same_across_turns(gateway: Gateway) -> None:

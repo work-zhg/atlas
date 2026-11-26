@@ -1,9 +1,7 @@
 """Middleware for providing filesystem tools to an agent."""
 # ruff: noqa: E501
 
-import concurrent.futures
 import mimetypes
-import threading
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -71,9 +69,6 @@ if TYPE_CHECKING:
 
 _FS_WCMATCH_FLAGS = wcglob.BRACE | wcglob.GLOBSTAR
 """wcmatch flags enabling brace expansion and `**` globstar recursion."""
-
-_SYNC_GLOB_WORKERS = 4
-"""Thread-pool size for synchronous glob operations."""
 
 FilesystemOperation = Literal["read", "write"]
 """Classification of filesystem tools as read-only or mutating."""
@@ -916,15 +911,6 @@ class FilesystemMiddleware(AgentMiddleware[AgentState, ContextT, ResponseT]):
         else:  # None -- user did not specify, defaults to all tools opted-in
             self._enabled_tools = None
         self._permissions = list(_permissions or [])
-
-        # Shared executor for enforcing GLOB_TIMEOUT on the sync glob tool.
-        # Timed-out worker threads keep running until the filesystem call returns,
-        # so the semaphore rejects overload instead of queueing behind them.
-        self._glob_executor = concurrent.futures.ThreadPoolExecutor(
-            max_workers=_SYNC_GLOB_WORKERS,
-            thread_name_prefix="deepagents-glob",
-        )
-        self._glob_slots = threading.BoundedSemaphore(_SYNC_GLOB_WORKERS)
 
         tool_factories: tuple[tuple[str, Callable[[], BaseTool]], ...] = (
             ("read_file", self._create_read_file_tool),

@@ -1,9 +1,12 @@
+import { csrfHeaders, loginUrl, logout, refreshSession } from "@atlas/chat-ui/src/lib/session";
+
 /**
  * 请求的唯一出口。
  *
- * 1. 同源：/api 经网关转到 TeamFlow 后端。登录统一在用户中心（doc/identity-propagation-design.html
- *    §4）：网关校验用户中心的 HttpOnly 会话 Cookie，把身份写进请求头；未登录 401 → ucLoginUrl()。
- * 2. 写请求带双提交的 CSRF 头（值取自非 HttpOnly 的 uc_csrf Cookie，由网关交给用户中心校验）。
+ * 1. 同源：接口经 API 网关（/teamflow/api/…）转到 TeamFlow 后端。登录统一在用户中心：网关本地验
+ *    HttpOnly Cookie 里的访问 JWT，把身份写进请求头。令牌过期（401）先单飞刷新、重放一次；
+ *    刷新也不行才 401 → ucLoginUrl()（@atlas/chat-ui 的 lib/session.ts）。
+ * 2. 写请求带双提交的 CSRF 头（值取自非 HttpOnly 的 uc_csrf Cookie，网关校验）。
  * 3. 错误统一为 {code, message, details}，转成 ApiError。
  */
 
@@ -22,32 +25,22 @@ export class ApiError extends Error {
 }
 
 /** 写请求须带的头（双提交 CSRF）。嵌入的 Atlas 对话组件经代理发消息时也用它。 */
-export function writeHeaders(): Record<string, string> {
-  const token = csrf();
-  return token ? { "X-UC-CSRF": token } : {};
-}
+export const writeHeaders = csrfHeaders;
 
-function csrf(): string | undefined {
-  if (typeof document === "undefined") return undefined;
-  const hit = document.cookie.split("; ").find((c) => c.startsWith("uc_csrf="));
-  return hit ? decodeURIComponent(hit.slice("uc_csrf=".length)) : undefined;
-}
+/** 统一登录页（同源）。next = 登录后回到的页面（含 basePath）。 */
+export const ucLoginUrl = loginUrl;
 
-/** 用户中心的登录页（同源，经网关 /uc）。next = 登录后回到的页面（含 basePath）。 */
-export function ucLoginUrl(next?: string): string {
-  const here =
-    next ?? (typeof window === "undefined" ? "/" : window.location.pathname + window.location.search);
-  return `/uc/login?next=${encodeURIComponent(here)}`;
-}
-
-/** 登出在用户中心（三个前端共用一个登录态）：登出后去用户中心登录页。 */
-export async function logoutToUC(): Promise<void> {
-  await fetch("/uc/api/v1/auth/logout", { method: "POST", headers: writeHeaders(), credentials: "same-origin" });
-  window.location.assign("/uc/login");
-}
+/** 登出在用户中心（几个前端共用一个登录态）：作废这次登录后去统一登录页。 */
+export const logoutToUC = logout;
 
 /** 部署子路径（与 next.config 的 basePath 一致）。fetch / EventSource / <a href> 不会自动加，要手动拼。 */
 export const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+
+/**
+ * 接口的同源前缀：经 API 网关是 /teamflow（页面在 /teamflow-ui，前后端名字不同）；
+ * 本地开发不设，走页面自己的 /api（next.config 转给后端）。
+ */
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? BASE_PATH;
 
 type Query = Record<string, string | number | boolean | undefined | null>;
 
@@ -57,22 +50,27 @@ function url(path: string, query?: Query): string {
     if (v !== undefined && v !== null && v !== "") qs.set(k, String(v));
   }
   const s = qs.toString();
-  return `${BASE_PATH}/api/v1${path}${s ? `?${s}` : ""}`;
+  return `${API_BASE}/api/v1${path}${s ? `?${s}` : ""}`;
+}
+
+/** 发请求；访问令牌过期（401）就单飞刷新、重放一次。 */
+async function send(make: () => Promise<Response>): Promise<Response> {
+  const res = await make();
+  if (res.status === 401 && (await refreshSession())) return make();
+  return res;
 }
 
 async function request<T>(method: string, path: string, body?: unknown, query?: Query): Promise<T> {
-  const headers: Record<string, string> = {};
-  if (body !== undefined) headers["Content-Type"] = "application/json";
-  if (method !== "GET") {
-    const token = csrf();
-    if (token) headers["X-UC-CSRF"] = token;
-  }
-  const res = await fetch(url(path, query), {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-    credentials: "same-origin",
-    cache: "no-store",
+  const res = await send(() => {
+    const headers: Record<string, string> = method === "GET" ? {} : csrfHeaders();
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    return fetch(url(path, query), {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      credentials: "same-origin",
+      cache: "no-store",
+    });
   });
   if (!res.ok) {
     let payload: { code?: string; message?: string; details?: Record<string, unknown> } = {};
@@ -100,10 +98,15 @@ export function errorText(e: unknown): string {
 
 /** multipart 上传（文件模板）。 */
 export async function upload<T>(path: string, form: FormData): Promise<T> {
-  const headers: Record<string, string> = {};
-  const token = csrf();
-  if (token) headers["X-TF-CSRF"] = token;
-  const res = await fetch(`${BASE_PATH}/api/v1${path}`, { method: "POST", body: form, headers, credentials: "same-origin" });
+  // ★ CSRF 头和别的写请求一样是 X-UC-CSRF（网关校验）；原来写成 X-TF-CSRF，上传一律被拒
+  const res = await send(() =>
+    fetch(`${API_BASE}/api/v1${path}`, {
+      method: "POST",
+      body: form,
+      headers: csrfHeaders(),
+      credentials: "same-origin",
+    }),
+  );
   if (!res.ok) {
     let payload: { code?: string; message?: string; details?: Record<string, unknown> } = {};
     try {

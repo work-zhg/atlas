@@ -7,11 +7,10 @@ point 的 payload 约定：
     segment_uuid   命中后回到哪个分段（父子模式下是父分段）
     document_uuid / dataset_uuid
     enabled        分段级开关
-    doc_ok         文档级可用（启用、未归档、审核通过）—— 文档状态变化时按 document_uuid 批量改
+    doc_ok         文档级可用（启用、未归档）—— 文档状态变化时按 document_uuid 批量改
     meta           文档业务元数据 {字段名: 值}（§7.2）
-    acl            可访问主体标签（§7.4）；["public"] = 库内公开
     is_current     是否当前版本；valid_from / valid_to 生效区间（epoch 秒，没有就不写）（§7.5）
-检索永远带 enabled = doc_ok = true 过滤。文档级字段（doc_ok、meta、acl、版本时效）变化时
+检索永远带 enabled = doc_ok = true 过滤。文档级字段（doc_ok、meta、版本时效）变化时
 只按 document_uuid 改 payload，不重新向量化。
 """
 

@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from ..gateway.kernel import Format
+from ..shared.kernel import Format
 
 __all__ = ["PROVIDERS", "AuthStyle", "ProviderSpec"]
 

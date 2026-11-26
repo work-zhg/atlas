@@ -1,6 +1,6 @@
 """运营接口库的行为测试（c4-model/infra-platform/code-opsapi.html）。
 
-签名和 OperatorStamp 不连库；挂起、恢复、删除的整条路连真库：只在库名以 _test 结尾时跑。
+签名和 OperatorStamp 不连库；创建、删除的整条路连真库：只在库名以 _test 结尾时跑。
 """
 
 from __future__ import annotations
@@ -21,15 +21,14 @@ from atlas_opsapi import (
     OperatorStamp,
     OpsGuard,
     OpsRoutes,
+    Rejected,
     SignatureError,
-    TenantGate,
-    TenantLifecycleService,
+    TenantLifecycle,
     sign,
     upgrade,
     verify,
 )
-from atlas_opsapi.db import request_table, state_table
-from atlas_tenancy import PurgeReport, TenantDataPurge, TenantOwned, TenantScope
+from atlas_tenancy import PurgeReport, SystemReason, TenantOwned, TenantScope
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -57,8 +56,8 @@ def test_signature_round_trip_and_tampering() -> None:
 
 
 def test_operator_headers_are_signed_too() -> None:
-    """★ 操作人和幂等键进签名原文：截到一个请求，不能在窗口内改掉操作人，也不能换个幂等键重放
-    （业务系统按幂等键去重，不签它的话去重形同虚设）。"""
+    """★ 操作人和幂等键进签名原文：截到一个请求，不能在窗口内改掉操作人或幂等键
+    （业务系统按它们写日志，和运营中心的审计对上）。"""
     path, body = "/ops/v1/tenants/x/suspend", b"{}"
     stamp = OperatorStamp(uuid4(), "小周", uuid4(), uuid4())
     headers = sign(KEY, "POST", path, body, stamp=stamp, at=1000)
@@ -104,21 +103,37 @@ class Doc(TenantOwned, Base):
     id: Mapped[int] = mapped_column(primary_key=True)
 
 
-class Hooks:
-    """宿主的钩子：记下调用时所在的租户；外部资源分两批删完。"""
+class Quota(TenantOwned, Base):
+    __tablename__ = f"opsapi_quota_{SUFFIX}"
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    mb: Mapped[int] = mapped_column()
 
-    def __init__(self) -> None:
+
+class Lifecycle(TenantLifecycle):
+    """宿主：创建时记份额（再建一次覆盖，结果一样）；外部资源分两批删完。"""
+
+    purge_order = (Doc, Quota)
+
+    def __init__(self, sessions: async_sessionmaker[AsyncSession], **kw: object) -> None:
+        super().__init__(sessions, base=Base, **kw)  # type: ignore[arg-type]
         self.calls: list[tuple[str, UUID | None]] = []
         self.external_left = 2
 
-    async def on_suspend(self, tenant_uuid: UUID) -> None:
-        self.calls.append(("suspend", TenantScope.current()))
+    async def create(self, tenant_uuid: UUID, params: dict[str, object]) -> None:
+        self.calls.append(("create", TenantScope.current()))
+        mb = params.get("storage_mb", 100)
+        if not isinstance(mb, int) or mb < 0:
+            raise Rejected("storage_mb 必须是非负整数")
+        async with self._sessions() as s:
+            row = (await s.execute(sa.select(Quota))).scalar_one_or_none()
+            if row is None:
+                s.add(Quota(mb=mb))
+            else:
+                row.mb = mb
+            await s.commit()
 
-    async def on_resume(self, tenant_uuid: UUID) -> None:
-        self.calls.append(("resume", TenantScope.current()))
-
-    async def purge_external(self, tenant_uuid: UUID, limit: int) -> PurgeReport:
-        self.calls.append(("purge_external", TenantScope.current()))
+    async def delete_external(self, tenant_uuid: UUID, budget: int) -> PurgeReport:
+        self.calls.append(("delete_external", TenantScope.current()))
         self.external_left -= 1
         return PurgeReport({"objects": 10}, remaining=self.external_left > 0)
 
@@ -153,100 +168,96 @@ class Signed:
         return await self.client.request(method, path, content=raw, headers=headers)
 
 
+def _client(app: FastAPI) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t")
+
+
+async def _quotas(sessions: async_sessionmaker[AsyncSession]) -> list[tuple[UUID, int]]:
+    async with sessions() as s:
+        with TenantScope.system(SystemReason.OPS):
+            rows = (await s.execute(sa.select(Quota.tenant_uuid, Quota.mb))).all()
+    return [(r[0], r[1]) for r in rows]
+
+
+def test_lifecycle_checks_purge_order_against_base() -> None:
+    """漏了租户表构造时就报错：删租户时不会留下没删的表。"""
+
+    class Missing(Lifecycle):
+        purge_order = (Doc,)
+
+    with pytest.raises(ValueError, match="漏了租户表"):
+        Missing(async_sessionmaker())
+
+
 @pytestmark_db
-async def test_suspend_purge_and_resume_rules(sessions: async_sessionmaker[AsyncSession]) -> None:
+async def test_create_runs_in_tenant_and_can_be_redone(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    tenant = uuid4()
+    lifecycle = Lifecycle(sessions)
+    app = FastAPI()
+    OpsRoutes.mount(app, OpsGuard(KEY), lifecycle)
+    path = f"/ops/v1/tenants/{tenant}"
+    async with _client(app) as c:
+        ops = Signed(c)
+        # 不是运营中心：没签名、签错
+        assert (await c.put(path, json={})).status_code == 401
+        assert (
+            await c.put(path, content=b"{}", headers=sign(b"x", "PUT", path, b"{}"))
+        ).status_code == 401
+
+        r = await ops.call("PUT", path, {"storage_mb": 50}, key=uuid4())
+        assert r.status_code == 200 and r.json() == {"tenant_uuid": str(tenant)}
+        assert lifecycle.calls == [("create", tenant)]
+        # 超时后重做（换了幂等键也一样）：结果一样，不会多出一行
+        await ops.call("PUT", path, {"storage_mb": 50}, key=uuid4())
+        assert (tenant, 50) in await _quotas(sessions)
+        assert [q for q in await _quotas(sessions) if q[0] == tenant] == [(tenant, 50)]
+        # 没有参数 = 用默认
+        assert (await ops.call("PUT", f"/ops/v1/tenants/{uuid4()}")).status_code == 200
+        # 参数不对：宿主拒绝 → 409（要人看）；不是 JSON 对象 → 422
+        bad = await ops.call("PUT", path, {"storage_mb": -1})
+        assert bad.status_code == 409 and "storage_mb" in bad.json()["detail"]
+        assert (await ops.call("PUT", path, [1, 2])).status_code == 422
+        # 停用、恢复都没有了
+        assert (await ops.call("POST", f"{path}/suspend")).status_code in (404, 405)
+
+
+@pytestmark_db
+async def test_delete_external_first_then_rows_in_batches(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
     tenant, other = uuid4(), uuid4()
     async with sessions() as s:
         s.add_all([Doc(id=i, tenant_uuid=tenant if i <= 3 else other) for i in range(1, 6)])
         await s.commit()
-    hooks = Hooks()
-    gate = TenantGate(sessions)
-    lifecycle = TenantLifecycleService(sessions, hooks, gate, TenantDataPurge([Doc]), purge_limit=2)
+    lifecycle = Lifecycle(sessions, budget=2)
     app = FastAPI()
-    app.include_router(OpsRoutes(OpsGuard(KEY), lifecycle).router)
-    base = f"/ops/v1/tenants/{tenant}"
-    try:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://t"
-        ) as c:
-            ops = Signed(c)
-            # 不是运营中心：没签名、签错
-            assert (await c.post(f"{base}/suspend")).status_code == 401
-            assert (
-                await c.post(f"{base}/suspend", headers=sign(b"x", "POST", f"{base}/suspend"))
-            ).status_code == 401
-            # 还在用的租户不能删
-            assert (await ops.call("POST", f"{base}/purge", key=uuid4())).status_code == 409
-
-            step = uuid4()
-            r = await ops.call("POST", f"{base}/suspend", key=step)
-            assert r.json() == {"status": "suspended"}
-            assert not await gate.is_active(tenant) and await gate.is_active(other)
-            # 同一个幂等键重做：直接返回上次的结果，不再调钩子
-            assert (await ops.call("POST", f"{base}/suspend", key=step)).json() == {
-                "status": "suspended"
-            }
-            assert hooks.calls == [("suspend", tenant)]
-
-            # 删除分批：外部两批，数据库每批 2 行，同一个幂等键一直调到删完。
-            # 第 1 次：外部还有剩；第 2 次：外部删完，接着删数据库 2 行（还剩 1 行）；第 3 次：删完
-            close = uuid4()
-            results = []
-            for _ in range(5):
-                body = (await ops.call("POST", f"{base}/purge", key=close)).json()
-                results.append(body)
-                if not body["remaining"]:
-                    break
-            assert [r["remaining"] for r in results] == [True, True, False]
-            assert sum(r["deleted"].get(Doc.__tablename__, 0) for r in results) == 3
-            async with sessions() as s:
-                from atlas_tenancy import SystemReason
-
-                with TenantScope.system(SystemReason.OPS):
-                    left = (await s.execute(sa.select(Doc.tenant_uuid))).scalars().all()
-            assert left == [other, other]
-            # 删完以后同一个幂等键：返回记下的结果；不能再恢复
-            assert (await ops.call("POST", f"{base}/purge", key=close)).json() == results[-1]
-            assert (await ops.call("POST", f"{base}/resume", key=uuid4())).status_code == 409
-
-            states = (await ops.call("GET", "/ops/v1/tenant-states")).json()
-            assert next(s for s in states if s["tenant_uuid"] == str(tenant))["status"] == "purged"
-    finally:
+    OpsRoutes.mount(app, OpsGuard(KEY), lifecycle)
+    path = f"/ops/v1/tenants/{tenant}"
+    async with _client(app) as c:
+        ops = Signed(c)
+        assert (await c.delete(path)).status_code == 401
+        # 外部两批，数据库每批 2 行：第 1 次外部还有剩；第 2 次外部删完，接着删数据库 2 行
+        # （还剩 1 行）；第 3 次外部没东西了，删掉最后 1 行。不查租户状态，也不按幂等键去重
+        results = []
+        for _ in range(5):
+            body = (await ops.call("DELETE", path, key=uuid4())).json()
+            results.append(body)
+            if not body["remaining"]:
+                break
+        assert [r["remaining"] for r in results] == [True, True, False]
+        assert sum(r["deleted"].get(Doc.__tablename__, 0) for r in results) == 3
+        assert results[0]["deleted"] == {"objects": 10}
+        # 外部在这个租户的上下文里删
+        assert lifecycle.calls[0] == ("delete_external", tenant)
         async with sessions() as s:
-            await s.execute(
-                sa.delete(state_table).where(state_table.c.tenant_uuid.in_([tenant, other]))
-            )
-            await s.execute(
-                sa.delete(request_table).where(request_table.c.tenant_uuid.in_([tenant, other]))
-            )
-            await s.commit()
-
-
-@pytestmark_db
-async def test_resume_runs_hook_in_tenant_then_reactivates(
-    sessions: async_sessionmaker[AsyncSession],
-) -> None:
-    tenant = uuid4()
-    hooks = Hooks()
-    gate = TenantGate(sessions)
-    lifecycle = TenantLifecycleService(sessions, hooks, gate)
-    app = FastAPI()
-    app.include_router(OpsRoutes(OpsGuard(KEY), lifecycle).router)
-    try:
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://t"
-        ) as c:
-            ops = Signed(c)
-            await ops.call("POST", f"/ops/v1/tenants/{tenant}/suspend", key=uuid4())
-            r = await ops.call("POST", f"/ops/v1/tenants/{tenant}/resume", key=uuid4())
-            assert r.json() == {"status": "active"}
-            assert hooks.calls == [("suspend", tenant), ("resume", tenant)]
-            assert await gate.is_active(tenant)
-    finally:
-        async with sessions() as s:
-            await s.execute(sa.delete(state_table).where(state_table.c.tenant_uuid == tenant))
-            await s.execute(sa.delete(request_table).where(request_table.c.tenant_uuid == tenant))
-            await s.commit()
+            with TenantScope.system(SystemReason.OPS):
+                left = (await s.execute(sa.select(Doc.tenant_uuid))).scalars().all()
+        assert left == [other, other]
+        # 删完以后再调：什么都没有了，照样回 remaining=false（重做安全）
+        again = (await ops.call("DELETE", path, key=uuid4())).json()
+        assert again["remaining"] is False
 
 
 @pytestmark_db
@@ -256,20 +267,13 @@ async def test_system_params_and_jobs_are_only_for_ops_center(
     name = f"t{SUFFIX}.images"
     config = AppConfig(sessions, [ConfigKey(name, list[str], default=["a/"])])
     await config.register()
-    lifecycle = TenantLifecycleService(sessions, Hooks(), TenantGate(sessions))
+    lifecycle = Lifecycle(sessions)
     app = FastAPI()
-    app.include_router(
-        OpsRoutes(OpsGuard(KEY), lifecycle, config=config, jobs=JobScheduler()).router
-    )
+    OpsRoutes.mount(app, OpsGuard(KEY), lifecycle, config=config, jobs=JobScheduler())
     disabled = FastAPI()
-    disabled.include_router(OpsRoutes(OpsGuard(None), lifecycle, config=config).router)
+    OpsRoutes.mount(disabled, OpsGuard(None), lifecycle, config=config)
     try:
-        async with (
-            httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c,
-            httpx.AsyncClient(
-                transport=httpx.ASGITransport(app=disabled), base_url="http://t"
-            ) as d,
-        ):
+        async with _client(app) as c, _client(disabled) as d:
             ops = Signed(c)
             assert (await c.get("/ops/v1/configs")).status_code == 401
             assert (await Signed(d).call("GET", "/ops/v1/configs")).status_code == 403
@@ -286,3 +290,22 @@ async def test_system_params_and_jobs_are_only_for_ops_center(
             await s.execute(sa.delete(revision_table).where(revision_table.c.config_uuid.in_(ids)))
             await s.execute(sa.delete(config_table).where(config_table.c.key == name))
             await s.commit()
+
+
+@pytestmark_db
+async def test_upgrade_drops_the_old_state_tables(
+    sessions: async_sessionmaker[AsyncSession],
+) -> None:
+    """存量库：0002 删掉 0001 建的两张表；本库现在没有自己的表。"""
+    async with sessions() as s:
+        names = set(
+            (
+                await s.execute(
+                    sa.text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_name IN ('app_tenant_state', 'app_ops_request')"
+                    )
+                )
+            ).scalars()
+        )
+    assert names == set()

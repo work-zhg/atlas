@@ -8,24 +8,27 @@ import { AppConfigPanel } from "@atlas/appconfig-ui";
 import { Tabs } from "antd";
 
 import { PageHead } from "@/components/common";
-import { sys, writeHeaders } from "@/lib/api";
-import { useMe, useSystems, withCapability } from "@/lib/session";
+import { refreshSession, sys, writeHeaders } from "@/lib/api";
+import { useAccess, useSystems, withCapability } from "@/lib/session";
 
 export default function ParamsPage() {
-  const { data: me } = useMe();
+  const acc = useAccess();
   const { data: systems } = useSystems();
   return (
     <>
       <PageHead title="系统参数" sub="各系统的系统参数：可用镜像、上传上限、默认技能……改了下一次用到时生效，每次修改留一个版本，可以回滚" />
       <Tabs
-        items={withCapability(systems, "settings").map((s) => ({
+        items={withCapability(systems, "settings")
+          .filter((s) => acc.read(s.module))
+          .map((s) => ({
           key: s.code,
           label: s.name,
           children: (
             <AppConfigPanel
               endpoint={`${sys(s.code).endpoint}/configs`}
               headers={writeHeaders}
-              readOnly={me?.role !== "ADMIN"}
+              refresh={refreshSession}
+              readOnly={!acc.write(s.module)}
             />
           ),
         }))}

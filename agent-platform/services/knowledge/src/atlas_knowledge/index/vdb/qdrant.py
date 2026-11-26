@@ -2,7 +2,7 @@
 
 collection   kb_{dataset_uuid_hex}
 向量         dense（cosine）+ 稀疏 bm25（IDF modifier）—— 同一个 point，混合检索不用两个存储
-payload 索引 document_uuid、segment_uuid、enabled、doc_ok、kind、acl、is_current、
+payload 索引 document_uuid、segment_uuid、enabled、doc_ok、kind、is_current、
              valid_from、valid_to；meta.* 按知识库的元数据字段定义另建（ensure_index）
 """
 
@@ -32,7 +32,6 @@ _BASE_INDEXES = (
     ("enabled", "bool"),
     ("doc_ok", "bool"),
     ("kind", "keyword"),
-    ("acl", "keyword"),
     ("is_current", "bool"),
     ("valid_from", "float"),
     ("valid_to", "float"),

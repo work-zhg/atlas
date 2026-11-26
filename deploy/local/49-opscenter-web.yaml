@@ -1,9 +1,8 @@
-# 运营中心前端（opscenter/web，basePath /ops）：和 Atlas 等前端同一个镜像（atlas-frontends，产物在 /app/ops），
-# 自己的 Deployment —— 不在 atlas-frontends 的 Pod 里，也不经它的 nginx（租户网关校验的是用户中心登录，
-# 运营中心有自己的账号）。/ops/api 由 Next 转给运营中心后端（48-opscenter.yaml），地址在镜像构建时定。
+# 运营中心前端（opscenter/web，basePath /opscenter-ui）：和 Atlas 等前端同一个镜像（atlas-frontends，产物在 /app/ops），
+# 自己的 Deployment。运营人员是系统租户里的人，统一登录（c4-model/opscenter/design-opscenter.html）：
+# 页面经 API 网关 /opscenter-ui/…，接口 /opscenter/…（网关验 JWT，转给 48-opscenter.yaml 的后端）。
 #
-# 对外：服务器上 traefik 按路径 /ops 直接转给它（deploy/server/20-ingress.yaml）；本机
-#   kubectl -n atlas-system port-forward svc/atlas-opscenter-web 3300:3300 → http://localhost:3300/ops
+# 内部 Ingress：Host = opscenter-ui.internal.techstz.com（网关写进 Host，见 40-frontends.yaml 的说明）。
 # ★ deploy/local/frontends.sh 应用本文件，镜像标签和 40-frontends.yaml 一样替换。
 apiVersion: apps/v1
 kind: Deployment
@@ -28,7 +27,7 @@ spec:
             - {name: PORT, value: "3300"}
           ports: [{containerPort: 3300, name: http}]
           readinessProbe:
-            httpGet: {path: /ops/login, port: 3300}
+            httpGet: {path: /opscenter-ui, port: 3300}
             periodSeconds: 5
           resources:
             requests: {cpu: 20m, memory: 96Mi}
@@ -42,3 +41,16 @@ spec:
   type: ClusterIP
   selector: {app: atlas-opscenter-web}
   ports: [{port: 3300, targetPort: 3300}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlas-opscenter-web
+  namespace: atlas-system
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: opscenter-ui.internal.techstz.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: atlas-opscenter-web, port: {number: 3300}}}}

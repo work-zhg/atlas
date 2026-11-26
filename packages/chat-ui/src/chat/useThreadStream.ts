@@ -103,13 +103,14 @@ export function useThreadStream({
       onDisconnect: () => setReconnecting(true),
       // ★ 重连按连续收到的位置接着要，不按收到过的最大序号（resumeCursor 的说明）
       cursor: () => resumeCursor(stateRef.current),
+      // ★ 在这里同步算出新状态、先更新 ref 再 setState，不在 setState 的 updater 里写 ref：
+      //   updater 可能推迟到下一次渲染才执行，而终态事件之后 sse.ts 同一拍就调 onTurnEnd、
+      //   读 stateRef —— 读到的是还没收这条终态事件的旧状态
       onEvent: (event) => {
-        setState((prev) => {
-          const next = applyEvent(prev, event);
-          lastSeqRef.current = next.lastSeq;
-          stateRef.current = next;
-          return next;
-        });
+        const next = applyEvent(stateRef.current, event);
+        lastSeqRef.current = next.lastSeq;
+        stateRef.current = next;
+        setState(next);
       },
       onError: (err) => {
         setReconnecting(false);

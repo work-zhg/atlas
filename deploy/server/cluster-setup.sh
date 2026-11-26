@@ -2,17 +2,15 @@
 # 在一台新机器上搭单节点 K8s（在那台机器上以 root 运行），组合与 112 一致：
 #   containerd（docker 官方源，docker 同时用来在服务器上构建镜像）、kubeadm 1.36、Calico 3.33（tigera-operator，
 #   VXLANCrossSubnet、hostPorts）、local-path（local-path / local-path-retain）、metrics-server、
-#   traefik（hostPort 80/443，IngressClass traefik）、helm、uv（images.sh 导出依赖用）。
+#   traefik（只做内部 Ingress，固定 ClusterIP，IngressClass traefik）、helm、uv（images.sh 导出依赖用）。
 #
 #   PUBLIC_IP=34.97.143.215 DOMAIN=apijp.techstz.com SMALL_NODE=1 deploy/server/cluster-setup.sh
 #
 #   PUBLIC_IP / DOMAIN  写进 apiserver 证书的 SAN（可空）
 #   SMALL_NODE=1        2 核的小机器：装 small-node-cpu.yaml（Pod 的 CPU requests 压到 1/4）、CoreDNS 只留 1 个副本
-#   HTTPS=1             traefik 叠加 deploy/server/traefik-https.yaml（Let's Encrypt 证书、HTTP 跳 HTTPS）；
-#                       .env 里同时写 ATLAS_PUBLIC_SCHEME=https
 #
-# 之后：git clone 仓库到这台机器、放好 .env，在仓库里跑 deploy/server/images.sh 与 deploy/server/deploy.sh
-# （两者发现本机是 K8s 节点就不经 ssh）。只在 Debian 13 上跑过（2026-11-11，GCP asia-northeast2）。
+# 之后：git clone 仓库到这台机器、放好 .env，在仓库里跑 deploy/server/images.sh、deploy/server/gateway.sh install
+# 与 cert（对外的 80 / 443、证书归宿主机上的 API 网关），再跑 deploy/server/deploy.sh（发现本机是 K8s 节点就不经 ssh）。只在 Debian 13 上跑过（2026-11-11，GCP asia-northeast2）。
 # ★ 可重复执行：kubeadm init 只在还没有集群时做。
 set -euxo pipefail
 cd "$(dirname "$0")/../.."
@@ -139,39 +137,19 @@ kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/down
 kubectl -n kube-system patch deploy metrics-server --type=json \
   -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]' || true
 
-# ── helm + traefik（hostPort 80/443，与 112 同 chart 版本）
+# ── helm + traefik（只做内部 Ingress：不占宿主机端口，固定 ClusterIP；值见 deploy/server/traefik-values.yaml）
 if ! command -v helm >/dev/null; then
   curl -fsSL https://get.helm.sh/helm-v3.19.0-linux-amd64.tar.gz | tar xz -C /tmp linux-amd64/helm
   install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
 fi
 helm repo add traefik https://traefik.github.io/charts >/dev/null 2>&1 || true
 helm repo update traefik >/dev/null
-cat >/root/traefik-values.yaml <<EOF
-ingressClass:
-  enabled: true
-  isDefaultClass: true
-ports:
-  web:
-    hostPort: 80
-  websecure:
-    hostPort: 443
-resources:
-  limits:
-    memory: 256Mi
-  requests:
-    cpu: 100m
-    memory: 64Mi
-service:
-  type: ClusterIP
-updateStrategy:
-  rollingUpdate:
-    maxSurge: 0
-    maxUnavailable: 1
-  type: RollingUpdate
-EOF
-traefik_values=(-f /root/traefik-values.yaml)
-[ "${HTTPS:-}" = 1 ] && traefik_values+=(-f deploy/server/traefik-https.yaml)
-helm upgrade --install traefik traefik/traefik --version 42.0.0 -n traefik --create-namespace "${traefik_values[@]}"
+# ClusterIP 建好就不能改：已有的不是固定地址（以前 Traefik 占 hostPort 80/443 对外）就先删 Service
+ingress_ip="$(awk '$1 == "clusterIP:" {print $2}' deploy/server/traefik-values.yaml)"
+old_ip="$(kubectl -n traefik get svc traefik -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)"
+[ -z "$old_ip" ] || [ "$old_ip" = "$ingress_ip" ] || kubectl -n traefik delete svc traefik
+helm upgrade --install traefik traefik/traefik --version 42.0.0 -n traefik --create-namespace \
+  -f deploy/server/traefik-values.yaml
 
 # ── uv（images.sh app 按 uv.lock 导出依赖：docker/app/requirements.sh）
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh

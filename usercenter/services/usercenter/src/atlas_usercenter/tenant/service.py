@@ -244,6 +244,8 @@ class TenantService:
             t.max_users = _quota(data["max_users"])
             changes["max_users"] = t.max_users
         if "expires_at" in data:
+            if data["expires_at"] is not None:
+                _guard_system(t, "设到期时间")
             t.expires_at = data["expires_at"]
             changes["expires_at"] = t.expires_at.isoformat() if t.expires_at else None
         if changes:
@@ -260,6 +262,8 @@ class TenantService:
         ★ 只挡新请求。在跑的后台工作由运营中心随后通知各系统挂起（租户隔离设计 §10）。
         """
         t = await self.get(uuid)
+        if blocked:
+            _guard_system(t, "停用")
         status = "suspended" if blocked else "active"
         if t.status != status:
             record(
@@ -313,6 +317,7 @@ class TenantService:
             ).scalar_one_or_none()
             if t is None:
                 return {}
+            _guard_system(t, "删除")
             if t.status == "active":
                 raise Conflict("TENANT_ACTIVE", "只能删除已停用的租户：先停用")
             deleted: dict[str, int] = {}
@@ -368,15 +373,18 @@ class TenantService:
             opened = {ta.app_uuid: ta for ta in await self.session.scalars(select(TenantApp))}
         return [(a, opened.get(a.uuid)) for a in apps]
 
-    async def set_app(self, uuid: UUID, app_uuid: UUID, enabled: bool) -> None:
-        """给租户开通 / 关闭应用。开通后范围默认无人（scope_all=False），由租户自己配。"""
+    async def set_app(
+        self, uuid: UUID, app_uuid: UUID, enabled: bool, *, scope_all: bool | None = None
+    ) -> None:
+        """给租户开通 / 关闭应用。开通后范围默认无人（scope_all=False），由租户自己配；
+        scope_all=True 开成全员可访问（运营中心给系统租户开通自己时用）。"""
         t = await self.get(uuid)
         app = (
             await self.session.execute(select(App).where(App.uuid == app_uuid))
         ).scalar_one_or_none()
         if app is None or app.is_builtin:
             raise NotFound("APP_NOT_FOUND", "应用不存在")
-        await self._switch_app(t, app, enabled)
+        await self._switch_app(t, app, enabled, scope_all=scope_all)
 
     async def _enable_apps(self, t: Tenant, codes: list[str]) -> None:
         for code in dict.fromkeys(c.strip() for c in codes if c and c.strip()):
@@ -389,15 +397,22 @@ class TenantService:
                 raise Invalid("APP_NOT_FOUND", f"应用 {code} 不存在", field="apps")
             await self._switch_app(t, app, True)
 
-    async def _switch_app(self, t: Tenant, app: App, enabled: bool) -> None:
+    async def _switch_app(
+        self, t: Tenant, app: App, enabled: bool, *, scope_all: bool | None = None
+    ) -> None:
+        if enabled and app.system_only and not t.is_system:
+            raise Conflict("SYSTEM_ONLY_APP", f"{app.name} 只能开给系统租户")
         with tenant_scope(self.session, t.uuid):
             row = (
                 await self.session.execute(select(TenantApp).where(TenantApp.app_uuid == app.uuid))
             ).scalar_one_or_none()
             if enabled and row is None:
-                self.session.add(TenantApp(app_uuid=app.uuid, enabled_at=utcnow()))
+                row = TenantApp(app_uuid=app.uuid, enabled_at=utcnow())
+                self.session.add(row)
             elif row is not None:
                 row.status = "active" if enabled else "disabled"
+            if enabled and scope_all is not None and row is not None:
+                row.scope_all = scope_all
             await self.session.flush()
         if not enabled:
             await self._revoke_tokens(t.uuid, app.uuid)
@@ -416,6 +431,12 @@ class TenantService:
         if app_uuid is not None:
             stmt = stmt.where(AppToken.app_uuid == app_uuid)
         await self.session.execute(stmt)
+
+
+def _guard_system(t: Tenant, what: str) -> None:
+    """系统租户不能停用、删除、设到期：运营人员都靠它登录运营中心，停了就把自己锁在门外。"""
+    if t.is_system:
+        raise Conflict("SYSTEM_TENANT", f"系统租户不能{what}：运营人员靠它登录运营中心")
 
 
 def _quota(value: Any) -> int | None:

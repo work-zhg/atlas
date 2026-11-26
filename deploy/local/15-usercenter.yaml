@@ -3,8 +3,8 @@
 # ★ 原先在宿主上跑 uvicorn（:8030）；按「部署一律放 Pod」迁进集群。镜像与 Atlas 共用 atlas-app:dev。
 # ★ initContainer 先迁移（含内置应用同步）再起服务：用户中心的迁移改约束、改唯一性，
 #   必须在新代码接请求之前完成。
-# ★ ClusterIP（内网身份传递 §4）：浏览器经网关 /uc/api；它也是网关 auth_request 的校验方
-#   （/api/v1/auth/verify）。宿主上要直接调它的运维命令先
+# ★ ClusterIP（内网身份传递 §4）：浏览器经 API 网关 /uc/api。它签访问 JWT、发公钥集（/api/v1/auth/jwks），
+#   API 网关本地验签（/api/v1/auth/verify 仍在，也认访问 JWT）。宿主上要直接调它的运维命令先
 #   kubectl -n atlas-system port-forward svc/atlas-usercenter 8030:8030，再按 127.0.0.1:8030 访问。
 # ★ Service 名不叫 atlas-uc：K8s 会给 Pod 注入 <SERVICE>_PORT 一类变量，ATLAS_UC_ 前缀正是
 #   用户中心的配置前缀，会撞上。另外关掉 enableServiceLinks，双保险。
@@ -32,6 +32,13 @@ spec:
             # 运营接口（/ops/v1）的签名密钥：运营中心（48-opscenter.yaml）调用时核对（apply.sh 建 atlas-ops-keys）
             - name: ATLAS_UC_OPS_API_KEY
               valueFrom: {secretKeyRef: {name: atlas-ops-keys, key: usercenter}}
+            # 访问 JWT 的签名私钥（apply.sh 建 atlas-uc-jwt）：网关拿公钥集（/api/v1/auth/jwks）本地验签
+            - name: ATLAS_UC_JWT_SIGNING_KEY
+              valueFrom: {secretKeyRef: {name: atlas-uc-jwt, key: signing_key}}
+            - name: ATLAS_UC_JWT_PUBLISHED_KEYS
+              valueFrom: {secretKeyRef: {name: atlas-uc-jwt, key: published_keys}}
+            # 登录 Cookie 加 Secure：对外是 HTTPS（API 网关终结 TLS）时 true（apply.sh 按 __PUBLIC_ORIGIN__ 替换）
+            - {name: ATLAS_UC_COOKIE_SECURE, value: "__PUBLIC_HTTPS__"}
       containers:
         - name: usercenter
           image: atlas-app:dev
@@ -45,7 +52,7 @@ spec:
           resources:
             requests: {cpu: 50m, memory: 128Mi}
 ---
-# ★ ClusterIP（内网身份传递 §4）：只经网关（atlas-frontends 的 nginx）对外；运维直连用
+# ★ ClusterIP（内网身份传递 §4）：只经 API 网关（/uc/…）对外；运维直连用
 #   kubectl -n atlas-system port-forward svc/atlas-usercenter 8030:8030
 apiVersion: v1
 kind: Service
@@ -56,3 +63,18 @@ spec:
   type: ClusterIP
   selector: {app: atlas-usercenter}
   ports: [{port: 8030, targetPort: 8030}]
+---
+# 内部 Ingress：API 网关把 /uc/… 去掉前缀后发到这里，Host = uc.internal.techstz.com
+#   （infra-platform/gateway/routes.yaml；Traefik 只在集群内，见 deploy/server/traefik-values.yaml）
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlas-usercenter
+  namespace: atlas-system
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: uc.internal.techstz.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: atlas-usercenter, port: {number: 8030}}}}

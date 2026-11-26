@@ -19,7 +19,7 @@ import httpx
 
 GATEWAY = os.environ.get("ATLAS_GATEWAY", "http://atlas.192.168.0.112.nip.io")
 UC = f"{GATEWAY}/uc/api/v1"
-ATLAS = f"{GATEWAY}/atlas-api/v1"
+ATLAS = f"{GATEWAY}/atlas/v1"
 DOMAIN = "xinghai.com"
 
 #: 部门 → 上级部门（根部门是 bootstrap 建的「星海科技」）
@@ -94,7 +94,7 @@ AGENT = {
 
 
 class Session:
-    """一个登录会话（网关的 uc_session Cookie）。写请求带 CSRF 头。"""
+    """一个登录会话（用户中心发的 uc_access 等 Cookie）。写请求带 CSRF 头。"""
 
     def __init__(self, account: str, password: str) -> None:
         self.c = httpx.Client(trust_env=False, timeout=30)

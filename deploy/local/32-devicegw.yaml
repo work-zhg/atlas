@@ -1,11 +1,11 @@
 # 设备网关（atlas-devicegw，agent-platform/doc/design/device-cli-design.html §3）：本机 CLI 智能体的入口。
 #
-#   用户电脑上的连接器 ──wss /device-api/connect（经前端网关）──▶ 设备网关（控制连接，一台设备一条）
-#   电脑上的 CLI ──https /device-api/u/{上游}（会话令牌）──▶ 设备网关 ──换上真实凭据──▶ 模型、MCP、知识库
+#   用户电脑上的连接器 ──wss /device/connect（经 API 网关）──▶ 设备网关（控制连接，一台设备一条）
+#   电脑上的 CLI ──https /device/u/{上游}（会话令牌）──▶ 设备网关 ──换上真实凭据──▶ 模型、MCP、知识库
 #   atlas-server ──/internal（集群内）──▶ 设备所在的那个网关实例（查在线、登记会话、接会话流、读文件）
 #
-# ★ 前端网关（40-frontends.yaml）把 /device-api/ 转过来，不经登录校验：网关自己认设备令牌、会话令牌。
-#   /device-api/internal/ 在前端网关挡掉，只走集群内地址。
+# ★ API 网关（infra-platform/gateway/routes.yaml）只把 /device/ 下的 /connect、/pair、/u/ 转过来，不验 JWT：
+#   这里自己认设备令牌、会话令牌。/internal 网关不转，只走集群内地址。旧版连接器的 /device-api 网关还认。
 # ★ 多个实例时：在线表（Redis）记着每台设备连在哪个实例上（instance = POD_IP:8095），atlas-server 直接
 #   连那个实例；实例之间不转发。所以 POD_IP 要注入，Pod 之间要能直连。
 # ★ 和 atlas-server 分开部署：server 发版频繁，设备的长连接不跟着断。
@@ -35,7 +35,7 @@ spec:
             - {name: ATLAS_DEVICEGW_REDIS_URL, value: "redis://__HOST_IP__:6380/0"}
             - {name: ATLAS_DEVICEGW_AGENT_URL, value: "http://atlas-server.atlas-system.svc.cluster.local:8000"}
             # 设备看到的地址：能力代理 = 它 + /u/{上游编号}
-            - {name: ATLAS_DEVICEGW_PUBLIC_URL, value: "__PUBLIC_ORIGIN__/device-api"}
+            - {name: ATLAS_DEVICEGW_PUBLIC_URL, value: "__PUBLIC_ORIGIN__/device"}
             - name: ATLAS_DEVICEGW_INTERNAL_TOKEN
               valueFrom: {secretKeyRef: {name: atlas-devicegw, key: internal_token}}
             - name: POD_IP
@@ -55,3 +55,18 @@ spec:
   type: ClusterIP
   selector: {app: atlas-devicegw}
   ports: [{port: 8095, targetPort: 8095}]
+---
+# 内部 Ingress：API 网关把 /device/… 去掉前缀后发到这里，Host = device.internal.techstz.com
+#   （infra-platform/gateway/routes.yaml；Traefik 只在集群内，见 deploy/server/traefik-values.yaml）
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlas-devicegw
+  namespace: atlas-system
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: device.internal.techstz.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: atlas-devicegw, port: {number: 8095}}}}

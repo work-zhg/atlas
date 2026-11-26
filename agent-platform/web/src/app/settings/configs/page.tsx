@@ -8,6 +8,7 @@
  * ★ 镜像白名单、上传上限这类系统参数在运营中心改，这里看不到。
  */
 import { AppConfigPanel } from "@atlas/appconfig-ui";
+import { refreshSession } from "@atlas/chat-ui/src/lib/session";
 
 import { SETTINGS_MANAGE } from "@/api/tenant-settings";
 import pageStyles from "@/features/agents/agents.module.css";
@@ -26,7 +27,7 @@ export default function Page() {
         </div>
       </header>
       <div className={pageStyles.body}>
-        <AppConfigPanel endpoint={ENDPOINT} headers={authHeaders} readOnly={!can(me, SETTINGS_MANAGE)} />
+        <AppConfigPanel endpoint={ENDPOINT} headers={authHeaders} refresh={refreshSession} readOnly={!can(me, SETTINGS_MANAGE)} />
       </div>
     </div>
   );

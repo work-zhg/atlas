@@ -14,12 +14,12 @@ import httpx
 import pytest
 from atlas_memory.db.session import get_engine, get_sessionmaker
 from atlas_memory.settings import get_settings
-from memory_testkit import TEST_TENANT, USERS_ELSEWHERE, FakePermissions
+from memory_testkit import BLOCKED_TENANTS, TEST_TENANT, USERS_ELSEWHERE, FakePermissions
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 TEST_DB = "atlas_memory_test"
-_ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/atlas"
+_ADMIN_URL = "postgresql+asyncpg://atlas:atlas@localhost:5433/postgres"
 TEST_URL = f"postgresql+asyncpg://atlas:atlas@localhost:5433/{TEST_DB}"
 _TABLES = (
     "mem_scope",
@@ -27,8 +27,6 @@ _TABLES = (
     "mem_topic",
     "mem_entry",
     "mem_revision",
-    "app_tenant_state",
-    "app_ops_request",
 )
 OPS_KEY = "test-ops-key"
 
@@ -95,7 +93,7 @@ def _fake_authz(monkeypatch: pytest.MonkeyPatch) -> None:
         return httpx.Response(
             200,
             json={
-                "can_access": True,
+                "can_access": tenant not in BLOCKED_TENANTS,
                 "permissions": [],
                 "user": {"id": uid, "status": "active", "tenant_id": tenant},
             },
@@ -112,6 +110,7 @@ def _ops_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     yield
     get_settings.cache_clear()
     USERS_ELSEWHERE.clear()
+    BLOCKED_TENANTS.clear()
 
 
 @pytest.fixture

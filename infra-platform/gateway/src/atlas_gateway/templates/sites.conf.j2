@@ -1,0 +1,99 @@
+# 由 atlas_gateway 生成，勿手改。站点：每个对外域名一个 server；不认识的域名在握手时拒绝。
+
+# ── 80：只放 ACME 验证路径，其余 301 到 HTTPS；不认识的 Host 直接关连接
+server {
+  listen {{ s.http_port }} default_server;
+  server_name _;
+  # 网关自己的变量：每个 server 先给默认值（日志格式和 Lua 都要用；Nginx 的变量是全局登记的）
+  include {{ install_dir }}/vars.conf;
+  return 444;
+}
+{% if sites %}
+server {
+  listen {{ s.http_port }};
+  server_name {% for site in sites %}{{ site.host }}{% if not loop.last %} {% endif %}{% endfor %};
+  include {{ install_dir }}/vars.conf;
+  location ^~ /.well-known/acme-challenge/ {
+    root {{ s.acme_root }};
+    default_type text/plain;
+    try_files $uri =404;
+  }
+  location / {
+    return 301 https://$host$request_uri;
+  }
+}
+{% endif %}
+
+# ── 443：不认识的 SNI 在握手时拒绝，不出示任何证书
+server {
+  listen {{ s.https_port }} ssl default_server;
+  ssl_reject_handshake on;
+}
+{% for site in tls_sites %}
+
+server {
+  listen {{ s.https_port }} ssl;
+  http2 on;
+  server_name {{ site.host }};
+  ssl_certificate     {{ s.cert_dir }}/{{ site.host }}/fullchain.pem;
+  ssl_certificate_key {{ s.cert_dir }}/{{ site.host }}/privkey.pem;
+  add_header Strict-Transport-Security "max-age=31536000" always;
+  include {{ install_dir }}/vars.conf;
+{% if site.kind == "atlas" %}
+  # 网关自己回的错误是 JSON（上游的响应带着自己的 Content-Type，不受影响）
+  default_type application/json;
+
+  # 边界：先于 location，对以后新加的路由也生效。★ 直接回 JSON，不经 error_page：
+  #   Nginx 在解析请求行时就拒绝的请求（如 %00）没有 URI，转去命名 location 会变成 500
+  if ($gw_malformed) {
+    return 400 '{{ invalid_path }}';
+  }
+  if ($gw_forbidden) {
+    return 404 '{{ not_found }}';
+  }
+
+  include {{ install_dir }}/errors.conf;
+  include {{ install_dir }}/atlas-routes.conf;
+{% else %}
+  # 透传站点：有自己的登录，只清身份头（http 级），整站转给 {{ site.name }}.{{ s.internal_suffix }}
+  location / {
+    set $gw_route "site:{{ site.name }}";
+    include {{ install_dir }}/proxy/common.conf;
+    include {{ install_dir }}/proxy/passthrough.conf;
+    proxy_set_header Host {{ site.name }}.{{ s.internal_suffix }};
+    proxy_pass http://internal_ingress;
+  }
+{% endif %}
+}
+{% endfor %}
+
+# ── 本机监控与运维：/readyz（一把公钥都没有时 503）、/bans（查看、解封）。只听本机
+server {
+  listen {{ s.admin_listen }};
+  access_log off;
+  # 不查封禁表（本机运维要能解封）
+  rewrite_by_lua_block {
+    return
+  }
+  location = /healthz {
+    return 200 "ok\n";
+  }
+  location = /readyz {
+    content_by_lua_block {
+      require("atlas_gw.admin").readyz()
+    }
+  }
+  location = /bans {
+    content_by_lua_block {
+      require("atlas_gw.admin").bans()
+    }
+  }
+  location ~ ^/bans/(?<gw_ban_ip>[0-9A-Fa-f:.]+)$ {
+    content_by_lua_block {
+      require("atlas_gw.admin").unban(ngx.var.gw_ban_ip)
+    }
+  }
+  location / {
+    return 404;
+  }
+}

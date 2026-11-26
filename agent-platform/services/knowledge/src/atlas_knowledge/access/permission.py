@@ -3,13 +3,12 @@
     读（看到、检索、召回测试）        有效级别 ≥ READ
     写（上传、编辑分段、改检索设置）  有效级别 ≥ WRITE
     管（删除、共享、换向量模型）      有效级别 = OWNER（含「全部知识库 · Owner」）
-    审核入库文档                      OWNER，或 操作码 kb:review ∧ 能读（角色管「能不能审」，
-                                      数据权限管「审哪些库」）
 
 ★ 一律按 auth-uid（按谁的权限判，内网身份传递 §6、§8）：人直接操作时就是本人，
   Agent 运行时是它的数字员工（P2）。只剩这一套规则。
 ★ 看不到的库一律 404（不暴露存在性），看得到但不能改的才 403。
 ★ 公有的库（kb_dataset.visibility = public）：任何主体至少可读；写、管理照旧按数据权限。
+★ 私有的库只看数据权限：不按创建人、角色、部门自己推断。没有文档级权限：能读库就能读库里全部文档。
 """
 
 from __future__ import annotations
@@ -134,10 +133,6 @@ class DatasetAccess:
     def can_write(self) -> bool:
         return LEVEL_RANK[self.level] >= LEVEL_RANK["WRITE"]
 
-    @property
-    def can_review(self) -> bool:
-        return self.is_admin or (self.p.has("kb:review") and self.can_read)
-
     def require_write(self) -> None:
         if not self.can_write:
             raise Forbidden("没有修改该知识库的权限")
@@ -145,10 +140,6 @@ class DatasetAccess:
     def require_admin(self) -> None:
         if not self.is_admin:
             raise Forbidden("只有知识库所有者可以执行该操作")
-
-    def require_review(self) -> None:
-        if not self.can_review:
-            raise Forbidden("没有审核该知识库文档的权限")
 
 
 async def load_dataset(

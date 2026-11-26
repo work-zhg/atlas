@@ -159,7 +159,11 @@ async def can_access(session: AsyncSession, user: User, app: App) -> bool:
 
     if user.status == "disabled" or app.status != "active":
         return False
-    if not tenant_usable(await _tenant(session, user)):
+    tenant = await _tenant(session, user)
+    if not tenant_usable(tenant):
+        return False
+    # 「仅系统租户」的应用（运营中心）：别的租户就算有开通记录、建了同名角色，也不可访问
+    if app.system_only and not tenant.is_system:
         return False
     if app.is_builtin:
         return True

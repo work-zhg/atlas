@@ -10,6 +10,8 @@ _RANK = {"NONE": 0, "READ": 1, "WRITE": 2, "OWNER": 3}
 TEST_TENANT = "00000000-0000-0000-0000-00000000000a"
 #: 用户 → 所属租户：登记在这里的人不在测试租户里（用户中心替身在别的租户里找不到他）
 USERS_ELSEWHERE: dict[str, str] = {}
+#: 已停用或到期的租户：用户中心对这些租户的人回答「无权限」（can_access 为假）
+BLOCKED_TENANTS: set[str] = set()
 
 
 class FakePermissions:

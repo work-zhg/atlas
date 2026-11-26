@@ -54,3 +54,18 @@ spec:
   type: ClusterIP
   selector: {app: atlas-teamflow}
   ports: [{port: 8040, targetPort: 8040}]
+---
+# 内部 Ingress：API 网关把 /teamflow/… 去掉前缀后发到这里，Host = teamflow.internal.techstz.com
+#   （infra-platform/gateway/routes.yaml；Traefik 只在集群内，见 deploy/server/traefik-values.yaml）
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atlas-teamflow
+  namespace: atlas-system
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: teamflow.internal.techstz.com
+      http:
+        paths:
+          - {path: /, pathType: Prefix, backend: {service: {name: atlas-teamflow, port: {number: 8040}}}}

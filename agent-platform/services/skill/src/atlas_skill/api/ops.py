@@ -1,13 +1,13 @@
-"""运营接口（/ops/v1）：技能市场，以及租户的停用、恢复、删除。只给运营中心（先验签名）。
+"""运营接口（/ops/v1）：技能市场，以及租户的创建、删除。只给运营中心（先验签名）。
 
     GET   /ops/v1/market/skills                              市场里的技能和版本
     POST  /ops/v1/market/skills                              上传一个版本（zip），直接发布
                                                              （表单 install_by_default 顺带改默认）
     PATCH /ops/v1/market/skills/{slug}                       改「默认安装」
     POST  /ops/v1/market/skills/{slug}/versions/{v}/revoke   下架（不能再装；装走的不动）
-    POST  /ops/v1/tenants/{tenant}/market-skills             给租户装：{skills: [slug@版本…]}，
-                                                             空 = 装全部默认安装的（开通租户时调）
-    POST  /ops/v1/tenants/{tenant}/suspend|resume|purge      运营接口库给的
+    PUT    /ops/v1/tenants/{tenant}                          创建（运营接口库给的）：装市场技能，
+                                                             参数见 SkillTenantLifecycle.create
+    DELETE /ops/v1/tenants/{tenant}                          删除（运营接口库给的）
 
 ★ 市场是产品自带的技能，不属于任何租户；装进租户以后才是租户的（market/service.py）。
 ★ 写操作在返回前提交。
@@ -22,15 +22,8 @@ import asyncio
 from typing import Annotated, Any
 from uuid import UUID
 
-from atlas_opsapi import (
-    PREFIX,
-    OperatorStamp,
-    OpsGuard,
-    OpsRoutes,
-    TenantGate,
-    TenantLifecycleService,
-)
-from atlas_tenancy import PurgeReport, TenantDataPurge, TenantScope
+from atlas_opsapi import PREFIX, OperatorStamp, OpsGuard, OpsRoutes, Rejected, TenantLifecycle
+from atlas_tenancy import PurgeReport
 from fastapi import APIRouter, Depends, FastAPI, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -41,7 +34,7 @@ from ..db.models import Base, Skill, SkillAudit, SkillVersion
 from ..db.session import get_sessionmaker
 from ..errors import Invalid
 from ..market.service import MarketService
-from ..schemas import MarketInstalled, MarketInstallIn, MarketSkillOut, MarketVersionOut
+from ..schemas import MarketSkillOut, MarketVersionOut
 from ..settings import SkillSettings, get_settings
 from ..store.layout import DRAFTS_PREFIX, PUBLISHED_PREFIX
 from ..store.objects import StorageNotConfigured, make_storage
@@ -115,48 +108,58 @@ async def revoke(
     return MarketVersionOut.model_validate(row, from_attributes=True)
 
 
-@router.post("/tenants/{tenant_uuid}/market-skills", response_model=list[MarketInstalled])
-async def install_for_tenant(
-    tenant_uuid: UUID, body: MarketInstallIn, op: Operator, request: Request
-) -> list[MarketInstalled]:
-    """开通租户时运营中心调（幂等）：装进这个租户的，就是这个租户自己的技能了。"""
-    settings = get_settings()
-    storage = _storage(request, settings)
-    with TenantScope.enter(tenant_uuid):
-        async with get_sessionmaker()() as session:
-            service = MarketService(session=session, storage=storage, settings=settings)
-            out = await service.install_many(body.skills, actor=op.who)
-            await session.commit()
-    return out
-
-
-def _storage(request: Request, settings: SkillSettings) -> Any:
-    storage = getattr(request.app.state, "storage", None)
+def _storage(app: FastAPI, settings: SkillSettings) -> Any:
+    storage = getattr(app.state, "storage", None)
     if storage is None:
         storage = make_storage(settings)
-        request.app.state.storage = storage
+        app.state.storage = storage
     return storage
 
 
-class SkillTenantLifecycle:
-    """技能应用的租户生命周期：没有后台工作要停；删除时先删对象存储里的包。"""
+class SkillTenantLifecycle(TenantLifecycle):
+    """技能应用的租户接入。
+
+    创建：从技能市场给新租户装技能 —— 装进租户以后就是这个租户自己的技能（market/service.py）。
+      参数（开通时运营中心给技能应用填的）：
+        install_defaults  装全部「默认安装」的市场技能，默认是
+        skills            只装这些（slug 或 slug@版本），给了就不看 install_defaults
+      能重做：已经装过的版本不再装一遍。
+    删除：先删对象存储里这个租户的包，再分批删数据库里的行（基类）。
+    """
+
+    purge_order = (SkillAudit, SkillVersion, Skill)
 
     def __init__(self, app: FastAPI) -> None:
+        super().__init__(get_sessionmaker(), base=Base)
         self._app = app
 
-    async def on_suspend(self, tenant_uuid: UUID) -> None:
-        return None
+    async def create(self, tenant_uuid: UUID, params: dict[str, Any]) -> None:
+        skills = params.get("skills")
+        install_defaults = params.get("install_defaults", True)
+        if skills is not None and (
+            not isinstance(skills, list) or not all(isinstance(x, str) for x in skills)
+        ):
+            raise Rejected("skills 必须是字符串列表（slug 或 slug@版本）")
+        if not isinstance(install_defaults, bool):
+            raise Rejected("install_defaults 必须是 true / false")
+        if not skills and not install_defaults:
+            return
+        settings = get_settings()
+        async with self._sessions() as session:
+            service = MarketService(
+                session=session, storage=_storage(self._app, settings), settings=settings
+            )
+            # 空列表 = 装全部默认安装的
+            await service.install_many(skills or [], actor="运营中心（开通租户）")
+            await session.commit()
 
-    async def on_resume(self, tenant_uuid: UUID) -> None:
-        return None
-
-    async def purge_external(self, tenant_uuid: UUID, limit: int) -> PurgeReport:
+    async def delete_external(self, tenant_uuid: UUID, budget: int) -> PurgeReport:
         report = PurgeReport()
         try:
-            storage = getattr(self._app.state, "storage", None) or make_storage(get_settings())
+            storage = _storage(self._app, get_settings())
         except StorageNotConfigured:
             return report  # 没配对象存储：没有包要删
-        async with get_sessionmaker()() as session:
+        async with self._sessions() as session:
             legacy = [
                 key
                 for key in await session.scalars(select(SkillVersion.storage_key))
@@ -180,10 +183,6 @@ class SkillTenantLifecycle:
 def mount_ops(app: FastAPI) -> None:
     settings = get_settings()
     key = settings.ops_api_key.get_secret_value() if settings.ops_api_key else None
-    sessions = get_sessionmaker()
     app.state.ops_guard = guard = OpsGuard(key)
-    app.state.tenant_gate = gate = TenantGate(sessions)
-    purge = TenantDataPurge((SkillAudit, SkillVersion, Skill), base=Base)
-    lifecycle = TenantLifecycleService(sessions, SkillTenantLifecycle(app), gate, purge)
-    app.include_router(OpsRoutes(guard, lifecycle).router)
+    OpsRoutes.mount(app, guard, SkillTenantLifecycle(app))
     app.include_router(router)

@@ -128,8 +128,16 @@ return 0
 """
 
 
+_SCRIPT_RENEW = "teamflow.node_lock.renew"
+_SCRIPT_RELEASE = "teamflow.node_lock.release"
+
+
 class RedisCoordinator(LocalCoordinator):
-    """多实例：所有广播都经 Redis 再回到各实例（包括自己），本地不直接投递。"""
+    """多实例：所有广播都经 Redis 再回到各实例（包括自己），本地不直接投递。
+
+    ★ 经 atlas_redis.RedisRuntime 统一管池、拦截链与 Lua 脚本（EVALSHA），
+      psubscribe 专用独立长连接不占 commands 短命令池。
+    """
 
     def __init__(self, url: str, lease_seconds: int = 30, prefix: str = "tf:") -> None:
         super().__init__()
@@ -137,8 +145,21 @@ class RedisCoordinator(LocalCoordinator):
         self.PROC, self.WAKE = f"{prefix}proc:", f"{prefix}wake"
         self.TEAM, self.LOCK = f"{prefix}team", f"{prefix}node-lock:"
         import redis.asyncio as aioredis
+        from atlas_redis import RedisConfig, RedisRuntime
 
-        self.redis = aioredis.from_url(url, decode_responses=True)
+        self._rt = RedisRuntime(RedisConfig(url=url, service="teamflow"))
+        self.redis = self._rt.commands
+        self._scripts = self._rt.scripts
+        self._scripts.register(_SCRIPT_RENEW, _RENEW)
+        self._scripts.register(_SCRIPT_RELEASE, _RELEASE)
+        # psubscribe 专用长连接（socket_timeout=None），与 commands 短命令池彻底隔离
+        self._sub_redis = aioredis.from_url(
+            url,
+            decode_responses=True,
+            socket_timeout=None,
+            socket_connect_timeout=3.0,
+            health_check_interval=30,
+        )
         self.lease_ms = lease_seconds * 1000
         self.instance = uuid4().hex[:8]
         self._listener: asyncio.Task[None] | None = None
@@ -154,13 +175,15 @@ class RedisCoordinator(LocalCoordinator):
             self._listener.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._listener
-        await self.redis.aclose()
+        with contextlib.suppress(Exception):
+            await self._sub_redis.aclose()
+        await self._rt.aclose()
 
     async def _listen(self) -> None:
         """一个实例一条订阅连接；断开后重连（不判失败）。"""
         while True:
             try:
-                pubsub = self.redis.pubsub()
+                pubsub = self._sub_redis.pubsub()
                 await pubsub.psubscribe(self.PROC + "*")
                 await pubsub.subscribe(self.WAKE, self.TEAM)
                 self._ready.set()
@@ -182,27 +205,55 @@ class RedisCoordinator(LocalCoordinator):
 
     def publish(self, process_uuid: UUID, msg: dict[str, Any]) -> None:
         self._spawn(
-            self.redis.publish(self.PROC + str(process_uuid), json.dumps(msg, ensure_ascii=False))
+            self.redis.with_policy(fail_open=True).publish(
+                self.PROC + str(process_uuid),
+                json.dumps(msg, ensure_ascii=False),
+                key_pattern="teamflow:proc:*",
+            )
         )
 
     def wake(self, node_uuid: UUID) -> None:
-        self._spawn(self.redis.publish(self.WAKE, str(node_uuid)))
+        self._spawn(
+            self.redis.with_policy(fail_open=True).publish(
+                self.WAKE, str(node_uuid), key_pattern="teamflow:wake"
+            )
+        )
 
     def team_changed(self, team_uuid: UUID) -> None:
-        self._spawn(self.redis.publish(self.TEAM, str(team_uuid)))
+        self._spawn(
+            self.redis.with_policy(fail_open=True).publish(
+                self.TEAM, str(team_uuid), key_pattern="teamflow:team"
+            )
+        )
 
     async def acquire(self, node_uuid: UUID, token: str) -> bool:
         return bool(
-            await self.redis.set(self.LOCK + str(node_uuid), token, nx=True, px=self.lease_ms)
+            await self.redis.set(
+                self.LOCK + str(node_uuid),
+                token,
+                nx=True,
+                px=self.lease_ms,
+                key_pattern="teamflow:node-lock:*",
+            )
         )
 
     async def renew(self, node_uuid: UUID, token: str) -> bool:
         return bool(
-            await self.redis.eval(_RENEW, 1, self.LOCK + str(node_uuid), token, self.lease_ms)
+            await self._scripts.run(
+                _SCRIPT_RENEW,
+                keys=(self.LOCK + str(node_uuid),),
+                args=(token, self.lease_ms),
+                key_pattern="teamflow:node-lock:*",
+            )
         )
 
     async def release(self, node_uuid: UUID, token: str) -> None:
-        await self.redis.eval(_RELEASE, 1, self.LOCK + str(node_uuid), token)
+        await self._scripts.run(
+            _SCRIPT_RELEASE,
+            keys=(self.LOCK + str(node_uuid),),
+            args=(token,),
+            key_pattern="teamflow:node-lock:*",
+        )
 
 
 _coord: list[LocalCoordinator] = [LocalCoordinator()]

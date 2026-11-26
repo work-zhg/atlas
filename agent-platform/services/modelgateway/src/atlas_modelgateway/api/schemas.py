@@ -123,11 +123,12 @@ class CapsIO(BaseModel):
 
 
 class PriceIO(BaseModel):
-    """元 / 百万 token。都不填 = 不计费。"""
+    """元 / 百万 token。都不填 = 不计费；cache_write 不填 = 按输入价算。"""
 
     input: Decimal = Field(default=Decimal(0), ge=0)
     cache_hit: Decimal = Field(default=Decimal(0), ge=0)
     output: Decimal = Field(default=Decimal(0), ge=0)
+    cache_write: Decimal | None = Field(default=None, ge=0)
 
 
 class RouteIn(BaseModel):

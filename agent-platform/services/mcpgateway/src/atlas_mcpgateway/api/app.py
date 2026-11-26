@@ -3,10 +3,10 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
+from uuid import UUID
 
 from atlas_jobs import JobScheduler
-from atlas_opsapi import NoExternal, OpsGuard, OpsRoutes, TenantGate, TenantLifecycleService
-from atlas_tenancy import TenantDataPurge
+from atlas_opsapi import OpsGuard, OpsRoutes, TenantLifecycle
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.types import Receive, Scope, Send
@@ -53,16 +53,20 @@ def create_app(*, uc: UserCenter | None = None) -> FastAPI:
             _wire(app, owned)
         upstream = UpstreamGateway(settings)
         app.state.upstream = upstream
-        gate = app.state.tenant_gate
+        grant_secret = (
+            settings.identity_grant_secret.get_secret_value()
+            if settings.identity_grant_secret
+            else ""
+        )
         invocation = ToolInvocation(
-            get_sessionmaker(), app.state.uc, app.state.access, upstream, gate
+            get_sessionmaker(), app.state.uc, app.state.access, upstream, grant_secret=grant_secret
         )
         app.state.invocation = invocation
         endpoint = McpEndpoint(invocation)
         app.state.mcp_endpoint = endpoint
         if settings.maintainer_tick_s > 0:
             jobs.register(
-                ToolRefresh(settings, app.state.uc, upstream, gate),
+                ToolRefresh(settings, app.state.uc, upstream),
                 scope="instance",
                 every=settings.maintainer_tick_s,
             )
@@ -109,20 +113,22 @@ def create_app(*, uc: UserCenter | None = None) -> FastAPI:
     return app
 
 
-def _mount_ops(app: FastAPI, jobs: JobScheduler) -> None:
-    """运营接口（/ops/v1）：租户停用、恢复、删除，系统任务（刷新工具定义）。
+class McpGatewayTenantLifecycle(TenantLifecycle):
+    """MCP 网关的租户接入。新租户不用准备什么（服务、Key 都由租户自己建，平台服务所有租户可见）；
+    删除只有数据库里的行，用户中心里登记的服务、Key 的主体随租户在用户中心里一起删。"""
 
-    数据库之外没有要删的（用户中心里登记的服务、Key 的主体随租户在用户中心里一起删）。停用后
-    管理接口、内部接口 403，数据面上这个租户的 Key 一律无效，定期刷新也跳过它。
-    """
+    purge_order = (McpAudit, McpDataObject, McpTool, McpApiKey, McpService)
+
+    async def create(self, tenant_uuid: UUID, params: dict[str, Any]) -> None:
+        return None
+
+
+def _mount_ops(app: FastAPI, jobs: JobScheduler) -> None:
+    """运营接口（/ops/v1）：租户的创建、删除，系统任务（刷新工具定义）。"""
     settings = get_settings()
     key = settings.ops_api_key.get_secret_value() if settings.ops_api_key else None
-    sessions = get_sessionmaker()
     app.state.ops_guard = guard = OpsGuard(key)
-    app.state.tenant_gate = gate = TenantGate(sessions)
-    purge = TenantDataPurge((McpAudit, McpDataObject, McpTool, McpApiKey, McpService), base=Base)
-    lifecycle = TenantLifecycleService(sessions, NoExternal(), gate, purge)
-    app.include_router(OpsRoutes(guard, lifecycle, jobs=jobs).router)
+    OpsRoutes.mount(app, guard, McpGatewayTenantLifecycle(get_sessionmaker(), base=Base), jobs=jobs)
 
 
 def _wire(app: FastAPI, uc: UserCenter) -> None:

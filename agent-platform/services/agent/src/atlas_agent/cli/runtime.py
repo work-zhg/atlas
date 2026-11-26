@@ -37,6 +37,7 @@ from atlas_jsonrpc import ErrorCode, RpcFault
 from ..approval import ApprovalService, DecisionChannel, OnlineApprovals
 from ..browser.component import refresh_in_background
 from ..errors import CapabilityUnavailable
+from ..redisx import shared_pubsub, shared_redis
 from .capabilities import CliCapabilities, CliCapabilityAssembly
 from .host import CliHost, HostAccess, HostRouter, HostUnavailable, PodHost
 from .link import CliSession, CliSessionStore, DbCliSessions, SessionLink
@@ -105,7 +106,11 @@ class CliRuntime:
         self._hosts = HostRouter(PodHost(pods), devices)
         self._capabilities = CliCapabilityAssembly(settings, sessionmaker)
         self._approvals: ApprovalFactory = approvals or (
-            lambda run_id, redis: OnlineApprovals(sessionmaker, DecisionChannel(redis), run_id)
+            lambda run_id, redis: OnlineApprovals(
+                sessionmaker,
+                DecisionChannel(redis, pubsub=shared_pubsub() if redis is shared_redis() else None),
+                run_id,
+            )
         )
         self._sessions: CliSessionStore = sessions or DbCliSessions(sessionmaker)
         self._clock = clock or (lambda: datetime.now(UTC))

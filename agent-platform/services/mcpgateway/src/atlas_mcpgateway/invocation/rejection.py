@@ -18,6 +18,8 @@ class Reason(StrEnum):
     SERVICE_DISABLED = "service_disabled"
     KEY_MISSING = "key_missing"
     KEY_INVALID = "key_invalid"
+    #: 身份凭据（X-Identity-Grant）签名不对、租户和 Key 的对不上
+    GRANT_INVALID = "grant_invalid"
     FORBIDDEN = "forbidden"
     AUTHZ_UNAVAILABLE = "authz_unavailable"
     TOOL_UNKNOWN = "tool_unknown"
@@ -32,6 +34,7 @@ _CODES: dict[Reason, tuple[int, int]] = {
     Reason.SERVICE_DISABLED: (403, -32041),
     Reason.KEY_MISSING: (401, -32042),
     Reason.KEY_INVALID: (401, -32043),
+    Reason.GRANT_INVALID: (401, -32047),
     Reason.FORBIDDEN: (403, -32044),
     Reason.AUTHZ_UNAVAILABLE: (503, -32045),
     Reason.TOOL_UNKNOWN: (200, -32046),

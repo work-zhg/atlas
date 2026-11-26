@@ -487,7 +487,13 @@ def parse(data: bytes, filename: str = "") -> DocIR:
     pages: list[_Page] = []
     with pdfplumber.open(io.BytesIO(data)) as pdf:
         for number, page in enumerate(pdf.pages, start=1):
-            pages.append(_analyze_page(page, number))
+            try:
+                pages.append(_analyze_page(page, number))
+            finally:
+                # ★ 每页分析完就放掉 pdfplumber 的缓存：它把每个字符缓存成一个 dict（约 2 KB），
+                #   不关的话要等整份解析完才释放，内存 ≈ 4 MB × 页数（500 页峰值 2 GB）。
+                #   分析结果已经在 _Page 里，之后不再回头读 pdfplumber 的页面
+                page.close()
 
     removed = _strip_headers_footers(pages)
     _strip_repeated_images(pages)
@@ -652,8 +658,6 @@ def _report(pages: list[_Page], ir: DocIR, removed: list[str]) -> dict[str, Any]
         warnings.append("没有提取到任何文本")
     if garbled >= 0.05:
         warnings.append(f"乱码比例 {garbled:.0%}：字体编码可能无法识别")
-    # 以上是影响内容本身的问题（缺文字、乱码）：入库后先进待审核（§4.7）
-    needs_review = bool(warnings)
     if len(pages) >= 5 and len(text) >= 3000 and n_head == 0:
         warnings.append("未识别出标题：按标题分段将退化为按段落切分")
     return {
@@ -667,5 +671,4 @@ def _report(pages: list[_Page], ir: DocIR, removed: list[str]) -> dict[str, Any]
         "images": sum(1 for b in ir.blocks if b.type == "image"),
         "header_footer_removed": removed,
         "warnings": warnings,
-        "needs_review": needs_review,
     }

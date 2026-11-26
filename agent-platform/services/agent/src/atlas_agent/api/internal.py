@@ -3,7 +3,7 @@
     POST /internal/devices/redeem         设备网关：连接器拿配对码换设备令牌
     POST /internal/devices/authenticate   设备网关：核对设备令牌（每次建立控制连接）
 
-★ 只走集群内地址：前端网关（nginx）把 /atlas-api/internal/ 挡在外面。
+★ 只走集群内地址：API 网关对含 /internal/ 段的路径一律 404。
 ★ 不需要登录：凭据就是请求体里的配对码、设备令牌。
 """
 
@@ -49,16 +49,15 @@ async def redeem_pairing_code(
 async def authenticate_device(
     body: AuthenticateIn, session: SessionDep, request: Request
 ) -> JSONResponse:
-    """→ {device_uuid, owner_uuid, name}；令牌不对或设备已吊销回 401，租户已停用回 403。"""
+    """→ {device_uuid, owner_uuid, name}；令牌不对或设备已吊销回 401。
+
+    ★ 不查租户状态（不知道它）：租户停用后设备照样连得上，但这个租户的人发不起新的 run
+      （用户中心回答无权限）；租户删除时设备行一起删，令牌就吊销了。
+    """
     identity = await DeviceService(session).authenticate(body.token, body.report)
     if identity is None:
         return JSONResponse(
             {"error": {"kind": "unauthorized", "message": "设备令牌无效或设备已吊销"}},
             status_code=401,
-        )
-    gate = getattr(request.app.state, "tenant_gate", None)
-    if gate is not None and not await gate.is_active(identity.tenant_uuid):
-        return JSONResponse(
-            {"error": {"kind": "forbidden", "message": "设备所在的组织已停用"}}, status_code=403
         )
     return JSONResponse(identity.to_json())

@@ -1,12 +1,13 @@
 """调用编排（c4-model/modelgateway/code-gateway-invocation.html）：一次调用的流程，自己不含规则。
 
-    读共同信息 → 准入 → 查能力 → 按入口筛线路 → 选线路 → 按线路算参数 → 发出
+    读共同信息 → 准入与预算 → 查能力 → 按入口筛线路 → 扣每分钟配额 → 选线路 → 按线路算参数 → 发出
     → 等第一段内容（提交点）→ 读一段写一段 → 记用量、累加花费
 
 ★ 提交点是「第一段内容到了」，不是上游返回 200：之前出的错（包括 200 之后流里来的过载）照样换线路，
   调用方只看到保活注释；之后出的错只能在流里报错结束。
-★ 读一段写一段，不经中继、不放队列：调用方读得慢写就等，读上游也跟着慢；调用方断开就关上游。
-★ 只限「等第一段内容」和「两段之间」，不限总时长。
+★ 跨多次尝试设有总首字截止时间（total_first_content_s），防止 4 条慢线路叠加挂住数十分钟；
+  提交之后两段之间若上游长考（如拼大工具参数），按 keepalive_s 持续写保活注释防反向代理断连，
+  超过 idle_s 才判卡住中断。
 ★ 网关已经换过线路仍然失败时，告诉 SDK 不要再重试（官方 SDK 认 x-should-retry: false）；
   只有一条线路（没换成）时不说，交给 SDK 重试。
 """
@@ -27,10 +28,7 @@ from uuid import UUID
 from atlas_tenancy import TenantScope
 
 from ..db.types import uuid7
-from .admission import Admission, Grant
-from .capability import CapabilityGate
-from .format import KEEPALIVE, FormatGateway, Piece, UpstreamCall, UpstreamError
-from .kernel import (
+from ..shared.kernel import (
     Entry,
     ErrorCategory,
     FailureKind,
@@ -43,6 +41,9 @@ from .kernel import (
     UpstreamFailure,
     Usage,
 )
+from .admission import Admission, Grant
+from .capability import CapabilityGate
+from .format import KEEPALIVE, FormatGateway, Piece, UpstreamCall, UpstreamError
 from .metering import CallRecord, Metering, UsageEstimator
 from .routing import RouteSelector
 
@@ -59,9 +60,17 @@ MSG_INTERRUPTED = "回答中断了，请重试"
 @dataclass(frozen=True)
 class Timeouts:
     first_content_s: float = 600.0
+    #: 跨多次换线路等待第一段内容的总上限；None = 默认按 1.5 倍 first_content_s 封顶
+    total_first_content_s: float | None = None
     idle_s: float = 300.0
     keepalive_s: float = 15.0
     max_attempts: int = 4
+
+    @property
+    def effective_total_first_s(self) -> float:
+        if self.total_first_content_s is not None:
+            return self.total_first_content_s
+        return max(self.first_content_s * 1.5, self.first_content_s)
 
 
 @dataclass
@@ -121,10 +130,16 @@ class Call:
         self.first_content_ms = int((time.monotonic() - self.started) * 1000)
 
     @property
-    def session_key(self) -> str:
+    def session_key(self) -> str | None:
+        """对话带了会话标识按会话粘连；个人 Key 未带标识时按 Key 粘连；
+        客户端无会话调用与向量、重排返回 None，走加权随机负载均衡。"""
+        if self.kind is not ModelKind.CHAT:
+            return None
         if self.summary and self.summary.session_key:
             return self.summary.session_key
-        return str(self.grant.key.key_uuid) if self.grant else ""
+        if self.grant and self.grant.key.kind == "user":
+            return str(self.grant.key.key_uuid)
+        return None
 
 
 @dataclass
@@ -141,7 +156,12 @@ class ErrorMapper:
     """把各种失败归成统一的类别和给用户的话。"""
 
     @staticmethod
-    def from_failures(call: Call, *, routes_exist: bool) -> GatewayError:
+    def from_failures(
+        call: Call,
+        *,
+        routes_exist: bool,
+        cooling_retry_after_s: float | None = None,
+    ) -> GatewayError:
         failures = [a for a in call.attempts if a.outcome and a.outcome != "ok"]
         model = call.summary.model if call.summary else ""
         if not routes_exist:
@@ -152,6 +172,14 @@ class ErrorMapper:
                 no_retry=True,
             )
         if not failures:
+            if cooling_retry_after_s is not None:
+                return GatewayError(
+                    ErrorCategory.MODEL_BUSY,
+                    MSG_BUSY,
+                    no_retry=True,
+                    retry_after_s=cooling_retry_after_s,
+                    detail="全部可用线路都在限流冷却中（半开保护拦截并发重试）",
+                )
             return GatewayError(
                 ErrorCategory.NO_ROUTE,
                 MSG_NO_ROUTE,
@@ -162,7 +190,11 @@ class ErrorMapper:
         last = failures[-1]
         if kinds <= {FailureKind.RATE_LIMITED.value}:
             return GatewayError(
-                ErrorCategory.MODEL_BUSY, MSG_BUSY, no_retry=True, detail=last.message
+                ErrorCategory.MODEL_BUSY,
+                MSG_BUSY,
+                no_retry=True,
+                retry_after_s=cooling_retry_after_s,
+                detail=last.message,
             )
         if kinds <= {FailureKind.NO_BALANCE.value, FailureKind.AUTH_FAILED.value}:
             return GatewayError(
@@ -239,14 +271,19 @@ class Invocation:
         call = Call(entry, kind)
         call.summary = self.fmt.read(entry, body, headers, kind)
         try:
-            call.grant = await self.admission.admit(secret, call.summary.model, kind)
+            call.grant = await self.admission.admit(
+                secret, call.summary.model, kind, consume_rpm=False
+            )
         except GatewayError as err:
             self._finish(call, err)
             raise
         TenantScope.bind(call.grant.tenant_uuid)
         try:
             self.capability.check(call.summary.model, call.grant.model.caps, call.summary)
-            call.routes = self.fmt.routes_for(entry, call.summary.model, call.grant.model.routes)
+            call.routes = self.fmt.routes_for(
+                entry, call.summary.model, call.grant.model.routes, summary=call.summary
+            )
+            await self.admission.consume_rpm(call.grant)
         except GatewayError as err:
             self._finish(call, err)
             raise
@@ -262,8 +299,12 @@ class Invocation:
         assert call.grant and call.summary
         routes = call.routes
         tried: set[UUID] = set()
+        total_deadline = call.started + self.t.effective_total_first_s
         try:
             while len(call.attempts) < self.t.max_attempts:
+                remaining_total = total_deadline - time.monotonic()
+                if remaining_total <= 0 and call.attempts:
+                    break
                 route = await self.routing.pick(routes, call.session_key, tried=tried)
                 if route is None:
                     break
@@ -271,12 +312,15 @@ class Invocation:
                 attempt = call.attempt(
                     route, self.capability.plan(call.grant.model.caps, route, call.summary)
                 )
+                timeout_s = min(self._first_timeout(route), max(remaining_total, 0.05))
                 upstream: UpstreamCall | None = None
                 try:
-                    upstream = await self._open(call, attempt, body, headers, stream=False)
-                    data, usage = await asyncio.wait_for(
-                        upstream.read(), self._first_timeout(route)
+                    upstream = await self._open(
+                        call, attempt, body, headers, stream=False, read_timeout_s=timeout_s
                     )
+                    data, usage = await asyncio.wait_for(upstream.read(), timeout_s)
+                except GatewayError:
+                    raise
                 except (UpstreamError, TimeoutError) as exc:
                     failure = _failure_of(exc)
                     if not await self._failed(attempt, failure):
@@ -291,7 +335,10 @@ class Invocation:
                 answer = Answer(body=json.dumps(data, ensure_ascii=False).encode())
                 self._finish(call)
                 return answer
-            raise ErrorMapper.from_failures(call, routes_exist=bool(routes))
+            retry_after = await self.routing.cooling_retry_after(routes) if routes else None
+            raise ErrorMapper.from_failures(
+                call, routes_exist=bool(routes), cooling_retry_after_s=retry_after
+            )
         except GatewayError as err:
             self._finish(call, err)
             raise
@@ -310,22 +357,39 @@ class Invocation:
         completed = False
         upstream: UpstreamCall | None = None
         error: GatewayError | None = None
+        total_deadline = call.started + self.t.effective_total_first_s
         try:
             while True:
+                remaining_total = total_deadline - time.monotonic()
                 route = (
                     await self.routing.pick(routes, call.session_key, tried=tried)
                     if len(call.attempts) < self.t.max_attempts
+                    and (remaining_total > 0 or not call.attempts)
                     else None
                 )
                 if route is None:
-                    error = ErrorMapper.from_failures(call, routes_exist=bool(routes))
+                    retry_after = await self.routing.cooling_retry_after(routes) if routes else None
+                    error = ErrorMapper.from_failures(
+                        call, routes_exist=bool(routes), cooling_retry_after_s=retry_after
+                    )
                     break
                 tried.add(route.uuid)
                 attempt = call.attempt(
                     route, self.capability.plan(call.grant.model.caps, route, call.summary)
                 )
+                attempt_timeout = min(self._first_timeout(route), max(remaining_total, 0.05))
                 try:
-                    upstream = await self._open(call, attempt, body, headers, stream=True)
+                    upstream = await self._open(
+                        call,
+                        attempt,
+                        body,
+                        headers,
+                        stream=True,
+                        read_timeout_s=attempt_timeout,
+                    )
+                except GatewayError as err:
+                    error = err
+                    break
                 except UpstreamError as exc:
                     if await self._failed(attempt, exc.failure):
                         continue
@@ -336,7 +400,7 @@ class Invocation:
                 pieces = upstream.pieces().__aiter__()
                 held: list[bytes] = []
                 failure: UpstreamFailure | None = None
-                deadline = time.monotonic() + self._first_timeout(route)
+                deadline = time.monotonic() + attempt_timeout
                 while failure is None:
                     task = asyncio.ensure_future(pieces.__anext__())
                     try:
@@ -389,21 +453,38 @@ class Invocation:
                     error = ErrorMapper.bad_request(failure)
                     break
 
-                # ── 提交：压着的连同第一段一起写出，之后读一段写一段
+                # ── 提交：压着的连同第一段一起写出，之后读一段写一段（长间隔期间持续发保活注释）
                 call.commit(attempt)
                 attempt.outcome = "ok"
                 sent = True
                 for data in held:
                     yield data
                 while True:
+                    idle_deadline = time.monotonic() + self.t.idle_s
+                    task = asyncio.ensure_future(pieces.__anext__())
+                    timed_out = False
                     try:
-                        piece = await asyncio.wait_for(pieces.__anext__(), self.t.idle_s)
-                    except StopAsyncIteration:
-                        break
-                    except TimeoutError:
+                        while not task.done():
+                            left = idle_deadline - time.monotonic()
+                            if left <= 0:
+                                timed_out = True
+                                break
+                            done, _ = await asyncio.wait(
+                                {task}, timeout=min(self.t.keepalive_s, left)
+                            )
+                            if not done:
+                                yield KEEPALIVE
+                    finally:
+                        if not task.done():
+                            task.cancel()
+                    if timed_out:
                         error = ErrorMapper.interrupted(
                             f"两段之间超过 {self.t.idle_s:.0f} 秒没有新内容"
                         )
+                        break
+                    try:
+                        piece = task.result()
+                    except StopAsyncIteration:
                         break
                     except Exception as exc:
                         error = ErrorMapper.interrupted(f"读上游的回答时出错：{exc!r}")
@@ -451,13 +532,15 @@ class Invocation:
     async def count_tokens(
         self, entry: Entry, secret: str | None, body: Mapping[str, Any], headers: Mapping[str, str]
     ) -> dict[str, Any]:
-        """有 Anthropic 格式地址的线路转给上游数；没有就按字符估算。不计费、不写调用记录。
-
-        线路和对话一样按入口筛：Anthropic 入口只看 Anthropic 格式的线路。"""
+        """有 Anthropic 地址的线路转给上游数；没有就按字符估算。不计费、不扣 RPM、不写记录。"""
         summary = self.fmt.read(entry, body, headers, ModelKind.CHAT)
-        grant = await self.admission.admit(secret, summary.model, ModelKind.CHAT)
-        routes = self.fmt.routes_for(entry, summary.model, grant.model.routes)
-        route = await self.routing.pick(routes, summary.session_key or str(grant.key.key_uuid))
+        grant = await self.admission.admit(secret, summary.model, ModelKind.CHAT, consume_rpm=False)
+        TenantScope.bind(grant.tenant_uuid)
+        routes = self.fmt.routes_for(entry, summary.model, grant.model.routes, summary=summary)
+        session_key = summary.session_key or (
+            str(grant.key.key_uuid) if grant.key.kind == "user" else None
+        )
+        route = await self.routing.pick(routes, session_key)
         if route is not None and route.account.endpoints.get(Format.ANTHROPIC):
             plan = self.capability.plan(grant.model.caps, route, summary)
             try:
@@ -479,6 +562,7 @@ class Invocation:
         headers: Mapping[str, str],
         *,
         stream: bool,
+        read_timeout_s: float | None = None,
     ) -> UpstreamCall:
         assert call.summary
         upstream = await self.fmt.open(
@@ -490,7 +574,8 @@ class Invocation:
             attempt.plan,
             model=call.summary.model,
             stream=stream,
-            read_timeout_s=self._first_timeout(attempt.route),
+            read_timeout_s=read_timeout_s or self._first_timeout(attempt.route),
+            has_documents=call.summary.has_documents,
         )
         attempt.path = "direct" if upstream.path.direct else f"convert:{upstream.path.upstream}"
         attempt.dropped = upstream.dropped

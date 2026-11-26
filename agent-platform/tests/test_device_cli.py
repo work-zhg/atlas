@@ -220,6 +220,8 @@ async def running(tmp_path: Path, **policy_kw: Any) -> AsyncIterator[Env]:
         device_gateway_url=gw,
         device_gateway_token=SecretStr(INTERNAL),
         device_gateway_timeout_s=5.0,
+        # 没配身份凭据的密钥：CLI 经网关调服务时不带凭据
+        mcp_identity_grant_secret=None,
     )
     runtime = CliRuntime(
         get_sessionmaker(),
@@ -391,8 +393,8 @@ async def test_mcp_servers_point_at_the_gateway_with_the_session_token() -> None
             {
                 "type": "http",
                 "name": "knowledge",
-                "url": "http://kb:8050/mcp/",
-                "headers": [{"name": "X-Knowledge-Token", "value": "signed"}],
+                "url": "http://gw:8070/mcp/knowledge",
+                "headers": [{"name": "X-Identity-Grant", "value": "signed"}],
             }
         ],
         permission_mode="manual",
@@ -406,14 +408,14 @@ async def test_mcp_servers_point_at_the_gateway_with_the_session_token() -> None
         SimpleNamespace(instance="http://gw"),  # type: ignore[arg-type]
     )
     (upstream,) = registered["upstreams"]
-    assert upstream.url == "http://kb:8050/mcp/" and upstream.headers == {
-        "X-Knowledge-Token": "signed"
+    assert upstream.url == "http://gw:8070/mcp/knowledge" and upstream.headers == {
+        "X-Identity-Grant": "signed"
     }
     (server,) = access.caps.mcp_servers
     assert server["url"] == f"https://atlas.example/device-api/u/{upstream.id}"
     assert server["headers"] == [{"name": "Authorization", "value": "Bearer dst_x"}]
     assert registered["launch"]["mode"] == "manual" and "model" not in registered["launch"]
-    assert caps.mcp_servers[0]["url"] == "http://kb:8050/mcp/"  # 平台这边的原样不动
+    assert caps.mcp_servers[0]["url"] == "http://gw:8070/mcp/knowledge"  # 平台这边的原样不动
 
 
 # ═══════════════════════════════════ 本机文件 ═══════════════════════════════════

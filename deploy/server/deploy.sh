@@ -16,16 +16,18 @@
 #   · 仓库根 .env（模型 key、Gitee 令牌、OSS 口令等 —— 与本机部署同一份）。
 #     部署参数也可以写在 .env 里（都有默认值）：
 #       ATLAS_SERVER_IP       服务器 IP（默认 192.168.0.112）
-#       ATLAS_PUBLIC_HOST     对外域名（默认 atlas.<服务器 IP>.nip.io）；ATLAS_PUBLIC_SCHEME 默认 http，
-#                             https 要先给 traefik 配证书（deploy/server/traefik-https.yaml）
-#       ATLAS_LANGFUSE_HOST   Langfuse 的域名（默认 langfuse.<服务器 IP>.nip.io）
+#       ATLAS_PUBLIC_HOST     对外域名（默认 atlas.<服务器 IP>.nip.io）；ATLAS_PUBLIC_SCHEME 默认 https
+#                             （对外的 80 / 443 与证书归宿主机上的 API 网关：deploy/server/gateway.sh）
+#       ATLAS_LANGFUSE_HOST   Langfuse 的域名（默认 langfuse.<服务器 IP>.nip.io；API 网关的透传站点）
 #       ATLAS_OBSERVABILITY   full（默认）| none：none 不装 Jaeger、Langfuse（11-observability.yaml），小机器用
 #       TENANT_BACKFILL_UUID  多租户迁移把已有数据归到哪个租户（用户中心里原平台租户的 uuid）；
 #                             库里已有数据又没给，各服务的迁移会失败。新部署、已迁移过的不需要
 #   · OpenSandbox 源码 release-1.1.1（OPENSANDBOX_SRC=…；不给就 clone 到 ~/.cache/atlas/opensandbox）
+#   · API 网关已装在服务器上（deploy/server/gateway.sh install、cert）；从 Traefik 对外换过来的第一次走
+#     deploy/server/apigateway-cutover.sh
 #
 # 步骤：前置检查 → 依赖服务（10-infra）→ OpenSandbox（opensandbox.sh）→ server 迁移 → 后端（apply.sh）
-#   → 前端（frontends.sh）→ Ingress → 用户中心首个超级管理员（只第一次）
+#   → 前端（frontends.sh）→ API 网关重新渲染（在服务器上跑时）→ 用户中心首个超级管理员、系统租户（只第一次）
 #
 # ★ 复用 deploy/local 的清单与脚本：依赖服务的地址经 ATLAS_*_ADDR 换成集群内的服务名（apply.sh 的 render）。
 # ★ 幂等：重复执行只更新有变化的部分；随机生成的密钥已存在就沿用。
@@ -42,7 +44,7 @@ if [ -z "${ATLAS_SERVER:-}" ] && [ -r /etc/kubernetes/admin.conf ]; then ATLAS_S
 TARGET="${ATLAS_SERVER:-root@${SERVER_IP}}"
 on_server() { if [ "$TARGET" = local ]; then bash -c "$1"; else ssh "$TARGET" "$1"; fi; }
 PUBLIC_HOST="${ATLAS_PUBLIC_HOST:-atlas.${SERVER_IP}.nip.io}"
-PUBLIC_SCHEME="${ATLAS_PUBLIC_SCHEME:-http}"
+PUBLIC_SCHEME="${ATLAS_PUBLIC_SCHEME:-https}"
 LANGFUSE_HOST="${ATLAS_LANGFUSE_HOST:-langfuse.${SERVER_IP}.nip.io}"
 OBSERVABILITY="${ATLAS_OBSERVABILITY:-full}"
 case "$OBSERVABILITY" in full|none) ;; *) echo "ATLAS_OBSERVABILITY 只能是 full 或 none"; exit 1 ;; esac
@@ -93,6 +95,10 @@ if [ "$TARGET" = local ] || ssh -o BatchMode=yes -o ConnectTimeout=5 "$TARGET" t
     for img in "$APP_IMAGE" "$FRONTENDS_IMAGE"; do
       [ -z "$img" ] || grep -qxF "docker.io/library/$img" <<<"$have" || missing+=("服务器上没有指定的镜像 $img")
     done
+    # 对外入口是宿主机上的 API 网关：没装就部署，前端的新路径（/<名>-ui）从外面一个都打不开
+    if [ "${ATLAS_GATEWAY_CUTOVER:-}" != 1 ] && ! on_server "test -x /usr/local/openresty/nginx/sbin/nginx"; then
+      missing+=("服务器上没装 API 网关：第一次从 Traefik 对外换过来，跑 deploy/server/apigateway-cutover.sh")
+    fi
   fi
 else
   missing+=("ssh $TARGET 免密登录")
@@ -142,7 +148,7 @@ kubectl -n atlas-infra create secret generic langfuse-runtime \
   --from-literal=DATABASE_URL="postgresql://atlas:atlas@postgres:5432/langfuse" \
   --from-literal=SALT="$LF_SALT" --from-literal=ENCRYPTION_KEY="$LF_ENC" \
   --from-literal=CLICKHOUSE_PASSWORD="$CH_PW" --from-literal=REDIS_AUTH="$LF_REDIS_PW" \
-  --from-literal=NEXTAUTH_URL="http://${LANGFUSE_HOST}" --from-literal=NEXTAUTH_SECRET="$LF_NEXTAUTH" \
+  --from-literal=NEXTAUTH_URL="${PUBLIC_SCHEME}://${LANGFUSE_HOST}" --from-literal=NEXTAUTH_SECRET="$LF_NEXTAUTH" \
   --from-literal=LANGFUSE_INIT_PROJECT_PUBLIC_KEY="$LF_PK" --from-literal=LANGFUSE_INIT_PROJECT_SECRET_KEY="$LF_SK" \
   --from-literal=LANGFUSE_INIT_USER_PASSWORD="$LF_PW" \
   --from-literal=LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID="${OSS_ACCESS_KEY_ID}" \
@@ -158,7 +164,7 @@ kubectl -n atlas-infra create configmap otel-collector \
 
 kubectl apply -f deploy/server/10-infra.yaml
 if [ "$OBSERVABILITY" = full ]; then
-  sed "s/__LANGFUSE_HOST__/${LANGFUSE_HOST}/g" deploy/server/11-observability.yaml | kubectl apply -f -
+  kubectl apply -f deploy/server/11-observability.yaml
 fi
 for sts in postgres redis minio qdrant; do
   kubectl -n atlas-infra rollout status "statefulset/$sts" --timeout=600s
@@ -205,8 +211,20 @@ ATLAS_PUBLIC_ORIGIN="${PUBLIC_SCHEME}://${PUBLIC_HOST}" ATLAS_APP_IMAGE="$APP_IM
 # LiteLLM 已退役（apply.sh 删了它的 Deployment）：它的库也删掉。FORCE 断开残留连接（幂等）
 kubectl -n atlas-infra exec statefulset/postgres -- psql -U atlas -d atlas -qc \
   "DROP DATABASE IF EXISTS atlas_litellm WITH (FORCE)"
-ATLAS_HOST_IP="$SERVER_IP" ATLAS_FRONTENDS_IMAGE="$FRONTENDS_IMAGE" deploy/local/frontends.sh --no-build
-sed "s/__ATLAS_HOST__/${PUBLIC_HOST}/g" deploy/server/20-ingress.yaml | kubectl apply -f -
+ATLAS_FRONTENDS_IMAGE="$FRONTENDS_IMAGE" deploy/local/frontends.sh --no-build
+# 以前的对外入口（Traefik 按域名转给前端 Pod 里的 nginx）：对外改由 API 网关，删掉（幂等）
+kubectl -n atlas-system delete ingress atlas --ignore-not-found
+kubectl -n atlas-system delete configmap atlas-frontends-nginx --ignore-not-found
+# API 网关：路由表（infra-platform/gateway/routes.yaml）随代码变，重新渲染并 reload（配置不过不切）。
+#   它在宿主机上、要 root，只有在服务器上跑本脚本时能顺带做；切换期间由 apigateway-cutover.sh 做
+if [ "${ATLAS_GATEWAY_CUTOVER:-}" = 1 ]; then
+  :
+elif [ "$TARGET" = local ]; then
+  LF_SITE=""; [ "$OBSERVABILITY" = full ] && LF_SITE="$LANGFUSE_HOST"
+  ATLAS_PUBLIC_HOST="$PUBLIC_HOST" ATLAS_LANGFUSE_HOST="$LF_SITE" deploy/server/gateway.sh
+else
+  echo "★ routes.yaml 有改动时，在服务器的仓库里以 root 跑 deploy/server/gateway.sh"
+fi
 
 # ── 5. 用户中心的首个超级管理员（只在还没有任何用户时）────────────────────
 if [ "$MODE" = app ]; then
@@ -220,15 +238,27 @@ elif grep -q "已经有用户" /tmp/uc-bootstrap.err; then
 else
   cat /tmp/uc-bootstrap.err; exit 1
 fi
+# 系统租户（运营团队；运营中心只开给它，c4-model/opscenter/design-opscenter.html）：只能有一个，已有就跳过。
+#   运营中心起来后自己登记应用目录、给系统租户开通；运营人员在用户中心里授运营模块
+if kubectl -n atlas-system exec deploy/atlas-usercenter -- python -m atlas_usercenter bootstrap-system \
+     --code "${UC_SYSTEM_TENANT:-platform}" --company "${UC_SYSTEM_COMPANY:-平台运营}" --account admin \
+     --name 运营管理员 --email "${UC_SYSTEM_EMAIL:-ops@xinghai.com}" 2>/tmp/uc-system.err; then
+  echo "↑ 系统租户 ${UC_SYSTEM_TENANT:-platform} 的 admin 临时密码只显示这一次，请记下（首次登录须修改）"
+elif grep -q "已经有系统租户" /tmp/uc-system.err; then
+  echo "已有系统租户，跳过"
+else
+  cat /tmp/uc-system.err; exit 1
+fi
 
 # ★ 应用目录（应用、操作码、菜单、数据编码、内置角色）不由代码登记：运营人员在运营中心录入
 #   （各服务 README「用户中心登记」）。没录之前各应用调用户中心会 403
 echo
-echo "★ 首次部署：admin 登录 ${PUBLIC_SCHEME}://${PUBLIC_HOST}/uc/login 改密码；应用目录在运营中心录入"
-echo "Atlas     → ${PUBLIC_SCHEME}://${PUBLIC_HOST}/atlas"
-echo "用户中心  → ${PUBLIC_SCHEME}://${PUBLIC_HOST}/uc"
-echo "TeamFlow  → ${PUBLIC_SCHEME}://${PUBLIC_HOST}/teamflow"
+echo "★ 首次部署：admin 登录 ${PUBLIC_SCHEME}://${PUBLIC_HOST}/uc-ui/login 改密码；应用目录在运营中心录入"
+echo "Atlas     → ${PUBLIC_SCHEME}://${PUBLIC_HOST}/atlas-ui/"
+echo "用户中心  → ${PUBLIC_SCHEME}://${PUBLIC_HOST}/uc-ui/"
+echo "TeamFlow  → ${PUBLIC_SCHEME}://${PUBLIC_HOST}/teamflow-ui/"
+echo "运营中心  → ${PUBLIC_SCHEME}://${PUBLIC_HOST}/opscenter-ui/（系统租户的人登录）"
 if [ "$OBSERVABILITY" = full ]; then
-  echo "Langfuse  → http://${LANGFUSE_HOST}（admin@atlas.local / Secret atlas-infra/langfuse 的 admin_password）"
+  echo "Langfuse  → ${PUBLIC_SCHEME}://${LANGFUSE_HOST}（admin@atlas.local / Secret atlas-infra/langfuse 的 admin_password）"
   echo "Jaeger    → kubectl -n atlas-infra port-forward svc/jaeger 16686"
 fi

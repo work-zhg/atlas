@@ -100,7 +100,7 @@ class IdentityHeadersMiddleware:
 
 
 class _Cache:
-    """(auth-uid, 租户) → (过期时刻, 用户中心给的用户资料)。只缓存成功结果。"""
+    """(auth-uid, 租户) → (过期时刻, 用户中心给的授权快照)。只缓存成功结果。"""
 
     def __init__(self) -> None:
         self._rows: dict[tuple[str, UUID], tuple[float, dict[str, Any]]] = {}
@@ -112,10 +112,10 @@ class _Cache:
             return None
         return row[1]
 
-    def put(self, key: tuple[str, UUID], user: dict[str, Any], ttl: float) -> None:
+    def put(self, key: tuple[str, UUID], snap: dict[str, Any], ttl: float) -> None:
         if len(self._rows) > 10_000:
             self._rows.clear()
-        self._rows[key] = (time.monotonic() + ttl, user)
+        self._rows[key] = (time.monotonic() + ttl, snap)
 
 
 _cache = _Cache()
@@ -124,7 +124,7 @@ _transport: httpx.AsyncBaseTransport | None = None
 
 
 async def _user_in(settings: MemorySettings, auth_uid: str, tenant: UUID) -> dict[str, Any]:
-    """在这个租户里向用户中心取这个人（请求头带着 X-Tenant-Id）；不在这个租户里就是 404。"""
+    """在这个租户里向用户中心取这个人的授权快照（请求头带着 X-Tenant-Id）；不在这个租户里是 404。"""
     hit = _cache.get((auth_uid, tenant))
     if hit is not None:
         return hit
@@ -142,11 +142,11 @@ async def _user_in(settings: MemorySettings, auth_uid: str, tenant: UUID) -> dic
     if r.status_code != 200:
         logger.warning("授权快照返回 %s：%s", r.status_code, r.text[:200])
         raise Unavailable("暂时无法校验身份，请稍后重试")
-    user = r.json().get("user") or {}
-    if user.get("status") == "disabled":
+    snap: dict[str, Any] = r.json()
+    if (snap.get("user") or {}).get("status") == "disabled":
         raise Unauthorized("账号已停用")
-    _cache.put((auth_uid, tenant), user, settings.authz_ttl_s)
-    return user
+    _cache.put((auth_uid, tenant), snap, settings.authz_ttl_s)
+    return snap
 
 
 async def verified_tenant(
@@ -155,19 +155,21 @@ async def verified_tenant(
     """数据接口的入口：取请求头里的租户，核对后进入它（之后的读写按它自动过滤）。
 
     带了调用用户的，经用户中心核对他在这个租户里；没带的（数据权限开关关闭的作用域）是内网
-    服务替自己的租户调用，按请求头。租户已停用（运营接口）的一律 403。
+    服务替自己的租户调用，按请求头。
+
+    ★ 不知道租户状态、只认权限：租户停用、到期后，用户中心给这个人的快照里 can_access 为假，
+      这里一律 403。
     """
     tenant = parse_tenant(request.headers.get("x-tenant-id"))
     if tenant is None:
         raise Unauthorized("缺少租户（X-Tenant-Id）")
     caller = caller_of(request)
     if caller is not None:
-        user = await _user_in(settings, caller.auth_uid, tenant)
-        claimed = parse_tenant(user.get("tenant_id"))
+        snap = await _user_in(settings, caller.auth_uid, tenant)
+        claimed = parse_tenant((snap.get("user") or {}).get("tenant_id"))
         if claimed is not None and claimed != tenant:
             raise Unauthorized("请求头里的租户和用户所属的不一致")
-    gate = getattr(request.app.state, "tenant_gate", None)
-    if gate is not None and not await gate.is_active(tenant):
-        raise Forbidden("所在的组织已停用")
+        if not snap.get("can_access"):
+            raise Forbidden("没有使用权限")
     TenantScope.bind(tenant)
     return tenant

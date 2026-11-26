@@ -143,6 +143,7 @@ class AppService:
         icon: str | None,
         code: str | None = None,
         home_url: str | None = None,
+        system_only: bool = False,
     ) -> tuple[App, str]:
         name = require_text(name, "name", "应用名称", 50)
         if await self.session.scalar(select(App.uuid).where(App.name == name)):
@@ -154,6 +155,7 @@ class AppService:
             name=name,
             code=code,
             home_url=home_url,
+            system_only=system_only,
             description=(description or "").strip()[:200] or None,
             icon=(icon or "").strip()[:16] or "🧱",
             app_key=new_app_key(),
@@ -200,6 +202,9 @@ class AppService:
                 if val != getattr(app, key):
                     changes[key] = [getattr(app, key), val]
                     setattr(app, key, val)
+        if data.get("system_only") is not None and bool(data["system_only"]) != app.system_only:
+            changes["system_only"] = [app.system_only, bool(data["system_only"])]
+            app.system_only = bool(data["system_only"])
         if changes:
             app.version += 1
             app.updated_by = self.actor.user_uuid
@@ -230,6 +235,69 @@ class AppService:
                 app.uuid,
                 app.name,
             )
+        await self.session.flush()
+        return app
+
+    async def sync_catalog(self, spec: dict[str, Any]) -> App:
+        """按应用编码把一个应用的目录写成声明的样子（幂等，运营中心同步自己的目录用）。
+
+        spec：name、description、icon、home_url、system_only、operations [{module, code, name}]、
+        data_types [{code, name, description}]、
+        roles [{code, name, description, operations: [code]}]。
+        ★ 只增、只改，不删没声明的：删数据编码会连带删掉授权，删角色会连带删掉授给人的角色，
+          这类事要人在运营中心里确认着做。
+        """
+        code = spec["code"]
+        app = await self.session.scalar(select(App).where(App.code == code))
+        if app is None:
+            app, _secret = await self.create(
+                spec["name"],
+                spec.get("description"),
+                spec.get("icon"),
+                code,
+                spec.get("home_url"),
+                bool(spec.get("system_only")),
+            )
+        else:
+            # 声明里没给（None）的不动：建的时候填了默认值（如图标），再同步不要把它清掉
+            await self.update(
+                app.uuid,
+                {
+                    k: spec[k]
+                    for k in ("name", "description", "icon", "home_url", "system_only")
+                    if spec.get(k) is not None
+                },
+            )
+        ops = {o.code: o for o in await self.operations(app.uuid)}
+        for o in spec.get("operations", []):
+            row = ops.get(o["code"])
+            if row is None:
+                ops[o["code"]] = await self.create_operation(
+                    app.uuid, o["module"], o["code"], o["name"]
+                )
+            elif (row.module, row.name) != (o["module"], o["name"]):
+                await self.update_operation(row.uuid, {"module": o["module"], "name": o["name"]})
+        dts = {d.code: d for d in await self.data_types(app.uuid)}
+        for d in spec.get("data_types", []):
+            row = dts.get(d["code"])
+            if row is None:
+                await self.create_data_type(app.uuid, d["code"], d["name"], d.get("description"))
+            elif (row.name, row.description) != (d["name"], d.get("description")):
+                await self.update_data_type(
+                    row.uuid, {"name": d["name"], "description": d.get("description")}
+                )
+        roles = {r.code: r for r in await self.roles(app.uuid)}
+        for r in spec.get("roles", []):
+            row = roles.get(r["code"])
+            if row is None:
+                row = await self.create_role(app.uuid, r["name"], r["code"], r.get("description"))
+            elif (row.name, row.description) != (r["name"], r.get("description")):
+                await self.update_role(
+                    row.uuid, {"name": r["name"], "description": r.get("description")}
+                )
+            want = sorted(ops[c].uuid for c in r.get("operations", []))
+            if sorted(await self.role_ops(row.uuid)) != want:
+                await self.set_role_operations(row.uuid, want)
         await self.session.flush()
         return app
 

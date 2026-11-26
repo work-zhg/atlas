@@ -123,7 +123,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         # CLI 智能体的执行：经会话 Pod（或使用者电脑）上的 bridge（上游协议 atlas.host.v1）
         cli_runtime=CliRuntime(get_sessionmaker(), settings, pods, devices=devices),
         memory=memory,
-        gate=app.state.tenant_gate,
     )
 
     executor = app.state.executor
@@ -163,7 +162,6 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     memory,
                     executor.model_builder,
                     lambda: make_redis(settings),
-                    gate=app.state.tenant_gate,
                 )
                 if memory is not None
                 else None
@@ -223,7 +221,7 @@ def create_app() -> FastAPI:
     install_log_mask()
 
     app.include_router(v1_router)
-    # 集群内接口（设备网关核对设备令牌）。nginx 挡掉 /atlas-api/internal/
+    # 集群内接口（设备网关核对设备令牌）。API 网关挡掉 /internal/
     app.include_router(internal_router)
     # 运行期配置（应用配置库）：租户设置的管理接口给租户管理员（settings:manage），系统参数的
     # 只给运营中心（运营接口）；lifespan 里登记 key
@@ -232,8 +230,8 @@ def create_app() -> FastAPI:
     app.include_router(tenant_config_router(app.state.runtime_config.config))
     # 定时任务（兜底、续租）：lifespan 里注册任务并启动；只读的管理接口在运营接口里
     app.state.jobs = JobScheduler()
-    # 运营接口（/ops/v1）：租户的停用、恢复、删除，份额，沙箱模板，系统参数，系统任务。
-    # ★ 也在这里建 TenantGate：鉴权、执行器、设备核对都靠它挡住已停用的租户
+    # 运营接口（/ops/v1）：租户的创建、删除，份额，沙箱模板，系统参数，系统任务。
+    # ★ 没有停用、恢复：Atlas 不知道租户状态，停用后用户中心对这个租户的人回答无权限
     mount_ops(app, settings)
 
     # ★ SSE 并发闸门。会话流的寿命是「用户开着这个会话多久」，而不是「一轮

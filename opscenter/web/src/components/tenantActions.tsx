@@ -4,19 +4,21 @@
  * 对一个租户做的事：编辑（名称、名额、到期）、补发首个管理员的临时密码、停用、恢复、关闭。
  * 列表的「⋯」和详情页共用。
  *
- * ★ 停用先挡用户中心的入口再挂起各系统，数据都留着；关闭只能对已停用的做，要输入企业代码确认，不可恢复。
+ * ★ 停用只挡用户中心的入口（业务系统不知道租户状态），数据都留着；关闭只能对已停用的做，要输入企业代码确认，不可恢复。
  * ★ 有操作在进行时不能再发起停用、恢复、关闭（一次只做一件）。
+ * ★ 都属于租户模块：编辑、停用、恢复要读写；关闭（删数据）、补发临时密码要 Owner。
+ *   系统租户（运营人员靠它登录运营中心）不能停用、关闭。
  */
 import { useQueryClient } from "@tanstack/react-query";
 import { Alert, App, Button, Form, Input, InputNumber, Modal, type MenuProps } from "antd";
 import { useState } from "react";
 
-import { ErrorBox, OBSERVER_TIP, OnceBox, errorText } from "@/components/common";
+import { ErrorBox, OBSERVER_TIP, OWNER_TIP, OnceBox, errorText } from "@/components/common";
 import { Icon } from "@/components/Icon";
 import { api } from "@/lib/api";
 import type { Tenant } from "@/lib/types";
 
-export function useTenantActions(admin: boolean) {
+export function useTenantActions(admin: boolean, owner: boolean) {
   const qc = useQueryClient();
   const { message } = App.useApp();
   const [edit, setEdit] = useState<Tenant | null>(null);
@@ -48,26 +50,28 @@ export function useTenantActions(admin: boolean) {
     }
   }
 
-  const resume = (t: Tenant) => run(t, () => api.post(`/tenants/${t.id}/resume`), "已发起恢复：先恢复各系统，最后放开用户中心的入口");
+  const resume = (t: Tenant) => run(t, () => api.post(`/tenants/${t.id}/resume`), "已发起恢复：放开用户中心的入口");
 
   /** 列表行尾、详情页「⋯」里的菜单 */
   function menu(t: Tenant, opts: { withView?: () => void } = {}): MenuProps {
     const busy = !!t.operation;
     const dis = !admin;
+    // 系统租户不能停用、关闭：运营人员都靠它登录运营中心
+    const sys = !!t.is_system;
     const items: MenuProps["items"] = [
       ...(opts.withView ? [{ key: "view", icon: <Icon name="eye" size={14} />, label: "查看" }] : []),
       ...(t.status !== "closed"
         ? [
             { key: "edit", icon: <Icon name="pencil" size={14} />, label: "编辑名称、名额、到期", disabled: dis },
             ...(t.status === "active"
-              ? [{ key: "reissue", icon: <Icon name="key" size={14} />, label: "补发首个管理员的临时密码", disabled: dis }]
+              ? [{ key: "reissue", icon: <Icon name="key" size={14} />, label: "补发首个管理员的临时密码", disabled: !owner }]
               : []),
             { type: "divider" as const },
             t.status === "active"
-              ? { key: "suspend", icon: <Icon name="pause" size={14} />, label: "停用", disabled: dis || busy }
+              ? { key: "suspend", icon: <Icon name="pause" size={14} />, label: sys ? "停用（系统租户不能停用）" : "停用", disabled: dis || busy || sys }
               : { key: "resume", icon: <Icon name="play" size={14} />, label: "恢复", disabled: dis || busy },
             ...(t.status === "suspended"
-              ? [{ key: "close", icon: <Icon name="trash" size={14} />, label: "关闭并删除数据", danger: true, disabled: dis || busy }]
+              ? [{ key: "close", icon: <Icon name="trash" size={14} />, label: "关闭并删除数据", danger: true, disabled: !owner || busy || sys }]
               : []),
           ]
         : []),
@@ -127,7 +131,19 @@ export function useTenantActions(admin: boolean) {
     </>
   );
 
-  return { menu, resume, reissue, edit: setEdit, suspend: setSuspending, close: setClosing, element, admin, tip: admin ? undefined : OBSERVER_TIP };
+  return {
+    menu,
+    resume,
+    reissue,
+    edit: setEdit,
+    suspend: setSuspending,
+    close: setClosing,
+    element,
+    admin,
+    owner,
+    tip: admin ? undefined : OBSERVER_TIP,
+    ownerTip: owner ? undefined : OWNER_TIP,
+  };
 }
 
 function SuspendTenant({ tenant, onClose, onOk }: { tenant: Tenant; onClose: () => void; onOk: (reason: string) => Promise<boolean> }) {
@@ -151,7 +167,7 @@ function SuspendTenant({ tenant, onClose, onOk }: { tenant: Tenant; onClose: () 
         type="warning"
         showIcon
         style={{ marginBottom: 14 }}
-        message="先挡住用户中心的入口（登录、各系统调用都会被拒），再停用各系统：在跑的对话挂起、沙箱回收。数据都留着，恢复后接着用"
+        message="挡住用户中心的入口：这个企业的人登录不了，各系统按权限一律拒绝。已经在跑的对话、入库会跑完；数据都留着，恢复后接着用"
       />
       <div className="ops-sub" style={{ marginBottom: 6 }}>
         原因（会记进运营审计和操作记录）
@@ -235,7 +251,7 @@ function EditTenant({ tenant, onClose, onSaved }: { tenant: Tenant; onClose: () 
           <Form.Item name="max_users" label="人员名额" extra="不填 = 不限；少于现有人数时不能再加人">
             <InputNumber min={1} style={{ width: "100%" }} placeholder="不限" />
           </Form.Item>
-          <Form.Item name="expires_on" label="到期日" extra="不填 = 不到期；到期后自动停用，已停用的续期后还要「恢复」">
+          <Form.Item name="expires_on" label="到期日" extra="不填 = 不到期；到期后这个企业的人登录不了、没有权限，续期后立即恢复">
             <Input type="date" />
           </Form.Item>
         </div>

@@ -28,7 +28,7 @@ class GatewaySettings(BaseSettings):
     redis_url: str = "redis://localhost:6380/0"
     #: Agent 服务的内部接口：核对配对码、设备令牌
     agent_url: str = "http://127.0.0.1:8000"
-    #: 设备看到的网关地址（公网入口 + /device-api）：能力代理的地址 = 它 + /u/{上游编号}
+    #: 设备看到的网关地址（公网入口 + /device，经 API 网关）：能力代理的地址 = 它 + /u/{上游编号}
     public_url: str = "http://127.0.0.1:8095"
     #: 本实例的内部地址：写进在线表，Agent 服务按它直接连设备所在的实例。
     #: 空 = 按 POD_IP（K8s 注入）+ 端口拼

@@ -1,4 +1,4 @@
-"""文档（同 Dify DocumentService）：上传、分段预览、状态操作、审核、删除。
+"""文档（同 Dify DocumentService）：上传、分段预览、状态操作、删除。
 
 ★ 入库任务在**事务提交之后**才投递：否则 worker 可能比提交更早读库，读不到文档。
 ★ 一个文档一个任务（runtime.Dispatcher）。
@@ -97,8 +97,6 @@ class DocumentService:
             conds.append(Document.enabled.is_(False))
         elif status == "archived":
             conds.append(Document.archived.is_(True))
-        elif status == "pending_review":
-            conds.append(Document.review_status == "pending")
         elif status:
             conds.append(Document.indexing_status == status)
         total = int(
@@ -216,9 +214,9 @@ class DocumentService:
         doc_form: str | None = None,
         attrs: dict[str, Any] | None = None,
     ) -> tuple[str, list[Document]]:
-        """attrs：文档属性（metadata / acl / valid_from / valid_to / supersedes），
+        """attrs：文档属性（metadata / valid_from / valid_to / supersedes），
         批内各文档相同。"""
-        from ..dataset.metadata import MetadataService, _when, normalize_acl
+        from ..dataset.metadata import MetadataService, _when
 
         access.require_write()
         ds = access.ds
@@ -227,7 +225,6 @@ class DocumentService:
         attrs = attrs or {}
         meta_svc = MetadataService(self._s, self._rt)
         doc_metadata = await meta_svc.normalize_metadata(access, attrs.get("metadata"))
-        acl = normalize_acl(attrs.get("acl"))
         valid_from = _when(attrs.get("valid_from"), "valid_from")
         valid_to = _when(attrs.get("valid_to"), "valid_to")
         old: Document | None = None
@@ -299,9 +296,7 @@ class DocumentService:
                 name=f.filename[:255],
                 doc_form=doc_form,
                 indexing_status="waiting",
-                review_status="pending" if ds.review_required else "none",
                 doc_metadata=doc_metadata,
-                acl=acl,
                 valid_from=valid_from,
                 valid_to=valid_to,
                 created_by=access.p.uid,
@@ -398,20 +393,6 @@ class DocumentService:
                 doc.archived = False
             else:
                 raise Invalid(f"未知操作：{action}")
-        await self._s.flush()
-        await self._sync_doc_ok(access, docs)
-
-    async def review(
-        self, access: DatasetAccess, docs: list[Document], *, approve: bool, note: str | None
-    ) -> None:
-        access.require_review()
-        for doc in docs:
-            if doc.review_status not in ("pending", "rejected", "approved"):
-                raise Conflict(f"文档「{doc.name}」不需要审核")
-            doc.review_status = "approved" if approve else "rejected"
-            doc.reviewed_by = access.p.uid
-            doc.reviewed_at = utcnow()
-            doc.review_note = note
         await self._s.flush()
         await self._sync_doc_ok(access, docs)
 

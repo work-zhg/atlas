@@ -1,0 +1,51 @@
+# 由 atlas_gateway 生成，勿手改。Atlas 站点的白名单路由：只有 routes.yaml 登记过的才有 location。
+# 后端 /<名>/… 去掉 /<名> 发往 <名>.{{ s.internal_suffix }}；前端 /<名>-ui/… 原样发往 <名>-ui.{{ s.internal_suffix }}。
+
+location = / {
+  return 302 {{ s.root_redirect }};
+}
+{% for loc in locations %}
+
+# {{ loc.external }} → {{ loc.route.id }} · {{ loc.route.mode }} · {{ loc.route.proxy }}
+location {{ loc.match }} {
+  set $gw_route "{{ loc.route.id }}";
+{% if loc.route.mode == "auth" %}
+  access_by_lua_block {
+    require("atlas_gw.access").run()
+  }
+{% endif %}
+{% if loc.route.login %}
+  log_by_lua_block {
+    require("atlas_gw.ban").record()
+  }
+{% endif %}
+{% if loc.route.preview %}
+  access_log {{ s.log_dir }}/access.log gw_json_nopath;
+{% endif %}
+  include {{ install_dir }}/proxy/common.conf;
+  include {{ install_dir }}/proxy/{{ loc.route.proxy | lower }}.conf;
+{% if loc.route.mode == "auth" %}
+  include {{ install_dir }}/proxy/identity.conf;
+{% endif %}
+  proxy_set_header Host {{ loc.host }};
+{% if loc.rewrite %}
+  rewrite {{ loc.rewrite }};
+{% endif %}
+  proxy_pass http://internal_ingress{{ loc.upstream_uri or "" }};
+}
+{% endfor %}
+{% for rd in redirects %}
+
+# 旧页面地址：{{ rd.source }} → {{ rd.target }}（过渡期）
+location = {{ rd.source }} {
+  return 301 {{ rd.target }}/;
+}
+location {{ rd.source }}/ {
+  rewrite ^{{ rd.source }}/(.*)$ {{ rd.target }}/$1 permanent;
+}
+{% endfor %}
+
+# 默认拒绝：没登记的路径一律 404，不暴露后面有哪些服务
+location / {
+  return 404 '{{ not_found }}';
+}

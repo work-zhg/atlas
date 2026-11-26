@@ -1,27 +1,37 @@
 /**
- * 登录会话：服务器地址、用户中心的会话、CSRF 头。
+ * 登录会话：服务器地址、访问令牌、刷新令牌（c4-model/apigateway/dynamic-mobile-jwt.html）。
  *
- * ★ 和网页同一套登录（doc/identity-propagation-design.html §4）：调用户中心的 POST /uc/api/v1/auth/login，
- *   会话在 HttpOnly Cookie 里。App 的 fetch（expo/fetch）用系统的 CookieManager，之后的请求自动带上，
- *   网关照常校验、写 X-Uid —— 后端不用为 App 改任何东西。
- * ★ 写请求要带 CSRF 双提交头：值等于 uc_csrf Cookie。App 读不到 Cookie 存储，登录时从 Set-Cookie 里取出来存好。
- * ★ 服务器地址让用户填（企业自己部署），记在 SecureStore 里；CSRF 值也在那里。
+ * ★ 和网页同一套令牌，载体不同：令牌登录接口 POST /uc/api/v1/auth/token 用 JSON 返回访问 JWT（15 分钟）
+ *   和刷新令牌（14 天）；业务请求带 Authorization: Bearer，不带 Cookie、不用 CSRF 头。API 网关本地验签，
+ *   写 X-Uid —— 后端不用为 App 改任何东西。
+ * ★ 访问令牌过期（接口 401）：单飞刷新（POST /uc/api/v1/auth/token/refresh，每次都换一对新的），成功后重放；
+ *   刷新也 401（14 天到期、账号或租户停用）才回登录页。
+ * ★ 刷新令牌放 SecureStore；访问令牌只在内存里（App 重启后第一个请求 401，自动刷新一次）。
+ * ★ 服务器地址让用户填（企业自己部署），记在 SecureStore 里。
  * ★ 企业代码（多租户）：和网页登录页同一套规则 —— 部署里只有一家企业时不用填，多家时要填，
  *   记住上次填的（GET /uc/api/v1/auth/tenant-required 判断）。
  */
 import * as SecureStore from "expo-secure-store";
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import type { AtlasClientConfig } from "@atlas/chat-ui/src/lib/http";
 
 const KEY_SERVER = "atlas.server";
-const KEY_CSRF = "atlas.csrf";
+/** 升级前存的 CSRF 值（Cookie 会话时代）：读到就删 */
+const KEY_LEGACY_CSRF = "atlas.csrf";
+const KEY_REFRESH = "atlas.refresh";
 const KEY_ACCOUNT = "atlas.account";
 const KEY_TENANT = "atlas.tenant";
 
 export const DEFAULT_SERVER = "https://atlas.techstz.com";
 /** 0.1.0 的默认地址是 HTTP；App 已不允许明文，装过 0.1.0 的手机里记着它，读出来换成 DEFAULT_SERVER */
 const LEGACY_DEFAULT_SERVER = "http://atlas.techstz.com";
+
+interface Tokens {
+  access_token: string;
+  refresh_token: string;
+  must_change_password?: boolean;
+}
 
 export interface Session {
   /** 还在读本地存的登录信息 */
@@ -37,7 +47,7 @@ export interface Session {
   /** tenant：企业代码，只有一家企业时不传 */
   login: (server: string, account: string, password: string, tenant?: string) => Promise<{ mustChangePassword: boolean }>;
   logout: () => Promise<void>;
-  /** 接口回 401：会话过期，回登录页 */
+  /** 刷新也 401：登录过期，回登录页 */
   expire: () => void;
 }
 
@@ -53,13 +63,6 @@ export function useSession(): Session {
 export function normalizeServer(raw: string): string {
   const s = raw.trim().replace(/\/+$/, "");
   return /^https?:\/\//i.test(s) ? s : `https://${s}`;
-}
-
-/** Set-Cookie 里取某个 Cookie 的值。多条 Set-Cookie 会被合成一行（逗号分隔），按名字找即可 */
-function cookieFrom(setCookie: string | null, name: string): string | null {
-  if (!setCookie) return null;
-  const m = new RegExp(`(?:^|[;,]\\s*)${name}=([^;,]+)`).exec(setCookie);
-  return m ? m[1]! : null;
 }
 
 export interface TenantRequired {
@@ -81,8 +84,9 @@ export async function fetchTenantRequired(rawServer: string): Promise<TenantRequ
 
 async function errorMessage(res: Response): Promise<string> {
   try {
-    const body = (await res.json()) as { error?: { message?: string }; detail?: string };
-    return body.error?.message ?? body.detail ?? `登录失败（${res.status}）`;
+    // 用户中心 {code, message}；网关 {code, message, error: {message}}（如 IP_BLOCKED）
+    const body = (await res.json()) as { message?: string; error?: { message?: string }; detail?: string };
+    return body.message ?? body.error?.message ?? body.detail ?? `登录失败（${res.status}）`;
   } catch {
     return res.status >= 500 ? "系统忙不过来了，请稍后再试" : `登录失败（${res.status}）`;
   }
@@ -93,81 +97,124 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [server, setServer] = useState(DEFAULT_SERVER);
   const [account, setAccount] = useState("");
   const [tenant, setTenant] = useState("");
-  const [csrf, setCsrf] = useState<string | null>(null);
+  const [refreshToken, setRefreshToken] = useState<string | null>(null);
+  // 访问令牌只放内存：请求头每次现取（刷新后重放的请求要带新的）
+  const access = useRef<string | null>(null);
+  const refreshing = useRef<Promise<boolean> | null>(null);
 
   useEffect(() => {
     void (async () => {
-      const [s, c, a, t] = await Promise.all([
+      const [s, r, a, t] = await Promise.all([
         SecureStore.getItemAsync(KEY_SERVER),
-        SecureStore.getItemAsync(KEY_CSRF),
+        SecureStore.getItemAsync(KEY_REFRESH),
         SecureStore.getItemAsync(KEY_ACCOUNT),
         SecureStore.getItemAsync(KEY_TENANT),
       ]);
+      void SecureStore.deleteItemAsync(KEY_LEGACY_CSRF);
       if (s) setServer(s === LEGACY_DEFAULT_SERVER ? DEFAULT_SERVER : s);
       if (a) setAccount(a);
       if (t) setTenant(t);
-      setCsrf(c);
+      setRefreshToken(r);
       setLoading(false);
     })();
   }, []);
 
-  const login = useCallback(async (rawServer: string, acct: string, password: string, rawTenant?: string) => {
-    const base = normalizeServer(rawServer);
-    // 企业代码不分大小写（用户中心按小写存）
-    const code = rawTenant?.trim().toLowerCase() || undefined;
-    const res = await fetch(`${base}/uc/api/v1/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ account: acct.trim(), password, tenant: code }),
-      credentials: "include",
-    });
-    if (!res.ok) throw new Error(await errorMessage(res));
-    const token = cookieFrom(res.headers.get("set-cookie"), "uc_csrf");
-    if (!token) throw new Error("登录成功了，但没有拿到校验信息（uc_csrf），请联系管理员");
-    const body = (await res.json()) as { must_change_password?: boolean };
-    await Promise.all([
-      SecureStore.setItemAsync(KEY_SERVER, base),
-      SecureStore.setItemAsync(KEY_CSRF, token),
-      SecureStore.setItemAsync(KEY_ACCOUNT, acct.trim()),
-      code ? SecureStore.setItemAsync(KEY_TENANT, code) : SecureStore.deleteItemAsync(KEY_TENANT),
-    ]);
-    setServer(base);
-    setAccount(acct.trim());
-    setTenant(code ?? "");
-    setCsrf(token);
-    return { mustChangePassword: Boolean(body.must_change_password) };
+  const keep = useCallback(async (tokens: Tokens) => {
+    access.current = tokens.access_token;
+    await SecureStore.setItemAsync(KEY_REFRESH, tokens.refresh_token);
+    setRefreshToken(tokens.refresh_token);
   }, []);
+
+  const login = useCallback(
+    async (rawServer: string, acct: string, password: string, rawTenant?: string) => {
+      const base = normalizeServer(rawServer);
+      // 企业代码不分大小写（用户中心按小写存）
+      const code = rawTenant?.trim().toLowerCase() || undefined;
+      const res = await fetch(`${base}/uc/api/v1/auth/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ account: acct.trim(), password, tenant: code }),
+      });
+      if (!res.ok) throw new Error(await errorMessage(res));
+      const tokens = (await res.json()) as Tokens;
+      await Promise.all([
+        SecureStore.setItemAsync(KEY_SERVER, base),
+        SecureStore.setItemAsync(KEY_ACCOUNT, acct.trim()),
+        code ? SecureStore.setItemAsync(KEY_TENANT, code) : SecureStore.deleteItemAsync(KEY_TENANT),
+      ]);
+      setServer(base);
+      setAccount(acct.trim());
+      setTenant(code ?? "");
+      await keep(tokens);
+      return { mustChangePassword: Boolean(tokens.must_change_password) };
+    },
+    [keep],
+  );
 
   const expire = useCallback(() => {
-    setCsrf(null);
-    void SecureStore.deleteItemAsync(KEY_CSRF);
+    access.current = null;
+    setRefreshToken(null);
+    void SecureStore.deleteItemAsync(KEY_REFRESH);
   }, []);
 
-  const logout = useCallback(async () => {
-    // 先让用户中心作废会话（顺带清掉 Cookie）；失败也照样退出本地
-    try {
-      await fetch(`${server}/uc/api/v1/auth/logout`, {
-        method: "POST",
-        headers: csrf ? { "X-UC-CSRF": csrf } : {},
-        credentials: "include",
+  /** 用刷新令牌换一对新的。单飞：同一时刻多个请求撞上 401 只换一次 */
+  const refresh = useCallback((): Promise<boolean> => {
+    if (!refreshing.current) {
+      refreshing.current = (async () => {
+        const rt = await SecureStore.getItemAsync(KEY_REFRESH);
+        if (!rt) return false;
+        try {
+          const res = await fetch(`${server}/uc/api/v1/auth/token/refresh`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ refresh_token: rt }),
+          });
+          if (res.status === 401) {
+            expire();
+            return false;
+          }
+          if (!res.ok) return false;
+          await keep((await res.json()) as Tokens);
+          return true;
+        } catch {
+          return false; // 网络不通：不算登录过期
+        }
+      })().finally(() => {
+        refreshing.current = null;
       });
+    }
+    return refreshing.current;
+  }, [server, keep, expire]);
+
+  const logout = useCallback(async () => {
+    // 先让用户中心作废刷新令牌；失败也照样退出本地
+    try {
+      if (refreshToken) {
+        await fetch(`${server}/uc/api/v1/auth/token/revoke`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ refresh_token: refreshToken }),
+        });
+      }
     } catch {
       // 网络不通时也要能退出
     }
     expire();
-  }, [server, csrf, expire]);
+  }, [server, refreshToken, expire]);
 
   const client = useMemo<AtlasClientConfig>(
     () => ({
-      apiBase: `${server}/atlas-api`,
-      headers: (): Record<string, string> => (csrf ? { "X-UC-CSRF": csrf } : {}),
+      // 经 API 网关：/atlas/… 是 Atlas 的接口
+      apiBase: `${server}/atlas`,
+      headers: (): Record<string, string> => (access.current ? { Authorization: `Bearer ${access.current}` } : {}),
+      refresh,
     }),
-    [server, csrf],
+    [server, refresh],
   );
 
   const value = useMemo<Session>(
-    () => ({ loading, server, account, tenant, signedIn: Boolean(csrf), client, login, logout, expire }),
-    [loading, server, account, tenant, csrf, client, login, logout, expire],
+    () => ({ loading, server, account, tenant, signedIn: Boolean(refreshToken), client, login, logout, expire }),
+    [loading, server, account, tenant, refreshToken, client, login, logout, expire],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

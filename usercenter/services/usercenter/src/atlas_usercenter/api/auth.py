@@ -1,4 +1,11 @@
-"""管理台登录、会话、个人中心。"""
+"""登录、令牌、个人中心（c4-model/apigateway/code-auth.html、dynamic-web-jwt.html、dynamic-mobile-jwt.html）。
+
+Web：登录、刷新都写 HttpOnly Cookie —— uc_access（访问 JWT，Path=/）、uc_refresh（刷新令牌，
+     Path=<前缀>/api/v1/auth，平时的业务请求不带它）、uc_csrf（可读，写请求带进 X-UC-CSRF）。
+手机：/auth/token 系列用 JSON 收发令牌，业务请求带 Authorization: Bearer。
+★ 这些接口经网关原样透传（passthrough）：网关只看登录接口回的状态码
+  （凭据不对一律 401，按 IP 数失败）。
+"""
 
 from __future__ import annotations
 
@@ -9,7 +16,8 @@ from fastapi import APIRouter, Query, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 
-from ..auth.service import AuthService
+from ..auth.service import AuthService, Issued
+from ..auth.tokens import TokenError, keyring
 from ..common import Page
 from ..db.models import App, Dept, User
 from ..errors import Forbidden, UCError, Unauthorized
@@ -17,7 +25,16 @@ from ..org.service import OrgService
 from ..perm.effective import can_access
 from ..security import policy_text
 from ..user.service import UserService
-from .deps import CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE, PrincipalDep, SessionDep, SettingsDep
+from .deps import (
+    ACCESS_COOKIE,
+    CSRF_COOKIE,
+    CSRF_HEADER,
+    LEGACY_SESSION_COOKIE,
+    REFRESH_COOKIE,
+    PrincipalDep,
+    SessionDep,
+    SettingsDep,
+)
 from .views import app_view, login_log_view, user_brief, user_view
 
 router = APIRouter(prefix="/api/v1", tags=["auth"])
@@ -47,6 +64,79 @@ def _client_ip(request: Request) -> str | None:
     return request.client.host if request.client else None
 
 
+def _cookie_paths(settings: Any) -> tuple[str, str]:
+    """(访问令牌、CSRF 的 Path, 刷新令牌的 Path)。"""
+    return "/", f"{settings.cookie_path_prefix.rstrip('/')}/api/v1/auth"
+
+
+def _set_session_cookies(
+    response: Response, settings: Any, access: str, refresh: str | None, *, csrf: bool
+) -> None:
+    root, refresh_path = _cookie_paths(settings)
+    max_age = settings.refresh_days * 86400
+    # ★ 访问令牌的 Cookie 和刷新令牌活得一样久：过期的令牌照样带上来，
+    #   网关回 TOKEN_EXPIRED，前端据此刷新
+    response.set_cookie(
+        ACCESS_COOKIE,
+        access,
+        max_age=max_age,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",
+        path=root,
+    )
+    if refresh is not None:
+        response.set_cookie(
+            REFRESH_COOKIE,
+            refresh,
+            max_age=max_age,
+            httponly=True,
+            secure=settings.cookie_secure,
+            samesite="strict",
+            path=refresh_path,
+        )
+    if csrf:
+        response.set_cookie(
+            CSRF_COOKIE,
+            secrets.token_urlsafe(24),
+            max_age=max_age,
+            httponly=False,
+            secure=settings.cookie_secure,
+            samesite="lax",
+            path=root,
+        )
+    # 升级前的会话 Cookie：换成令牌后就不要了
+    response.delete_cookie(LEGACY_SESSION_COOKIE, path=root)
+
+
+def _clear_session_cookies(response: Response, settings: Any) -> None:
+    root, refresh_path = _cookie_paths(settings)
+    for name in (ACCESS_COOKIE, CSRF_COOKIE, LEGACY_SESSION_COOKIE):
+        response.delete_cookie(name, path=root)
+    response.delete_cookie(REFRESH_COOKIE, path=refresh_path)
+
+
+async def _login(body: LoginBody, request: Request, session: Any, settings: Any) -> Issued:
+    svc = AuthService(session, settings)
+    try:
+        return await svc.login(body.account, body.password, _client_ip(request), body.tenant)
+    except UCError:
+        # ★ 失败计数、锁定、登录日志必须落库：先提交再抛错（请求事务否则会回滚它们）
+        await session.commit()
+        raise
+
+
+def _tokens_view(issued: Issued, settings: Any) -> dict[str, Any]:
+    return {
+        "access_token": issued.access_token,
+        "token_type": "Bearer",
+        "expires_in": settings.access_minutes * 60,
+        "refresh_token": issued.refresh_token,
+        "refresh_expires_in": settings.refresh_days * 86400,
+        "must_change_password": issued.must_change_password,
+    }
+
+
 @router.post("/auth/login")
 async def login(
     body: LoginBody,
@@ -55,33 +145,78 @@ async def login(
     session: SessionDep,
     settings: SettingsDep,
 ) -> dict[str, Any]:
-    svc = AuthService(session, settings)
+    """Web 登录：令牌写进 Cookie。凭据不对一律 401（触发锁定的那一次也是）。"""
+    issued = await _login(body, request, session, settings)
+    _set_session_cookies(response, settings, issued.access_token, issued.refresh_token, csrf=True)
+    return {"must_change_password": issued.must_change_password}
+
+
+def _csrf_ok(request: Request) -> bool:
+    cookie = request.cookies.get(CSRF_COOKIE)
+    return bool(cookie) and cookie == request.headers.get(CSRF_HEADER)
+
+
+@router.post("/auth/refresh")
+async def refresh(
+    request: Request, response: Response, session: SessionDep, settings: SettingsDep
+) -> dict[str, Any]:
+    """Web 刷新：用 uc_refresh 换一对新的（每次都轮换）。401 = 要重新登录。
+
+    ★ 前端单飞：同一时刻多个请求撞上 401 只刷新一次，刷新成功后重放原请求。
+    """
+    if not _csrf_ok(request):
+        raise Forbidden("CSRF_FAILED", "请求校验失败，请刷新页面后重试")
     try:
-        result = await svc.login(body.account, body.password, _client_ip(request), body.tenant)
+        issued = await AuthService(session, settings).refresh(request.cookies.get(REFRESH_COOKIE))
     except UCError:
-        # ★ 失败计数、锁定、登录日志必须落库：先提交再抛错（请求事务否则会回滚它们）
+        await session.commit()  # 发现被盗用时作废会话：要落库
+        raise
+    _set_session_cookies(response, settings, issued.access_token, issued.refresh_token, csrf=False)
+    return {"must_change_password": issued.must_change_password}
+
+
+@router.post("/auth/token")
+async def token_login(
+    body: LoginBody, request: Request, session: SessionDep, settings: SettingsDep
+) -> dict[str, Any]:
+    """手机登录：令牌用 JSON 返回（App 存安全存储），不写 Cookie。和 Web 登录共用签发逻辑。"""
+    return _tokens_view(await _login(body, request, session, settings), settings)
+
+
+class RefreshBody(BaseModel):
+    refresh_token: str
+
+
+@router.post("/auth/token/refresh")
+async def token_refresh(
+    body: RefreshBody, session: SessionDep, settings: SettingsDep
+) -> dict[str, Any]:
+    """手机刷新：换一对新的（每次都轮换）。401 = 要重新登录。"""
+    try:
+        issued = await AuthService(session, settings).refresh(body.refresh_token)
+    except UCError:
         await session.commit()
         raise
-    max_age = settings.session_hours * 3600
-    response.set_cookie(
-        SESSION_COOKIE,
-        result.token,
-        max_age=max_age,
-        httponly=True,
-        secure=settings.cookie_secure,
-        samesite="lax",
-        path="/",
-    )
-    response.set_cookie(
-        CSRF_COOKIE,
-        secrets.token_urlsafe(24),
-        max_age=max_age,
-        httponly=False,
-        secure=settings.cookie_secure,
-        samesite="lax",
-        path="/",
-    )
-    return {"must_change_password": result.must_change_password}
+    return _tokens_view(issued, settings)
+
+
+@router.post("/auth/token/revoke")
+async def token_revoke(
+    body: RefreshBody, session: SessionDep, settings: SettingsDep
+) -> dict[str, bool]:
+    """手机退出登录：作废这个刷新令牌。
+
+    它的访问令牌在网关最多再用 15 分钟；用户中心自己的接口立刻不认。
+    """
+    await AuthService(session, settings).logout(body.refresh_token)
+    return {"ok": True}
+
+
+@router.get("/auth/jwks")
+async def jwks(response: Response, settings: SettingsDep) -> dict[str, Any]:
+    """验签公钥集：网关的公钥环每 5 分钟经内部 Ingress 拉一次。"""
+    response.headers["Cache-Control"] = "public, max-age=300"
+    return keyring(settings).jwks()
 
 
 _SAFE = {"GET", "HEAD", "OPTIONS"}
@@ -89,20 +224,24 @@ _SAFE = {"GET", "HEAD", "OPTIONS"}
 
 @router.get("/auth/verify", include_in_schema=False)
 async def verify(request: Request, session: SessionDep, settings: SettingsDep) -> Response:
-    """网关 auth_request（内网身份传递 §4）：校验用户中心会话 → 204 + 响应头 X-Uid、X-Tenant-Id。
+    """旧网关的 auth_request（切到 API 网关之前还在用）：校验访问 JWT（Cookie 或 Bearer）或升级前的
+    会话 → 204 + 响应头 X-Uid、X-Tenant-Id。
 
-    网关把原请求的头（Cookie、X-UC-CSRF）原样带过来，并用 X-Original-Method 告诉这里原请求的
-    方法：写请求在这里统一校验 CSRF 双提交（各应用不再各做一份）。
-    未登录 / 须先改密 → 401（前端跳到 /uc/login）；CSRF 不对 → 403。
+    网关把原请求的头（Cookie、Authorization、X-UC-CSRF）原样带过来，并用 X-Original-Method 告诉这里
+    原请求的方法：Cookie 载体的写请求在这里校验 CSRF 双提交。
+    未登录 / 令牌过期 / 须先改密 → 401（前端先刷新，刷新也 401 再跳登录页）；CSRF 不对 → 403。
     """
-    v = await AuthService(session, settings).verify(request.cookies.get(SESSION_COOKIE))
+    authz = request.headers.get("authorization") or ""
+    bearer = authz[7:].strip() if authz[:7].lower() == "bearer " else None
+    v = await AuthService(session, settings).verify(
+        access=bearer or request.cookies.get(ACCESS_COOKIE),
+        legacy=None if bearer else request.cookies.get(LEGACY_SESSION_COOKIE),
+    )
     if v.must_change_password:
         raise Unauthorized("PASSWORD_CHANGE_REQUIRED", "请先修改密码")
     method = (request.headers.get("x-original-method") or "GET").upper()
-    if method not in _SAFE:
-        cookie = request.cookies.get(CSRF_COOKIE)
-        if not cookie or cookie != request.headers.get(CSRF_HEADER):
-            raise Forbidden("CSRF_FAILED", "请求校验失败，请刷新页面后重试")
+    if not bearer and method not in _SAFE and not _csrf_ok(request):
+        raise Forbidden("CSRF_FAILED", "请求校验失败，请刷新页面后重试")
     return Response(
         status_code=204, headers={"X-Uid": str(v.user_uuid), "X-Tenant-Id": str(v.tenant_uuid)}
     )
@@ -112,9 +251,19 @@ async def verify(request: Request, session: SessionDep, settings: SettingsDep) -
 async def logout(
     request: Request, response: Response, session: SessionDep, settings: SettingsDep
 ) -> dict[str, bool]:
-    await AuthService(session, settings).logout(request.cookies.get(SESSION_COOKIE))
-    response.delete_cookie(SESSION_COOKIE, path="/")
-    response.delete_cookie(CSRF_COOKIE, path="/")
+    """Web 登出：作废这次登录的刷新令牌，清掉 Cookie。刷新 Cookie 不在时按访问令牌里的会话作废。"""
+    sid = None
+    access = request.cookies.get(ACCESS_COOKIE)
+    if access:
+        try:
+            sid = keyring(settings).verify(access).session_uuid
+        except TokenError:
+            sid = None
+    await AuthService(session, settings).logout(
+        request.cookies.get(REFRESH_COOKIE) or request.cookies.get(LEGACY_SESSION_COOKIE),
+        session_uuid=sid,
+    )
+    _clear_session_cookies(response, settings)
     return {"ok": True}
 
 
@@ -149,14 +298,25 @@ async def me(principal: PrincipalDep, session: SessionDep, settings: SettingsDep
 
 @router.post("/auth/password")
 async def change_password(
-    body: PasswordBody, principal: PrincipalDep, session: SessionDep, settings: SettingsDep
+    body: PasswordBody,
+    principal: PrincipalDep,
+    response: Response,
+    session: SessionDep,
+    settings: SettingsDep,
 ) -> dict[str, bool]:
+    """改密：别的登录（会话）全部作废，保留这一个。浏览器顺手换一个 mcp=false 的访问令牌；
+    手机拿刷新令牌换一次即可。"""
     await UserService(session, principal.actor, settings).change_password(
         principal.user,
         body.old_password,
         body.new_password,
-        keep_session=principal.session_row.uuid,
+        keep_session=principal.session_uuid,
     )
+    if principal.carrier == "COOKIE":
+        access = AuthService(session, settings).access_token(
+            principal.user, principal.session_uuid, False
+        )
+        _set_session_cookies(response, settings, access, None, csrf=False)
     return {"ok": True}
 
 

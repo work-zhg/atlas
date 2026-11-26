@@ -12,12 +12,13 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
+import { logout as ucLogout } from "@atlas/chat-ui/src/lib/session";
+
 import { useGwMe } from "@/api/mcp-gateway";
 import { useMgMe } from "@/api/model-gateway";
 import { useSkMe } from "@/api/skill-app";
 import { Icon } from "@/components/Icon";
 import { ThreadHistory } from "@/features/chat/ThreadHistory";
-import { authHeaders } from "@/lib/http";
 import { useMe } from "@/lib/session";
 
 import { isEditorPath, PLATFORMS, platformHome, platformOf, visibleItems, type Access } from "./nav";
@@ -62,11 +63,10 @@ export function AppShell({ children }: { children: ReactNode }) {
     });
   };
 
-  /** 登出在用户中心（几个前端共用一个登录态）：登出后去用户中心登录页 */
+  /** 登出在用户中心（几个前端共用一个登录态）：作废这次登录后去统一登录页 */
   async function logout() {
-    await fetch("/uc/api/v1/auth/logout", { method: "POST", headers: authHeaders() });
     qc.clear();
-    window.location.assign("/uc/login");
+    await ucLogout();
   }
 
   return (

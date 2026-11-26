@@ -447,6 +447,90 @@ class RedisClient:
             _invoker=lambda: self._raw.xrevrange(key, **kwargs),
         )
 
+    async def mget(self, keys: Sequence[str], *, key_pattern: str = "") -> Any:
+        if not keys:
+            return []
+        key_tuple = tuple(keys)
+        return await self.execute(
+            "MGET",
+            *key_tuple,
+            keys=key_tuple,
+            key_pattern=key_pattern,
+            _invoker=lambda: self._raw.mget(key_tuple),
+        )
+
+    async def getdel(self, key: str, *, key_pattern: str = "") -> Any:
+        return await self.execute(
+            "GETDEL",
+            key,
+            keys=(key,),
+            key_pattern=key_pattern,
+            _invoker=lambda: self._raw.getdel(key),
+        )
+
+    async def getset(self, key: str, value: Any, *, key_pattern: str = "") -> Any:
+        """写入新值、返回旧值（沙箱执行记「工作区上次用的沙箱」用它）。
+
+        ★ 是写命令：不在幂等读集合里，断连不重试 —— 重试可能拿回的是自己刚写的值，不是「上一次」。
+        """
+        return await self.execute(
+            "GETSET",
+            key,
+            value,
+            keys=(key,),
+            key_pattern=key_pattern,
+            payload_bytes=estimate_payload_bytes("GETSET", (value,)),
+            _invoker=lambda: self._raw.getset(key, value),
+        )
+
+    async def incrbyfloat(self, key: str, amount: float = 1.0, *, key_pattern: str = "") -> Any:
+        return await self.execute(
+            "INCRBYFLOAT",
+            key,
+            amount,
+            keys=(key,),
+            key_pattern=key_pattern,
+            _invoker=lambda: self._raw.incrbyfloat(key, amount),
+        )
+
+    async def sadd(self, key: str, *values: Any, key_pattern: str = "") -> Any:
+        return _as_int(
+            await self.execute(
+                "SADD",
+                key,
+                *values,
+                keys=(key,),
+                key_pattern=key_pattern,
+                payload_bytes=estimate_payload_bytes("SADD", values),
+                _invoker=lambda: self._raw.sadd(key, *values),
+            )
+        )
+
+    async def srem(self, key: str, *values: Any, key_pattern: str = "") -> Any:
+        return _as_int(
+            await self.execute(
+                "SREM",
+                key,
+                *values,
+                keys=(key,),
+                key_pattern=key_pattern,
+                _invoker=lambda: self._raw.srem(key, *values),
+            )
+        )
+
+    async def smembers(self, key: str, *, key_pattern: str = "") -> Any:
+        return await self.execute(
+            "SMEMBERS",
+            key,
+            keys=(key,),
+            key_pattern=key_pattern,
+            _invoker=lambda: self._raw.smembers(key),
+        )
+
+    def scan_iter(self, match: str | None = None, count: int | None = None) -> Any:
+        """流式 SCAN 迭代（替代危险的 KEYS 命令）。"""
+        return self._raw.scan_iter(match=match, count=count)
+
     async def xread(
         self,
         streams: Mapping[str, str],

@@ -19,8 +19,8 @@ import { schedule, upcoming, useNow } from "./format";
 
 export type JobsPanelProps = JobsClient;
 
-export function JobsPanel({ endpoint, headers }: JobsPanelProps) {
-  const client = useMemo(() => ({ endpoint, headers }), [endpoint, headers]);
+export function JobsPanel({ endpoint, headers, refresh }: JobsPanelProps) {
+  const client = useMemo(() => ({ endpoint, headers, refresh }), [endpoint, headers, refresh]);
   const q = useJobs(client);
   const now = useNow();
   const mono = useMono();

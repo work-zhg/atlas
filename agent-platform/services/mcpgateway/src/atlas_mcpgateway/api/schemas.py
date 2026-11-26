@@ -114,6 +114,8 @@ class ServiceOut(BaseModel):
     tool_count: int
     active_tool_count: int
     my: MyAccessOut = MyAccessOut()
+    #: 平台服务（例如知识库）：所有租户可见，只能由运维命令行修改
+    platform: bool = False
 
 
 class ToolOut(BaseModel):

@@ -1,8 +1,8 @@
 """读写器：每种入口格式一个，只读写少数字段，不做整体转换。
 
-    summarize   读出共同信息（模型名、会话标识、意图、有没有图片和工具、大致长度）
+    summarize   读出共同信息（模型名、会话标识、意图、有没有图片/文档/工具、大致长度）
     apply       按 ParamPlan 在原格式上改参数
-    outgoing    回答写回调用方前的小改动：模型名换回调用时的名字、思考块打来源标记
+    outgoing    回答写回调用方前的小改动：模型名换回调用时的名字、思考块（含加密思考块）打来源标记
     inspect     看一段回答：是不是内容、带没带用量、是不是错误
     error_*     把网关的错误写成这种格式
 
@@ -16,7 +16,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from ..kernel import ErrorCategory, GatewayError, Intent, ModelKind, ParamPlan, RequestSummary
+from ...shared.kernel import (
+    ErrorCategory,
+    GatewayError,
+    Intent,
+    ModelKind,
+    ParamPlan,
+    RequestSummary,
+)
 from .sse import SSEEvent
 
 __all__ = [
@@ -31,9 +38,9 @@ __all__ = [
     "wrap_signature",
 ]
 
-#: 会话标识请求头：同一会话落在同一条线路上（不带就按 Key 算）
+#: 会话标识请求头：同一会话落在同一条线路上（不带时个人 Key 按 Key 粘连，客户端 Key 加权随机）
 SESSION_HEADER = "x-session-id"
-#: 思考块签名前的来源标记：atlas1:<来源>:<原签名>
+#: 思考块签名与加密思考块前的来源标记：atlas1:<来源>:<原文>
 STAMP_PREFIX = "atlas1:"
 #: 估算 token：按字符数 / 3（中文偏少估、英文偏多估，宁可放过不误拒）
 _CHARS_PER_TOKEN = 3
@@ -92,14 +99,23 @@ class FormatCodec(Protocol):
     def error_event(self, err: GatewayError) -> SSEEvent: ...
 
 
+def _is_binary_document(block: Mapping[str, Any]) -> bool:
+    source = block.get("source")
+    return not (isinstance(source, Mapping) and source.get("type") == "text")
+
+
 def _text_len(value: Any) -> int:
-    """估算长度时只数文字，跳过图片、文件的 base64。"""
+    """估算长度时只数文字，跳过图片、二进制文件的 base64（纯文本 document 块照数）。"""
     if isinstance(value, str):
         return len(value)
     if isinstance(value, list):
         return sum(_text_len(v) for v in value)
     if isinstance(value, Mapping):
-        if value.get("type") in ("base64",) or ("data" in value and value.get("type") == "base64"):
+        if value.get("type") == "text" and isinstance(value.get("data"), str):
+            return len(value["data"])
+        if value.get("type") in ("base64", "redacted_thinking") or (
+            "data" in value and value.get("type") == "base64"
+        ):
             return 0
         return sum(_text_len(v) for k, v in value.items() if k not in ("data", "url", "image_url"))
     return 0
@@ -147,22 +163,33 @@ class AnthropicCodec:
             temperature=body.get("temperature"),
             max_output=body.get("max_tokens"),
         )
-        has_images, stamps = False, set()
+        has_images, has_documents, stamps = False, False, set()
         for message in body.get("messages") or []:
             content = message.get("content")
             if not isinstance(content, list):
                 continue
             for block in content:
-                kind_ = block.get("type") if isinstance(block, Mapping) else None
-                if kind_ in ("image", "document"):
+                if not isinstance(block, Mapping):
+                    continue
+                kind_ = block.get("type")
+                if kind_ == "image":
                     has_images = True
+                elif kind_ == "document" and _is_binary_document(block):
+                    has_documents = True
                 elif kind_ == "tool_result" and isinstance(block.get("content"), list):
-                    has_images |= any(
-                        isinstance(b, Mapping) and b.get("type") in ("image", "document")
-                        for b in block["content"]
-                    )
+                    for inner in block["content"]:
+                        if not isinstance(inner, Mapping):
+                            continue
+                        if inner.get("type") == "image":
+                            has_images = True
+                        elif inner.get("type") == "document" and _is_binary_document(inner):
+                            has_documents = True
                 elif kind_ == "thinking":
                     stamp, _ = unwrap_signature(str(block.get("signature") or ""))
+                    if stamp:
+                        stamps.add(stamp)
+                elif kind_ == "redacted_thinking":
+                    stamp, _ = unwrap_signature(str(block.get("data") or ""))
                     if stamp:
                         stamps.add(stamp)
         text = (
@@ -177,6 +204,7 @@ class AnthropicCodec:
             session_key=_session(headers, (body.get("metadata") or {}).get("user_id")),
             intent=intent,
             has_images=has_images,
+            has_documents=has_documents,
             has_tools=bool(body.get("tools")),
             approx_input_tokens=text // _CHARS_PER_TOKEN,
             thinking_stamps=frozenset(stamps),
@@ -217,7 +245,7 @@ class AnthropicCodec:
 
     @staticmethod
     def _history(messages: list[Any], plan: ParamPlan) -> list[Any]:
-        """历史里的思考块：同一个上游模型产生的按规则带回（去掉标记），别的上游产生的去掉。"""
+        """历史里的思考块与加密思考块：同一上游模型产生的还原后带回，换了上游产生的去掉。"""
         result: list[Any] = []
         for message in messages:
             content = message.get("content") if isinstance(message, Mapping) else None
@@ -227,6 +255,19 @@ class AnthropicCodec:
             ):
                 result.append(message)
                 continue
+            # 同条消息里若已经有别家来源标记，未打标的加密思考块也一并剥离，避免发给新上游触发 400
+            msg_stamps = {
+                s
+                for b in content
+                if isinstance(b, Mapping) and b.get("type") in ("thinking", "redacted_thinking")
+                for s in [
+                    unwrap_signature(
+                        str(b.get("signature" if b.get("type") == "thinking" else "data") or "")
+                    )[0]
+                ]
+                if s is not None
+            }
+            foreign_msg = bool(msg_stamps) and plan.stamp not in msg_stamps
             blocks = []
             for block in content:
                 kind = block.get("type") if isinstance(block, Mapping) else None
@@ -238,7 +279,14 @@ class AnthropicCodec:
                         continue  # 转换来的思考（上游没有签名）带不回去
                     blocks.append({**block, "signature": original})
                 elif kind == "redacted_thinking":
-                    if not plan.strip_history_thinking:
+                    stamp, original = unwrap_signature(str(block.get("data") or ""))
+                    if plan.strip_history_thinking:
+                        continue
+                    if stamp is not None:
+                        if stamp != plan.stamp or not original:
+                            continue
+                        blocks.append({**block, "data": original})
+                    elif not foreign_msg:
                         blocks.append(block)
                 else:
                     blocks.append(block)
@@ -252,6 +300,12 @@ class AnthropicCodec:
             message = dict(data.get("message") or {})
             message["model"] = ctx.model
             return SSEEvent.of({**data, "message": message}, name)
+        if name == "content_block_start" and ctx.stamp and '"redacted_thinking"' in event.data:
+            data = event.json()
+            cb = dict(data.get("content_block") or {})
+            if cb.get("type") == "redacted_thinking":
+                cb["data"] = wrap_signature(ctx.stamp, str(cb.get("data") or ""))
+                return SSEEvent.of({**data, "content_block": cb}, name)
         if name == "content_block_delta" and ctx.stamp and '"signature_delta"' in event.data:
             data = event.json()
             delta = dict(data.get("delta") or {})
@@ -262,12 +316,19 @@ class AnthropicCodec:
     def outgoing_body(self, data: dict[str, Any], ctx: OutContext) -> dict[str, Any]:
         out = {**data, "model": ctx.model}
         if ctx.stamp and isinstance(data.get("content"), list):
-            out["content"] = [
-                {**b, "signature": wrap_signature(ctx.stamp, str(b.get("signature") or ""))}
-                if isinstance(b, Mapping) and b.get("type") == "thinking"
-                else b
-                for b in data["content"]
-            ]
+            blocks = []
+            for b in data["content"]:
+                if isinstance(b, Mapping) and b.get("type") == "thinking":
+                    blocks.append(
+                        {**b, "signature": wrap_signature(ctx.stamp, str(b.get("signature") or ""))}
+                    )
+                elif isinstance(b, Mapping) and b.get("type") == "redacted_thinking":
+                    blocks.append(
+                        {**b, "data": wrap_signature(ctx.stamp, str(b.get("data") or ""))}
+                    )
+                else:
+                    blocks.append(b)
+            out["content"] = blocks
         return out
 
     def inspect(self, event: SSEEvent, ctx: OutContext) -> Peek:
@@ -333,13 +394,17 @@ class OpenAICodec:
     ) -> RequestSummary:
         effort = body.get("reasoning_effort")
         has_images = False
+        has_documents = False
         for message in body.get("messages") or []:
             content = message.get("content") if isinstance(message, Mapping) else None
-            if isinstance(content, list) and any(
-                isinstance(p, Mapping) and p.get("type") in ("image_url", "input_image", "file")
-                for p in content
-            ):
-                has_images = True
+            if isinstance(content, list):
+                for p in content:
+                    if not isinstance(p, Mapping):
+                        continue
+                    if p.get("type") in ("image_url", "input_image"):
+                        has_images = True
+                    elif p.get("type") == "file":
+                        has_documents = True
         text = (
             _text_len(body.get("messages"))
             + _text_len(body.get("tools"))
@@ -357,6 +422,7 @@ class OpenAICodec:
                 max_output=body.get("max_completion_tokens") or body.get("max_tokens"),
             ),
             has_images=has_images,
+            has_documents=has_documents,
             has_tools=bool(body.get("tools") or body.get("functions")),
             approx_input_tokens=text // _CHARS_PER_TOKEN,
         )

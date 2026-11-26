@@ -10,9 +10,9 @@ from uuid import UUID
 
 from ..accounts import AccountStatus
 from ..db.models import GwAccount, GwApiKey, GwModel, GwModelCall, GwRoute
-from ..gateway.kernel import ModelCaps, Price
 from ..keys import mask
 from ..provider import ProviderCatalog, ProviderSpec
+from ..shared.kernel import ModelCaps, Price
 from .schemas import (
     AccountOut,
     CallOut,
@@ -104,7 +104,12 @@ def caps_io(caps: ModelCaps) -> CapsIO:
 
 
 def _price_io(price: Price) -> PriceIO:
-    return PriceIO(input=price.input, cache_hit=price.cache_hit, output=price.output)
+    return PriceIO(
+        input=price.input,
+        cache_hit=price.cache_hit,
+        output=price.output,
+        cache_write=price.cache_write,
+    )
 
 
 def model_out(
