@@ -1,6 +1,6 @@
 "use client";
 
-/** 流程市场 · 模板详情：流程图、节点说明、角色；运营管理员上下架、编辑，团队管理员拷贝到团队 */
+/** 流程市场 · 模板详情：流程图、步骤说明、角色；运营管理员上下架、编辑，团队管理员拷贝到团队 */
 import { useQueryClient } from "@tanstack/react-query";
 import { App, Button, Tag } from "antd";
 import Link from "next/link";
@@ -114,10 +114,9 @@ export default function MarketDetail() {
             {copies.map((c, i) => (
               <span key={c.id}>
                 {i > 0 && "、"}
-                <Link href={`/team/templates/${c.id}`}>「{c.name}」</Link>（拷自 v{c.origin!.version}）
+                <Link href={`/team/templates/${c.id}`}>「{c.name}」</Link>（v{c.origin!.version}）
               </span>
             ))}
-            。拷过去的是团队自己的，市场后来的更新不会带过去；要新版本就再拷一份
           </div>
         </div>
       )}
@@ -130,14 +129,6 @@ export default function MarketDetail() {
         <>
           <div className="card">
             <FlowGraph structure={s} selected={nid} onSelect={setSel} />
-            <div className="legend">
-              <span>点节点看工作说明</span>
-              <span className="sp" />
-              <span className="rtag admit">准入</span>
-              <span>开工前审上游</span>
-              <span className="rtag exit">准出</span>
-              <span>交付前审本节点</span>
-            </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 16, marginTop: 16 }}>
             <div className="card pad">
@@ -149,7 +140,7 @@ export default function MarketDetail() {
                     <dd className="sm" style={{ whiteSpace: "pre-wrap" }}>
                       {n.instructions || "—"}
                     </dd>
-                    <dt>执行</dt>
+                    <dt>谁来做</dt>
                     <dd className="sm">{s.roles[n.exec_role] ?? "—"}</dd>
                     {n.admit && (
                       <>
@@ -168,7 +159,10 @@ export default function MarketDetail() {
               )}
             </div>
             <div className="card pad">
-              <h2 style={{ marginBottom: 10 }}>角色</h2>
+              <h2 style={{ marginBottom: 4 }}>角色</h2>
+              <div className="xs muted" style={{ marginBottom: 6 }}>
+                拷贝后在项目里给每个角色配人和数字员工
+              </div>
               {Object.entries(s.roles).map(([rk, rn]) => {
                 const d = roleDuties(s, rk);
                 return (
@@ -177,14 +171,11 @@ export default function MarketDetail() {
                       {rn}
                     </b>
                     <span className="sm muted">
-                      执行 {d.exec.join("、") || "—"}；评审 {[...new Set([...d.admit, ...d.exit])].join("、") || "—"}
+                      做 {d.exec.join("、") || "—"}；评审 {[...new Set([...d.admit, ...d.exit])].join("、") || "—"}
                     </span>
                   </div>
                 );
               })}
-              <div className="xs faint" style={{ marginTop: 8 }}>
-                角色是占位：拷到团队后，在项目配置里给每个角色分配成员和数字员工；产出物的格式看数字员工的技能
-              </div>
             </div>
           </div>
         </>

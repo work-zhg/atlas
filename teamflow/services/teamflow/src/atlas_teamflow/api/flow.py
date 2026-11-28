@@ -107,17 +107,33 @@ async def list_processes(
     pr = await svc.projects.get(project_id)
     await access.require(p, Action.PROCESS_VIEW, pr.team_uuid)
     todo = {t.process_uuid for t in await svc.inbox.todos(p.uid, project_uuid=pr.uuid)}
+    procs = await svc.process.list(pr.uuid, status=status, q=q)
+    touched = await svc.process.last_activity([x.uuid for x in procs])
+    # 谁负责（各角色现在的人、数字员工）：同一个锁定版本只解析一次，解析要问用户中心
+    tables: dict[UUID, Any] = {}
     out = []
-    for proc in await svc.process.list(pr.uuid, status=status, q=q):
+    for proc in procs:
+        if proc.template_version_uuid not in tables:
+            tables[proc.template_version_uuid] = await svc.process.roles(proc)
+        table = tables[proc.template_version_uuid]
         nodes = sorted((await svc.process.nodes(proc)).values(), key=lambda n: n.id)
         out.append(
             {
                 **process_out(proc),
                 "nodes": [
-                    {"id": n.node_id, "name": n.name, "status": n.status, "round": n.round}
+                    {
+                        "id": n.node_id,
+                        "name": n.name,
+                        "status": n.status,
+                        "round": n.round,
+                        "executors": [str(u) for u in table.members.get(n.exec_role, [])],
+                        "atlas_agent_id": n.atlas_agent_id
+                        or (a[1] if (a := table.agents.get(n.exec_role)) else None),
+                    }
                     for n in nodes
                 ],
                 "waiting_for_me": proc.uuid in todo,
+                "updated_at": (t.isoformat() if (t := touched.get(proc.uuid)) else None),
             }
         )
     return out
@@ -211,9 +227,21 @@ async def get_node(
         "i_am_executor": executor,
         "session": session_out(ns, can_send=executor and await svc.collab.can_send(n, ns)),
         "submissions": [submission_out(x) for x in await svc.process.submissions(n)],
-        "reviews": [review_out(r, v) for r, v in await svc.process.reviews(n)],
+        "reviews": await _reviews_out(svc, n),
         "instructions": [instruction_out(i) for i in await svc.collab.instructions(n.uuid)],
     }
+
+
+async def _reviews_out(svc: Any, n: Any) -> list[dict[str, Any]]:
+    """评审记录：每一轮带上它审的文件（准出是本节点的提交，准入是上游的提交）。"""
+    reviews = await svc.process.reviews(n)
+    ids = [UUID(x) for r, _ in reviews for x in r.submissions]
+    subs = await svc.process.submissions_by_uuid(ids)
+    out = []
+    for r, votes in reviews:
+        files = [path for x in r.submissions if (sub := subs.get(UUID(x))) for path in sub.paths]
+        out.append({**review_out(r, votes), "files": files})
+    return out
 
 
 @router.post("/processes/{process_id}/nodes/{node_id}/begin")

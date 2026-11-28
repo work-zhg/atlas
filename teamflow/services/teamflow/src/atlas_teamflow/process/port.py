@@ -20,10 +20,14 @@ class WorkOrder:
     node_name: str
     instructions: str
     round: int
+    #: 流程标题（发起时写的「要做什么」）
+    title: str = ""
     #: 上游最近一次提交：[(节点名, [路径])]
     upstream: list[tuple[str, list[str]]] = field(default_factory=list)
     #: 驳回或打回的意见
     feedback: str | None = None
+    #: 成员上传的参考资料（路径）
+    materials: list[str] = field(default_factory=list)
 
 
 class NodeWork(Protocol):

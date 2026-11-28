@@ -60,8 +60,18 @@ export function PageHead({ title, sub, extra }: { title: ReactNode; sub?: ReactN
 export function NodeStatusTag({ status }: { status: NodeStatus }) {
   const s = NODE_STATUS[status];
   return (
-    <span className="st" style={{ color: s.color, background: s.bg }}>
+    <span className="st" style={{ color: s.color, background: s.bg }} title={s.hint}>
       {s.label}
+    </span>
+  );
+}
+
+/** 步骤序号：第几步（同时进行的步骤同号），颜色跟状态走 */
+export function StepNo({ n, status }: { n: number | undefined; status?: NodeStatus }) {
+  const c = status && status !== "pending" ? NODE_STATUS[status] : null;
+  return (
+    <span className="stepno" style={c ? { color: c.color, background: c.bg } : undefined}>
+      {n ?? "·"}
     </span>
   );
 }
@@ -131,12 +141,17 @@ export function AgentChip({ name, size = 18 }: { name: string; size?: number }) 
   );
 }
 
-export function FileChip({ path, onClick }: { path: string; onClick?: () => void }) {
+/** 流程文件的预览页（新标签页打开）。不经应用外壳：整页都给文件 */
+export const viewHref = (processId: string, path: string) =>
+  `/view?flow=${encodeURIComponent(processId)}&path=${encodeURIComponent(path)}`;
+
+/** 一个文件：点了在新标签页打开预览 */
+export function FileChip({ processId, path }: { processId: string; path: string }) {
   return (
-    <span className="inchip" title={path} onClick={onClick} style={onClick ? { cursor: "pointer" } : undefined}>
-      <Icon name={path.endsWith("/") ? "folder" : "file"} size={13} />
+    <Link className="inchip" title={`${path}（在新标签页打开）`} href={viewHref(processId, path)} target="_blank" rel="noopener">
+      <Icon name="file" size={13} />
       <span className="ellipsis">{base(path)}</span>
-    </span>
+    </Link>
   );
 }
 

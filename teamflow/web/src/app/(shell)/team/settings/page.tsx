@@ -88,7 +88,7 @@ function Settings({ team }: { team: Team }) {
           <div>
             <div className="sm" style={{ marginBottom: 6 }}>团队名称</div>
             <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={64} />
-            <div className="xs faint" style={{ marginTop: 4 }}>在本租户里唯一</div>
+            <div className="xs faint" style={{ marginTop: 4 }}>同一企业里不能重名</div>
           </div>
           <div>
             <div className="sm" style={{ marginBottom: 6 }}>说明</div>
@@ -110,13 +110,13 @@ function Settings({ team }: { team: Team }) {
           ))}
         </div>
         <div className="xs faint" style={{ marginTop: 8 }}>
-          团队管理员 = 这个团队的 Owner（用户中心团队数据权限）：配置团队和流程。在「成员与数字员工」里改权限，至少保留一个
+          团队管理员能配置团队、流程模板和项目，至少保留一个；在「成员与数字员工」里改
         </div>
       </div>
       <div className="card pad" style={{ marginBottom: 16 }}>
         <h2 style={{ marginBottom: 4 }}>通知</h2>
         <div className="xs muted" style={{ marginBottom: 4 }}>
-          评审推给对应的人；每个人在个人设置里绑定自己的账号。渠道要部署时配好凭据才会真的推
+          要评审的事推给对应的人；每个人在个人设置里绑定自己的账号
         </div>
         {sw("wecom", "企业微信", "团队用企业微信时打开")}
         {sw("dingtalk", "钉钉", "团队用钉钉时打开")}
@@ -127,7 +127,7 @@ function Settings({ team }: { team: Team }) {
           <div className="grow">
             <h2>归档团队</h2>
             <div className="sm muted" style={{ marginTop: 4 }}>
-              归档后不能再发起流程，进行中的流程继续跑完；成员权限仍在用户中心
+              归档后不能再发起流程，进行中的流程继续跑完
             </div>
           </div>
           <Popconfirm title={`归档「${team.name}」？`} onConfirm={() => void archive()}>

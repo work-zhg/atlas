@@ -1,69 +1,73 @@
 /**
- * 流程事件（追溯、流程详情的「最近」）→ 一句话。事件由后端 process/service.py、collab/ 记下。
+ * 流程事件（记录、概览的「最近」）→ 一句人话。事件由后端 process/service.py、collab/ 记下。
  *
- * kind 决定时间线上的圆点颜色：lock 锁定 / 开工，save 写入、上传，review 提交与开评审，pass 通过，
- * reject 驳回、打回、终止。
+ * ★ 只留人关心的里程碑：谁开始了、谁下了指令、谁上传、谁提交、谁同意或退回、暂停与继续、终止。
+ *   系统内部的步骤（指令投递、开评审、评审通过的汇总）返回 null，不显示。
+ * ★ 句子里不带步骤名：记录页按步骤分组、概览的「最近」由调用方在前面补步骤名。
+ *
+ * kind 决定圆点颜色：start 开始，talk 下指令、上传，review 提交，pass 同意、完成，reject 退回、终止。
  */
 import { STAGE } from "./format";
 import type { ProcessEvent } from "./types";
 
-export type EventKind = "lock" | "save" | "review" | "pass" | "reject" | "other";
+export type EventKind = "start" | "talk" | "review" | "pass" | "reject";
 
-const INSTRUCTION = { kickoff: "开工指令", revise: "修改指令", human: "人的指令", handback: "交还说明" } as Record<string, string>;
+export interface Milestone {
+  text: string;
+  kind: EventKind;
+  /** 只看评审时留下的 */
+  review: boolean;
+}
+
+const quote = (v: unknown) => (v ? `：「${String(v)}」` : "");
 
 export function describe(
   ev: ProcessEvent,
   who: (id: string | null) => string,
   nodeName: (id: string | null | undefined) => string,
-): { text: string; kind: EventKind } {
+): Milestone | null {
   const d = ev.data as Record<string, unknown>;
   const actor = who(ev.actor);
-  const node = nodeName(ev.node_id);
   const stage = STAGE[(d.stage as "admit" | "exit") ?? "exit"] ?? "";
+  const m = (text: string, kind: EventKind, review = false): Milestone => ({ text, kind, review });
   switch (ev.type) {
     case "process.started":
-      return { text: `${actor} 发起流程，锁定模板 v${d.version ?? "?"}；流程空间已申请`, kind: "lock" };
-    case "node.started":
-      return {
-        text: `「${node}」开工（第 ${d.round ?? 1} 轮）${ev.actor ? `：${actor} 点了开始` : ""}；锁定执行的数字员工，会话挂载流程空间`,
-        kind: "lock",
-      };
-    case "instruction.sent":
-      return { text: `「${node}」${INSTRUCTION[String(d.kind)] ?? "指令"}已发给数字员工`, kind: "other" };
+      return m(`${actor} 发起了流程`, "start");
+    case "node.started": {
+      const round = Number(d.round ?? 1);
+      if (ev.actor && round <= 1) return m(`${actor} 开始了这一步`, "start");
+      return m(round > 1 ? `开始第 ${round} 轮` : "开始了", "start");
+    }
     case "message.sent":
-      return { text: `${actor} 在「${node}」给数字员工发了指令`, kind: "other" };
+      return m(`${actor} 给数字员工下了指令${quote(d.text)}`, "talk");
     case "space.uploaded":
-      return { text: `${actor} 上传 ${String(d.path ?? "")}`, kind: "save" };
+      return m(`${actor} 上传了 ${String(d.path ?? "")}`, "talk");
     case "submission.created": {
       const paths = (d.paths as string[] | undefined) ?? [];
-      return { text: `${actor} 提交「${node}」第 ${d.round ?? 1} 轮：${paths.join("、")}`, kind: "review" };
+      return m(`${actor} 提交评审（第 ${d.round ?? 1} 轮）：${paths.join("、")}`, "review", true);
     }
-    case "review.opened":
-      return { text: `「${node}」进入${stage}评审（${d.reviewers ?? "?"} 位评审人，${d.rule === "all" ? "全部同意" : "任一人同意"}）`, kind: "review" };
     case "vote.cast":
-      return { text: `${actor} 在「${node}」${stage}评审：${d.decision === "approve" ? "同意" : "不同意"}`, kind: d.decision === "approve" ? "pass" : "reject" };
-    case "review.approved":
-      return { text: `「${node}」${stage}评审通过`, kind: "pass" };
+      // 不同意的那一票由 review.rejected 说（带退回到哪）
+      return d.decision === "approve" ? m(`${actor} 同意${stage}${quote(d.comment)}`, "pass", true) : null;
     case "review.rejected":
-      return {
-        text: d.return_to ? `${actor} 在「${node}」准入时打回上游「${nodeName(String(d.return_to))}」` : `${actor} 驳回「${node}」，本节点再做一轮`,
-        kind: "reject",
-      };
+      if (d.return_to) return m(`${actor} 没让它开始，退回了上一步「${nodeName(String(d.return_to))}」${quote(d.comment)}`, "reject", true);
+      return m(`${actor} 退回修改${quote(d.comment)}`, "reject", true);
     case "node.exited":
-      return { text: `「${node}」已准出，等下游准入`, kind: "pass" };
+      return m("已准出，等下一步接收", "pass", true);
     case "node.passed":
-      return { text: `「${node}」已通过`, kind: "pass" };
+      return m("这一步完成了", "pass", true);
     case "node.returned":
-      return { text: `「${node}」被「${nodeName(String(d.by ?? ""))}」打回：${String(d.comment ?? "")}`, kind: "reject" };
+      return m(`被下一步「${nodeName(String(d.by ?? ""))}」退回，要重做${quote(d.comment)}`, "reject", true);
     case "node.taken_over":
-      return { text: `${actor} 接管了「${node}」：数字员工停下`, kind: "other" };
+      return m(`${actor} 暂停了数字员工，自己改文件`, "talk");
     case "node.handed_back":
-      return { text: `${actor} 把「${node}」交还给数字员工${d.note ? `：${String(d.note)}` : ""}`, kind: "other" };
+      return m(`${actor} 让数字员工继续${quote(d.note)}`, "talk");
     case "process.completed":
-      return { text: "流程完成；流程空间转只读保留", kind: "pass" };
+      return m("流程完成了", "pass");
     case "process.terminated":
-      return { text: `${actor} 终止了流程${d.reason ? `：${String(d.reason)}` : ""}；流程空间转只读保留`, kind: "reject" };
+      return m(`${actor} 终止了流程${quote(d.reason)}`, "reject");
     default:
-      return { text: `${node ? `「${node}」` : ""}${ev.type}`, kind: "other" };
+      // instruction.sent、review.opened、review.approved：系统内部的步骤
+      return null;
   }
 }

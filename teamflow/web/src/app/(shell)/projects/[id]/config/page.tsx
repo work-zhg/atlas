@@ -37,7 +37,7 @@ export default function ProjectConfig() {
   return (
     <Page>
       <Crumb items={[[p.name, `/projects/${p.id}`], ["配置", undefined]]} />
-      <PageHead title="项目配置" sub={<b style={{ color: "var(--fg-2)" }}>{p.name}</b>} />
+      <PageHead title={`${p.name} · 配置`} />
       {!adm && (
         <div className="banner info" style={{ marginBottom: 12 }}>
           <Icon name="lock" size={15} />
@@ -46,8 +46,8 @@ export default function ProjectConfig() {
       )}
       <BasicInfo project={p} editable={adm} />
       <div className="row" style={{ margin: "18px 0 10px" }}>
-        <h2>流程</h2>
-        <span className="sm muted">本项目能发起的流程：绑定流程模板，再给模板里的每个角色分配成员和数字员工</span>
+        <h2>流程模板</h2>
+        <span className="sm muted">给每个角色配好人和数字员工，就能在这个项目里发起</span>
         <span className="sp" />
         {adm && (
           <Button icon={<Icon name="plus" size={14} />} onClick={() => setBinding(true)}>
@@ -116,11 +116,6 @@ function BasicInfo({ project, editable }: { project: ProjectDetail; editable: bo
           <dd>{project.name}</dd>
           <dt>说明</dt>
           <dd>{project.description || "—"}</dd>
-          <dt>流程空间</dt>
-          <dd className="sm">
-            每条流程发起时向 Agent 平台申请一个，这条流程所有节点的数字员工会话都挂载它
-            <div className="xs faint">节点提交评审时，由执行人从流程空间选这一轮的产出物</div>
-          </dd>
         </dl>
       )}
     </div>
@@ -179,7 +174,7 @@ function BindCard({
         </span>
         <div className="grow">
           <b>{t.name}</b>
-          <div className="xs faint">{b.version_no ? `跟随最新发布版 v${b.version_no}，发起时锁定版本` : "还没发布"}</div>
+          <div className="xs faint">{b.version_no ? `用最新发布的 v${b.version_no}；已发起的流程不受之后的修改影响` : "还没发布"}</div>
         </div>
         {b.ready ? (
           <span className="rtag" style={{ background: "var(--success-soft)", color: "var(--success)" }}>
@@ -187,7 +182,7 @@ function BindCard({
           </span>
         ) : (
           <span className="rtag" style={{ background: "var(--warning-soft)", color: "var(--warning)" }}>
-            {b.version_no ? `还差 ${new Set(b.missing.map((m) => m.role)).size} 个角色` : "模板还没发布"}
+            {b.version_no ? `还差 ${new Set(b.missing.map((m) => m.role)).size} 个角色没配齐` : "模板还没发布"}
           </span>
         )}
         {editable && (
@@ -201,13 +196,14 @@ function BindCard({
           </>
         )}
       </div>
+      <div className="xs muted" style={{ padding: "8px 16px 0" }}>成员给数字员工下指令、提交和评审；数字员工干活</div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr className="xs muted" style={{ textAlign: "left" }}>
             <th style={{ padding: "8px 16px", width: 100 }}>角色</th>
-            <th style={{ padding: 8 }}>负责的节点</th>
-            <th style={{ padding: 8, width: 320 }}>成员（下指令、评审）</th>
-            <th style={{ padding: "8px 16px 8px 8px", width: 230 }}>数字员工（执行）</th>
+            <th style={{ padding: 8 }}>负责哪几步</th>
+            <th style={{ padding: 8, width: 320 }}>成员</th>
+            <th style={{ padding: "8px 16px 8px 8px", width: 230 }}>数字员工</th>
           </tr>
         </thead>
         <tbody>
@@ -217,14 +213,17 @@ function BindCard({
             const a = b.assignments[rk] ?? { members: [], agent: null };
             const miss = missingOf(rk);
             return (
-              <tr key={rk} style={{ borderTop: "1px solid var(--tf-line-soft)", verticalAlign: "top" }}>
+              <tr key={rk} style={{ borderTop: "1px solid var(--tf-line-soft)", verticalAlign: "top", background: miss.length ? "#fffaf2" : undefined }}>
                 <td style={{ padding: "10px 16px" }}>
                   <b>{rn}</b>
+                  {!!miss.length && (
+                    <div className="xs warn-text">{miss.map((w) => (w === "no_member" ? "缺成员" : w === "no_agent" ? "缺数字员工" : "")).filter(Boolean).join("、")}</div>
+                  )}
                 </td>
                 <td className="sm" style={{ padding: "10px 8px" }}>
                   {!!duty.exec.length && (
                     <div>
-                      <span className="rtag exec">执行</span> {duty.exec.join("、")}
+                      <span className="rtag exec">做</span> {duty.exec.join("、")}
                     </div>
                   )}
                   {!!duty.admit.length && (
@@ -258,7 +257,7 @@ function BindCard({
                 </td>
                 <td style={{ padding: "8px 16px 8px 8px" }}>
                   {!execs ? (
-                    <span className="faint sm">只评审，不执行</span>
+                    <span className="faint sm">只评审，不用配</span>
                   ) : editable ? (
                     <Select
                       style={{ width: "100%" }}
@@ -282,7 +281,7 @@ function BindCard({
       </table>
       {editable && (
         <div className="xs faint" style={{ padding: "8px 16px 12px" }}>
-          成员只能选本团队「{LEVEL.WRITE.label}」以上的人；分配后他们自动获得这个流程里数字员工的使用权。改分配只影响还没开工的节点
+          成员只能选本团队「{LEVEL.WRITE.label}」以上的人。改了只影响还没开始的步骤
         </div>
       )}
     </div>

@@ -3,13 +3,14 @@
 /**
  * 编排器：团队流程模板和流程市场模板共用（保存、发布由外层传入）。
  *
- * ★ 模板只存结构：顺序步骤 + 并行组；节点依赖由结构推导，不用连线。
+ * ★ 模板只存结构：顺序步骤 + 并行组（界面叫「同时进行的步骤」）；依赖由结构推导，不用连线。
  * ★ 角色只是占位（模板角色）：在项目配置里给每个角色分配成员和数字员工，和用户中心的系统角色无关。
- * ★ 第一步的节点没有上游，不设准入；其余节点没配准入只给警告（直接开工）。
+ * ★ 第一步没有上一步，不设准入；其余步骤没配准入只给警告（直接开始）。
+ * ★ 草稿自动保存（停手 1 秒后存）；「检查」列出问题，点问题跳到对应步骤。
  */
-import { App, Button, Input, Modal, Popconfirm, Segmented, Tag } from "antd";
+import { App, Button, Input, Modal, Popconfirm, Segmented, Tag, Tooltip } from "antd";
 import Link from "next/link";
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { errorText } from "@/lib/api";
 import {
@@ -22,8 +23,8 @@ import {
   newRoleKey,
   removeNode,
   removeRole,
+  stepOf,
   updateNode,
-  upstreams,
 } from "@/lib/structure";
 import type { Issue, Rule, Structure } from "@/lib/types";
 
@@ -48,42 +49,64 @@ export interface EditorProps {
 export function TemplateEditor(p: EditorProps) {
   const { message } = App.useApp();
   const [s, setS] = useState<Structure>(p.structure);
-  const [dirty, setDirty] = useState(false);
   const [sel, setSel] = useState<string | undefined>(Object.keys(p.structure.nodes)[0]);
   const [issues, setIssues] = useState<{ errors: Issue[]; warnings: Issue[] } | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [showIssues, setShowIssues] = useState(false);
+  const [saveState, setSaveState] = useState<"saved" | "dirty" | "saving" | "error">("saved");
+  const [saveError, setSaveError] = useState("");
   const [roles, setRoles] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [note, setNote] = useState("");
+  const latest = useRef(s);
+  const inflight = useRef(false);
+  const saveFn = useRef(p.save);
+  saveFn.current = p.save;
 
   const change = (next: Structure) => {
     setS(next);
-    setDirty(true);
+    latest.current = next;
+    setSaveState("dirty");
   };
-  const save = async (): Promise<{ errors: Issue[]; warnings: Issue[] } | null> => {
-    setSaving(true);
+  const save = useCallback(async (): Promise<{ errors: Issue[]; warnings: Issue[] } | null> => {
+    if (inflight.current) return null;
+    inflight.current = true;
+    const cur = latest.current;
+    setSaveState("saving");
     try {
-      const r = await p.save(s);
+      const r = await saveFn.current(cur);
       setIssues(r);
-      setDirty(false);
+      // 存的时候又改了：再存一次（状态回到 dirty，下面的定时器接着存）
+      setSaveState(latest.current === cur ? "saved" : "dirty");
       return r;
     } catch (e) {
-      message.error(errorText(e));
+      setSaveError(errorText(e));
+      setSaveState("error");
       return null;
     } finally {
-      setSaving(false);
+      inflight.current = false;
     }
-  };
-  // 离开前提醒还没保存
+  }, []);
+  // 自动保存：停手 1 秒后存
   useEffect(() => {
-    if (!dirty) return;
+    if (saveState !== "dirty") return;
+    const t = setTimeout(() => void save(), 1000);
+    return () => clearTimeout(t);
+  }, [s, saveState, save]);
+  // 离开前提醒还没存下
+  useEffect(() => {
+    if (saveState === "saved") return;
     const h = (e: BeforeUnloadEvent) => e.preventDefault();
     window.addEventListener("beforeunload", h);
     return () => window.removeEventListener("beforeunload", h);
-  }, [dirty]);
+  }, [saveState]);
 
-  const startPublish = async () => {
+  const check = async () => {
     const r = await save();
+    if (r) setShowIssues(true);
+    return r;
+  };
+  const startPublish = async () => {
+    const r = await check();
     if (r) setPublishing(true);
   };
   const doPublish = async () => {
@@ -97,16 +120,31 @@ export function TemplateEditor(p: EditorProps) {
     }
   };
 
-  const bad = new Set((issues?.errors ?? []).map((i) => i.node).filter((x): x is string => !!x));
+  const bad = new Set(showIssues ? (issues?.errors ?? []).map((i) => i.node).filter((x): x is string => !!x) : []);
   const add = (r: [Structure, string]) => {
     change(r[0]);
     if (r[1]) setSel(r[1]);
   };
-  const plus = (title: string, onClick: () => void, icon: "plus" | "layers" = "plus") => (
-    <button type="button" className="addbtn" title={title} onClick={onClick}>
-      <Icon name={icon} size={13} />
-    </button>
-  );
+  // 加步骤：接在选中的那一步后面（没选就加在最后）；同时进行：和选中的那一步并排
+  const at = sel ? stepOf(s, sel) : s.flow.length - 1;
+  const addStep = () => add(addNode(s, at < 0 ? s.flow.length - 1 : at));
+  const addParallel = () => {
+    const i = at < 0 ? s.flow.length - 1 : at;
+    add(s.flow[i]?.type === "parallel" ? addTrack(s, i) : makeParallel(s, i));
+  };
+  const status = {
+    saved: <span className="xs faint">已自动保存</span>,
+    dirty: <span className="xs faint">有修改，马上保存…</span>,
+    saving: <span className="xs faint">保存中…</span>,
+    error: (
+      <Tooltip title={saveError}>
+        <Tag color="error" style={{ cursor: "pointer" }} onClick={() => void save()}>
+          保存失败，点这里重试
+        </Tag>
+      </Tooltip>
+    ),
+  }[saveState];
+  const problems = (issues?.errors.length ?? 0) + (issues?.warnings.length ?? 0);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, minHeight: 0 }}>
@@ -116,13 +154,13 @@ export function TemplateEditor(p: EditorProps) {
         </Link>
         <b>{p.title}</b>
         {p.tags}
-        {dirty && <Tag color="warning">有未保存的修改</Tag>}
+        {status}
         <span className="sp" />
         <Button size="small" icon={<Icon name="users" size={13} />} onClick={() => setRoles(true)}>
           角色（{Object.keys(s.roles).length}）
         </Button>
-        <Button size="small" loading={saving} onClick={() => void save()}>
-          保存并校验
+        <Button size="small" onClick={() => void check()}>
+          检查{issues && problems ? `（${problems}）` : ""}
         </Button>
         <Button size="small" type="primary" onClick={() => void startPublish()}>
           发布 v{p.nextVersion}
@@ -130,48 +168,19 @@ export function TemplateEditor(p: EditorProps) {
       </div>
       <div className="editor">
         <div className="canvas">
-          <FlowGraph
-            structure={s}
-            selected={sel}
-            onSelect={setSel}
-            bad={bad}
-            head={
-              <>
-                {plus("在最前面加一个节点", () => add(addNode(s, -1)))}
-                <span className="arrow" style={{ width: 14 }} />
-              </>
-            }
-            renderAfterStep={(i) => (
-              // 后面那段箭头由流程图在下一步前面画
-              <>
-                <span className="arrow" style={{ width: 14 }} />
-                {plus("在这一步后面加一个节点", () => add(addNode(s, i)))}
-              </>
-            )}
-            renderInPar={(i) => <div className="row" style={{ justifyContent: "center" }}>{plus("加一条并行轨道", () => add(addTrack(s, i)))}</div>}
-            renderAfterTrack={(i, t) => plus("在这条轨道末尾接一个节点", () => add(appendToTrack(s, i, t)))}
-            renderUnderStep={(i) => (
-              <div className="stepbar">
-                <Button size="small" type="text" disabled={i === 0} onClick={() => change(moveStep(s, i, -1))} title="往前挪">
-                  <Icon name="left" size={13} />
-                </Button>
-                {s.flow[i]!.type === "node" && (
-                  <Button size="small" type="text" onClick={() => add(makeParallel(s, i))} title="改成并行组：再加一条轨道">
-                    ∥
-                  </Button>
-                )}
-                <Button size="small" type="text" disabled={i === s.flow.length - 1} onClick={() => change(moveStep(s, i, 1))} title="往后挪">
-                  <Icon name="right" size={13} />
-                </Button>
-              </div>
-            )}
-          />
-          <div className="xs faint" style={{ position: "absolute", left: 18, bottom: 14 }}>
-            模板只存结构：顺序步骤 + 并行组。节点依赖由结构推导，不用连线
+          <FlowGraph structure={s} selected={sel} onSelect={setSel} bad={bad} />
+          <div className="row" style={{ position: "absolute", left: 18, bottom: 14 }}>
+            <Button icon={<Icon name="plus" size={13} />} onClick={addStep}>
+              添加步骤
+            </Button>
+            <Button icon={<Icon name="layers" size={13} />} onClick={addParallel}>
+              添加同时进行的步骤
+            </Button>
+            {sel && <span className="xs faint">都加在「{s.nodes[sel]?.name}」旁边</span>}
           </div>
         </div>
         <div className="inspector">
-          {issues && (issues.errors.length > 0 || issues.warnings.length > 0) && (
+          {showIssues && issues && (
             <div className="col" style={{ gap: 6, marginBottom: 14 }}>
               {issues.errors.map((e, i) => (
                 <div key={`e${i}`} className="banner danger" style={{ cursor: e.node ? "pointer" : undefined }} onClick={() => e.node && setSel(e.node)}>
@@ -185,21 +194,28 @@ export function TemplateEditor(p: EditorProps) {
                   <div className="sm">{w.message}</div>
                 </div>
               ))}
-            </div>
-          )}
-          {issues && !issues.errors.length && !issues.warnings.length && (
-            <div className="banner info" style={{ marginBottom: 14 }}>
-              <Icon name="check" size={14} />
-              <div className="sm">校验通过，可以发布</div>
+              {!problems && (
+                <div className="banner info">
+                  <Icon name="check" size={14} />
+                  <div className="sm">没有问题，可以发布</div>
+                </div>
+              )}
             </div>
           )}
           {sel && s.nodes[sel] ? (
-            <Inspector key={sel} s={s} id={sel} onChange={change} onRemove={() => {
-              change(removeNode(s, sel));
-              setSel(undefined);
-            }} />
+            <Inspector
+              key={sel}
+              s={s}
+              id={sel}
+              onChange={change}
+              onAppend={(r) => add(r)}
+              onRemove={() => {
+                change(removeNode(s, sel));
+                setSel(undefined);
+              }}
+            />
           ) : (
-            <div className="sm muted">点画布上的节点编辑；用加号加节点、加并行轨道</div>
+            <div className="sm muted">点画布上的步骤来编辑；用左下角的按钮加步骤</div>
           )}
         </div>
       </div>
@@ -218,10 +234,7 @@ export function TemplateEditor(p: EditorProps) {
                 <div>有 {issues.warnings.length} 条提醒，不挡发布</div>
               </div>
             )}
-            <div className="banner info">
-              <Icon name="lock" size={15} />
-              <div>{p.publishHint}</div>
-            </div>
+            <div className="sm muted">{p.publishHint}</div>
             <Input value={note} onChange={(e) => setNote(e.target.value)} maxLength={200} placeholder="这一版改了什么（可选）" />
           </div>
         )}
@@ -251,61 +264,77 @@ function RoleChips({ s, value, onChange, multi }: { s: Structure; value: string[
   );
 }
 
-function Inspector({ s, id, onChange, onRemove }: { s: Structure; id: string; onChange: (s: Structure) => void; onRemove: () => void }) {
+function Inspector({
+  s,
+  id,
+  onChange,
+  onAppend,
+  onRemove,
+}: {
+  s: Structure;
+  id: string;
+  onChange: (s: Structure) => void;
+  onAppend: (r: [Structure, string]) => void;
+  onRemove: () => void;
+}) {
   const n = s.nodes[id]!;
   const root = isRoot(s, id);
-  const ups = (upstreams(s)[id] ?? []).map((u) => s.nodes[u]?.name ?? u);
   const set = (patch: Partial<typeof n>) => onChange(updateNode(s, id, patch));
   const total = Object.keys(s.nodes).length;
+  const i = stepOf(s, id);
+  const step = s.flow[i];
+  const track = step?.type === "parallel" ? step.tracks.findIndex((t) => t.nodes.includes(id)) : -1;
   return (
     <>
       <div className="row" style={{ marginBottom: 12 }}>
-        <h2 className="grow">{n.name || "（未命名）"}</h2>
-        <Popconfirm title="删除这个节点？" onConfirm={onRemove} disabled={total <= 1}>
-          <Button size="small" type="text" icon={<Icon name="trash" size={14} />} disabled={total <= 1} title={total <= 1 ? "至少留一个节点" : "删除节点"} />
+        <h2 className="grow ellipsis">{n.name || "（未命名）"}</h2>
+        <Button size="small" type="text" disabled={i === 0} onClick={() => onChange(moveStep(s, i, -1))}>
+          前移
+        </Button>
+        <Button size="small" type="text" disabled={i === s.flow.length - 1} onClick={() => onChange(moveStep(s, i, 1))}>
+          后移
+        </Button>
+        {track >= 0 && (
+          <Button size="small" type="text" onClick={() => onAppend(appendToTrack(s, i, track))} title="同一条线上，接在它后面再做一步">
+            接一步
+          </Button>
+        )}
+        <Popconfirm title="删除这一步？" onConfirm={onRemove} disabled={total <= 1}>
+          <Button size="small" type="text" danger disabled={total <= 1} title={total <= 1 ? "至少留一步" : undefined}>
+            删除
+          </Button>
         </Popconfirm>
       </div>
       <div className="fld">
         <label className="label">名称</label>
         <Input value={n.name} onChange={(e) => set({ name: e.target.value })} maxLength={32} />
-        <div className="help">也是流程空间里放它产出的目录名：不能带 / 、不能以 . 开头</div>
+        <div className="help">不能包含 /</div>
       </div>
       <div className="fld">
         <label className="label">工作说明</label>
         <Input.TextArea value={n.instructions} onChange={(e) => set({ instructions: e.target.value })} autoSize={{ minRows: 4, maxRows: 12 }} maxLength={4000} />
-        <div className="help">开工时和上游提交的产出物一起，作为第一条指令发给执行的数字员工。产出物的格式由数字员工的技能约定，这里可以点名要用的技能</div>
+        <div className="help">数字员工开始时收到的第一条说明，会自动带上上一步交付的文件和成员上传的资料</div>
       </div>
       <div className="fld">
-        <label className="label">执行角色</label>
+        <label className="label">谁来做</label>
         <RoleChips s={s} value={n.exec_role ? [n.exec_role] : []} onChange={(v) => set({ exec_role: v[0] ?? "" })} multi={false} />
-        <div className="help">这个角色的成员下指令、必要时接管、提交评审时选产出物；分配的数字员工干活</div>
       </div>
+      {!root && (
+        <div className="fld">
+          <label className="label">准入评审（开始前审上一步交付的文件）</label>
+          <RoleChips
+            s={s}
+            value={n.admit?.roles ?? []}
+            onChange={(v) => set({ admit: v.length ? { roles: v, rule: n.admit?.rule ?? "any" } : null })}
+            multi
+          />
+          {n.admit ? <RuleSeg value={n.admit.rule} onChange={(r) => set({ admit: { ...n.admit!, rule: r } })} /> : <div className="help">不选就直接开始</div>}
+        </div>
+      )}
       <div className="fld">
-        <label className="label">
-          准入评审 <span className="rtag admit">开工前</span>
-        </label>
-        {root ? (
-          <div className="help">没有上游，不设准入</div>
-        ) : (
-          <>
-            <RoleChips
-              s={s}
-              value={n.admit?.roles ?? []}
-              onChange={(v) => set({ admit: v.length ? { roles: v, rule: n.admit?.rule ?? "any" } : null })}
-              multi
-            />
-            {n.admit && <RuleSeg value={n.admit.rule} onChange={(r) => set({ admit: { ...n.admit!, rule: r } })} />}
-            <div className="help">审核上游「{ups.join("、")}」提交的产出物；不通过可打回上游。不配就直接开工</div>
-          </>
-        )}
-      </div>
-      <div className="fld">
-        <label className="label">
-          准出评审 <span className="rtag exit">交付前</span>
-        </label>
+        <label className="label">准出评审（交付前审这一步的文件）</label>
         <RoleChips s={s} value={n.exit.roles} onChange={(v) => set({ exit: { ...n.exit, roles: v } })} multi />
         <RuleSeg value={n.exit.rule} onChange={(r) => set({ exit: { ...n.exit, rule: r } })} />
-        <div className="help">结论：同意（准出）/ 驳回修改（本节点再做一轮）；打回上游在下游准入时做</div>
       </div>
     </>
   );
@@ -341,7 +370,7 @@ function RolesModal({ s, hint, onChange, onClose }: { s: Structure; hint: string
   return (
     <Modal open title="模板角色" onCancel={onClose} footer={<Button onClick={onClose}>完成</Button>}>
       <div className="sm muted" style={{ marginBottom: 10 }}>
-        {hint}。一个角色可以执行或评审好几个节点（所以用角色、不直接写人）
+        {hint}。一个角色可以负责或评审好几步
       </div>
       <div className="col" style={{ gap: 6 }}>
         {Object.entries(s.roles).map(([k, v]) => (
@@ -354,7 +383,7 @@ function RolesModal({ s, hint, onChange, onClose }: { s: Structure; hint: string
             />
             <Popconfirm
               title={`删除角色「${v}」？`}
-              description={used(k) ? "节点上用到它的地方会一起清掉" : undefined}
+              description={used(k) ? "步骤上用到它的地方会一起清掉" : undefined}
               onConfirm={() => onChange(removeRole(s, k))}
             >
               <Button type="text" icon={<Icon name="trash" size={14} />} />

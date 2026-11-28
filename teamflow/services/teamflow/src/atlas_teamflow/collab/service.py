@@ -158,7 +158,9 @@ class NodeCollab:
         )
         self.session.add(ins)
         ns.last_run_id = run_id
-        await self.process.record(proc.uuid, "message.sent", node.node_id, actor=author, run=run_id)
+        await self.process.record(
+            proc.uuid, "message.sent", node.node_id, actor=author, run=run_id, text=text[:200]
+        )
         await self.session.flush()
         return run_id
 

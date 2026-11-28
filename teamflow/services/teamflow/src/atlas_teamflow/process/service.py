@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -278,8 +279,10 @@ class ProcessService:
             node_name=n.name,
             instructions=spec.get("instructions") or "",
             round=n.round,
+            title=proc.title,
             upstream=await self._upstream(s, nodes, n),
             feedback=feedback,
+            materials=await self._materials(proc),
         )
         await self.work.kickoff(n, order)
         self.emit(
@@ -301,6 +304,15 @@ class ProcessService:
             if sub is not None:
                 out.append((nodes[up].name, list(sub.paths)))
         return out
+
+    async def _materials(self, proc: Process) -> list[str]:
+        """成员上传过的文件（按上传先后，去重）。"""
+        seen: dict[str, None] = {}
+        for e in await self.events(proc, types=["space.uploaded"], limit=5000):
+            path = e.data.get("path")
+            if isinstance(path, str) and path:
+                seen.setdefault(path, None)
+        return list(seen)
 
     async def latest_submission(self, n: ProcessNode) -> Submission | None:
         return await self.session.scalar(
@@ -487,13 +499,27 @@ class ProcessService:
                 return_to=return_to if decision == "reject" else None,
             )
         )
-        self.emit(proc, "vote.cast", n.node_id, actor=actor, stage=rr.stage, decision=decision)
+        self.emit(
+            proc,
+            "vote.cast",
+            n.node_id,
+            actor=actor,
+            stage=rr.stage,
+            decision=decision,
+            comment=(comment or "").strip()[:300] or None,
+        )
         await self.session.flush()
         nodes = await self.nodes(proc)
         if decision == "reject":
             rr.status, rr.closed_at = "rejected", utcnow()
             self.emit(
-                proc, "review.rejected", n.node_id, actor=actor, stage=rr.stage, return_to=return_to
+                proc,
+                "review.rejected",
+                n.node_id,
+                actor=actor,
+                stage=rr.stage,
+                return_to=return_to,
+                comment=(comment or "")[:300] or None,
             )
             if return_to:
                 await self._send_back(
@@ -632,6 +658,23 @@ class ProcessService:
                 select(Submission).where(Submission.node_uuid == n.uuid).order_by(Submission.round)
             )
         )
+
+    async def submissions_by_uuid(self, uuids: list[UUID]) -> dict[UUID, Submission]:
+        if not uuids:
+            return {}
+        rows = await self.session.scalars(select(Submission).where(Submission.uuid.in_(uuids)))
+        return {x.uuid: x for x in rows}
+
+    async def last_activity(self, process_uuids: list[UUID]) -> dict[UUID, datetime]:
+        """每条流程最近一条事件的时间（流程列表的「更新」）。"""
+        if not process_uuids:
+            return {}
+        rows = await self.session.execute(
+            select(ProcessEvent.process_uuid, func.max(ProcessEvent.created_at))
+            .where(ProcessEvent.process_uuid.in_(process_uuids))
+            .group_by(ProcessEvent.process_uuid)
+        )
+        return {u: t for u, t in rows.all()}
 
     async def reviews(self, n: ProcessNode) -> list[tuple[ReviewRound, list[Vote]]]:
         rounds = list(

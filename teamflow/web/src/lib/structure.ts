@@ -74,7 +74,7 @@ function newId(s: Structure): string {
 
 function freeName(s: Structure): string {
   const names = new Set(Object.values(s.nodes).map((n) => n.name));
-  for (let i = Object.keys(s.nodes).length + 1; ; i++) if (!names.has(`节点 ${i}`)) return `节点 ${i}`;
+  for (let i = Object.keys(s.nodes).length + 1; ; i++) if (!names.has(`步骤 ${i}`)) return `步骤 ${i}`;
 }
 
 function blankNode(s: Structure): NodeSpec {
@@ -181,6 +181,15 @@ export function newRoleKey(s: Structure): string {
 /** 节点在第几步（编排器判断「第一步的节点不能配准入」） */
 export function stepOf(s: Structure, id: string): number {
   return s.flow.findIndex((st) => (st.type === "node" ? st.id === id : st.tracks.some((t) => t.nodes.includes(id))));
+}
+
+/** 节点 → 第几步（从 1 起；同一个并行组里的同号） */
+export function stepNos(s: Structure): Record<string, number> {
+  const out: Record<string, number> = {};
+  s.flow.forEach((st, i) => {
+    for (const n of st.type === "node" ? [st.id] : st.tracks.flatMap((t) => t.nodes)) out[n] = i + 1;
+  });
+  return out;
 }
 
 export function isRoot(s: Structure, id: string): boolean {

@@ -10,16 +10,22 @@ export const LEVEL: Record<Level, { label: string; color: string }> = {
 const RANK: Record<Level, number> = { NONE: 0, READ: 1, WRITE: 2, OWNER: 3 };
 export const atLeast = (lv: Level | null | undefined, min: Level) => RANK[lv ?? "NONE"] >= RANK[min];
 
-/** 节点的七种状态：文字 + 颜色（流程图、标签、进度条共用） */
-export const NODE_STATUS: Record<NodeStatus, { label: string; color: string; bg: string }> = {
-  pending: { label: "待开始", color: "#64748b", bg: "#f1f5f9" },
-  working: { label: "人机协同中", color: "#1d4ed8", bg: "#e0ecff" },
-  exit_review: { label: "待准出", color: "#b45309", bg: "#fef3e2" },
-  exited: { label: "待下游准入", color: "#0f766e", bg: "#ddf7f2" },
-  admit_review: { label: "准入评审中", color: "#7e22ce", bg: "#f5edff" },
-  passed: { label: "已通过", color: "#15803d", bg: "#e3f7e8" },
-  returned: { label: "已打回", color: "#b91c1c", bg: "#fdeaea" },
+/**
+ * 步骤（后端叫节点）的七种状态：文字 + 颜色（流程图、标签、进度条共用）。
+ * hint 是悬停说明：状态名说不全的那半句。
+ */
+export const NODE_STATUS: Record<NodeStatus, { label: string; color: string; bg: string; hint?: string }> = {
+  pending: { label: "未开始", color: "#64748b", bg: "#f1f5f9" },
+  working: { label: "进行中", color: "#1d4ed8", bg: "#e0ecff" },
+  exit_review: { label: "准出评审中", color: "#b45309", bg: "#fef3e2" },
+  exited: { label: "已准出", color: "#0f766e", bg: "#ddf7f2", hint: "等下一步的人确认接收" },
+  admit_review: { label: "准入评审中", color: "#7e22ce", bg: "#f5edff", hint: "下一步的人在审上一步交付的文件" },
+  passed: { label: "已完成", color: "#15803d", bg: "#e3f7e8" },
+  returned: { label: "被退回", color: "#b91c1c", bg: "#fdeaea", hint: "上一步重做后再走准入" },
 };
+
+/** 成员上传资料的默认文件夹（数字员工开工时会收到上传过的文件清单） */
+export const MATERIALS_DIR = "资料";
 
 export const PROCESS_STATUS: Record<ProcessStatus, { label: string; color: string }> = {
   running: { label: "进行中", color: "processing" },

@@ -41,7 +41,7 @@ export default function MePage() {
       <div className="card pad">
         <h2 style={{ marginBottom: 4 }}>通知绑定</h2>
         <div className="xs muted" style={{ marginBottom: 10 }}>
-          要你评审的事、节点开工、被打回，除了站内通知也推到这里；团队管理员在团队设置里打开了对应渠道才会推
+          要你评审的事、轮到你的步骤、被退回，除了站内通知也推到这里（团队打开了对应渠道才会推）
         </div>
         {CHANNELS.map((c) => (
           <div key={c.key} className="row" style={{ padding: "8px 0", borderBottom: "1px solid var(--tf-line-soft)" }}>

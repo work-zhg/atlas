@@ -54,6 +54,8 @@ async def test_start_opens_space_and_waits_for_begin() -> None:
     assert (
         await w.as_("zhou").post(f"/api/v1/processes/{proc['id']}/nodes/prd/begin")
     ).status_code == 409
+    # 开始前上传的资料会写进开工说明
+    await _upload(w, "zhou", proc["id"], "资料/现状.md")
     n = ok(await w.as_("zhou").post(f"/api/v1/processes/{proc['id']}/nodes/clarify/begin"))
     assert (n["status"], n["round"]) == ("working", 1)
     await w.settle()
@@ -64,6 +66,13 @@ async def test_start_opens_space_and_waits_for_begin() -> None:
     assert thread["owner"] == str(w.ids["zhou"])  # 会话归发起人
     kickoff = w.atlas.texts(session["thread_id"])[0]
     assert "做好需求澄清" in kickoff and "「需求澄清/」" in kickoff
+    assert "支付回调幂等" in kickoff and "- 资料/现状.md" in kickoff and "中文" in kickoff
+    # 流程列表：各节点现在谁负责（执行人、数字员工）、最近更新
+    rows = ok(await w.as_("zhou").get(f"/api/v1/projects/{env['project']['id']}/processes"))
+    clarify = next(x for x in rows[0]["nodes"] if x["id"] == "clarify")
+    assert clarify["executors"] == [str(w.ids["zhou"])]
+    assert clarify["atlas_agent_id"] == env["agents"]["pm"]["atlas_agent_id"]
+    assert rows[0]["updated_at"]
     # 发起时给流程里的人授了数字员工的使用权
     pm_agent = env["agents"]["pm"]["atlas_agent_id"]
     assert str(w.ids["chen"]) in w.atlas.users_with_use(pm_agent)
@@ -156,6 +165,10 @@ async def test_review_admission_and_return_upstream() -> None:
     assert len(texts) == 2 and "导出分页上限没区分租户" in texts[1]
     events = [e["type"] for e in ok(await zhou.get(f"/api/v1/processes/{pid}/events"))]
     assert "node.returned" in events
+    # 评审记录带审的文件：准入审的是上游的提交
+    cases = ok(await zhou.get(f"/api/v1/processes/{pid}/nodes/cases"))
+    assert [(r["stage"], r["files"]) for r in cases["reviews"]] == [("admit", ["PRD/PRD.md"])]
+    assert cases["reviews"][0]["votes"][0]["comment"] == "导出分页上限没区分租户"
 
 
 async def test_exit_reject_is_next_round_in_same_session() -> None:

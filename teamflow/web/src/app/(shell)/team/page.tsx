@@ -52,16 +52,13 @@ export default function TeamPage() {
           <div>加人、改权限、接入数字员工只有团队管理员能做；你在这个团队是{LEVEL[team.my_level ?? "NONE"].label}成员</div>
         </div>
       )}
-      <h2 style={{ marginBottom: 4 }}>数字员工</h2>
-      <div className="sm muted" style={{ marginBottom: 10 }}>
-        产出物的格式写在数字员工的技能里；要统一格式，就在 Agent 平台里给它装对应的技能
-      </div>
+      <h2 style={{ marginBottom: 10 }}>数字员工</h2>
       {agents.error ? (
         <LoadError error={agents.error} />
       ) : agents.data && !agents.data.length ? (
         <div className="card">
           <Empty icon="bot" title="还没接入数字员工">
-            {adm ? "点右上角「接入数字员工」，从 Agent 平台里你是 Owner 的数字员工中选" : "等团队管理员接入"}
+            {adm ? "点右上角「接入数字员工」，从你在 Atlas 里建的数字员工中选" : "等团队管理员接入"}
           </Empty>
         </div>
       ) : (
@@ -73,7 +70,7 @@ export default function TeamPage() {
       )}
       <div className="sec">
         <h2>
-          成员<span className="xs faint" style={{ fontWeight: 500 }}>团队权限存在用户中心的团队数据权限里</span>
+          成员
         </h2>
         {members.error ? (
           <LoadError error={members.error} />
@@ -83,7 +80,7 @@ export default function TeamPage() {
           <Members team={team} grants={members.data.grants} people={members.data.members} admin={adm} />
         )}
         <div className="xs faint" style={{ marginTop: 8 }}>
-          读写：发起流程，按项目配置的角色执行、评审 · 只读：看流程、流程空间和追溯 · 团队管理员：另外能配置团队、流程模板、项目
+          读写：发起流程、在项目里担任角色 · 只读：只能看 · 团队管理员：另外能配置团队、流程模板、项目
         </div>
       </div>
       {adding === "member" && <AddMembers team={team} onClose={() => setAdding(null)} />}
@@ -110,7 +107,6 @@ function AgentCardView({ team, agent: a, admin }: { team: Team; agent: TeamAgent
         <Avatar name={a.name} size={38} bot />
         <div className="grow">
           <b>{a.name}</b>
-          <div className="xs faint">{[a.kind === "cli" ? "CLI 智能体" : "原生智能体", a.model].filter(Boolean).join(" · ")}</div>
         </div>
         {!a.available ? <Tag color="red">不可用</Tag> : a.stats.working ? <Tag color="blue">干活中 {a.stats.working}</Tag> : <Tag>空闲</Tag>}
       </div>
@@ -127,7 +123,7 @@ function AgentCardView({ team, agent: a, admin }: { team: Team; agent: TeamAgent
       {a.description && <div className="xs muted" style={{ marginTop: 8 }}>{a.description}</div>}
       <div className="row xs muted" style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--tf-line-soft)", whiteSpace: "nowrap" }}>
         <span>
-          通过 <b style={{ color: "var(--fg)" }}>{a.stats.passed}</b> 个节点
+          完成 <b style={{ color: "var(--fg)" }}>{a.stats.passed}</b> 步
         </span>
         {a.stats.avg_rounds != null && (
           <span>
@@ -138,7 +134,7 @@ function AgentCardView({ team, agent: a, admin }: { team: Team; agent: TeamAgent
         {admin && (
           <>
             <a href={`${ATLAS_UI_BASE}/agents/${a.atlas_agent_id}`} target="_blank" rel="noreferrer">
-              在 Agent 平台里编辑
+              去 Atlas 编辑
             </a>
             <Popconfirm title={`从团队移除「${a.name}」？`} description="项目配置里用它的角色要换一个" onConfirm={() => void remove()}>
               <a style={{ color: "var(--danger)" }}>移除</a>
@@ -283,7 +279,7 @@ function AddMembers({ team, onClose }: { team: Team; onClose: () => void }) {
             options={(["WRITE", "READ", "OWNER"] as Level[]).map((l) => ({ value: l, label: LEVEL[l].label }))}
           />
         </div>
-        <div className="xs faint">权限写进用户中心的团队数据权限；只读的人不能在项目里担任角色</div>
+        <div className="xs faint">只读的人不能在项目里担任角色</div>
       </div>
     </Modal>
   );
@@ -307,7 +303,7 @@ function AddAgent({ team, onClose }: { team: Team; onClose: () => void }) {
   return (
     <Modal open title={`接入数字员工 · ${team.name}`} onCancel={onClose} footer={<Button onClick={onClose}>完成</Button>} width={600}>
       <div className="sm muted" style={{ marginBottom: 10 }}>
-        从 Agent 平台里选以数字员工为权限、你是 Owner 的智能体。TeamFlow 只引用：技能、知识库、模型在 Agent 平台里配
+        从你在 Atlas 里建的数字员工中选。它会什么（技能、知识库、模型）在 Atlas 里配
       </div>
       <Input.Search placeholder="搜智能体" allowClear onSearch={setQ} style={{ marginBottom: 10 }} />
       {cand.isPending ? (
@@ -315,7 +311,7 @@ function AddAgent({ team, onClose }: { team: Team; onClose: () => void }) {
       ) : cand.error ? (
         <LoadError error={cand.error} />
       ) : !cand.data?.length ? (
-        <div className="sm muted">没有可接入的：先在 Agent 平台建一个以数字员工为权限的智能体</div>
+        <div className="sm muted">没有可接入的：先在 Atlas 里建一个数字员工</div>
       ) : (
         <div className="col" style={{ gap: 8, maxHeight: 380, overflowY: "auto" }}>
           {cand.data.map((c) => (

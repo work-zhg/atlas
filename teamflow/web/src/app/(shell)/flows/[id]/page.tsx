@@ -1,250 +1,315 @@
 "use client";
 
 /**
- * 流程详情：流程图（状态、轮次、执行的数字员工、准入准出由谁审）、产出物、最近事件、角色分配。
+ * 流程 · 概览：先回答「现在怎样、要我做什么」（现在卡片 / 开始引导），再是流程图、各步骤交付的文件、
+ * 最近的里程碑、参与的人。
  *
- * ★ 发起后节点都待开始：首节点的执行人把资料传进流程空间后点「开始」，数字员工才开工。
+ * ★ 发起后各步骤都未开始：第一步的负责人先把资料传进来，再点「开始第一步」，数字员工才动手。
  */
 import { useQueryClient } from "@tanstack/react-query";
-import { App, Button, Dropdown, Input, Modal } from "antd";
+import { App, Button, Upload } from "antd";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useState } from "react";
 
-import { FlowGraph, Legend, type NodeState } from "@/components/FlowGraph";
-import { AgentChip, Crumb, FileChip, Icon, LoadError, Loading, Page, PageHead, ProcessStatusTag, Who } from "@/components/ui";
+import { FlowGraph, type NodeState } from "@/components/FlowGraph";
+import { FlowHeader } from "@/components/FlowHeader";
+import { AgentChip, FileChip, Icon, LoadError, Loading, Page, StepNo, Who } from "@/components/ui";
 import { api, errorText } from "@/lib/api";
 import { describe } from "@/lib/events";
-import { ago, dt } from "@/lib/format";
-import { useFlow } from "@/lib/flow";
-import { useProject } from "@/lib/queries";
-import { isRoot, nodeIds } from "@/lib/structure";
+import { ago, MATERIALS_DIR, NODE_STATUS, STAGE } from "@/lib/format";
+import { useFlow, useUpload } from "@/lib/flow";
+import { useSpace, useTodos } from "@/lib/queries";
+import { isRoot, nodeIds, stepNos, upstreams } from "@/lib/structure";
 import { useCan } from "@/lib/team";
+import type { ProcessDetail, ProcessNode } from "@/lib/types";
 
-export default function FlowDetail() {
+/** 进行中的步骤（不算未开始、已完成） */
+const ACTIVE = new Set(["working", "exit_review", "admit_review", "exited", "returned"]);
+
+export default function FlowOverview() {
   const { id } = useParams<{ id: string }>();
-  const router = useRouter();
-  const { message } = App.useApp();
-  const qc = useQueryClient();
-  const { proc, events, agents, nameOf, agentName, nodeName, version } = useFlow(id);
-  const project = useProject(proc.data?.project_id);
+  const flow = useFlow(id);
+  const { proc, events, nameOf, agentOf, nodeName, version } = flow;
+  const todos = useTodos();
   const can = useCan();
-  const [terminating, setTerminating] = useState(false);
-  const [reason, setReason] = useState("");
 
   if (proc.error) return <LoadError error={proc.error} onRetry={() => void proc.refetch()} />;
   if (!proc.data) return <Loading />;
   const p = proc.data;
   const s = p.structure;
+  const no = stepNos(s);
   const byId = Object.fromEntries(p.nodes.map((n) => [n.id, n]));
+  const people = (n: ProcessNode) => n.executors.map((u) => ({ id: u, name: nameOf(u) }));
   const states: Record<string, NodeState> = Object.fromEntries(
-    p.nodes.map((n) => [n.id, { status: n.status, round: n.round, agent: agentName(n.atlas_agent_id) }]),
+    p.nodes.map((n) => [n.id, { status: n.status, round: n.round, agent: agentOf(n), people: people(n) }]),
   );
-  const binding = project.data?.bindings.find((b) => b.template.id === p.template_id);
-  /** 角色当前分配的数字员工（项目配置里存的是团队接入的数字员工 id） */
-  const agentOfRole = (role: string) => {
-    const a = binding?.assignments[role]?.agent;
-    return a ? agents.data?.find((x) => x.id === a)?.name : undefined;
-  };
-  const roots = nodeIds(s).filter((n) => isRoot(s, n));
-  const waitingRoots = roots.filter((n) => byId[n]?.status === "pending");
-  const subs = nodeIds(s).filter((n) => byId[n]?.latest_submission);
+  const delivered = nodeIds(s).filter((n) => byId[n]?.latest_submission);
+  const recent = (events.data ?? [])
+    .map((e) => ({ e, m: describe(e, nameOf, nodeName) }))
+    .filter((x) => x.m)
+    .slice(-6)
+    .reverse();
+
+  return (
+    <Page>
+      <FlowHeader process={p} tab="overview" version={version} nameOf={nameOf} />
+
+      <Now process={p} mine={(todos.data ?? []).filter((t) => t.process_id === p.id)} flow={flow} />
+
+      <div className="card" style={{ marginTop: 14 }}>
+        <FlowGraph structure={s} states={states} href={(nid) => `/flows/${p.id}/n/${nid}`} />
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 14, marginTop: 14 }}>
+        <div className="card pad">
+          <div className="row" style={{ marginBottom: 6 }}>
+            <h2>交付文件</h2>
+            <span className="sp" />
+            <Link className="sm" href={`/flows/${p.id}/space`}>
+              全部文件
+            </Link>
+          </div>
+          {delivered.length ? (
+            delivered.map((n) => {
+              const node = byId[n]!;
+              const sub = node.latest_submission!;
+              return (
+                <div key={n} className="ev" style={{ alignItems: "flex-start", padding: "7px 0", borderBottom: "1px solid var(--tf-line-soft)" }}>
+                  <StepNo n={no[n]} status={node.status} />
+                  <div className="grow">
+                    <b className="sm">{node.name}</b>
+                    <div>
+                      {sub.paths.map((x) => (
+                        <FileChip key={x} processId={p.id} path={x} />
+                      ))}
+                    </div>
+                  </div>
+                  <span className="xs faint" style={{ whiteSpace: "nowrap", marginTop: 2 }}>
+                    第 {sub.round} 轮 · {NODE_STATUS[node.status].label}
+                  </span>
+                </div>
+              );
+            })
+          ) : (
+            <div className="sm muted">还没有步骤交付过文件</div>
+          )}
+        </div>
+        <div className="card pad">
+          <div className="row" style={{ marginBottom: 6 }}>
+            <h2>最近</h2>
+            <span className="sp" />
+            <Link className="sm" href={`/flows/${p.id}/trace`}>
+              全部记录
+            </Link>
+          </div>
+          {recent.map(({ e, m }) => (
+            <div key={e.seq} className="ev">
+              <span className="t">{ago(e.at)}</span>
+              <span className="sm">
+                {e.node_id && <b>{nodeName(e.node_id)} · </b>}
+                {m!.text}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="card pad" style={{ marginTop: 14 }}>
+        <div className="row" style={{ flexWrap: "wrap", gap: "6px 18px" }}>
+          <b className="sm">参与的人</b>
+          {Object.entries(s.roles).map(([rk, rn]) => {
+            const agent = agentOf({ atlas_agent_id: null, exec_role: rk });
+            return (
+              <span key={rk} className="row sm" style={{ gap: 6 }}>
+                <span className="muted">{rn}</span>
+                {(p.roles[rk] ?? []).map((u) => (
+                  <Who key={u} id={u} name={nameOf(u)} size={18} />
+                ))}
+                {!(p.roles[rk] ?? []).length && <span className="faint">没配人</span>}
+                {agent && <AgentChip name={agent} size={18} />}
+              </span>
+            );
+          })}
+          <span className="sp" />
+          {can.configFlow && (
+            <Link className="sm" href={`/projects/${p.project_id}/config`}>
+              去项目配置
+            </Link>
+          )}
+        </div>
+      </div>
+    </Page>
+  );
+}
+
+type Flow = ReturnType<typeof useFlow>;
+
+/** 现在卡片：轮到我的事排最前；还没开始的给开始引导；其余说清哪一步在进行、谁在处理 */
+function Now({ process: p, mine, flow }: { process: ProcessDetail; mine: { kind: "admit" | "exit"; node_id: string; since: string }[]; flow: Flow }) {
+  const { nameOf, agentOf } = flow;
+  const s = p.structure;
+  const no = stepNos(s);
+  const byId = Object.fromEntries(p.nodes.map((n) => [n.id, n]));
+  const go = (nid: string) => `/flows/${p.id}/n/${nid}`;
+
+  if (p.status !== "running") {
+    const done = p.status === "completed";
+    return (
+      <div className={`now ${done ? "done" : "off"}`}>
+        <Icon name={done ? "check" : "stop"} size={18} />
+        <div className="grow">
+          <b>{done ? "流程完成了" : "流程已终止"}</b>
+          <div className="sm muted">文件和记录都保留，只能看不能改</div>
+        </div>
+      </div>
+    );
+  }
+
+  const cards = [];
+  for (const t of mine) {
+    const n = byId[t.node_id];
+    if (!n) continue;
+    const ups = (upstreams(s)[n.id] ?? []).map((u) => byId[u]).filter(Boolean);
+    const subs = t.kind === "exit" ? [n.latest_submission] : ups.map((u) => u!.latest_submission);
+    const files = subs.flatMap((x) => x?.paths ?? []);
+    const by = subs.find((x) => x)?.submitted_by;
+    cards.push(
+      <div key={`todo-${t.node_id}-${t.kind}`} className="now todo">
+        <Icon name="shield" size={18} />
+        <div className="grow">
+          <b>
+            等你{STAGE[t.kind]}评审 ·「{n.name}」{t.kind === "exit" ? `第 ${n.round} 轮` : ""}
+          </b>
+          <div className="sm muted row" style={{ flexWrap: "wrap", gap: 4 }}>
+            {by && <span>{nameOf(by)} 提交了</span>}
+            {files.map((f) => (
+              <FileChip key={f} processId={p.id} path={f} />
+            ))}
+            <span>· {ago(t.since)}</span>
+          </div>
+        </div>
+        <Link href={go(n.id)}>
+          <Button type="primary">去评审</Button>
+        </Link>
+      </div>,
+    );
+  }
+
+  const roots = nodeIds(s).filter((n) => isRoot(s, n) && byId[n]?.status === "pending");
+  if (roots.length) return <>{cards}<StartGuide process={p} roots={roots.map((n) => byId[n]!)} flow={flow} /></>;
+
+  for (const n of p.nodes.filter((x) => ACTIVE.has(x.status))) {
+    if (mine.some((t) => t.node_id === n.id)) continue;
+    const agent = agentOf(n);
+    const who = [n.executors.map(nameOf).join("、"), agent].filter(Boolean).join(" + ");
+    const myTurn = n.i_am_executor && n.status === "working";
+    const line = (() => {
+      if (n.status === "working") return n.session.state === "taken_over" ? `${nameOf(n.session.taken_by)} 暂停了数字员工，正在自己改` : `${who} 正在做`;
+      if (n.status === "exit_review" || n.status === "admit_review")
+        return `等 ${(n.open_review?.reviewers ?? []).map(nameOf).join("、") || "评审人"} 评审`;
+      if (n.status === "exited") return "已准出，等下一步的人确认接收";
+      return "被下一步退回，等上一步重做";
+    })();
+    cards.push(
+      <div key={n.id} className={`now ${myTurn ? "todo" : ""}`}>
+        <StepNo n={no[n.id]} status={n.status} />
+        <div className="grow">
+          <b>
+            {myTurn ? `轮到你：「${n.name}」` : `「${n.name}」${NODE_STATUS[n.status].label}`}
+            {n.round > 1 ? ` · 第 ${n.round} 轮` : ""}
+          </b>
+          <div className="sm muted">{myTurn ? `和${agent ?? "数字员工"}一起做，做完提交评审` : line}</div>
+        </div>
+        <Link href={go(n.id)}>
+          <Button type={myTurn ? "primary" : "default"}>{myTurn ? "去处理" : "查看"}</Button>
+        </Link>
+      </div>,
+    );
+  }
+  return <>{cards}</>;
+}
+
+/** 刚发起的流程：① 传资料（放进「资料」文件夹）② 开始第一步。不是第一步负责人的看到「等谁开始」 */
+function StartGuide({ process: p, roots, flow }: { process: ProcessDetail; roots: ProcessNode[]; flow: Flow }) {
+  const { message } = App.useApp();
+  const qc = useQueryClient();
+  const router = useRouter();
+  const { nameOf, agentOf } = flow;
+  const upload = useUpload(p.id);
+  const materials = useSpace(p.id, MATERIALS_DIR);
+  const files = (materials.data?.entries ?? []).filter((e) => !e.is_dir);
+  const [busy, setBusy] = useState<string>();
+  const mineRoots = roots.filter((n) => n.i_am_executor);
 
   const begin = async (nid: string) => {
+    setBusy(nid);
     try {
       await api.post(`/processes/${p.id}/nodes/${nid}/begin`);
       await qc.invalidateQueries({ queryKey: ["process", p.id] });
       router.push(`/flows/${p.id}/n/${nid}`);
     } catch (e) {
       message.error(errorText(e));
+      setBusy(undefined);
     }
   };
-  const terminate = async () => {
-    try {
-      await api.post(`/processes/${p.id}/terminate`, { reason: reason.trim() || null });
-      await qc.invalidateQueries({ queryKey: ["process", p.id] });
-      setTerminating(false);
-    } catch (e) {
-      message.error(errorText(e));
-    }
-  };
+
+  if (!mineRoots.length)
+    return (
+      <div className="now">
+        <Icon name="clock" size={18} />
+        <div className="grow">
+          <b>还没开始</b>
+          <div className="sm muted">
+            等 {[...new Set(roots.flatMap((n) => n.executors))].map(nameOf).join("、") || "第一步的负责人"} 上传资料、开始第一步
+            {p.can_run && "；你也可以先把手上的资料传到「文件」里"}
+          </div>
+        </div>
+      </div>
+    );
 
   return (
-    <Page>
-      <Crumb
-        items={[
-          [project.data?.name ?? "项目", `/projects/${p.project_id}`],
-          ["流程", `/projects/${p.project_id}`],
-          [p.code, undefined],
-        ]}
-      />
-      <PageHead
-        title={
-          <>
-            {p.title} <ProcessStatusTag status={p.status} />
-          </>
-        }
-        sub={
-          <>
-            <span>
-              {binding?.template.name ?? "流程模板"} <b style={{ color: "var(--fg-2)" }}>{version ? `v${version}` : ""}</b>
-            </span>
-            <span className="lock" title="模板之后发布的新版本不影响这条流程">
-              <Icon name="lock" size={12} />
-              发起时锁定
-            </span>
-            <span>·</span>
-            <Link className="lock" href={`/flows/${p.id}/space`} title="向 Agent 平台申请的流程空间：这条流程所有节点的数字员工会话都挂载它">
-              <Icon name="folder" size={12} />
-              流程空间
-            </Link>
-            <span>·</span>
-            <Who id={p.started_by} name={nameOf(p.started_by)} size={16} /> {dt(p.started_at)} 发起
-          </>
-        }
-        extra={
-          <>
-            <Button icon={<Icon name="folder" size={14} />} onClick={() => router.push(`/flows/${p.id}/space`)}>
-              流程空间
-            </Button>
-            <Button icon={<Icon name="clock" size={14} />} onClick={() => router.push(`/flows/${p.id}/trace`)}>
-              追溯
-            </Button>
-            {p.can_terminate && (
-              <Dropdown
-                trigger={["click"]}
-                menu={{ items: [{ key: "t", danger: true, label: "终止流程" }], onClick: () => setTerminating(true) }}
-              >
-                <Button icon={<Icon name="more" size={14} />} />
-              </Dropdown>
-            )}
-          </>
-        }
-      />
-
-      {p.status === "running" && waitingRoots.length > 0 && (
-        <div className="banner info" style={{ marginBottom: 14 }}>
-          <Icon name="play" size={15} />
+    <div className="guide">
+      <b style={{ fontSize: 15 }}>开始第一步{roots.length === 1 ? `「${roots[0]!.name}」` : ""}</b>
+      <div className="gstep">
+        <StepNo n={1} />
+        <div className="grow">
+          <b>上传参考资料</b>
+          <span className="sm muted">　需求文档、现状说明、截图都行，数字员工会先读这些；没有也可以直接开始</span>
+          <Upload.Dragger
+            multiple
+            showUploadList={false}
+            style={{ marginTop: 8, background: "var(--bg-1)" }}
+            customRequest={({ file, onSuccess }) => void upload(file as File, MATERIALS_DIR).then(() => onSuccess?.({}))}
+          >
+            <div className="sm muted" style={{ padding: "4px 0" }}>
+              把文件拖到这里，或 <a>选择文件</a>
+              <div className="xs faint">单个文件不超过 50 MB</div>
+            </div>
+          </Upload.Dragger>
+          {!!files.length && (
+            <div style={{ marginTop: 6 }}>
+              {files.map((f) => (
+                <FileChip key={f.path} processId={p.id} path={f.path} />
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      {mineRoots.map((n) => (
+        <div key={n.id} className="gstep">
+          <StepNo n={2} />
           <div className="grow">
-            <b>待开始</b>：先把参考资料上传到 <Link href={`/flows/${p.id}/space`}>流程空间</Link>，再点「开始」：数字员工收到工作说明后开工
-            {waitingRoots.map((n) => {
-              const node = byId[n]!;
-              return (
-                <div key={n} className="row" style={{ marginTop: 8 }}>
-                  <b className="sm">{node.name}</b>
-                  <span className="xs muted">执行：{node.executors.map(nameOf).join("、") || "—"}</span>
-                  <span className="sp" />
-                  {node.i_am_executor ? (
-                    <Button size="small" type="primary" onClick={() => void begin(n)}>
-                      开始
-                    </Button>
-                  ) : (
-                    <span className="xs faint">等执行人开始</span>
-                  )}
-                </div>
-              );
-            })}
+            <b>开始「{n.name}」</b>
+            <div className="sm muted">
+              {agentOf(n) ?? "数字员工"}会按工作说明开始做；有不清楚的地方会在对话里问你
+            </div>
           </div>
+          <Button type="primary" loading={busy === n.id} onClick={() => void begin(n.id)}>
+            开始第一步
+          </Button>
         </div>
-      )}
-
-      <div className="card">
-        <FlowGraph structure={s} states={states} href={(nid) => `/flows/${p.id}/n/${nid}`} />
-        <Legend />
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) minmax(0,1fr)", gap: 16, marginTop: 16 }}>
-        <div className="card pad">
-          <div className="row" style={{ marginBottom: 8 }}>
-            <h2>产出物</h2>
-            <span className="xs faint">各节点提交评审时从流程空间选的文件</span>
-            <span className="sp" />
-            <Link className="sm" href={`/flows/${p.id}/space`}>
-              打开流程空间
-            </Link>
-          </div>
-          {subs.length ? (
-            subs.map((n) => {
-              const sub = byId[n]!.latest_submission!;
-              return (
-                <div key={n} className="row" style={{ padding: "6px 0", borderBottom: "1px solid var(--tf-line-soft)", alignItems: "flex-start" }}>
-                  <b className="sm" style={{ width: 84, flex: "none", marginTop: 5 }}>
-                    {byId[n]!.name}
-                  </b>
-                  <span className="grow">
-                    {sub.paths.map((x) => (
-                      <FileChip key={x} path={x} />
-                    ))}
-                  </span>
-                  <span className="xs faint" style={{ marginTop: 6, whiteSpace: "nowrap" }}>
-                    第 {sub.round} 轮提交
-                  </span>
-                </div>
-              );
-            })
-          ) : (
-            <div className="sm muted">还没有节点提交过产出物</div>
-          )}
-        </div>
-        <div className="card pad">
-          <div className="row" style={{ marginBottom: 8 }}>
-            <h2>最近</h2>
-            <span className="sp" />
-            <Link className="sm" href={`/flows/${p.id}/trace`}>
-              完整追溯
-            </Link>
-          </div>
-          {(events.data ?? [])
-            .slice(-6)
-            .reverse()
-            .map((e) => (
-              <div key={e.seq} className="row" style={{ padding: "5px 0", alignItems: "flex-start" }}>
-                <span className="xs faint" style={{ width: 76, flex: "none" }}>
-                  {ago(e.at)}
-                </span>
-                <span className="sm">{describe(e, nameOf, nodeName).text}</span>
-              </div>
-            ))}
-        </div>
-      </div>
-
-      <div className="card pad" style={{ marginTop: 16 }}>
-        <div className="row" style={{ marginBottom: 6 }}>
-          <h2>角色分配</h2>
-          <span className="xs faint">来自项目配置；改分配只影响还没开工的节点，已开工节点的数字员工已锁定</span>
-          <span className="sp" />
-          {can.configFlow && (
-            <Link className="sm" href={`/projects/${p.project_id}/config`}>
-              去项目配置改
-            </Link>
-          )}
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", columnGap: 24 }}>
-          {Object.entries(s.roles).map(([rk, rn]) => {
-            const agent = agentOfRole(rk);
-            return (
-              <div key={rk} className="row" style={{ padding: "7px 0", borderBottom: "1px solid var(--tf-line-soft)" }}>
-                <b className="sm" style={{ width: 84 }}>
-                  {rn}
-                </b>
-                <span className="grow row" style={{ flexWrap: "wrap" }}>
-                  {(p.roles[rk] ?? []).map((u) => (
-                    <Who key={u} id={u} name={nameOf(u)} size={18} />
-                  ))}
-                </span>
-                {agent && <AgentChip name={agent} size={18} />}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      <Modal open={terminating} title="终止流程" onCancel={() => setTerminating(false)} onOk={() => void terminate()} okText="终止" okButtonProps={{ danger: true }}>
-        <div className="sm muted" style={{ marginBottom: 8 }}>
-          进行中的数字员工会话停下，未完成的评审取消；流程空间转只读保留
-        </div>
-        <Input.TextArea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="原因（可选）" maxLength={200} autoSize={{ minRows: 2 }} />
-      </Modal>
-    </Page>
+      ))}
+    </div>
   );
 }

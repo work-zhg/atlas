@@ -50,7 +50,7 @@ export default function TemplatesPage() {
     <Page>
       <PageHead
         title="流程模板"
-        sub={`${team.name} 的流程模板：项目绑定后才能发起。节点交什么由执行人提交评审时从流程空间选，格式由数字员工的技能约定`}
+        sub={`${team.name} 的流程模板：发布后在项目里配好人，就能发起`}
         extra={
           <>
             <Button icon={<Icon name="grid" size={14} />} onClick={() => router.push("/market")}>
@@ -91,7 +91,7 @@ export default function TemplatesPage() {
       )}
       <Modal open={creating} title="空白新建流程模板" onCancel={() => setCreating(false)} onOk={() => void create()} okText="新建" okButtonProps={{ disabled: !name.trim() }}>
         <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={64} placeholder="模板名称，团队内唯一" />
-        <div className="xs faint" style={{ marginTop: 6 }}>从一个节点开始编排；发布后才能被项目绑定</div>
+        <div className="xs faint" style={{ marginTop: 6 }}>从一步开始编排；发布后才能在项目里用</div>
       </Modal>
     </Page>
   );

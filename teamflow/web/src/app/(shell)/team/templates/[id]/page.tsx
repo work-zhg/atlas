@@ -46,8 +46,8 @@ export default function TeamTemplateEditor() {
       nextVersion={tpl.latest_version_no + 1}
       save={save}
       publish={publish}
-      roleHint="角色只是占位：在项目配置里给每个角色分配成员和数字员工"
-      publishHint="发布后：新发起的流程用这一版；进行中的流程仍锁在各自发起时的版本。绑定了这个模板的项目跟着用新版本，新版本多了角色时要在项目配置里补上"
+      roleHint="角色只是占位：在项目配置里给每个角色配人和数字员工"
+      publishHint="发布后，新发起的流程用这一版；已发起的流程不受影响。新版本多了角色的话，要在项目配置里配上人"
       tags={
         <>
           {tpl.latest_version_no > 0 && <Tag>v{tpl.latest_version_no} 已发布</Tag>}

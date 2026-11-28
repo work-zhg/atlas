@@ -212,8 +212,11 @@ export interface Process {
 }
 
 export interface ProcessRow extends Process {
-  nodes: { id: string; name: string; status: NodeStatus; round: number }[];
+  /** executors、atlas_agent_id：这一步现在谁负责（数字员工开工后是锁定的那个，之前是角色当前分配的） */
+  nodes: { id: string; name: string; status: NodeStatus; round: number; executors: string[]; atlas_agent_id: string | null }[];
   waiting_for_me: boolean;
+  /** 最近一条事件的时间 */
+  updated_at: string | null;
 }
 
 export interface Submission {
@@ -276,6 +279,8 @@ export interface Review {
   rule: Rule;
   reviewers: string[];
   submissions: string[];
+  /** 这一轮审的文件（准出是本步骤的提交，准入是上一步的提交） */
+  files: string[];
   status: "open" | "approved" | "rejected" | "cancelled";
   opened_at: string;
   closed_at: string | null;

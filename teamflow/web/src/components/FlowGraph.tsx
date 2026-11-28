@@ -1,23 +1,26 @@
 "use client";
 
 /**
- * 流程图：步骤从左到右，并行组内的轨道上下排列；节点卡上是名字、轮次、状态、执行、准入 / 准出由谁审。
+ * 流程图：步骤从左到右，同时进行的步骤上下排列；卡片上是序号、名字、轮次、状态、谁负责。
+ * 模板（编排器、市场）还标出准入 / 准出由哪些角色审。
  *
- * ★ 只按结构画（依赖由结构推出来，不画连线）。流程详情传节点状态，编排器传选中的节点。
+ * ★ 只按结构画（依赖由结构推出来，不画连线）。流程页传各步骤的状态，编排器传选中的步骤。
  */
 import Link from "next/link";
 import type { ReactNode } from "react";
 
 import { NODE_STATUS, RULE } from "@/lib/format";
-import { roleNames } from "@/lib/structure";
+import { roleNames, stepNos } from "@/lib/structure";
 import type { NodeStatus, Structure } from "@/lib/types";
 
-import { Avatar, Icon, NodeStatusTag } from "./ui";
+import { Avatar, Icon, NodeStatusTag, StepNo } from "./ui";
 
 export interface NodeState {
   status: NodeStatus;
   round: number;
   agent?: string | null;
+  /** 负责的人 */
+  people?: { id: string; name: string }[];
 }
 
 interface Props {
@@ -41,6 +44,7 @@ interface Props {
 
 export function FlowGraph(p: Props) {
   const s = p.structure;
+  const no = stepNos(s);
   const box = (id: string) => {
     const n = s.nodes[id];
     if (!n) return null;
@@ -49,37 +53,48 @@ export function FlowGraph(p: Props) {
     const body = (
       <>
         <div className="nm">
+          <StepNo n={no[id]} status={st?.status} />
           <span className="grow ellipsis">{n.name || "（未命名）"}</span>
           {st && st.round > 1 && <span className="rtag">第 {st.round} 轮</span>}
         </div>
-        {st && (
-          <div style={{ marginTop: 6 }}>
-            <NodeStatusTag status={st.status} />
-          </div>
-        )}
-        <div className="whoexec">
-          {st?.agent ? (
-            <>
-              <Avatar name={st.agent} size={16} bot />
-              <span className="ellipsis">{st.agent}</span>
-            </>
-          ) : (
-            <>
+        {st ? (
+          <>
+            <div style={{ marginTop: 6 }}>
+              <NodeStatusTag status={st.status} />
+            </div>
+            <div className="whoexec">
+              {st.agent && (
+                <span className="who ellipsis" title={`数字员工：${st.agent}`}>
+                  <Avatar name={st.agent} size={16} bot />
+                  <span className="ellipsis">{st.agent}</span>
+                </span>
+              )}
+              {(st.people ?? []).map((u) => (
+                <span key={u.id} title={u.name}>
+                  <Avatar id={u.id} name={u.name} size={16} />
+                </span>
+              ))}
+              {!st.agent && !st.people?.length && <span className="faint">还没配人</span>}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="whoexec">
               <Icon name="bot" size={13} />
-              <span className="ellipsis">执行：{s.roles[n.exec_role] ?? (n.exec_role || "未选")}</span>
-            </>
-          )}
-        </div>
-        <div className="rv">
-          {n.admit && (
-            <span className="rtag admit" title="准入评审：开工前审核上游提交的产出物">
-              准入 {roleNames(s, n.admit.roles) || "—"}
-            </span>
-          )}
-          <span className="rtag exit" title={`准出评审，${RULE[n.exit?.rule ?? "any"]}`}>
-            准出 {roleNames(s, n.exit?.roles) || "—"}
-          </span>
-        </div>
+              <span className="ellipsis">{s.roles[n.exec_role] ?? (n.exec_role || "还没选")} 做</span>
+            </div>
+            <div className="rv">
+              {n.admit && (
+                <span className="rtag admit" title="准入评审：开始前审上一步交付的文件">
+                  准入 {roleNames(s, n.admit.roles) || "—"}
+                </span>
+              )}
+              <span className="rtag exit" title={`准出评审：交付前审这一步的文件，${RULE[n.exit?.rule ?? "any"]}`}>
+                准出 {roleNames(s, n.exit?.roles) || "—"}
+              </span>
+            </div>
+          </>
+        )}
       </>
     );
     const cls = `fnode ${p.selected === id ? "on" : ""} ${p.bad?.has(id) ? "bad" : ""}`;
@@ -108,7 +123,7 @@ export function FlowGraph(p: Props) {
               box(step.id)
             ) : (
               <div className="par">
-                <span className="plabel">并行</span>
+                <span className="plabel">同时进行</span>
                 {step.tracks.map((t, ti) => (
                   <div key={ti} className="track">
                     {t.nodes.map((id, j) => (
@@ -128,22 +143,6 @@ export function FlowGraph(p: Props) {
           {p.renderAfterStep?.(i)}
         </span>
       ))}
-    </div>
-  );
-}
-
-export function Legend({ extra }: { extra?: ReactNode }) {
-  return (
-    <div className="legend">
-      {(Object.keys(NODE_STATUS) as NodeStatus[]).map((k) => (
-        <NodeStatusTag key={k} status={k} />
-      ))}
-      <span className="sp" />
-      {extra}
-      <span className="rtag admit">准入</span>
-      <span>开工前审上游</span>
-      <span className="rtag exit">准出</span>
-      <span>交付前审本节点</span>
     </div>
   );
 }

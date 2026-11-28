@@ -38,10 +38,10 @@ def describe(ev: ProcessEvent, proc: Process, node: str) -> tuple[str, str] | No
         return f"{head} · 「{node}」等你{stage}评审", link
     if ev.type == "node.returned":
         comment = str(ev.data.get("comment") or "")[:80]
-        return f"{head} · 「{node}」被打回，请按意见修改：{comment}", link
+        return f"{head} · 「{node}」被退回，请按意见修改：{comment}", link
     if ev.type == "node.started":
         rnd = ev.data.get("round") or 1
-        return f"{head} · 「{node}」开工了（第 {rnd} 轮）", link
+        return f"{head} · 「{node}」" + ("开始了" if rnd <= 1 else f"开始第 {rnd} 轮"), link
     if ev.type == "process.completed":
         return f"{head} 已完成", link
     return None

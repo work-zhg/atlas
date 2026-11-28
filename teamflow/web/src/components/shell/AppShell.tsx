@@ -16,8 +16,8 @@ import { useEffect, useState, type ReactNode } from "react";
 
 import { Icon, type IconName } from "@/components/ui";
 import { api, ApiError, errorText, logoutToUC, ucLoginUrl } from "@/lib/api";
-import { ago, LEVEL } from "@/lib/format";
-import { useMe, useNotifications, useProcess, useProjects } from "@/lib/queries";
+import { ago, LEVEL, STAGE } from "@/lib/format";
+import { useMe, useNotifications, useProcess, useProjects, useTodos } from "@/lib/queries";
 import { useCan, useCurrentTeam } from "@/lib/team";
 import type { Project, Team } from "@/lib/types";
 
@@ -47,7 +47,7 @@ function platformOf(path: string): PlatformId | null {
   return null;
 }
 
-/** 整页编辑：节点页、编排器默认收起左侧 */
+/** 整页编辑：步骤页、编排器默认收起左侧 */
 const isWide = (p: string) => /^\/flows\/[^/]+\/n\//.test(p) || /^\/team\/templates\/[^/]+/.test(p) || /^\/market\/[^/]+\/edit/.test(p);
 
 interface Item {
@@ -256,6 +256,7 @@ function TeamSwitch() {
 
 function Bell() {
   const { data } = useNotifications();
+  const todos = useTodos();
   const qc = useQueryClient();
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -264,10 +265,41 @@ function Bell() {
     await qc.invalidateQueries({ queryKey: ["notifications"] });
   };
   const items = data?.items ?? [];
+  const mine = todos.data ?? [];
   const body = (
-    <div style={{ width: 360, maxHeight: 440, overflowY: "auto" }}>
+    <div style={{ width: 360, maxHeight: 480, overflowY: "auto" }}>
+      {mine.length > 0 && (
+        <>
+          <div className="row" style={{ padding: "2px 4px 6px" }}>
+            <b>要你处理</b>
+            <span className="xs faint">{mine.length}</span>
+          </div>
+          {mine.map((t) => (
+            <div
+              key={t.process_id + t.node_id + t.kind}
+              className="row"
+              style={{ alignItems: "flex-start", padding: "8px 4px", borderTop: "1px solid var(--tf-line-soft)", cursor: "pointer" }}
+              onClick={() => {
+                setOpen(false);
+                router.push(`/flows/${t.process_id}/n/${t.node_id}`);
+              }}
+            >
+              <span className="rtag exit" style={{ marginTop: 2 }}>
+                {STAGE[t.kind]}评审
+              </span>
+              <div className="grow">
+                <div className="sm">「{t.node_name}」等你评审</div>
+                <div className="xs faint">
+                  {t.process_code} {t.process_title} · {ago(t.since)}
+                </div>
+              </div>
+            </div>
+          ))}
+          <div style={{ height: 10 }} />
+        </>
+      )}
       <div className="row" style={{ padding: "2px 4px 8px" }}>
-        <b>通知</b>
+        <b>动态</b>
         <span className="sp" />
         {!!data?.unread && (
           <a className="xs" onClick={() => void readAll()}>
@@ -298,7 +330,7 @@ function Bell() {
         ))
       ) : (
         <div className="sm muted" style={{ padding: "16px 4px" }}>
-          没有通知
+          没有新动态
         </div>
       )}
       <div className="xs faint" style={{ padding: "8px 4px 0", borderTop: "1px solid var(--tf-line-soft)" }}>
@@ -308,8 +340,8 @@ function Bell() {
   );
   return (
     <Popover content={body} trigger="click" placement="bottomRight" open={open} onOpenChange={setOpen}>
-      <button type="button" className={styles.iconBtn} style={{ width: 32, height: 32 }} title="通知：要你评审的事">
-        <Badge count={data?.unread ?? 0} size="small" offset={[2, -2]}>
+      <button type="button" className={styles.iconBtn} style={{ width: 32, height: 32 }} title="要你处理的事和动态">
+        <Badge count={mine.length || (data?.unread ?? 0)} size="small" offset={[2, -2]} color={mine.length ? undefined : "#94a3b8"}>
           <BellOutlined style={{ fontSize: 17 }} />
         </Badge>
       </button>
@@ -386,7 +418,7 @@ export function NewTeamModal({ onClose, onCreated }: { onClose: () => void; onCr
         <div>
           <div className="sm" style={{ marginBottom: 6 }}>团队名称</div>
           <Input value={name} onChange={(e) => setName(e.target.value)} maxLength={64} placeholder="如：研发二部" />
-          <div className="xs faint" style={{ marginTop: 4 }}>在本租户里唯一</div>
+          <div className="xs faint" style={{ marginTop: 4 }}>同一企业里不能重名</div>
         </div>
         <div>
           <div className="sm" style={{ marginBottom: 6 }}>说明（可选）</div>
@@ -394,7 +426,7 @@ export function NewTeamModal({ onClose, onCreated }: { onClose: () => void; onCr
         </div>
         <div className="banner info">
           <Icon name="shield" size={15} />
-          <div>新建团队的人自动成为它的团队管理员（用户中心的团队 Owner）；成员建好后在「团队 → 成员与数字员工」里加</div>
+          <div>你会成为这个团队的团队管理员；建好后在「团队 → 成员与数字员工」里加人</div>
         </div>
       </div>
     </Modal>

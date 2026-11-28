@@ -16,7 +16,7 @@ import type { Issue, MarketCategory, MarketTemplate, Structure } from "@/lib/typ
 const BLANK: Structure = {
   roles: {},
   flow: [{ type: "node", id: "n1" }],
-  nodes: { n1: { name: "节点 1", instructions: "", exec_role: "", admit: null, exit: { roles: [], rule: "any" } } },
+  nodes: { n1: { name: "步骤 1", instructions: "", exec_role: "", admit: null, exit: { roles: [], rule: "any" } } },
 };
 
 export default function MarketEditor() {

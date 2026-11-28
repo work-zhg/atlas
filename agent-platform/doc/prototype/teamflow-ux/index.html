@@ -1,0 +1,604 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>AI TeamFlow 页面体验优化方案</title>
+<style>
+:root {
+  --bg: #f6f7f9; --bg-1: #fff; --bg-2: #f2f4f8; --bg-side: #fbfbfd; --line: #e6e8ee; --soft: #eef0f4;
+  --fg: #0f172a; --fg-2: #475569; --fg-3: #64748b; --fg-4: #94a3b8;
+  --primary: #4f46e5; --primary-soft: #eef0ff; --primary-text: #4338ca;
+  --success: #16a34a; --success-soft: #e7f6ec; --warning: #d97706; --warning-soft: #fef3e2;
+  --danger: #dc2626; --danger-soft: #fdeaea; --info-soft: #eef6ff;
+  --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: #eceef2; color: var(--fg); font: 14px/1.6 Inter, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+.doc { max-width: 1280px; margin: 0 auto; padding: 36px 32px 80px; }
+.doc > h1 { font-size: 26px; margin: 0 0 6px; }
+.lead { color: var(--fg-2); font-size: 15px; margin-bottom: 24px; }
+.sec { background: #fff; border-radius: 14px; padding: 22px 26px; margin-bottom: 22px; box-shadow: 0 1px 2px rgba(16,24,40,.05); }
+.sec > h2 { font-size: 19px; margin: 0 0 12px; display: flex; align-items: center; gap: 10px; }
+.sec > h2 .no { width: 26px; height: 26px; border-radius: 8px; background: var(--primary); color: #fff; display: grid; place-items: center; font-size: 13px; }
+.sec h3 { font-size: 16px; margin: 22px 0 8px; }
+.sec p { margin: 6px 0; }
+table.t { width: 100%; border-collapse: collapse; font-size: 13.5px; margin: 8px 0; }
+table.t th { text-align: left; color: var(--fg-3); font-weight: 600; background: var(--bg-side); }
+table.t th, table.t td { border-bottom: 1px solid var(--line); padding: 8px 10px; vertical-align: top; }
+.bad { color: #9b1c1c; background: var(--danger-soft); padding: 0 4px; border-radius: 4px; }
+.good { color: #14532d; background: var(--success-soft); padding: 0 4px; border-radius: 4px; }
+.q { color: var(--fg-3); }
+.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.prob { background: #fff8f8; border: 1px solid #f7d7d7; border-radius: 10px; padding: 10px 14px; }
+.fix { background: #f6fbf7; border: 1px solid #cfeedd; border-radius: 10px; padding: 10px 14px; }
+.prob h4, .fix h4 { margin: 0 0 6px; font-size: 13.5px; }
+.prob ul, .fix ul { margin: 0; padding-left: 18px; font-size: 13.5px; }
+.prob li, .fix li { margin: 3px 0; }
+details.before { margin: 10px 0 4px; }
+details.before summary { cursor: pointer; color: var(--fg-3); font-size: 13px; }
+details.before img { width: 100%; border: 1px solid var(--line); border-radius: 8px; margin-top: 8px; }
+.cap { font-size: 12.5px; color: var(--fg-3); margin: 6px 0 2px; }
+.decide { border-left: 4px solid var(--warning); background: var(--warning-soft); border-radius: 8px; padding: 10px 14px; margin: 8px 0; font-size: 13.5px; }
+
+/* ───────── 新样子（模拟页面） ───────── */
+.screen { border: 1px solid #d5d9e2; border-radius: 12px; overflow: hidden; background: var(--bg); margin: 12px 0 4px; font-size: 13.5px; }
+.top { height: 46px; background: #fff; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 18px; padding: 0 14px; }
+.logo { width: 24px; height: 24px; border-radius: 7px; background: linear-gradient(135deg,#6366f1,#0ea5e9); color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 700; }
+.brand { display: flex; gap: 8px; align-items: center; font-weight: 700; }
+.teamsw { border: 1px solid var(--line); border-radius: 7px; padding: 2px 9px; font-size: 12.5px; font-weight: 550; }
+.pnav { display: flex; gap: 2px; height: 100%; }
+.pnav span { display: flex; align-items: center; padding: 0 12px; color: var(--fg-2); font-weight: 550; position: relative; }
+.pnav span.on { color: var(--primary-text); }
+.pnav span.on::after { content: ""; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 2px; background: var(--primary); }
+.topr { margin-left: auto; display: flex; gap: 10px; align-items: center; }
+.bell { position: relative; color: var(--fg-2); }
+.bell b { position: absolute; top: -6px; right: -8px; background: var(--danger); color: #fff; font-size: 10px; border-radius: 8px; padding: 0 4px; }
+.me { width: 26px; height: 26px; border-radius: 50%; background: var(--primary); color: #fff; display: grid; place-items: center; font-size: 12px; }
+.body { display: flex; min-height: 420px; }
+.sider { width: 196px; background: var(--bg-side); border-right: 1px solid var(--line); padding: 10px 8px; flex: none; }
+.sider .it { padding: 7px 10px; border-radius: 7px; color: var(--fg-2); margin-bottom: 2px; }
+.sider .it.on { background: var(--primary-soft); color: var(--primary-text); font-weight: 600; }
+.sider .hd { font-size: 11.5px; color: var(--fg-3); padding: 12px 10px 4px; border-top: 1px solid var(--line); margin-top: 8px; }
+.sider .badge { float: right; background: var(--danger); color: #fff; font-size: 10.5px; border-radius: 8px; padding: 0 5px; }
+.main { flex: 1; padding: 18px 22px 26px; min-width: 0; }
+.crumb { font-size: 12px; color: var(--fg-3); margin-bottom: 4px; }
+.h1 { font-size: 19px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+.meta { color: var(--fg-3); font-size: 12.5px; margin-top: 3px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.row { display: flex; align-items: center; gap: 8px; }
+.sp { flex: 1; }
+.btn { border: 1px solid var(--line); background: #fff; border-radius: 7px; padding: 4px 12px; font-size: 13px; white-space: nowrap; }
+.btn.pri { background: var(--primary); color: #fff; border-color: var(--primary); }
+.btn.dng { color: var(--danger); border-color: #f3c1c1; }
+.btn.sm { padding: 2px 9px; font-size: 12.5px; }
+.card { background: #fff; border: 1px solid var(--line); border-radius: 11px; padding: 13px 15px; }
+.tabs { display: flex; gap: 20px; border-bottom: 1px solid var(--line); margin: 14px 0 14px; }
+.tabs span { padding: 8px 0; color: var(--fg-3); font-weight: 550; position: relative; }
+.tabs span.on { color: var(--fg); }
+.tabs span.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--primary); }
+.tabs .n { font-size: 11px; background: var(--soft); border-radius: 8px; padding: 0 6px; margin-left: 4px; }
+.st { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 7px; border-radius: 6px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.st::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.s-pend { color: #64748b; background: #f1f5f9; } .s-work { color: #1d4ed8; background: #e0ecff; }
+.s-exit { color: #b45309; background: #fef3e2; } .s-done { color: #15803d; background: #e3f7e8; }
+.s-adm { color: #7e22ce; background: #f5edff; } .s-back { color: #b91c1c; background: #fdeaea; } .s-ok { color: #0f766e; background: #ddf7f2; }
+.tag { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 6px; font-size: 11.5px; font-weight: 600; background: var(--soft); color: var(--fg-3); white-space: nowrap; }
+.tag.todo { background: var(--warning-soft); color: #b45309; }
+.tag.pri { background: var(--primary-soft); color: var(--primary-text); }
+.av { width: 20px; height: 20px; border-radius: 50%; display: inline-grid; place-items: center; color: #fff; font-size: 10.5px; font-weight: 650; flex: none; }
+.av.bot { border-radius: 6px; }
+.who { display: inline-flex; gap: 5px; align-items: center; white-space: nowrap; }
+.c1 { background: #0ea5e9; } .c2 { background: #10b981; } .c3 { background: #ec4899; } .c4 { background: #8b5cf6; } .c5 { background: #f59e0b; } .c6 { background: #6366f1; }
+.tbl { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.tbl th { text-align: left; font-size: 12px; color: var(--fg-3); font-weight: 600; background: var(--bg-side); padding: 8px 12px; }
+.tbl td { padding: 10px 12px; border-top: 1px solid var(--soft); vertical-align: middle; }
+.tbl tr.hl td { background: #fffaf2; }
+.mono { font-family: var(--mono); font-size: 12px; }
+.muted { color: var(--fg-3); } .faint { color: var(--fg-4); } .xs { font-size: 12px; } .sm { font-size: 12.5px; }
+.bar { display: inline-flex; gap: 2px; vertical-align: middle; }
+.bar i { width: 14px; height: 6px; border-radius: 3px; background: #e6e8ee; }
+.bar i.d { background: #22c55e; } .bar i.w { background: #38bdf8; } .bar i.e { background: #f59e0b; }
+.now { border: 1px solid #c7d2fe; background: #f7f8ff; border-radius: 11px; padding: 12px 15px; display: flex; align-items: center; gap: 12px; }
+.now.todo { border-color: #f6d9a8; background: #fffaf0; }
+.flow { display: flex; align-items: center; gap: 0; padding: 14px 8px; overflow: hidden; }
+.arrow { width: 22px; height: 2px; background: #cfd5df; flex: none; position: relative; }
+.arrow::after { content: ""; position: absolute; right: -1px; top: -4px; border: 5px solid transparent; border-left: 6px solid #cfd5df; border-right: 0; }
+.fn { width: 150px; border: 1.5px solid var(--line); border-radius: 10px; background: #fff; padding: 8px 10px; flex: none; }
+.fn .nm { font-weight: 650; font-size: 13px; display: flex; gap: 6px; align-items: center; }
+.fn .ow { display: flex; gap: 4px; align-items: center; margin-top: 6px; font-size: 11.5px; color: var(--fg-3); }
+.fn.cur { border-color: #93c5fd; box-shadow: 0 0 0 3px #e0ecff; }
+.par { border: 1px dashed #c9cfdc; border-radius: 11px; padding: 8px; display: flex; flex-direction: column; gap: 8px; position: relative; }
+.par::before { content: "同时进行"; position: absolute; top: -9px; left: 10px; background: #fff; padding: 0 5px; font-size: 11px; color: var(--fg-4); }
+.num { width: 18px; height: 18px; border-radius: 50%; background: var(--soft); color: var(--fg-3); font-size: 11px; display: inline-grid; place-items: center; font-weight: 650; }
+.num.d { background: #dcfce7; color: #15803d; } .num.w { background: #dbeafe; color: #1d4ed8; }
+.fchip { display: inline-flex; gap: 5px; align-items: center; border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 1px 8px; font-size: 12px; margin: 2px 4px 2px 0; }
+.ev { display: flex; gap: 10px; padding: 6px 0; align-items: flex-start; }
+.ev .t { width: 74px; flex: none; color: var(--fg-4); font-size: 12px; margin-top: 1px; }
+.md { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; font-size: 13px; line-height: 1.75; }
+.md h1 { font-size: 16px; margin: 0 0 6px; } .md h2 { font-size: 14px; margin: 10px 0 4px; } .md ul { margin: 2px 0; padding-left: 18px; } .md p { margin: 4px 0; }
+.md code { background: var(--soft); border-radius: 4px; padding: 0 4px; font-size: 12px; }
+/* 步骤页 */
+.stepper { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.stepper .s { display: flex; gap: 5px; align-items: center; padding: 3px 9px; border-radius: 14px; color: var(--fg-3); }
+.stepper .s.on { background: var(--primary-soft); color: var(--primary-text); font-weight: 600; }
+.stepper .ln { width: 16px; height: 1px; background: #cfd5df; }
+.work { display: grid; grid-template-columns: minmax(0,1fr) 390px; min-height: 560px; }
+.chat { background: #fff; border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+.chat .msgs { flex: 1; padding: 14px 22px; display: flex; flex-direction: column; gap: 12px; }
+.sysmsg { border: 1px dashed #c7cbd6; border-radius: 10px; padding: 8px 12px; background: var(--bg-side); font-size: 12.5px; color: var(--fg-2); }
+.sysmsg b { color: var(--fg); }
+.ubub { align-self: flex-end; max-width: 72%; background: #f1f3f8; border-radius: 12px; padding: 8px 12px; }
+.abub { max-width: 90%; }
+.abub .hd { display: flex; gap: 6px; align-items: center; font-weight: 600; font-size: 12.5px; margin-bottom: 4px; }
+.steps { border: 1px solid var(--line); border-radius: 9px; padding: 6px 11px; color: var(--fg-2); font-size: 12.5px; margin: 6px 0; }
+.composer { margin: 0 22px 14px; border: 1px solid #c7cbf6; border-radius: 12px; padding: 10px 12px; color: var(--fg-4); display: flex; align-items: flex-end; gap: 8px; min-height: 66px; }
+.composer .send { margin-left: auto; width: 26px; height: 26px; border-radius: 50%; background: var(--primary); }
+.panel { padding: 14px; background: var(--bg); display: flex; flex-direction: column; gap: 10px; }
+.ptabs { display: flex; gap: 16px; border-bottom: 1px solid var(--line); }
+.ptabs span { padding: 6px 0; color: var(--fg-3); font-weight: 550; font-size: 13px; position: relative; }
+.ptabs span.on { color: var(--fg); }
+.ptabs span.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--primary); }
+.pick { display: flex; gap: 8px; align-items: center; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+.pick.on { border-color: #a5b4fc; background: #f8f8ff; }
+.cb { width: 14px; height: 14px; border-radius: 4px; border: 1.5px solid #c5cad6; flex: none; }
+.cb.on { background: var(--primary); border-color: var(--primary); }
+.radio { border: 1px solid var(--line); border-radius: 9px; padding: 8px 10px; background: #fff; flex: 1; }
+.radio.on { border-color: #86efac; background: #f6fef9; box-shadow: 0 0 0 3px #e7f6ec; }
+.ta { border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 8px 10px; color: var(--fg-4); min-height: 54px; font-size: 12.5px; }
+.note { font-size: 11.5px; color: var(--fg-4); }
+.drop { border: 1.5px dashed #b9c0cd; border-radius: 10px; padding: 14px; text-align: center; color: var(--fg-3); background: #fff; }
+.steprow { display: flex; gap: 12px; align-items: flex-start; padding: 10px 0; }
+.steprow + .steprow { border-top: 1px solid var(--soft); }
+.ed { display: grid; grid-template-columns: minmax(0,1fr) 330px; min-height: 420px; }
+.canvas { background: #f7f8fb radial-gradient(#dfe3ea 1px, transparent 1px) 0 0 / 18px 18px; padding: 26px 22px; position: relative; }
+.insp { background: #fff; border-left: 1px solid var(--line); padding: 14px 16px; font-size: 13px; }
+.insp .lb { font-weight: 600; color: var(--fg-2); font-size: 12.5px; margin: 10px 0 5px; }
+.ipt { border: 1px solid var(--line); border-radius: 7px; padding: 5px 9px; background: #fff; }
+.chip { display: inline-block; border: 1px solid var(--line); border-radius: 14px; padding: 1px 10px; margin: 0 4px 4px 0; font-size: 12.5px; }
+.chip.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.toolbar { position: absolute; left: 22px; bottom: 16px; display: flex; gap: 8px; }
+</style>
+</head>
+<body>
+<div class="doc">
+<h1>AI TeamFlow 页面体验优化方案</h1>
+<div class="lead">逐页从用户的角度重看现在的界面（11-28 部署在日本服务器上的版本，用真实数据截的图），列出问题、给出改法，关键页画了「新样子」。<b>先评审这份方案，定了再改代码。</b></div>
+
+<!-- ───────────────────────────────────────── 总的问题 -->
+<div class="sec">
+<h2><span class="no">0</span>总的问题：界面在讲「系统怎么实现」，没讲「用户该做什么」</h2>
+<p>你举的例子是最典型的一处：节点页右侧「流程空间」页签只有一句 <span class="bad">本节点的会话把流程空间挂在 /space，上游、并行节点的文件都在里面 · 打开流程空间</span>。用户不需要知道「会话」「挂载」「/space」，他只关心：<b>这一步要交什么、上一步给了我什么、文件在哪</b>。同类的话几乎每页都有：</p>
+<table class="t">
+<tr><th style="width:150px">页面</th><th>现在写的</th><th style="width:300px">问题</th></tr>
+<tr><td>流程空间页头</td><td><span class="bad">Agent 平台的应用工作空间 01a22171 · 这条流程所有节点的数字员工会话都挂载它（/space）</span></td><td>实现细节 + 内部编号，用户看不懂也用不上</td></tr>
+<tr><td>流程详情页头</td><td><span class="bad">发起时锁定</span>（锁形标签）</td><td>「锁定」是系统行为，用户不知道锁了什么、对他有什么影响</td></tr>
+<tr><td>追溯 / 最近</td><td><span class="bad">「技术方案」开工指令已发给数字员工</span>、<span class="bad">锁定执行的数字员工，会话挂载流程空间</span></td><td>系统内部步骤当成业务事件给人看；一次同意产生 5 条记录</td></tr>
+<tr><td>节点页 · 本节点</td><td><span class="bad">产出目录 需求澄清/ · 开工指令里的约定；提交时由执行人选文件，不限目录</span></td><td>写给开发看的说明</td></tr>
+<tr><td>提交评审弹窗</td><td><span class="bad">评审期间本节点会话不再写入。产物不做版本管理，只记下这一轮提交了哪些文件</span></td><td>同上；关键信息（谁来评审）反而没突出</td></tr>
+<tr><td>项目配置</td><td><span class="bad">流程空间：每条流程发起时向 Agent 平台申请一个，这条流程所有节点的数字员工会话都挂载它</span></td><td>不是配置项，不该出现在配置页</td></tr>
+<tr><td>团队设置</td><td><span class="bad">团队管理员 = 这个团队的 Owner（用户中心团队数据权限）</span>、<span class="bad">渠道要部署时配好凭据才会真的推</span></td><td>权限模型、部署细节</td></tr>
+<tr><td>节点页 · 评审记录</td><td><span class="bad">01a22172-533f-7bc0-a298-903a27d0e…</span>（文件名的位置显示成了一串编号）</td><td>缺陷：把「提交记录的编号」当文件名显示了</td></tr>
+<tr><td>流程空间预览</td><td>Markdown 原文（<span class="bad"># ## ** </span>都露在外面）</td><td>数字员工的产出大多是 Markdown，应渲染成文档</td></tr>
+</table>
+<p>除了用语，还有三类结构性问题：<b>① 每页没有回答「现在什么情况、要我做什么」</b>（例如流程详情要自己去流程图里找哪一步在等谁）；<b>② 同一件事拆在好几个地方</b>（流程详情 / 流程空间 / 追溯是三个页面，节点右侧又有五个页签）；<b>③ 说明性小字太多</b>（几乎每个卡片底下都有一行灰字解释原理）。</p>
+</div>
+
+<!-- ───────────────────────────────────────── 原则 -->
+<div class="sec">
+<h2><span class="no">1</span>改的原则</h2>
+<table class="t">
+<tr><th style="width:220px">原则</th><th>落到界面上</th></tr>
+<tr><td><b>说用户的话</b></td><td>界面上不出现：会话、挂载、/space、Agent 平台、应用工作空间、锁定、开工指令、数据权限、用户中心、Owner、凭据、内部编号。需要指 Agent 平台时用用户看得到的名字「Atlas」。</td></tr>
+<tr><td><b>每页先回答「现在怎样、我该做什么」</b></td><td>流程页、步骤页顶部放一张「现在」卡：进行到哪一步、谁在处理；轮到我时变成醒目的待办卡，带一个直接去做的按钮。</td></tr>
+<tr><td><b>一件事一个地方</b></td><td>流程详情、流程空间、追溯合成一个流程页的三个标签：概览 / 文件 / 记录。步骤页右侧从五个页签减到四个，去掉只有一句话的「流程空间」页签。</td></tr>
+<tr><td><b>记录只记人关心的事</b></td><td>记录里只留里程碑：谁开始了、数字员工写了什么文件、谁提交评审、谁同意或退回、谁上传了资料。系统内部的步骤（指令投递、开评审、状态迁移）不进记录。</td></tr>
+<tr><td><b>少解释、多给入口</b></td><td>删掉卡片底下的原理说明；规则类信息（谁评审、什么规则）放在要用的地方（评审区），空状态告诉用户下一步点哪里。</td></tr>
+</table>
+</div>
+
+<!-- ───────────────────────────────────────── 用语 -->
+<div class="sec">
+<h2><span class="no">2</span>统一用语</h2>
+<table class="t">
+<tr><th style="width:220px">现在</th><th style="width:220px">改成</th><th>理由</th></tr>
+<tr><td>节点</td><td><span class="good">步骤</span></td><td>用户说「到哪一步了」，不说「到哪个节点」。模板编排里也叫步骤（并行的叫「同时进行的步骤」）</td></tr>
+<tr><td>流程空间</td><td><span class="good">文件</span>（页签名）／<span class="good">流程文件</span></td><td>它就是这条流程的共享文件夹。概念上仍是一条流程一个，界面只说「文件」</td></tr>
+<tr><td>追溯</td><td><span class="good">记录</span></td><td>「追溯」偏审计口吻；记录既能看也能导出</td></tr>
+<tr><td>产出物</td><td><span class="good">交付文件</span></td><td>和「提交评审」「准出」对应：这一步交出去的文件</td></tr>
+<tr><td>输入</td><td><span class="good">参考资料</span></td><td>上一步交付的文件 + 成员上传的资料</td></tr>
+<tr><td>本节点</td><td><span class="good">说明</span></td><td>这一步要做什么、谁负责、谁评审</td></tr>
+<tr><td>接管 / 交还</td><td><span class="good">暂停数字员工 / 让它继续</span></td><td>「接管」容易被理解成「接管账号、接管浏览器」</td></tr>
+<tr><td>驳回修改 / 打回上游</td><td><span class="good">退回修改 / 退回上一步</span></td><td>口径统一用「退回」</td></tr>
+<tr><td>过程文件</td><td><span class="good">草稿</span></td><td>没被交付过的文件</td></tr>
+<tr><td>执行 Agent / 执行的数字员工</td><td><span class="good">数字员工</span></td><td>直接写名字，如「需求分析师」</td></tr>
+</table>
+<h3>步骤状态</h3>
+<table class="t">
+<tr><th style="width:220px">现在</th><th style="width:220px">改成</th><th>说明</th></tr>
+<tr><td>待开始</td><td><span class="st s-pend">未开始</span></td><td></td></tr>
+<tr><td>人机协同中</td><td><span class="st s-work">进行中</span></td><td>「人机协同」是产品理念，不是状态</td></tr>
+<tr><td>待准出</td><td><span class="st s-exit">准出评审中</span></td><td>和「准入评审中」对称</td></tr>
+<tr><td>待下游准入</td><td><span class="st s-ok">已准出</span></td><td>悬停提示「等下一步的人确认接收」</td></tr>
+<tr><td>准入评审中</td><td><span class="st s-adm">准入评审中</span></td><td>不变</td></tr>
+<tr><td>已通过</td><td><span class="st s-done">已完成</span></td><td></td></tr>
+<tr><td>已打回</td><td><span class="st s-back">被退回</span></td><td></td></tr>
+</table>
+<div class="decide">要你定：「准入 / 准出」我保留了（它是这个产品的核心概念，用户在模板里就要配），只是状态改成更顺的说法。如果想更口语化，可以改成「交付评审 / 接收评审」。</div>
+</div>
+
+<!-- ───────────────────────────────────────── 项目流程列表 -->
+<div class="sec">
+<h2><span class="no">3</span>项目 · 流程列表</h2>
+<div class="cols">
+<div class="prob"><h4>现在的问题</h4><ul>
+<li>标题「流程」+ 副标题「支付中台」+ 面包屑「支付中台 / 流程」：同一信息说三遍</li>
+<li>「等你」单独一列，大多数时候是一列「—」；真有事等我时反而不醒目</li>
+<li>「各节点」一排无标签的色条，看不出是第几步</li>
+<li>看不到谁在处理、多久没动了</li>
+</ul></div>
+<div class="fix"><h4>改成</h4><ul>
+<li>页头就是项目名；左侧菜单已经说明了这是「流程」</li>
+<li>等我处理的流程排在最前、整行浅橙底色，标题旁直接写「待你准出评审」</li>
+<li>「进展」一列：当前步骤 + 状态 + 「2 / 4」；色条保留但带悬停</li>
+<li>新增「负责」（当前步骤的人和数字员工）和「更新」两列；筛选加「只看与我有关」</li>
+</ul></div>
+</div>
+<details class="before"><summary>现在的样子</summary><img src="before/flows.png" alt="现在的流程列表" /></details>
+<div class="cap">新样子</div>
+<div class="screen">
+  <div class="top"><span class="brand"><span class="logo">T</span>AI TeamFlow</span><span class="teamsw">研发一部 ▾</span><div class="pnav"><span class="on">项目</span><span>团队</span><span>流程市场</span></div><div class="topr"><span class="bell">🔔<b>2</b></span><span class="me">李</span></div></div>
+  <div class="body">
+    <div class="sider"><div class="it on">流程</div><div class="it">配置</div><div class="hd">项目</div><div class="it on" style="background:var(--bg-2);color:var(--fg)">支付中台 <span class="badge">1</span></div><div class="it">会员体系</div></div>
+    <div class="main">
+      <div class="row"><div><div class="h1">支付中台</div><div class="meta">研发一部 · 3 个流程进行中</div></div><span class="sp"></span><span class="btn pri">＋ 发起流程</span></div>
+      <div class="row" style="margin:14px 0 10px"><span class="tag pri">进行中 3</span><span class="tag">已完成 12</span><span class="tag">已终止 1</span><span class="tag">全部</span><span class="btn sm">全部模板 ▾</span><span class="btn sm">☑ 只看与我有关</span></div>
+      <table class="tbl">
+        <tr><th style="width:280px">流程</th><th>进展</th><th style="width:200px">负责</th><th style="width:90px">更新</th></tr>
+        <tr class="hl"><td><span class="mono muted">F-1003</span> <b>退款对账差异修复</b><div class="row" style="margin-top:3px"><span class="tag todo">待你准出评审</span><span class="xs faint">周工 发起 · 缺陷修复</span></div></td><td><span class="num w">3</span> 编码 <span class="st s-exit">准出评审中</span> <span class="xs muted">3 / 4</span> <span class="bar"><i class="d"></i><i class="d"></i><i class="e"></i><i></i></span></td><td><span class="who"><span class="av c2">周</span>周工</span> · <span class="who"><span class="av bot c4">开</span>开发工程师</span></td><td class="xs muted">10 分钟前</td></tr>
+        <tr><td><span class="mono muted">F-1001</span> <b>支付回调幂等</b><div class="xs faint" style="margin-top:3px">李工 发起 · 软件研发（标准）</div></td><td><span class="num w">2</span> 技术方案 <span class="st s-work">进行中</span> <span class="xs muted">2 / 4</span> <span class="bar"><i class="d"></i><i class="w"></i><i></i><i></i></span></td><td><span class="who"><span class="av c1">李</span>李工</span> · <span class="who"><span class="av bot c3">需</span>需求分析师</span></td><td class="xs muted">2 小时前</td></tr>
+        <tr><td><span class="mono muted">F-1004</span> <b>订单导出优化</b><div class="xs faint" style="margin-top:3px">李工 发起 · 软件研发（标准）</div></td><td><span class="st s-pend">未开始</span> <span class="xs muted">等李工上传资料、开始第一步</span></td><td><span class="who"><span class="av c1">李</span>李工</span></td><td class="xs muted">昨天</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ───────────────────────────────────────── 发起 -->
+<div class="sec">
+<h2><span class="no">4</span>发起流程，以及刚发起的流程</h2>
+<div class="cols">
+<div class="prob"><h4>现在的问题</h4><ul>
+<li>弹窗里一段技术说明：<span class="bad">发起时先向 Agent 平台申请这条流程的流程空间……</span></li>
+<li>发起后落到流程详情，但「下一步要上传资料、再点开始」只写在一条横幅里，开始按钮藏在横幅中</li>
+</ul></div>
+<div class="fix"><h4>改成</h4><ul>
+<li>弹窗只留：选模板（带步骤预览、没配齐的说明还差谁）、写标题；底部一行「发起后先上传资料，再由 李工 开始第一步」</li>
+<li>刚发起的流程，概览顶部是一张「开始」引导卡：① 把资料拖进来 ② 开始第一步（说清楚数字员工会做什么）。非执行人看到「等 李工 开始」</li>
+</ul></div>
+</div>
+<details class="before"><summary>现在的样子</summary><img src="before/start.png" alt="现在的发起弹窗" /></details>
+<div class="cap">新样子：刚发起的流程（执行人 李工 看到的）</div>
+<div class="screen"><div class="body"><div class="main" style="padding-bottom:20px">
+  <div class="crumb">支付中台 / F-1004</div>
+  <div class="row"><div class="h1">订单导出优化 <span class="st s-pend">未开始</span></div><span class="sp"></span><span class="btn sm">⋯</span></div>
+  <div class="meta">软件研发（标准）v3 · 李工 11-28 发起</div>
+  <div class="tabs"><span class="on">概览</span><span>文件<span class="n">0</span></span><span>记录</span></div>
+  <div class="card" style="border-color:#c7d2fe;background:#f9f9ff">
+    <b style="font-size:15px">开始第一步「需求澄清」</b>
+    <div class="steprow"><span class="num">1</span><div style="flex:1"><b>上传参考资料</b><span class="muted sm">　需求文档、现状说明、截图都行，数字员工会先读这些</span><div class="drop" style="margin-top:8px">把文件拖到这里，或 <a style="color:var(--primary)">选择文件</a><div class="xs faint">单个文件不超过 50 MB</div></div></div></div>
+    <div class="steprow"><span class="num">2</span><div style="flex:1"><b>开始</b><div class="muted sm">「需求分析师」会读资料、把需求整理成澄清记录；有不清楚的地方会在对话里问你</div></div><span class="btn pri">开始第一步</span></div>
+  </div>
+</div></div></div>
+</div>
+
+<!-- ───────────────────────────────────────── 流程概览 -->
+<div class="sec">
+<h2><span class="no">5</span>流程 · 概览（原「流程详情」）</h2>
+<div class="cols">
+<div class="prob"><h4>现在的问题</h4><ul>
+<li>打开后要自己在流程图里找「现在到哪了、在等谁」</li>
+<li>页头一排小标签：版本、<span class="bad">发起时锁定</span>、流程空间、发起人，信息密但没用</li>
+<li>流程图下面一整行 7 种状态的图例</li>
+<li>「最近」里混着系统步骤（<span class="bad">开工指令已发给数字员工</span>）</li>
+<li>流程空间、追溯是两个独立页面，要来回跳</li>
+</ul></div>
+<div class="fix"><h4>改成</h4><ul>
+<li>一个流程页三个标签：<b>概览 · 文件 · 记录</b></li>
+<li>顶部「现在」卡：哪一步在进行、谁在处理、进入按钮；轮到我时换成橙色待办卡「等你评审 · 技术方案.md　去评审」</li>
+<li>流程图里步骤带序号、状态、负责的人和数字员工；去掉图例（状态标签本身就是说明）</li>
+<li>左「交付文件」按步骤列出每一步最近一次交付的文件，点开直接预览；右「最近」只放里程碑</li>
+<li>角色分配收进「参与的人」一行，管理员才有「去配置」入口</li>
+</ul></div>
+</div>
+<details class="before"><summary>现在的样子</summary><img src="before/flow.png" alt="现在的流程详情" /></details>
+<div class="cap">新样子（评审人 李工 打开时，有一件待办）</div>
+<div class="screen"><div class="body"><div class="main">
+  <div class="crumb">支付中台 / F-1001</div>
+  <div class="row"><div class="h1">支付回调幂等 <span class="st s-work">进行中</span></div><span class="sp"></span><span class="btn sm">⋯</span></div>
+  <div class="meta">软件研发（标准）v3 · 李工 11-28 发起</div>
+  <div class="tabs"><span class="on">概览</span><span>文件<span class="n">6</span></span><span>记录</span></div>
+  <div class="now todo"><span style="font-size:20px">📝</span><div style="flex:1"><b>等你准出评审 ·「技术方案」第 1 轮</b><div class="sm muted">李工 提交了 <span class="fchip">📄 技术方案.md</span> · 20 分钟前</div></div><span class="btn pri">去评审</span></div>
+  <div class="card" style="margin-top:12px;padding:4px 10px">
+    <div class="flow">
+      <div class="fn"><div class="nm"><span class="num d">1</span>需求澄清</div><div style="margin-top:6px"><span class="st s-done">已完成</span></div><div class="ow"><span class="av bot c3">需</span>需求分析师</div></div>
+      <span class="arrow"></span>
+      <div class="fn cur"><div class="nm"><span class="num w">2</span>技术方案</div><div style="margin-top:6px"><span class="st s-exit">准出评审中</span></div><div class="ow"><span class="av bot c3">需</span>需求分析师 · <span class="av c1">李</span></div></div>
+      <span class="arrow"></span>
+      <div class="par"><div class="fn"><div class="nm"><span class="num">3</span>编码</div><div style="margin-top:6px"><span class="st s-pend">未开始</span></div><div class="ow"><span class="av bot c4">开</span>开发工程师</div></div><div class="fn"><div class="nm"><span class="num">3</span>测试用例</div><div style="margin-top:6px"><span class="st s-pend">未开始</span></div><div class="ow"><span class="av bot c5">测</span>测试工程师</div></div></div>
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px">
+    <div class="card"><div class="row"><b>交付文件</b><span class="sp"></span><a class="sm" style="color:var(--primary)">全部文件</a></div>
+      <div class="ev"><span class="num d">1</span><div style="flex:1"><b class="sm">需求澄清</b><div><span class="fchip">📄 澄清记录.md</span></div></div><span class="xs faint">第 1 轮 · 已准出</span></div>
+      <div class="ev"><span class="num w">2</span><div style="flex:1"><b class="sm">技术方案</b><div><span class="fchip">📄 技术方案.md</span></div></div><span class="xs faint">第 1 轮 · 评审中</span></div>
+    </div>
+    <div class="card"><div class="row"><b>最近</b><span class="sp"></span><a class="sm" style="color:var(--primary)">全部记录</a></div>
+      <div class="ev"><span class="t">20 分钟前</span><span class="sm"><span class="who"><span class="av c1">李</span>李工</span> 提交「技术方案」评审：技术方案.md</span></div>
+      <div class="ev"><span class="t">25 分钟前</span><span class="sm"><span class="who"><span class="av bot c3">需</span>需求分析师</span> 写好 技术方案.md</span></div>
+      <div class="ev"><span class="t">1 小时前</span><span class="sm"><span class="who"><span class="av c1">李</span>李工</span> 同意「需求澄清」准出 · 「可以」</span></div>
+    </div>
+  </div>
+  <div class="card" style="margin-top:12px"><div class="row"><b>参与的人</b><span class="sm muted">产品 <span class="who"><span class="av c1">李</span>李工</span> + 需求分析师　·　开发 <span class="who"><span class="av c2">周</span>周工</span> + 开发工程师　·　测试 <span class="who"><span class="av c3">陈</span>陈运</span> + 测试工程师</span><span class="sp"></span><a class="sm" style="color:var(--primary)">去项目配置</a></div></div>
+</div></div></div>
+</div>
+
+<!-- ───────────────────────────────────────── 文件 -->
+<div class="sec">
+<h2><span class="no">6</span>流程 · 文件（原「流程空间」）</h2>
+<div class="cols">
+<div class="prob"><h4>现在的问题</h4><ul>
+<li>页头 <span class="bad">Agent 平台的应用工作空间 01a22171 · …挂载它（/space）</span></li>
+<li>根目录只有三个文件夹，列「提交 / 来源 / 修改 / 大小」全是空的</li>
+<li>来源写 <span class="bad">「需求澄清」的会话里写的</span>；没交付的叫 <span class="bad">过程文件</span></li>
+<li>预览是 Markdown 原文；底部 <span class="bad">产物不做版本管理……</span></li>
+<li>上传按钮叫「上传到根目录」，不能选放到哪</li>
+</ul></div>
+<div class="fix"><h4>改成</h4><ul>
+<li>左边是文件夹列表：每一步一个文件夹（带步骤序号和状态），外加「资料（成员上传）」；点文件夹看里面的文件</li>
+<li>文件一行：名字、状态（<span class="good">已交付 · 第 1 轮</span> / <span class="good">草稿</span>）、谁写的（数字员工名，或「李工 上传」）、修改时间、大小</li>
+<li>右边预览：Markdown 渲染成文档；代码、补丁按等宽显示；其他格式给下载</li>
+<li>「上传文件」按钮默认放进「资料」，也可以选别的文件夹；支持拖拽</li>
+<li>去掉所有原理说明</li>
+</ul></div>
+</div>
+<details class="before"><summary>现在的样子</summary><img src="before/space.png" alt="现在的流程空间" /></details>
+<div class="cap">新样子</div>
+<div class="screen"><div class="body"><div class="main">
+  <div class="crumb">支付中台 / F-1001</div>
+  <div class="row"><div class="h1">支付回调幂等 <span class="st s-work">进行中</span></div></div>
+  <div class="tabs"><span>概览</span><span class="on">文件<span class="n">6</span></span><span>记录</span></div>
+  <div style="display:grid;grid-template-columns:210px minmax(0,1fr) 380px;gap:12px">
+    <div class="card" style="padding:8px">
+      <div class="pick" style="border:none"><span>📁</span><span style="flex:1">资料</span><span class="xs faint">2</span></div>
+      <div class="pick" style="border:none"><span class="num d">1</span><span style="flex:1">需求澄清</span><span class="xs faint">1</span></div>
+      <div class="pick on" style="border:none"><span class="num w">2</span><span style="flex:1"><b>技术方案</b></span><span class="xs faint">2</span></div>
+      <div class="pick" style="border:none;color:var(--fg-4)"><span class="num">3</span><span style="flex:1">编码</span><span class="xs">空</span></div>
+      <div class="pick" style="border:none;color:var(--fg-4)"><span class="num">3</span><span style="flex:1">测试用例</span><span class="xs">空</span></div>
+      <div style="padding:8px 4px 2px"><span class="btn sm" style="width:100%;display:block;text-align:center">⬆ 上传文件</span></div>
+    </div>
+    <div>
+      <table class="tbl"><tr><th>文件</th><th>状态</th><th>谁写的</th><th>修改</th></tr>
+        <tr style="background:#f8f8ff"><td>📄 <b>技术方案.md</b></td><td><span class="tag" style="background:var(--warning-soft);color:#b45309">评审中 · 第 1 轮</span></td><td><span class="who"><span class="av bot c3">需</span>需求分析师</span></td><td class="xs muted">25 分钟前</td></tr>
+        <tr><td>📄 接口草图.md</td><td><span class="tag">草稿</span></td><td><span class="who"><span class="av bot c3">需</span>需求分析师</span></td><td class="xs muted">30 分钟前</td></tr>
+      </table>
+    </div>
+    <div>
+      <div class="row sm" style="margin-bottom:6px"><b>技术方案.md</b><span class="xs faint">7.1 KB</span><span class="sp"></span><a class="sm" style="color:var(--primary)">下载</a></div>
+      <div class="md"><h1>技术方案：支付渠道回调幂等</h1><p>目标：同一笔回调无论重投多少次，入账只发生一次；老数据零改造兼容。</p><h2>1. 方案</h2><ul><li>新增幂等表 <code>t_pay_callback_idempotent</code> + 唯一索引</li><li>用 upsert 作为唯一并发闸门，不依赖「先查后写」</li></ul><h2>2. 风险</h2><ul><li>R1 幂等键选错导致真实支付丢失</li></ul></div>
+    </div>
+  </div>
+</div></div></div>
+</div>
+
+<!-- ───────────────────────────────────────── 记录 -->
+<div class="sec">
+<h2><span class="no">7</span>流程 · 记录（原「追溯」）</h2>
+<div class="cols">
+<div class="prob"><h4>现在的问题</h4><ul>
+<li>一次准出同意写了 5 行：提交、<span class="bad">进入准出评审（1 位评审人，任一人同意）</span>、同意、<span class="bad">准出评审通过</span>、<span class="bad">已准出，等下游准入</span>、<span class="bad">已通过</span></li>
+<li>系统步骤混在里面：<span class="bad">开工指令已发给数字员工</span>、<span class="bad">锁定执行的数字员工，会话挂载流程空间</span></li>
+<li>看不出数字员工写了哪些文件</li>
+</ul></div>
+<div class="fix"><h4>改成</h4><ul>
+<li>按步骤分组，一组里只放里程碑，每条带头像：开始、数字员工写了文件、提交评审、同意 / 退回（带意见）、上传资料、暂停 / 继续、终止</li>
+<li>评审一轮合成一条：「第 1 轮 · 李工 提交 技术方案.md → 李工 同意 ✓ 准出」</li>
+<li>筛选：全部步骤 / 某一步；只看评审。导出保留</li>
+</ul></div>
+</div>
+<details class="before"><summary>现在的样子</summary><img src="before/trace.png" alt="现在的追溯" /></details>
+<div class="cap">新样子</div>
+<div class="screen"><div class="body"><div class="main">
+  <div class="row"><div class="h1">支付回调幂等 <span class="st s-work">进行中</span></div></div>
+  <div class="tabs"><span>概览</span><span>文件<span class="n">6</span></span><span class="on">记录</span></div>
+  <div class="row" style="margin-bottom:10px"><span class="btn sm">全部步骤 ▾</span><span class="btn sm">☐ 只看评审</span><span class="sp"></span><span class="btn sm">导出</span></div>
+  <div class="card">
+    <div class="row" style="margin-bottom:4px"><span class="num">·</span><b>发起</b></div>
+    <div class="ev"><span class="t">11-28 18:16</span><span class="sm"><span class="who"><span class="av c1">李</span>李工</span> 发起流程（软件研发（标准）v3）</span></div>
+    <div class="ev"><span class="t">11-28 18:16</span><span class="sm"><span class="who"><span class="av c1">李</span>李工</span> 上传资料 现状.md</span></div>
+    <div class="row" style="margin:10px 0 4px"><span class="num d">1</span><b>需求澄清</b><span class="st s-done">已完成</span><a class="xs" style="color:var(--primary)">打开</a></div>
+    <div class="ev"><span class="t">11-28 18:16</span><span class="sm"><span class="who"><span class="av c1">李</span>李工</span> 开始了这一步</span></div>
+    <div class="ev"><span class="t">11-28 18:17</span><span class="sm"><span class="who"><span class="av bot c3">需</span>需求分析师</span> 写好 <span class="fchip">📄 澄清记录.md</span></span></div>
+    <div class="ev"><span class="t">11-28 18:17</span><span class="sm"><b>第 1 轮评审</b>　<span class="who"><span class="av c1">李</span>李工</span> 提交 澄清记录.md → <span class="who"><span class="av c1">李</span>李工</span> <span style="color:var(--success)">同意 ✓</span> 准出 ·「可以」</span></div>
+    <div class="row" style="margin:10px 0 4px"><span class="num w">2</span><b>技术方案</b><span class="st s-exit">准出评审中</span><a class="xs" style="color:var(--primary)">打开</a></div>
+    <div class="ev"><span class="t">11-28 18:17</span><span class="sm"><span class="who"><span class="av c1">李</span>李工</span> <span style="color:var(--success)">准入同意 ✓</span>，这一步开始</span></div>
+    <div class="ev"><span class="t">11-28 18:23</span><span class="sm"><span class="who"><span class="av c1">李</span>李工</span> 让数字员工补一条风险：「渠道回调验签失败怎么处理」</span></div>
+  </div>
+</div></div></div>
+</div>
+
+<!-- ───────────────────────────────────────── 步骤页（执行人） -->
+<div class="sec">
+<h2><span class="no">8</span>步骤页 · 执行人视角（原「节点页」）</h2>
+<div class="cols">
+<div class="prob"><h4>现在的问题</h4><ul>
+<li>页头三个小标签：<span class="bad">🔒 执行的数字员工「需求分析师」</span>、流程空间、<span class="bad">执行：产品 · 管理员</span>；没有说「我现在该做什么」</li>
+<li>对话第一条是系统发给数字员工的开工说明，看起来像我自己发的</li>
+<li>数字员工的过程发言是英文（<span class="bad">I'll start by exploring the workflow space…</span>）</li>
+<li>打开时对话停在最上面，要往下翻才看到最新</li>
+<li>输入框里有 Atlas 的「自动」审批模式选择器，和 TeamFlow 无关</li>
+<li>右侧五个页签：产出物 / 输入 / 流程空间 / 本节点 / 评审记录；「流程空间」页签只有一句原理说明</li>
+<li>「提交评审」在底部角落，点开还要在弹窗里重新浏览文件夹；「接管」意义不明</li>
+</ul></div>
+<div class="fix"><h4>改成</h4><ul>
+<li>页头：返回流程 · 步骤条（每一步带序号和状态，点了切换）· 本步名称和状态 · 一行「负责：李工（产品）+ 需求分析师」</li>
+<li>开工说明显示成系统卡片「开工说明 · 系统发给需求分析师」，默认折叠</li>
+<li>数字员工用中文说话（改提示词）；打开时滚到最新；隐藏审批模式选择器</li>
+<li>右侧四个页签：<b>交付 · 参考资料 · 说明 · 评审记录</b></li>
+<li>「交付」页签就是提交的地方：列出本步文件夹里的文件（默认全选），预览，「提交评审（1 个文件）」按钮，写明谁来评审；要交别的文件夹里的文件点「从其他文件夹选」</li>
+<li>「接管」改为页头的「暂停数字员工」；暂停后横幅说明「数字员工已暂停，你可以直接改文件，改完点 让它继续」</li>
+</ul></div>
+</div>
+<details class="before"><summary>现在的样子（执行中、右侧流程空间页签、提交弹窗）</summary><img src="before/node.png" alt="现在的节点页" /><img src="before/node-space-tab.png" alt="现在的流程空间页签" /><img src="before/submit.png" alt="现在的提交弹窗" /></details>
+<div class="cap">新样子（执行人 李工，数字员工已经写好文件）</div>
+<div class="screen">
+  <div class="top" style="gap:12px"><span class="sm" style="color:var(--primary)">← 支付回调幂等</span><span class="faint">|</span>
+    <div class="stepper"><span class="s"><span class="num d">1</span>需求澄清</span><span class="ln"></span><span class="s on"><span class="num w">2</span>技术方案</span><span class="ln"></span><span class="s"><span class="num">3</span>编码</span><span class="s"><span class="num">3</span>测试用例</span></div>
+    <span class="sp"></span><span class="me">李</span></div>
+  <div style="padding:10px 18px;background:#fff;border-bottom:1px solid var(--line)" class="row">
+    <b style="font-size:16px">技术方案</b><span class="st s-work">进行中</span><span class="tag">第 1 轮</span>
+    <span class="sm muted" style="margin-left:6px">负责：<span class="who"><span class="av c1">李</span>李工</span>（产品）+ <span class="who"><span class="av bot c3">需</span>需求分析师</span></span>
+    <span class="sp"></span><span class="btn sm">⏸ 暂停数字员工</span></div>
+  <div class="work">
+    <div class="chat">
+      <div class="msgs">
+        <div class="sysmsg">▸ <b>开工说明</b> · 系统发给需求分析师　<span class="faint">根据上游的澄清记录写一页技术方案（方案、接口、风险）……　展开</span></div>
+        <div class="abub"><div class="hd"><span class="av bot c3">需</span>需求分析师 <span class="faint xs" style="font-weight:400">25 分钟前</span></div>
+          <div class="muted sm">先读上游的澄清记录和现状材料。</div>
+          <div class="steps">✓ 已完成 5 个步骤</div>
+          <div>已写好 <code>技术方案/技术方案.md</code>，包括方案、接口和 12 条风险，最高的风险是幂等键选错……</div></div>
+        <div class="ubub">在风险部分补一条：渠道回调验签失败怎么处理。</div>
+        <div class="abub"><div class="hd"><span class="av bot c3">需</span>需求分析师 <span class="faint xs" style="font-weight:400">5 分钟前</span></div><div class="steps">✓ 已完成 3 个步骤</div><div>已在风险部分补了 R13「验签失败处理」：不落幂等表、不入账，返回失败码让渠道重试。</div></div>
+      </div>
+      <div class="composer">给「需求分析师」下指令、回答它的问题…<span class="send"></span></div>
+    </div>
+    <div class="panel">
+      <div class="ptabs"><span class="on">交付</span><span>参考资料</span><span>说明</span><span>评审记录</span></div>
+      <div class="sm">「技术方案」文件夹里的文件，勾上要交的：</div>
+      <div class="pick on"><span class="cb on"></span>📄 <b>技术方案.md</b><span class="sp"></span><span class="xs faint">5 分钟前</span></div>
+      <div class="pick"><span class="cb"></span>📄 接口草图.md<span class="sp"></span><span class="xs faint">30 分钟前</span></div>
+      <div class="row"><a class="xs" style="color:var(--primary)">从其他文件夹选</a><span class="sp"></span><span class="btn pri">提交评审（1 个文件）</span></div>
+      <div class="note">评审人：李工（产品，任一人同意）。评审期间数字员工暂停</div>
+      <div class="row sm"><b>技术方案.md</b><span class="sp"></span><a class="xs" style="color:var(--primary)">下载</a></div>
+      <div class="md"><h1>技术方案：支付渠道回调幂等</h1><h2>1. 方案</h2><ul><li>新增幂等表 + 唯一索引，upsert 作为并发闸门</li></ul><h2>3. 风险</h2><ul><li>R13 验签失败：不落幂等表、不入账，返回失败码让渠道重试</li></ul></div>
+    </div>
+  </div>
+</div>
+<p class="sm muted">其他页签：<b>参考资料</b> = 上一步交付的文件 + 「资料」文件夹，点开在右侧预览；<b>说明</b> = 工作说明、负责的人和数字员工（带技能）、准入 / 准出由谁评审、规则；<b>评审记录</b> = 每一轮交了哪些文件（显示文件名）、每个人的结论和意见。</p>
+</div>
+
+<!-- ───────────────────────────────────────── 步骤页（评审人） -->
+<div class="sec">
+<h2><span class="no">9</span>步骤页 · 评审人视角</h2>
+<div class="cols">
+<div class="prob"><h4>现在的问题</h4><ul>
+<li>评审区一大段规则说明：<span class="bad">看的是执行人提交时选的文件（流程空间里的当前内容）；评审期间本节点会话不再写入</span></li>
+<li>文件预览是 Markdown 原文</li>
+<li>选项「同意 / 驳回修改」「准入通过 / 打回上游」口径不一</li>
+</ul></div>
+<div class="fix"><h4>改成</h4><ul>
+<li>顶部一句话：「等你准出评审 · 第 1 轮 · 李工 提交了 2 个文件」</li>
+<li>文件标签可切换，预览渲染成文档</li>
+<li>结论两个大按钮：<span class="good">同意</span> / <span class="good">退回修改</span>（准入时是「同意，开始这一步」/「退回上一步」）；退回必须写意见，提示「意见会发给需求分析师，作为下一轮的要求」</li>
+<li>其他评审人的结论放在下面一行一个</li>
+</ul></div>
+</div>
+<div class="cap">新样子（右侧面板）</div>
+<div class="screen" style="max-width:430px"><div class="panel" style="background:var(--bg)">
+  <div class="card" style="border-color:#f6d9a8;background:#fffaf0"><b>等你准出评审 · 第 1 轮</b><div class="sm muted">李工 提交了 2 个文件 · 20 分钟前</div></div>
+  <div><span class="fchip" style="border-color:#a5b4fc;background:#f8f8ff">📄 技术方案.md</span><span class="fchip">📄 接口草图.md</span></div>
+  <div class="md"><h1>技术方案：支付渠道回调幂等</h1><p>目标：同一笔回调无论重投多少次，入账只发生一次。</p><h2>1. 方案</h2><ul><li>新增幂等表 + 唯一索引</li></ul></div>
+  <div class="card"><b class="sm">你的结论</b>
+    <div class="row" style="margin-top:8px"><div class="radio on"><b style="color:var(--success)">同意</b><div class="xs muted">交给下一步</div></div><div class="radio"><b style="color:var(--danger)">退回修改</b><div class="xs muted">这一步再做一轮</div></div></div>
+    <div class="ta" style="margin-top:8px">意见（退回时必填，会发给需求分析师作为下一轮的要求）</div>
+    <div class="row" style="margin-top:8px"><span class="sp"></span><span class="btn pri">提交结论</span></div></div>
+  <div class="sm muted">其他评审人：<span class="who"><span class="av c2">周</span>周工</span> <span style="color:var(--success)">同意</span> ·「迁移脚本在测试库跑过了」</div>
+</div></div>
+</div>
+
+<!-- ───────────────────────────────────────── 编排器 -->
+<div class="sec">
+<h2><span class="no">10</span>流程模板编排</h2>
+<div class="cols">
+<div class="prob"><h4>现在的问题</h4><ul>
+<li>加步骤靠节点之间的小圆「＋」，改成并行靠一个 <span class="bad">∥</span> 按钮，看不出是干什么的</li>
+<li>画布底部 <span class="bad">模板只存结构：顺序步骤 + 并行组。节点依赖由结构推导，不用连线</span></li>
+<li>名称输入框下 <span class="bad">也是流程空间里放它产出的目录名：不能带 / 、不能以 . 开头</span></li>
+<li>要手动「保存并校验」，忘了点就丢</li>
+</ul></div>
+<div class="fix"><h4>改成</h4><ul>
+<li>步骤带序号；画布下方两个明确的按钮「＋ 添加步骤」「＋ 添加同时进行的步骤」；选中步骤时在卡片上出现「前移 / 后移 / 和下一步同时进行 / 删除」</li>
+<li>草稿自动保存（顶部显示「已保存」）；「检查」列出问题，点问题跳到对应步骤；「发布」</li>
+<li>右侧属性：名称（只提示「不能包含 /」）、工作说明（提示「数字员工开工时收到的第一条说明」）、谁来做、准入评审（第一步不显示）、准出评审、通过规则</li>
+<li>删掉画布和属性栏里的原理说明</li>
+</ul></div>
+</div>
+<details class="before"><summary>现在的样子</summary><img src="before/editor.png" alt="现在的编排器" /></details>
+<div class="cap">新样子</div>
+<div class="screen">
+  <div class="top" style="gap:10px"><span class="sm" style="color:var(--primary)">←</span><b>软件研发（标准）</b><span class="tag">v3 已发布</span><span class="xs faint">草稿已自动保存</span><span class="sp"></span><span class="btn sm">角色（3）</span><span class="btn sm">检查</span><span class="btn sm pri">发布 v4</span></div>
+  <div class="ed">
+    <div class="canvas">
+      <div class="flow">
+        <div class="fn"><div class="nm"><span class="num">1</span>需求澄清</div><div class="ow">产品 做 · 产品 准出</div></div><span class="arrow"></span>
+        <div class="fn cur"><div class="nm"><span class="num">2</span>技术方案</div><div class="ow">产品 做 · 开发 准入</div></div><span class="arrow"></span>
+        <div class="par"><div class="fn"><div class="nm"><span class="num">3</span>编码</div><div class="ow">开发 做</div></div><div class="fn"><div class="nm"><span class="num">3</span>测试用例</div><div class="ow">测试 做</div></div></div>
+      </div>
+      <div class="toolbar"><span class="btn">＋ 添加步骤</span><span class="btn">＋ 添加同时进行的步骤</span></div>
+    </div>
+    <div class="insp">
+      <b style="font-size:15px">技术方案</b><span style="float:right" class="xs muted">前移 · 后移 · 删除</span>
+      <div class="lb">名称</div><div class="ipt">技术方案</div>
+      <div class="lb">工作说明</div><div class="ipt" style="min-height:58px">根据上一步的澄清记录写一页技术方案（方案、接口、风险）</div><div class="note">数字员工开工时收到的第一条说明，会自动带上上一步交付的文件</div>
+      <div class="lb">谁来做</div><span class="chip on">产品</span><span class="chip">开发</span><span class="chip">测试</span>
+      <div class="lb">准入评审（开工前审上一步的文件）</div><span class="chip">产品</span><span class="chip on">开发</span><span class="chip">测试</span>
+      <div class="lb">准出评审（交付前审这一步的文件）</div><span class="chip on">产品</span><span class="chip">开发</span><span class="chip">测试</span><div class="row" style="margin-top:4px"><span class="sm muted">通过规则</span><span class="tag pri">任一人同意</span><span class="tag">全部同意</span></div>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- ───────────────────────────────────────── 其他页 -->
+<div class="sec">
+<h2><span class="no">11</span>其他页面（只改文案和小处，不画图）</h2>
+<table class="t">
+<tr><th style="width:150px">页面</th><th>改什么</th></tr>
+<tr><td>项目 · 配置</td><td>去掉「流程空间」这一行（它不是配置）；表头「成员（下指令、评审）」「数字员工（执行）」改为「成员」「数字员工」，在表头上方一句话说明「成员下指令、提交、评审；数字员工干活」；「跟随最新发布版 v1，发起时锁定版本」改为「用最新发布的 v1；已发起的流程不受之后的修改影响」；没配齐的角色那一行标红并写缺什么</td></tr>
+<tr><td>团队 · 成员与数字员工</td><td>数字员工卡片：去掉「原生智能体 · MiniMax-M3」，改显示技能和「最近：在 F-1001 技术方案 干活」；「在 Agent 平台里编辑」改为「去 Atlas 编辑」；去掉「产出物的格式写在数字员工的技能里……」和「团队权限存在用户中心……」两行说明；成员表加一列「在项目里担任」</td></tr>
+<tr><td>团队 · 设置</td><td>团队管理员一栏去掉「Owner（用户中心团队数据权限）」，只说「团队管理员能配置团队和流程，至少保留一个」；通知一栏去掉「渠道要部署时配好凭据才会真的推」，没配好的渠道开关置灰并提示「还没接入，联系管理员」；「在本租户里唯一」改为「同一企业里不能重名」</td></tr>
+<tr><td>流程市场 · 详情</td><td>去掉「角色是占位：……产出物的格式看数字员工的技能」，改成角色表里一句「拷贝后在项目里给每个角色配人和数字员工」；已拷贝提示缩成一行「研发一部已拷贝过（v1）· 查看」</td></tr>
+<tr><td>个人设置</td><td>不变</td></tr>
+<tr><td>通知</td><td>分「要你处理」和「动态」两组，要你处理的排前面；文案去掉编号重复（「F-1001 支付回调幂等 0916 · 」改成两行：流程名一行、事情一行）</td></tr>
+<tr><td>空状态</td><td>统一成「一句话现状 + 一个按钮」，不写原理（例：「还没有流程模板」→ 按钮「从流程市场拷贝」「空白新建」）</td></tr>
+</table>
+</div>
+
+<!-- ───────────────────────────────────────── 缺陷 -->
+<div class="sec">
+<h2><span class="no">12</span>走查时发现的缺陷（和方案一起修）</h2>
+<table class="t">
+<tr><th style="width:240px">缺陷</th><th>改法</th></tr>
+<tr><td>评审记录把提交编号当文件名显示</td><td>评审记录显示这一轮提交的文件名</td></tr>
+<tr><td>Markdown 文件预览是原文</td><td>文件预览按类型渲染：Markdown 渲染成文档，代码 / 补丁等宽显示</td></tr>
+<tr><td>打开步骤页时对话停在顶部</td><td>打开时滚到最新一条</td></tr>
+<tr><td>数字员工的过程发言是英文</td><td>开工说明里要求用中文说话（TeamFlow 发的开工说明里加一句，不改智能体配置）</td></tr>
+</table>
+</div>
+
+<!-- ───────────────────────────────────────── 要你定的 -->
+<div class="sec">
+<h2><span class="no">13</span>需要你定的</h2>
+<table class="t">
+<tr><th style="width:30px">#</th><th style="width:330px">问题</th><th>我的建议</th></tr>
+<tr><td>1</td><td>流程详情、流程空间、追溯合成一个流程页的三个标签（概览 / 文件 / 记录）</td><td>合。三者都是「这条流程」的不同面，来回跳页面是现在最大的折返</td></tr>
+<tr><td>2</td><td>界面上「节点」改叫「步骤」，「流程空间」改叫「文件」，「追溯」改叫「记录」</td><td>改。设计文档和代码里保留原来的词，只改界面文案</td></tr>
+<tr><td>3</td><td>步骤状态改名（见第 2 节），「准入 / 准出」保留</td><td>按表改；准入 / 准出保留</td></tr>
+<tr><td>4</td><td>提交评审从弹窗改到步骤页右侧「交付」页签里直接勾选提交</td><td>改。弹窗只留给「从其他文件夹选」</td></tr>
+<tr><td>5</td><td>「接管 / 交还」改叫「暂停数字员工 / 让它继续」，按钮放到步骤页头</td><td>改</td></tr>
+<tr><td>6</td><td>步骤页隐藏 Atlas 的审批模式选择器（自动 / 手动 / 规划）</td><td>隐藏。TeamFlow 里数字员工按智能体的默认模式跑，要人确认的操作照样会弹卡片</td></tr>
+<tr><td>7</td><td>界面里指代 Agent 平台用「Atlas」</td><td>用。用户在顶栏切换应用时看到的就是 Atlas</td></tr>
+<tr><td>8</td><td>刚发起的流程在概览里引导「上传资料 → 开始第一步」，并支持直接拖文件</td><td>做</td></tr>
+</table>
+</div>
+
+</div>
+</body>
+</html>
