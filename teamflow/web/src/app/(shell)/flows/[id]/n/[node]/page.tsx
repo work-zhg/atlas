@@ -13,9 +13,9 @@ import { useQueryClient } from "@tanstack/react-query";
 import { App, Button, Input, Tooltip } from "antd";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 
-import { AtlasChatTheme, ThreadConversation, type Message, type SubmitRun } from "@atlas/chat-ui";
+import { AtlasChatTheme, ThreadConversation, type ConversationStreamState, type Message, type SubmitRun } from "@atlas/chat-ui";
 
 import { NodePanel } from "@/components/NodePanel";
 import { AgentChip, Empty, Icon, LoadError, Loading, NodeStatusTag, StepNo, Who } from "@/components/ui";
@@ -214,8 +214,21 @@ function Conversation({
   nameOf: (id: string | null | undefined) => string;
 }) {
   const { busy, act } = useNodeAction(p, node);
+  const qc = useQueryClient();
   const thread = node.session.thread_id;
   const mine = node.i_am_executor;
+
+  // 数字员工写了文件、或这一轮结束了：刷新文件列表（交付页签）。TeamFlow 的事件里没有「写了文件」
+  const seen = useRef({ running: false, files: 0 });
+  const onStreamState = useCallback(
+    (st: ConversationStreamState) => {
+      const prev = seen.current;
+      if (st.filesWritten !== prev.files || (prev.running && !st.running))
+        void qc.invalidateQueries({ queryKey: ["process", p.id, "space"] });
+      seen.current = { running: st.running, files: st.filesWritten };
+    },
+    [qc, p.id],
+  );
 
   // 开新一轮经 TeamFlow：它记下 run 和步骤的对应，幂等键就是对话组件给的那个
   const submitRun = useMemo<SubmitRun>(
@@ -263,6 +276,7 @@ function Conversation({
           readOnlyHint={hint}
           submitRun={submitRun}
           renderUserMessage={renderUserMessage}
+          onStreamState={onStreamState}
           placeholder={`给「${agent ?? "数字员工"}」下指令、回答它的问题…`}
         />
       </AtlasChatTheme>
