@@ -8,7 +8,7 @@ import type { Message } from "../api/types";
 import { Icon } from "../components/Icon";
 import { Markdown } from "../components/Markdown";
 import { relativeTime } from "../lib/format";
-import { planConversation, timelineEntries } from "../lib/conversation";
+import { planConversation, timelineEntries, type ConversationEntry } from "../lib/conversation";
 import { APPROVAL_MODE_LABEL, type AgentModeData, type ApprovalMode } from "../lib/events";
 import {
   isStreamDone,
@@ -48,8 +48,27 @@ interface Props {
   feedback?: boolean;
   /** 重新生成：用最后一个问题再问一次。不给 = 不显示这个按钮 */
   onRegenerate?: () => void;
-  /** 嵌入方自己画某些用户消息（如 AI TeamFlow 把系统发的开工说明画成卡片）。返回 undefined = 照常画气泡 */
-  renderUserMessage?: (message: Message, text: string) => ReactNode | undefined;
+  /**
+   * 嵌入方自己画某些用户消息（如 AI TeamFlow 把系统发的开工说明画成卡片）。返回 undefined = 照常画气泡。
+   * runId = 这条消息开的 run（用户消息落库时不带 run，见 startedRuns）；认不出是 null。
+   */
+  renderUserMessage?: (message: Message, text: string, runId: string | null) => ReactNode | undefined;
+}
+
+/**
+ * 每条用户消息开的是哪个 run。用户消息落库时 run 还没建，不带 run_id；
+ * ★ 同一会话的 run 串行，所以紧跟着的助手消息属于哪个 run，这条用户消息开的就是哪个；
+ *   最后一条用户消息后面还在跑的，就是实时区的 run。那个 run 没留下回答（失败）就认不出，不会认错。
+ */
+function startedRuns(entries: ConversationEntry[], showLive: boolean, liveRunId: string | undefined): Map<string, string> {
+  const out = new Map<string, string>();
+  entries.forEach((e, i) => {
+    if (e.kind !== "user") return;
+    const next = entries[i + 1];
+    const run = next ? (next.kind === "assistant" ? next.message.run_id : null) : showLive ? liveRunId : null;
+    if (run) out.set(e.message.id, run);
+  });
+  return out;
 }
 
 /** 助手正文：末段是结论，之前的都是过程性发言，弱化显示。 */
@@ -406,6 +425,7 @@ export function MessageStream({
 
   // 哪几条要画、实时区让不让位：规则在 lib/conversation.ts（与手机 App 共用）
   const { entries, showLive } = planConversation(messages, live, liveRunId);
+  const runOfUser = renderUserMessage ? startedRuns(entries, showLive, liveRunId) : undefined;
 
   return (
     <div className={styles.paneBody} ref={bodyRef}>
@@ -426,7 +446,7 @@ export function MessageStream({
       {entries.map((e) =>
         e.kind === "user" ? (
           <div key={e.message.id} className={`${styles.msg} ${styles.msgUser}`}>
-            {renderUserMessage?.(e.message, e.text) ?? <div className={styles.bubble}>{e.text}</div>}
+            {renderUserMessage?.(e.message, e.text, runOfUser?.get(e.message.id) ?? null) ?? <div className={styles.bubble}>{e.text}</div>}
           </div>
         ) : (
           <div key={e.message.id} className={styles.msg}>

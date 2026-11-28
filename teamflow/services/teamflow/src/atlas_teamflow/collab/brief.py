@@ -1,7 +1,7 @@
 """BriefRenderer：把工作单写成给数字员工的话。
 
 流程标题和工作说明；上游最近一次提交的文件路径（不拷贝、不带上游的对话）；成员上传的参考资料；
-约定产出写在「{节点名}/」下、不改上游提交的文件（有问题就提）；驳回或打回的意见；用中文说话。
+约定产出写在「{节点名}/」下、不改上游提交的文件（有问题就提）；驳回或打回的意见；用中文说话（放最前）。
 怎么措辞随智能体和技能调整，和状态机无关。
 """
 
@@ -12,8 +12,13 @@ from ..process.port import WorkOrder
 __all__ = ["render", "render_handback"]
 
 
+#: ★ 放最前面：放末尾时模型调工具前的话更容易说英文
+#:   （11-28 在 MiniMax-M3 上对比过；放最前也只是少一些，第一句常常还是英文）
+LANGUAGE = "全程用中文说话：包括每次调用工具前后说的话、过程说明和最后的回答。"
+
+
 def render(order: WorkOrder) -> str:
-    parts: list[str] = []
+    parts: list[str] = [LANGUAGE]
     if order.round > 1 and order.feedback:
         parts.append(
             f"这是「{order.node_name}」的第 {order.round} 轮。评审意见：\n{order.feedback.strip()}"
@@ -37,7 +42,6 @@ def render(order: WorkOrder) -> str:
     parts.append(
         f"产出写在工作目录的「{order.node_name}/」下。上游提交的文件不要改，觉得有问题就提出来。"
     )
-    parts.append("和人说话、写过程说明都用中文。")
     return "\n\n".join(parts)
 
 

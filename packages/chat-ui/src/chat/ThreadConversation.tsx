@@ -73,8 +73,8 @@ export interface ThreadConversationProps {
   placeholder?: string;
   /** 不显示审批模式选择器（嵌入方的会话按智能体默认的模式跑，如 AI TeamFlow） */
   hideModePicker?: boolean;
-  /** 嵌入方自己画某些用户消息（如系统发的开工说明）。返回 undefined = 照常画气泡 */
-  renderUserMessage?: (message: Message, text: string) => ReactNode | undefined;
+  /** 嵌入方自己画某些用户消息（如系统发的开工说明）。runId = 这条消息开的 run；返回 undefined = 照常画气泡 */
+  renderUserMessage?: (message: Message, text: string, runId: string | null) => ReactNode | undefined;
 }
 
 /** 附件路径并进消息正文：智能体按路径去工作区里读 */

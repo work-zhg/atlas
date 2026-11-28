@@ -230,12 +230,12 @@ function Conversation({
     [p.id, node.id],
   );
 
-  // 系统发的话：按 run 认（指令记了它开的 run）
+  // 系统发的话：按 run 认（指令记了它开的 run，对话组件告诉我们每条消息开的 run）
   const instructions = detail?.instructions;
   const renderUserMessage = useMemo(() => {
     const byRun = new Map((instructions ?? []).filter((i) => i.run_id && SYSTEM[i.kind]).map((i) => [i.run_id!, i]));
-    return (m: Message, text: string): ReactNode | undefined => {
-      const ins = m.run_id ? byRun.get(m.run_id) : undefined;
+    return (_m: Message, text: string, runId: string | null): ReactNode | undefined => {
+      const ins = runId ? byRun.get(runId) : undefined;
       if (!ins) return undefined;
       return <SystemCard kind={ins.kind} text={text} agent={agent} by={ins.kind === "handback" ? nameOf(ins.author) : null} />;
     };
