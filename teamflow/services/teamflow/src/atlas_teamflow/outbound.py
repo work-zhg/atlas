@@ -1,38 +1,54 @@
-"""出站身份（内网身份传递 §3、§10）：本服务调用户中心、Atlas 时带什么请求头。
+"""出站身份：本服务调用户中心、Agent 平台时带什么请求头。
 
-    use_identity(uid, tenant)   之后本任务发出的内网调用都以这个人的名义
-    outbound_headers()          X-Uid / X-Tenant-Id 透传，X-Caller-App 写 teamflow；不写 X-Auth-Uid
-                                （按谁判由 Atlas 按 Agent 决定）
+    use_identity(uid)       之后本任务发出的内网调用都以这个人的名义（X-Uid）
+    acting_as(uid)          临时换一个人（如以接入人的身份授权、以作者的身份开 run），出块还原
+    outbound_headers()      X-Uid、X-Tenant-Id（当前租户）、X-Caller-App: teamflow；不写 X-Auth-Uid
+                            （按谁的权限判由 Agent 平台按智能体决定）
 
-★ 请求里由主体解析设置（谁在操作）；Agent 监督器投递指令时设为指令的作者、没有作者（系统
-  投递）时为流程发起人（§10）。
+★ 租户取 atlas_tenancy 的当前租户：请求入口进入了租户、后台按数据所属的租户逐条进入，
+  调下游时自然带上，不用每处传。
 """
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any
 from uuid import UUID
 
-__all__ = ["CALLER_APP", "IdentityScopeMiddleware", "outbound_headers", "use_identity"]
+from atlas_tenancy import TENANT_HEADER, TenantScope
+
+__all__ = ["CALLER_APP", "IdentityScopeMiddleware", "acting_as", "outbound_headers", "use_identity"]
 
 #: 本服务的应用编码（用户中心 uc_app.code）
 CALLER_APP = "teamflow"
 
-_current: ContextVar[dict[str, str] | None] = ContextVar("tf_outbound_identity", default=None)
+_uid: ContextVar[str | None] = ContextVar("tf_outbound_uid", default=None)
 
 
-def use_identity(uid: UUID | str | None, tenant: str | None = None) -> None:
-    h: dict[str, str] = {}
-    if uid:
-        h["X-Uid"] = str(uid)
-    if tenant:
-        h["X-Tenant-Id"] = tenant
-    _current.set(h or None)
+def use_identity(uid: UUID | str | None) -> None:
+    _uid.set(str(uid) if uid else None)
+
+
+@contextmanager
+def acting_as(uid: UUID | str | None) -> Iterator[None]:
+    token = _uid.set(str(uid) if uid else None)
+    try:
+        yield
+    finally:
+        _uid.reset(token)
 
 
 def outbound_headers() -> dict[str, str]:
-    return {**(_current.get() or {}), "X-Caller-App": CALLER_APP}
+    h = {"X-Caller-App": CALLER_APP}
+    uid = _uid.get()
+    if uid:
+        h["X-Uid"] = uid
+    tenant = TenantScope.current()
+    if tenant is not None:
+        h[TENANT_HEADER] = str(tenant)
+    return h
 
 
 class IdentityScopeMiddleware:
@@ -45,8 +61,9 @@ class IdentityScopeMiddleware:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        token = _current.set(None)
+        token = _uid.set(None)
         try:
-            await self.app(scope, receive, send)
+            with TenantScope.isolated():
+                await self.app(scope, receive, send)
         finally:
-            _current.reset(token)
+            _uid.reset(token)

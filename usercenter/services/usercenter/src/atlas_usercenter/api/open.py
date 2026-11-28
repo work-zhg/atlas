@@ -157,6 +157,7 @@ async def token(body: TokenBody, session: SessionDep, settings: SettingsDep) -> 
 @router.get("/tenants")
 async def tenants(app: OpenAppDep, session: SessionDep) -> list[dict[str, Any]]:
     """开通了本应用的租户 —— 多租户应用据此为每个租户换令牌（租户设计 §09）。
+    is_system 标出系统租户。
 
     ★ 只返回开通了**本应用**的；租户内的任何数据都不在这里。
     """
@@ -170,7 +171,16 @@ async def tenants(app: OpenAppDep, session: SessionDep) -> list[dict[str, Any]]:
             )
         ).scalars()
         return [
-            {"id": str(t.uuid), "code": t.code, "name": t.name, "status": t.status} for t in rows
+            {
+                "id": str(t.uuid),
+                "code": t.code,
+                "name": t.name,
+                "status": t.status,
+                # 系统租户（运营团队所在的）：业务系统据此判「运营管理员」这类
+                # 只在系统租户里成立的权限
+                "is_system": t.is_system,
+            }
+            for t in rows
         ]
 
 

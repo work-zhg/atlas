@@ -1,141 +1,279 @@
-"""对外视图：API 里的 id 一律为 uuid。"""
+"""接口的输出形状：表行 → JSON。uuid 一律转字符串，时间是 ISO 8601（UTC）。"""
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
+from uuid import UUID
 
-from ..db.models import (
-    FileTemplate,
-    FileTemplateVersion,
-    FlowTemplate,
-    FlowTemplateVersion,
-    Project,
-    Team,
-    TeamAgent,
-)
+from ..collab.models import Instruction, NodeSession
+from ..inbox.models import Notification
+from ..market.models import CATEGORIES, MarketTemplate, MarketVersion
+from ..process.models import Process, ProcessEvent, ProcessNode, ReviewRound, Submission, Vote
+from ..projects.models import Project
+from ..teams.agents import AgentCard
+from ..teams.models import Team, TeamAgent
+from ..templates.models import FlowTemplate, TemplateDraft, TemplateVersion
 
-
-def iso(dt: datetime | None) -> str | None:
-    return dt.isoformat() if dt else None
-
-
-def sid(v: Any) -> str | None:
-    return str(v) if v is not None else None
-
-
-def file_template_view(t: FileTemplate, cur: FileTemplateVersion | None = None) -> dict[str, Any]:
-    return {
-        "id": str(t.uuid),
-        "name": t.name,
-        "icon": t.icon,
-        "description": t.description,
-        "usage": t.usage,
-        "status": t.status,
-        "version": t.version,
-        "current_version": file_version_view(cur) if cur else None,
-        "updated_at": iso(t.updated_at),
-    }
+__all__ = [
+    "agent_out",
+    "card_out",
+    "event_out",
+    "instruction_out",
+    "market_out",
+    "node_out",
+    "notification_out",
+    "process_out",
+    "project_out",
+    "review_out",
+    "session_out",
+    "submission_out",
+    "team_out",
+    "template_out",
+]
 
 
-def file_version_view(v: FileTemplateVersion, *, content: bool = False) -> dict[str, Any]:
-    out = {
-        "id": str(v.uuid),
-        "version_no": v.version_no,
-        "file_name": v.file_name,
-        "size_bytes": v.size_bytes,
-        "sha256": v.sha256,
-        "change_note": v.change_note,
-        "uploaded_by": sid(v.uploaded_by),
-        "uploaded_at": iso(v.uploaded_at),
-    }
-    if content:
-        out["content"] = v.content
-    return out
+def _t(v: datetime | None) -> str | None:
+    return v.isoformat() if v else None
 
 
-def flow_version_view(v: FlowTemplateVersion, *, definition: bool = False) -> dict[str, Any]:
-    out = {
-        "id": str(v.uuid),
-        "label": f"v{v.major}.{v.minor}",
-        "roles": v.roles,
-        "change_note": v.change_note,
-        "published_by": sid(v.published_by),
-        "published_at": iso(v.published_at),
-    }
-    if definition:
-        out["definition"] = v.definition
-    return out
+def _u(v: UUID | None) -> str | None:
+    return str(v) if v else None
 
 
-def flow_template_view(
-    t: FlowTemplate, cur: FlowTemplateVersion | None, **extra: Any
-) -> dict[str, Any]:
-    return {
-        "id": str(t.uuid),
-        "name": t.name,
-        "icon": t.icon,
-        "description": t.description,
-        "scope": t.scope,
-        "builtin": t.builtin,
-        "status": t.status,
-        "version": t.version,
-        "current_version": flow_version_view(cur) if cur else None,
-        "updated_at": iso(t.updated_at),
-        **extra,
-    }
-
-
-def team_view(t: Team, **extra: Any) -> dict[str, Any]:
+def team_out(t: Team, level: str | None = None) -> dict[str, Any]:
     return {
         "id": str(t.uuid),
         "name": t.name,
         "description": t.description,
         "status": t.status,
         "version": t.version,
-        "created_at": iso(t.created_at),
-        **extra,
+        "my_level": level,
+        "created_at": _t(t.created_at),
     }
 
 
-def agent_view(a: TeamAgent, **extra: Any) -> dict[str, Any]:
+def agent_out(a: TeamAgent, stats: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "id": str(a.uuid),
         "atlas_agent_id": a.atlas_agent_id,
         "name": a.name,
-        "avatar_key": a.avatar_key,
-        "description": a.description,
+        "kind": a.kind,
         "model": a.model,
+        "description": a.description,
         "available": a.available,
-        "synced_at": iso(a.synced_at),
-        **extra,
+        "added_by": str(a.added_by),
+        "synced_at": _t(a.synced_at),
+        "stats": stats or {"working": 0, "passed": 0, "avg_rounds": None},
     }
 
 
-def project_view(p: Project, **extra: Any) -> dict[str, Any]:
+def card_out(c: AgentCard) -> dict[str, Any]:
+    return {
+        "atlas_agent_id": c.atlas_agent_id,
+        "name": c.name,
+        "kind": c.kind,
+        "model": c.model,
+        "description": c.description,
+        "skills": c.skills,
+        "available": c.available,
+    }
+
+
+def template_out(
+    t: FlowTemplate,
+    draft: TemplateDraft | None = None,
+    versions: list[TemplateVersion] | None = None,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "id": str(t.uuid),
+        "team_id": str(t.team_uuid),
+        "name": t.name,
+        "description": t.description,
+        "icon": t.icon,
+        "status": t.status,
+        "latest_version_no": t.latest_version_no,
+        "origin": (
+            {"market_template_id": str(t.origin_market_uuid), "version": t.origin_market_version}
+            if t.origin_market_uuid
+            else None
+        ),
+        "updated_at": _t(t.updated_at),
+    }
+    if draft is not None:
+        out["draft"] = {
+            "structure": draft.structure,
+            "rev": draft.rev,
+            "base_version_no": draft.base_version_no,
+            "editor": _u(draft.editor),
+            "updated_at": _t(draft.updated_at),
+        }
+    if versions is not None:
+        out["versions"] = [
+            {
+                "id": str(v.uuid),
+                "version_no": v.version_no,
+                "note": v.note,
+                "published_by": str(v.published_by),
+                "published_at": _t(v.published_at),
+            }
+            for v in versions
+        ]
+    return out
+
+
+def market_out(
+    t: MarketTemplate,
+    latest: MarketVersion | None = None,
+    *,
+    maintainer: bool = False,
+    stats: tuple[int, int] | None = None,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "id": str(t.uuid),
+        "name": t.name,
+        "category": t.category,
+        "category_name": CATEGORIES.get(t.category, t.category),
+        "description": t.description,
+        "who": t.who,
+        "icon": t.icon,
+        "color": t.color,
+        "status": t.status,
+        "latest_version": t.latest_version,
+    }
+    if latest is not None:
+        out["structure"] = latest.structure
+        out["published_at"] = _t(latest.published_at)
+    if maintainer:
+        out["draft"] = t.draft
+        out["version"] = t.version
+    if stats is not None:
+        out["copies"], out["tenants"] = stats
+    return out
+
+
+def project_out(p: Project) -> dict[str, Any]:
     return {
         "id": str(p.uuid),
         "team_id": str(p.team_uuid),
         "name": p.name,
         "description": p.description,
-        "flow_template_id": sid(p.flow_template_uuid),
         "status": p.status,
         "version": p.version,
-        "updated_at": iso(p.updated_at),
-        **extra,
+        "created_at": _t(p.created_at),
     }
 
 
-async def user_names(session: Any, ids: set[Any]) -> dict[str, str]:
-    """uuid → 姓名（本地用户缓存）。"""
-    from sqlalchemy import select
-
-    from ..db.models import TfUser
-
-    ids = {i for i in ids if i}
-    if not ids:
-        return {}
+def process_out(p: Process) -> dict[str, Any]:
     return {
-        str(u.uuid): u.name
-        for u in await session.scalars(select(TfUser).where(TfUser.uuid.in_(ids)))
+        "id": str(p.uuid),
+        "no": p.no,
+        "code": f"F-{p.no}",
+        "title": p.title,
+        "team_id": str(p.team_uuid),
+        "project_id": str(p.project_uuid),
+        "template_id": str(p.template_uuid),
+        "template_version_id": str(p.template_version_uuid),
+        "space_id": str(p.space_uuid),
+        "status": p.status,
+        "started_by": str(p.started_by),
+        "started_at": _t(p.created_at),
+        "finished_at": _t(p.finished_at),
+    }
+
+
+def node_out(n: ProcessNode) -> dict[str, Any]:
+    return {
+        "id": n.node_id,
+        "name": n.name,
+        "exec_role": n.exec_role,
+        "status": n.status,
+        "round": n.round,
+        "atlas_agent_id": n.atlas_agent_id,
+        "started_at": _t(n.started_at),
+        "passed_at": _t(n.passed_at),
+    }
+
+
+def submission_out(s: Submission) -> dict[str, Any]:
+    return {
+        "id": str(s.uuid),
+        "round": s.round,
+        "paths": list(s.paths),
+        "submitted_by": str(s.submitted_by),
+        "submitted_at": _t(s.created_at),
+    }
+
+
+def review_out(r: ReviewRound, votes: list[Vote]) -> dict[str, Any]:
+    return {
+        "id": str(r.uuid),
+        "stage": r.stage,
+        "round": r.round,
+        "roles": list(r.roles),
+        "rule": r.rule,
+        "reviewers": list(r.reviewers),
+        "submissions": list(r.submissions),
+        "status": r.status,
+        "opened_at": _t(r.created_at),
+        "closed_at": _t(r.closed_at),
+        "votes": [
+            {
+                "reviewer": str(v.reviewer),
+                "decision": v.decision,
+                "comment": v.comment,
+                "return_to": v.return_to,
+                "at": _t(v.created_at),
+            }
+            for v in votes
+        ],
+    }
+
+
+def session_out(ns: NodeSession | None, *, can_send: bool) -> dict[str, Any]:
+    if ns is None:
+        return {"thread_id": None, "atlas_agent_id": None, "state": None, "can_send": False}
+    return {
+        "thread_id": ns.atlas_thread_id,
+        "atlas_agent_id": ns.atlas_agent_id,
+        "state": ns.state,
+        "taken_by": _u(ns.taken_by),
+        "last_run_id": ns.last_run_id,
+        "can_send": can_send,
+    }
+
+
+def instruction_out(i: Instruction) -> dict[str, Any]:
+    return {
+        "id": str(i.uuid),
+        "kind": i.kind,
+        "round": i.round,
+        "author": _u(i.author),
+        "status": i.status,
+        "run_id": i.atlas_run_id,
+        "sent_at": _t(i.sent_at),
+        "last_error": i.last_error,
+        "created_at": _t(i.created_at),
+    }
+
+
+def event_out(e: ProcessEvent) -> dict[str, Any]:
+    data = {k: v for k, v in e.data.items() if k != "to"}
+    return {
+        "seq": e.seq,
+        "type": e.type,
+        "node_id": e.node_id,
+        "actor": _u(e.actor),
+        "data": data,
+        "at": _t(e.created_at),
+    }
+
+
+def notification_out(n: Notification) -> dict[str, Any]:
+    return {
+        "id": str(n.uuid),
+        "text": n.text,
+        "link": n.link,
+        "read": n.read_at is not None,
+        "at": _t(n.created_at),
     }

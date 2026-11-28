@@ -1,164 +1,27 @@
-export type Level = "NONE" | "READ" | "WRITE" | "OWNER";
+/** 后端接口的形状（atlas_teamflow/api/views.py）。uuid 都是字符串，时间是 ISO 8601。 */
 
-export interface MenuNode {
-  code?: string;
-  name: string;
-  icon?: string | null;
-  path?: string | null;
-  children?: MenuNode[];
-}
+export type Level = "OWNER" | "WRITE" | "READ" | "NONE";
+export type MarketLevel = "maintain" | "view";
 
 export interface Me {
-  user: { id: string; account: string; name: string; email: string | null };
-  roles: string[];
-  permissions: string[];
-  menus: MenuNode[];
-  /** 数据权限：对各数据编码下全部数据的级别（如 { Team: "OWNER" }），与角色无关 */
-  data_levels?: Record<string, "READ" | "WRITE" | "OWNER" | "NONE">;
-}
-
-export interface Issue {
-  message: string;
-  node: string | null;
-  field?: string | null;
-}
-
-// ───────────── 文件模板
-
-export type Usage = "artifact" | "review_rule" | "other";
-
-export interface FileVersion {
-  id: string;
-  version_no: number;
-  file_name: string;
-  size_bytes: number;
-  sha256: string;
-  change_note: string;
-  uploaded_by: string | null;
-  uploaded_by_name?: string | null;
-  uploaded_at: string;
-  content?: string;
-}
-
-export interface FileTemplate {
   id: string;
   name: string;
-  icon: string | null;
-  description: string | null;
-  usage: Usage;
-  status: "active" | "disabled";
-  version: number;
-  current_version: FileVersion | null;
-  updated_at: string;
-  reference_count?: number;
-  versions?: FileVersion[];
-  references?: { flow_template_id: string; flow_template: string; node_id: string; node: string; in: string }[];
-  content?: string | null;
+  tenant_id: string;
+  operations: string[];
+  menus: unknown[];
+  system_tenant: boolean;
+  all_teams_level: Level;
+  market: MarketLevel;
 }
 
-// ───────────── 流程模板
-
-export interface Review {
-  role: string;
-  rule: "any" | "all";
-}
-
-export interface NodeConfig {
-  name: string;
-  exec_role: string;
-  output_name: string;
-  artifact_file_template_id: string | null;
-  exit_review: Review;
-  admit_review: Review | null;
-}
-
-export type Step = { type: "node"; id: string } | { type: "parallel"; tracks: { nodes: string[] }[] };
-
-export interface Definition {
-  flow: Step[];
-  nodes: Record<string, NodeConfig>;
-}
-
-export interface FlowVersion {
-  id: string;
-  label: string;
-  roles: { exec: string[]; review: string[] };
-  change_note: string;
-  published_by: string | null;
-  published_by_name?: string | null;
-  published_at: string;
-  definition?: Definition;
-  deps?: Record<string, string[]>;
-}
-
-export interface Draft {
-  definition: Definition;
-  deps: Record<string, string[]>;
-  base_version_id: string | null;
-  editor_id: string | null;
-  editor_name: string | null;
-  editing_by_me: boolean;
-  updated_at: string;
-  version: number;
-  errors: Issue[];
-  warnings: Issue[];
-}
-
-export interface FlowTemplate {
-  id: string;
-  name: string;
-  icon: string | null;
-  description: string | null;
-  scope: string | null;
-  builtin: boolean;
-  status: "active" | "disabled";
-  version: number;
-  current_version: FlowVersion | null;
-  updated_at: string;
-  node_count: number;
-  project_count: number;
-  has_draft: boolean;
-  draft_editor_name?: string | null;
-  definition?: Definition | null;
-  deps?: Record<string, string[]>;
-  versions?: FlowVersion[];
-  projects?: Project[];
-  draft?: Draft | null;
-}
-
-// ───────────── 团队与项目
-
-export interface Subject {
-  type: "USER" | "DEPT";
+export interface Person {
   id: string;
   name: string;
   account?: string;
+  dept?: string | null;
 }
 
-export interface Grant {
-  id: string;
-  permission: Level;
-  subject: Subject;
-  include_sub: boolean;
-}
-
-export interface Holder {
-  user: { id: string; account: string; name: string };
-  permission: Level;
-  roles?: string[];
-}
-
-export interface TeamAgent {
-  id: string;
-  atlas_agent_id: string;
-  name: string;
-  avatar_key: string | null;
-  description: string | null;
-  model: string | null;
-  available: boolean;
-  synced_at: string;
-  roles?: string[];
-}
+// ───────────────────────────── 团队
 
 export interface Team {
   id: string;
@@ -166,207 +29,324 @@ export interface Team {
   description: string | null;
   status: "active" | "archived";
   version: number;
-  my_level?: Level;
-  member_count?: number;
-  agent_count?: number;
-  project_count?: number;
-  agents?: { name: string; avatar_key: string | null; available: boolean }[];
-  warnings?: string[];
+  my_level: Level | null;
+  created_at: string;
 }
 
-export interface TeamDetail extends Omit<Team, "agents"> {
-  can: { edit: boolean; member: boolean; agent: boolean; create: boolean };
-  members: { grants: Grant[]; holders: Holder[]; can_manage: boolean };
-  agents: TeamAgent[];
-  projects: Project[];
+export interface TeamMember {
+  id: string;
+  name: string;
+  account: string;
+  level: Level;
 }
+
+/** 用户中心里团队这条数据的授权行（人或部门）：改级别、移除按授权行。 */
+export interface TeamGrant {
+  id: string;
+  subject: { type: "USER" | "DEPT"; id: string; name?: string };
+  permission: Level;
+  include_sub?: boolean;
+}
+
+export interface TeamMembers {
+  grants: TeamGrant[];
+  members: TeamMember[];
+}
+
+export interface TeamAgent {
+  id: string;
+  atlas_agent_id: string;
+  name: string;
+  kind: string;
+  model: string | null;
+  description: string | null;
+  available: boolean;
+  added_by: string;
+  synced_at: string | null;
+  stats: { working: number; passed: number; avg_rounds: number | null };
+}
+
+export interface AgentCard {
+  atlas_agent_id: string;
+  name: string;
+  kind: string;
+  model: string | null;
+  description: string | null;
+  skills: string[];
+  available: boolean;
+}
+
+export interface AgentCandidate extends AgentCard {
+  added: boolean;
+}
+
+export interface TeamChannels {
+  wecom: boolean;
+  dingtalk: boolean;
+  email_digest: boolean;
+}
+
+// ───────────────────────────── 流程结构（模板草稿、版本、市场版本共用）
+
+export type Rule = "any" | "all";
+
+export interface ReviewSpec {
+  roles: string[];
+  rule: Rule;
+}
+
+export interface NodeSpec {
+  name: string;
+  instructions: string;
+  exec_role: string;
+  admit: ReviewSpec | null;
+  exit: ReviewSpec;
+}
+
+export type Step = { type: "node"; id: string } | { type: "parallel"; tracks: { nodes: string[] }[] };
+
+export interface Structure {
+  roles: Record<string, string>;
+  flow: Step[];
+  nodes: Record<string, NodeSpec>;
+}
+
+export interface Issue {
+  level: "error" | "warn";
+  message: string;
+  node: string | null;
+  field: string | null;
+}
+
+// ───────────────────────────── 流程模板与市场
+
+export interface Template {
+  id: string;
+  team_id: string;
+  name: string;
+  description: string | null;
+  icon: string | null;
+  status: "active" | "archived";
+  latest_version_no: number;
+  origin: { market_template_id: string; version: number } | null;
+  updated_at: string | null;
+  draft?: {
+    structure: Structure;
+    rev: number;
+    base_version_no: number;
+    editor: string | null;
+    updated_at: string | null;
+  };
+  versions?: { id: string; version_no: number; note: string | null; published_by: string; published_at: string }[];
+}
+
+export type MarketCategory = "rd" | "content" | "legal" | "data";
+
+export interface MarketTemplate {
+  id: string;
+  name: string;
+  category: MarketCategory;
+  category_name: string;
+  description: string | null;
+  who: string | null;
+  icon: string | null;
+  color: string | null;
+  status: "draft" | "listed" | "unlisted";
+  latest_version: number;
+  structure?: Structure;
+  published_at?: string | null;
+  draft?: Structure | null;
+  version?: number;
+  copies?: number;
+  tenants?: number;
+}
+
+// ───────────────────────────── 项目
 
 export interface Project {
   id: string;
   team_id: string;
   name: string;
   description: string | null;
-  flow_template_id: string | null;
   status: "active" | "archived";
   version: number;
-  updated_at: string;
-  template_name?: string | null;
-  template_version?: string | null;
-  completion?: { total: number; done: number };
+  created_at: string;
+  running?: number;
+  todos?: number;
 }
 
-export interface RoleRow {
-  name: string;
-  kind: "exec" | "review";
-  users: { id: string; name: string; account: string | null; is_member: boolean }[];
-  agents: { id: string; name: string; available: boolean }[];
-  problems: string[];
-  nodes: { node: string; as: string; rule?: "any" | "all" }[];
-}
-
-export interface ProjectRoles {
-  template: { id: string; name: string; status: string; version: string } | null;
-  roles: RoleRow[];
-  incomplete: number;
+export interface Binding {
+  template: Template;
+  version_no: number;
+  roles_of_template: Record<string, string>;
+  exec_roles: string[];
+  assignments: Record<string, { members: string[]; agent: string | null }>;
+  ready: boolean;
+  missing: { role: string; what: "no_member" | "no_agent" | string }[];
+  running: number;
 }
 
 export interface ProjectDetail extends Project {
-  team: Team;
-  can: { configure: boolean; archive: boolean };
-  roles: ProjectRoles;
-  hints: { kind: string; message: string }[];
+  bindings: Binding[];
 }
 
-export interface DirUser {
-  id: string;
-  account: string;
-  name: string;
-  dept_id: string;
-}
+// ───────────────────────────── 流程
 
-export interface DirDept {
-  id: string;
-  parent_id: string | null;
-  name: string;
-}
-
-// ───────────── 流程运行
-
-/** exited = 准出通过、待下游准入；admit_review = 本节点开工前的准入评审中（审核上游产物） */
 export type NodeStatus = "pending" | "working" | "exit_review" | "exited" | "admit_review" | "passed" | "returned";
+export type ProcessStatus = "running" | "completed" | "terminated";
 
-export interface ProcessSummary {
+export interface Process {
   id: string;
   no: number;
+  code: string;
   title: string;
-  status: "running" | "completed" | "terminated";
-  started_by: string | null;
+  team_id: string;
+  project_id: string;
+  template_id: string;
+  template_version_id: string;
+  space_id: string;
+  status: ProcessStatus;
+  started_by: string;
   started_at: string;
   finished_at: string | null;
-  progress: { passed: number; total: number };
-  waiting: { node: string; stage: string; who: string }[];
-  notices: string[];
 }
 
-export interface ProcessNodeState {
-  status: NodeStatus;
-  stage: string;
+export interface ProcessRow extends Process {
+  nodes: { id: string; name: string; status: NodeStatus; round: number }[];
+  waiting_for_me: boolean;
+}
+
+export interface Submission {
+  id: string;
   round: number;
-  notice: string | null;
-  agent: string | null;
-  agent_running: boolean;
-  artifact: { version: number; round: number; commit: string } | null;
-  executor: boolean;
-  reviewer: boolean;
+  paths: string[];
+  submitted_by: string;
+  submitted_at: string;
 }
 
-export interface ProcessDetail extends ProcessSummary {
-  team_id: string;
-  team_name: string;
-  project_id: string;
-  project_name: string;
-  template_version: string;
-  definition: Definition;
-  deps: Record<string, string[]>;
-  nodes: Record<string, ProcessNodeState>;
-  event_seq: number;
-  can: { terminate: boolean };
+export interface NodeSession {
+  thread_id: string | null;
+  atlas_agent_id: string | null;
+  state: "active" | "taken_over" | "frozen" | "stopped" | null;
+  taken_by?: string | null;
+  last_run_id?: string | null;
+  can_send: boolean;
 }
 
-export interface NodeDetail {
-  node_id: string;
+export interface NodeRow {
+  id: string;
   name: string;
-  config: NodeConfig;
+  exec_role: string;
   status: NodeStatus;
-  stage: string;
   round: number;
-  notice: string | null;
-  agent_running: boolean;
-  /** 节点的 Atlas 会话（对话区经代理读写它）；Agent 尚未开工时为空 */
-  atlas_thread_id: string | null;
-  file_template: { id: string; name: string; version: number } | null;
-  inputs: { node_id: string; node: string; output: string; version: number | null }[];
-  upstream: string[];
-  messages: {
-    id: string;
-    role: "user" | "agent" | "system";
-    author: string | null;
-    content: string;
-    status: "done" | "queued" | "streaming" | "failed";
-    round: number;
-    created_at: string;
-  }[];
-  /** 本节点产物在仓库里的路径（Agent 提交到这里）；未开工时为空 */
-  artifact_path: string | null;
-  repository: RepoInfo | null;
-  artifacts: {
-    version: number;
-    round: number;
-    commit: string;
-    path: string;
-    /** agent = 带本节点尾注的提交；user = 已绑定账号的成员；unknown = 认不出提交人 */
-    source: "agent" | "user" | "unknown";
-    by: string | null;
-    author: string | null;
-    author_login: string | null;
-    note: string | null;
-    current: boolean;
-    url: string | null;
-    committed_at: string | null;
-    created_at: string;
-  }[];
-  current_content: string | null;
-  reviews: {
-    id: string;
-    stage: "exit" | "admit";
-    round: number;
-    role: string;
-    rule: "any" | "all";
-    status: "open" | "passed" | "rejected" | "cancelled";
-    artifact_version: number | null;
-    reviewers: { id: string; name: string }[];
-    votes: { user: string | null; user_id: string; decision: "approve" | "reject"; comment: string | null; return_to: string | null; created_at: string }[];
-    opened_at: string;
-    closed_at: string | null;
-  }[];
-  can: { handle: boolean; vote: boolean; resubmit: boolean };
+  atlas_agent_id: string | null;
+  started_at: string | null;
+  passed_at: string | null;
 }
 
-export interface TodoItem {
-  kind: "work" | "exit_review" | "admit_review";
-  team_id: string;
-  project_id: string;
+export interface ProcessNode extends NodeRow {
+  executors: string[];
+  i_am_executor: boolean;
+  session: NodeSession;
+  open_review: { stage: "admit" | "exit"; reviewers: string[]; i_can_vote: boolean } | null;
+  latest_submission: Submission | null;
+}
+
+export interface ProcessDetail extends Process {
+  structure: Structure;
+  nodes: ProcessNode[];
+  roles: Record<string, string[]>;
+  can_run: boolean;
+  can_terminate: boolean;
+}
+
+export interface Vote {
+  reviewer: string;
+  decision: "approve" | "reject";
+  comment: string | null;
+  return_to: string | null;
+  at: string;
+}
+
+export interface Review {
+  id: string;
+  stage: "admit" | "exit";
+  round: number;
+  roles: string[];
+  rule: Rule;
+  reviewers: string[];
+  submissions: string[];
+  status: "open" | "approved" | "rejected" | "cancelled";
+  opened_at: string;
+  closed_at: string | null;
+  votes: Vote[];
+}
+
+export interface Instruction {
+  id: string;
+  kind: "kickoff" | "revise" | "human" | "handback";
+  round: number;
+  author: string | null;
+  status: "queued" | "sent" | "cancelled";
+  run_id: string | null;
+  sent_at: string | null;
+  last_error: string | null;
+  created_at: string;
+}
+
+export interface NodeDetail extends NodeRow {
+  process: Process;
+  executors: string[];
+  i_am_executor: boolean;
+  session: NodeSession;
+  submissions: Submission[];
+  reviews: Review[];
+  instructions: Instruction[];
+}
+
+export interface ProcessEvent {
+  seq: number;
+  type: string;
+  node_id: string | null;
+  actor: string | null;
+  data: Record<string, unknown>;
+  at: string;
+}
+
+export interface SpaceEntry {
+  path: string;
+  name: string;
+  is_dir: boolean;
+  size: number | null;
+  modified_at: string | null;
+  node: string | null;
+  uploaded_by: string | null;
+}
+
+export interface SpaceListing {
+  dir: string;
+  truncated: boolean;
+  entries: SpaceEntry[];
+}
+
+// ───────────────────────────── 待办与通知
+
+export interface Todo {
+  kind: "admit" | "exit";
   process_id: string;
-  process_no: number;
+  process_code: string;
   process_title: string;
+  project_id: string;
+  team_id: string;
   node_id: string;
   node_name: string;
-  since: string | null;
+  since: string;
 }
 
-export interface RepoInfo {
-  full_name: string;
-  web_url: string;
-  clone_url: string;
-}
-
-/** 项目产物仓库：地址 + 我的访问方式；管理员另有协作者同步状态 */
-export interface ProjectRepository {
-  status: "none" | "ready" | "error";
-  error: string | null;
-  full_name: string | null;
-  web_url: string | null;
-  clone_url: string | null;
-  allow_admin_commit: boolean;
-  me: { login: string | null; permission: "pull" | "push" | null; error: string | null };
-  collaborators:
-    | { login: string; user_id: string | null; user_name: string | null; permission: "pull" | "push"; synced_at: string | null; error: string | null }[]
-    | null;
-  can_sync: boolean;
-}
-
-export interface GitAccountView {
-  oauth_enabled: boolean;
-  account: { provider: string; login: string; name: string | null; bound_at: string } | null;
-  repositories: { login: string; permission: "pull" | "push"; error: string | null; project_id: string }[];
+export interface Notification {
+  id: string;
+  text: string;
+  link: string | null;
+  read: boolean;
+  at: string;
 }

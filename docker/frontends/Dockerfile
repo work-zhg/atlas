@@ -61,10 +61,13 @@ COPY usercenter/web/ ./
 ENV NEXT_PUBLIC_BASE_PATH=/uc-ui NEXT_PUBLIC_API_BASE=/uc NEXT_TELEMETRY_DISABLED=1
 RUN pnpm build
 
-# ── AI TeamFlow：页面 /teamflow-ui；接口 /teamflow（人机协同对话区即共享的 Atlas 对话组件，经 TeamFlow 后端转给 Atlas）
+# ── AI TeamFlow：页面 /teamflow-ui；接口 /teamflow。节点对话区是共享的 Atlas 对话组件，直连 Atlas 的接口
+#    /atlas（开新一轮另经 TeamFlow）；「在 Agent 平台里编辑」链到 /atlas-ui
 FROM ws AS tf
 ENV NEXT_PUBLIC_BASE_PATH=/teamflow-ui \
-    NEXT_PUBLIC_API_BASE=/teamflow
+    NEXT_PUBLIC_API_BASE=/teamflow \
+    NEXT_PUBLIC_ATLAS_API_BASE=/atlas \
+    NEXT_PUBLIC_ATLAS_UI_BASE=/atlas-ui
 RUN pnpm --filter atlas-teamflow-web build
 
 # ── 运营中心：页面 /opscenter-ui；接口 /opscenter（统一登录，网关验 JWT，c4-model/opscenter/design-opscenter.html）。

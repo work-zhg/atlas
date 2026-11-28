@@ -1,7 +1,7 @@
 [project]
 name = "atlas-teamflow"
 version = "0.1.0"
-description = "AI TeamFlow —— 让 AI Agent 作为团队成员参与研发流程。"
+description = "AI TeamFlow —— 面向团队协作的 AI 工作流平台：数字员工按团队的流程干活。"
 requires-python = ">=3.13"
 
 # ★ 独立系统（prototype/teamflow/docs/system-design.html）：自己的库与进程。
@@ -16,11 +16,14 @@ dependencies = [
   "pydantic-settings>=2.6",
   "httpx>=0.27",
   "python-multipart>=0.0.9",
-  # 多实例协调（广播、唤醒、节点租约锁）；统一走 atlas_redis 中间件
+  # 多实例协调（唤醒、实时事件、缓存失效广播）；统一走 atlas_redis 中间件
   "atlas-redis",
   "redis>=5",
-  # 协作者对账、扫描待处理节点是它的实例任务（jobs.py）
+  # 扫描排着的指令、通知器是它的实例任务（jobs.py）
   "atlas-jobs",
+  # 多租户：业务表按当前租户自动过滤；运营接口（租户的创建、删除）
+  "atlas-tenancy",
+  "atlas-opsapi",
 ]
 
 [build-system]

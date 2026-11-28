@@ -77,11 +77,12 @@ services:
       - {subpath: /v1/previews/, mode: public, preview: true, legacy_paths: [/v1/previews/]}
   - {name: atlas-ui, kind: ui}
 
-  # ── AI TeamFlow：流程实时事件是 SSE
+  # ── AI TeamFlow：流程实时事件是 SSE；往流程空间传资料走上传档（后端允许单个 50 MB）
   - name: teamflow
     kind: api
     routes:
       - {subpath: /api/, proxy: SSE}
+      - {subpath: /api/v1/processes/*/space, proxy: UPLOAD}
   - {name: teamflow-ui, kind: ui}
 
   # ── 运营中心：运营人员是系统租户里的人，统一登录（c4-model/opscenter/design-opscenter.html）。

@@ -1,15 +1,13 @@
 """AI TeamFlow 的入口与运维命令。
 
-python -m atlas_teamflow serve          起 HTTP 服务（默认 :8040）
-python -m atlas_teamflow migrate        升级 TeamFlow 库
-python -m atlas_teamflow worker         独立的 Agent 监督器进程（多实例部署；可起多个）
-python -m atlas_teamflow export-thread-owners > map.json
-                                        节点会话 → 流程发起人（Atlas reassign-threads 用，§14）
+python -m atlas_teamflow serve      起 HTTP 服务（默认 :8040；内嵌投递器和通知器）
+python -m atlas_teamflow migrate    升级 TeamFlow 库（本服务的表 + 运营接口库的表）
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
 import sys
@@ -35,69 +33,6 @@ def serve() -> None:
     uvicorn.run(create_app(), host=os.environ.get("ATLAS_TF_HOST", "0.0.0.0"), port=_port())
 
 
-def worker() -> None:
-    """独立 worker：只跑 Agent 监督器（投递指令、跟随 Atlas 事件流、提交产物），不接 HTTP。
-
-    ★ 可以起多个，与 API 内嵌的监督器并存都安全：同一节点同一时刻只有拿到租约的一个在处理。
-    """
-    import asyncio
-    import signal
-
-    from atlas_jobs import JobScheduler
-
-    from .agents.supervisor import AgentSupervisor
-    from .api.app import check_deployment
-    from .atlas import AtlasClient
-    from .db.session import get_engine, get_sessionmaker
-    from .jobs import NodeSweep
-    from .process.bus import make_coordinator, set_coordinator
-    from .process.repo_host import make_repo_host
-
-    settings = get_settings()
-    check_deployment(settings)
-    if not settings.redis_url:
-        print(
-            "✗ worker 需要 ATLAS_TF_REDIS_URL（单实例开发请直接用 serve，内嵌监督器）",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
-
-    async def _run() -> None:
-        coord = make_coordinator(settings.redis_url, settings.worker_lease_seconds)
-        set_coordinator(coord)
-        atlas = AtlasClient(settings)
-        host = make_repo_host(settings)
-        await host.prepare()
-        sup = AgentSupervisor(
-            get_sessionmaker,
-            atlas,
-            host,
-            git_profile=settings.atlas_git_profile,
-            lease_seconds=settings.worker_lease_seconds,
-        )
-        # 定期扫描待处理节点（接手崩溃实例留下的、补漏掉的唤醒）：定时任务库的实例任务
-        jobs = JobScheduler()
-        jobs.register(NodeSweep(sup), scope="instance", every=settings.worker_sweep_seconds)
-        stop = asyncio.Event()
-        loop = asyncio.get_running_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, stop.set)
-        await coord.start()
-        await sup.start()
-        jobs.start()
-        logging.getLogger("atlas_teamflow").info(
-            "worker 已启动（实例 %s）", getattr(coord, "instance", "-")
-        )
-        await stop.wait()
-        await jobs.stop()
-        await sup.close()
-        await coord.close()
-        await atlas.aclose()
-        await get_engine().dispose()
-
-    asyncio.run(_run())
-
-
 def migrate(revision: str = "head") -> None:
     from alembic import command
     from alembic.config import Config
@@ -106,33 +41,20 @@ def migrate(revision: str = "head") -> None:
     cfg.set_main_option("script_location", str(MIGRATIONS_DIR))
     cfg.set_main_option("sqlalchemy.url", get_settings().database_url)
     command.upgrade(cfg, revision)
+    asyncio.run(_upgrade_opsapi())
 
 
-def export_thread_owners() -> int:
-    """去服务账号的存量迁移（内网身份传递 §14）：节点的 Atlas 会话 → 流程发起人，JSON 输出到
-    标准输出，交给 `python -m atlas_agent reassign-threads` 改写会话所有者。"""
-    import asyncio
-    import json
+async def _upgrade_opsapi() -> None:
+    from atlas_opsapi import upgrade
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
 
-    from sqlalchemy import select
-
-    from .db.models import Process, ProcessNode
-    from .db.session import get_engine, get_sessionmaker
-
-    async def _go() -> dict[str, str]:
-        try:
-            async with get_sessionmaker()() as s:
-                rows = await s.execute(
-                    select(ProcessNode.atlas_thread_id, Process.started_by)
-                    .join(Process, Process.uuid == ProcessNode.process_uuid)
-                    .where(ProcessNode.atlas_thread_id.is_not(None))
-                )
-                return {str(t): str(u) for t, u in rows.all()}
-        finally:
-            await get_engine().dispose()
-
-    print(json.dumps(asyncio.run(_go()), ensure_ascii=False, indent=2))
-    return 0
+    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(upgrade)
+    finally:
+        await engine.dispose()
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -140,8 +62,6 @@ def _parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("serve")
     sub.add_parser("migrate")
-    sub.add_parser("worker")
-    sub.add_parser("export-thread-owners")
     return parser
 
 
@@ -156,11 +76,6 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "migrate":
             migrate()
             return 0
-        if args.command == "worker":
-            worker()
-            return 0
-        if args.command == "export-thread-owners":
-            return export_thread_owners()
     except TFError as exc:
         print(f"✗ {exc.message}", file=sys.stderr)
         return 1

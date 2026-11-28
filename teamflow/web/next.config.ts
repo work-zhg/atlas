@@ -2,8 +2,10 @@ import path from "node:path";
 
 import type { NextConfig } from "next";
 
-// ★ 与后端同源：/api 经 Next 反向代理到 TeamFlow 后端（默认 :8040），会话 Cookie 与 CSRF 双提交都同源。
+// ★ 本地开发与后端同源：/api 经 Next 反向代理到 TeamFlow 后端（默认 :8040），/atlas 转给 Agent 平台
+//   （节点对话组件直连它）。部署时这两条都由 API 网关转，不经这里。
 const API_ORIGIN = process.env.TF_API_ORIGIN ?? "http://127.0.0.1:8040";
+const ATLAS_ORIGIN = process.env.TF_ATLAS_ORIGIN ?? "http://127.0.0.1:8000";
 
 // 部署在网关子路径下时（如 /uc、/teamflow）构建时设置 NEXT_PUBLIC_BASE_PATH；本地开发为空
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
@@ -17,7 +19,10 @@ const config: NextConfig = {
   outputFileTracingRoot: path.join(__dirname, "../.."),
   transpilePackages: ["@atlas/chat-ui", "@atlas/jobs-ui", "antd", "@ant-design/icons", "rc-util", "rc-picker", "rc-tree", "rc-table"],
   async rewrites() {
-    return [{ source: "/api/:path*", destination: `${API_ORIGIN}/api/:path*` }];
+    return [
+      { source: "/api/:path*", destination: `${API_ORIGIN}/api/:path*` },
+      { source: "/atlas/:path*", destination: `${ATLAS_ORIGIN}/:path*`, basePath: false },
+    ];
   },
 };
 

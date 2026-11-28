@@ -1,60 +1,37 @@
-"""定时任务（定时任务库 atlas_jobs 的实例任务，c4-model/infra-platform/code-jobs.html）。
+"""定时任务（atlas_jobs 的实例任务，每个副本各跑一份）。
 
-    teamflow.collaborator_reconcile   仓库协作者对账：以团队成员身份为准修正（成员按部门展开的变化、
-                                      在 Gitee 上被手工改动的）
-    teamflow.node_sweep               扫描待处理节点：接手崩溃实例留下的节点、补漏掉的唤醒
-                                      （AgentSupervisor.resume）
-
-多实例时每个实例都跑，操作幂等（节点由租约锁保证只有一个实例处理）。循环、出错隔离、停机交给库；
-运行情况在 /api/v1/jobs 看。
+teamflow.dispatch_sweep   扫描排着的指令、要取消的 run（补漏掉的唤醒、接手挂掉的副本没投完的）
+teamflow.notify           按流程事件写站内通知、推渠道（游标行锁，同时只有一个副本在推）
 """
 
 from __future__ import annotations
 
-import logging
-from typing import Any
-
 from atlas_jobs import Job, JobContext, NoParams
-from sqlalchemy import select
 
-from .agents.supervisor import AgentSupervisor
-from .db.models import Project
-from .db.session import get_sessionmaker
-from .errors import TFError
-from .process.repo_host import RepoHost
-from .process.repository import sync_project_collaborators
+from .collab.dispatcher import InstructionDispatcher
+from .inbox.notifier import Notifier
 
-__all__ = ["CollaboratorReconcile", "NodeSweep"]
-
-log = logging.getLogger("atlas_teamflow")
+__all__ = ["DispatchSweep", "Notify"]
 
 
-class CollaboratorReconcile(Job):
-    type = "teamflow.collaborator_reconcile"
-    description = "仓库协作者对账"
+class DispatchSweep(Job):
+    type = "teamflow.dispatch_sweep"
+    description = "扫描排着的指令、要取消的 run"
 
-    def __init__(self, uc: Any, host: RepoHost) -> None:
-        self._uc, self._host = uc, host
+    def __init__(self, dispatcher: InstructionDispatcher) -> None:
+        self._dispatcher = dispatcher
 
     async def execute(self, ctx: JobContext, params: NoParams) -> None:
-        async with get_sessionmaker()() as s:
-            for pr in await s.scalars(
-                select(Project).where(Project.status == "active", Project.repo_status == "ready")
-            ):
-                try:
-                    await sync_project_collaborators(s, self._uc, self._host, pr)
-                except TFError as exc:
-                    # 一个项目失败不影响别的项目
-                    log.warning("对账项目 %s 的仓库协作者失败：%s", pr.uuid, exc.message)
-            await s.commit()
+        await self._dispatcher.sweep()
 
 
-class NodeSweep(Job):
-    type = "teamflow.node_sweep"
-    description = "扫描待处理节点"
+class Notify(Job):
+    type = "teamflow.notify"
+    description = "按流程事件生成通知"
 
-    def __init__(self, supervisor: AgentSupervisor) -> None:
-        self._supervisor = supervisor
+    def __init__(self, notifier: Notifier) -> None:
+        self._notifier = notifier
 
     async def execute(self, ctx: JobContext, params: NoParams) -> None:
-        await self._supervisor.resume()
+        while await self._notifier.run() >= self._notifier.batch:
+            pass
