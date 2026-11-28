@@ -48,6 +48,8 @@ interface Props {
   feedback?: boolean;
   /** 重新生成：用最后一个问题再问一次。不给 = 不显示这个按钮 */
   onRegenerate?: () => void;
+  /** 嵌入方自己画某些用户消息（如 AI TeamFlow 把系统发的开工说明画成卡片）。返回 undefined = 照常画气泡 */
+  renderUserMessage?: (message: Message, text: string) => ReactNode | undefined;
 }
 
 /** 助手正文：末段是结论，之前的都是过程性发言，弱化显示。 */
@@ -376,19 +378,31 @@ export function MessageStream({
   threadId,
   feedback = false,
   onRegenerate,
+  renderUserMessage,
 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
-  const liveText = live?.text ?? "";
 
-  // 新内容到达时贴底。仅在用户已经接近底部时才自动滚 ——
-  // 否则会把正在往回翻历史的用户强行拽下来。
+  // 贴底：打开时在最新一条，之后内容变多（新消息、流式正文、历史轮次的过程取回来）也跟着滚到底。
+  // ★ 用户往上翻了（离底部超过 160px）就不再跟，免得把正在看历史的人拽下来；翻回底部又接着跟。
+  // ★ 看 DOM 变化而不是数消息条数：历史轮次的过程是打开后才异步取回的，条数不变高度却变了。
   const bodyRef = useRef<HTMLDivElement>(null);
+  const stick = useRef(true);
   useEffect(() => {
     const el = bodyRef.current;
     if (!el) return;
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
-    if (nearBottom) bottomRef.current?.scrollIntoView({ block: "end" });
-  }, [messages.length, liveText, live?.timeline.length]);
+    const onScroll = () => {
+      stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 160;
+    };
+    const follow = new MutationObserver(() => {
+      if (stick.current) el.scrollTop = el.scrollHeight;
+    });
+    el.addEventListener("scroll", onScroll, { passive: true });
+    follow.observe(el, { childList: true, subtree: true, characterData: true });
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      follow.disconnect();
+    };
+  }, []);
 
   // 哪几条要画、实时区让不让位：规则在 lib/conversation.ts（与手机 App 共用）
   const { entries, showLive } = planConversation(messages, live, liveRunId);
@@ -412,7 +426,7 @@ export function MessageStream({
       {entries.map((e) =>
         e.kind === "user" ? (
           <div key={e.message.id} className={`${styles.msg} ${styles.msgUser}`}>
-            <div className={styles.bubble}>{e.text}</div>
+            {renderUserMessage?.(e.message, e.text) ?? <div className={styles.bubble}>{e.text}</div>}
           </div>
         ) : (
           <div key={e.message.id} className={styles.msg}>

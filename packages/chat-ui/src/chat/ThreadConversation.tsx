@@ -15,6 +15,7 @@ import { qk } from "../api/keys";
 import { selectableModels, useAgentModels } from "../api/models";
 import { useCancelRun, useSendMessage, type SubmitRun } from "../api/runs";
 import { flattenMessages, useMessages, useThread } from "../api/threads";
+import type { Message } from "../api/types";
 import { avatarBackground, avatarLetter } from "../lib/avatar";
 import type { ApprovalMode } from "../lib/events";
 import { newIdempotencyKey } from "../lib/id";
@@ -70,6 +71,10 @@ export interface ThreadConversationProps {
   beforeSend?: () => Promise<void>;
   /** 输入框的提示文字 */
   placeholder?: string;
+  /** 不显示审批模式选择器（嵌入方的会话按智能体默认的模式跑，如 AI TeamFlow） */
+  hideModePicker?: boolean;
+  /** 嵌入方自己画某些用户消息（如系统发的开工说明）。返回 undefined = 照常画气泡 */
+  renderUserMessage?: (message: Message, text: string) => ReactNode | undefined;
 }
 
 /** 附件路径并进消息正文：智能体按路径去工作区里读 */
@@ -94,6 +99,8 @@ export function ThreadConversation({
   hideHeader = false,
   beforeSend,
   placeholder = "继续对话…",
+  hideModePicker = false,
+  renderUserMessage,
 }: ThreadConversationProps) {
   const threadQ = useThread(threadId);
   const messagesQ = useMessages(threadId);
@@ -190,7 +197,7 @@ export function ThreadConversation({
       : undefined;
 
   // 运行中不可切换：这一轮的模式在开始时就定了，改了也只作用于下一轮，置灰免得误会
-  const modeSelector = approval && (
+  const modeSelector = approval && !hideModePicker && (
     <ModePicker
       value={pickedMode ?? (approval.mode as ApprovalMode)}
       allowed={approval.allowed_modes as ApprovalMode[]}
@@ -281,6 +288,7 @@ export function ThreadConversation({
         threadId={threadId}
         feedback={feedback}
         onRegenerate={onRegenerate}
+        renderUserMessage={renderUserMessage}
       />
 
       {notice && (

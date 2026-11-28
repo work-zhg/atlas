@@ -18,7 +18,8 @@ export { ThreadConversation, type ConversationStreamState, type ThreadConversati
 export { AtlasChatTheme } from "./chat/AtlasChatTheme";
 export { ApiError, type AtlasClientConfig } from "./lib/http";
 export type { SendMessageInput, SubmitRun } from "./api/runs";
-export type { RunAccepted } from "./api/types";
+export type { Message, RunAccepted } from "./api/types";
+export { Markdown } from "./components/Markdown";
 export { atlasTheme, palette } from "./theme/antd";
 // 浏览器（c4-model/agent/browser/design-browser.html）：会话里的实时画面、我的登录
 export { BrowserView } from "./chat/BrowserView";
