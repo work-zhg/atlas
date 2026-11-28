@@ -33,7 +33,7 @@
   "description": "目标领域模型，只画期望的样子、不对照现状。这个人在各个网站上的登录态：按人、按站点加密保管，导出时只写更新的，导入时整份合并。领域总览见 code-browser.html，整体设计见 design-browser.html。",
   "component": "浏览器",
   "package": "浏览器 · 登录态（目标模型）",
-  "overview": "登录态是这个人在各个网站上的登录凭证：cookie，加上网站放在浏览器本地存储（localStorage）里的令牌。这里按人、按站点加密保存在 Atlas 的库里。人接管登录、交还时，新登录的站点第一次存进来；之后浏览器每段结束、沙箱退役前导出的，只刷新已经存过的站点，并且只在比库里的新时才写；新沙箱拉起浏览器时，把这个人所有站点的登录态解密、合并成一份交出去。\n\n这个人可以在「我的登录」里看到存了哪些站点、什么时候存的、是不是已经过期，删掉不要的。\n\n它是浏览器组件最底下的一层：不碰沙箱，也不知道浏览器在哪；什么时候导入导出由宿主和接管决定。",
+  "overview": "登录态是沙箱主体在各个网站上的登录凭证：cookie，加上网站放在浏览器本地存储（localStorage）里的令牌。主体跟着沙箱走：以人为权限的会话是这个人，以数字员工为权限的会话是数字员工（数字员工也是用户中心的用户，有自己的 uid）。这里按主体、按站点加密保存在 Atlas 的库里。人接管登录、交还时，新登录的站点第一次存进来；之后浏览器每段结束、沙箱退役前导出的，只刷新已经存过的站点，并且只在比库里的新时才写；新沙箱拉起浏览器时，把这个主体所有站点的登录态解密、合并成一份交出去。\n\n这个人可以在「我的登录」里看到存了哪些站点、什么时候存的、是不是已经过期，删掉不要的。\n\n它是浏览器组件最底下的一层：不碰沙箱，也不知道浏览器在哪；什么时候导入导出由宿主和接管决定。",
   "elements": [
     {
       "id": "hostsU",
@@ -91,7 +91,7 @@
       "kind": "class",
       "name": "LoginVault",
       "stereotype": "应用服务",
-      "responsibility": "登录态的入口。save：给了 sites 就新增或刷新这些站点（接管交还）；没给就只刷新已经存过的站点，别的丢掉（段末、退役前）。load：解密这个人的全部站点，去掉已过期的，合并成一份。sites、forget 给「我的登录」用。",
+      "responsibility": "登录态的入口。save：给了 sites 就新增或刷新这些站点（接管交还）；没给就只刷新已经存过的站点，别的丢掉（段末、退役前）。load：解密这个主体的全部站点，去掉已过期的，合并成一份。sites、forget 给「我的登录」用。",
       "at": [
         2.6,
         0.85
@@ -99,19 +99,19 @@
       "methods": [
         [
           "+",
-          "save(user, bundle, *, sites=None, thread=None)"
+          "save(subject, bundle, *, sites=None, thread=None)"
         ],
         [
           "+",
-          "load(user) -> StateBundle"
+          "load(subject) -> StateBundle"
         ],
         [
           "+",
-          "sites(user) -> list[SiteSummary]"
+          "sites(subject) -> list[SiteSummary]"
         ],
         [
           "+",
-          "forget(user, site)"
+          "forget(subject, site)"
         ]
       ]
     },
@@ -174,7 +174,7 @@
       "kind": "class",
       "name": "SiteLogin",
       "stereotype": "聚合根",
-      "responsibility": "一个人在一个站点上的登录态。只按「捕获时间更新」覆盖：两个沙箱前后导出同一个站点，以后捕获的为准。过期时间取它的 cookie 里最晚的那个；都过期了，导入时跳过，列表里标「已过期」。",
+      "responsibility": "一个主体（人或数字员工）在一个站点上的登录态。只按「捕获时间更新」覆盖：两个沙箱前后导出同一个站点，以后捕获的为准。过期时间取它的 cookie 里最晚的那个；都过期了，导入时跳过，列表里标「已过期」。",
       "at": [
         2.6,
         2.75
@@ -213,7 +213,7 @@
       "kind": "class",
       "name": "StateCipher",
       "stereotype": "策略",
-      "responsibility": "加密、解密一个站点的登录态：AES-256-GCM，附加数据是（人，站点），把密文绑在这一行上，挪到别人名下解不开。密钥带版本号，换钥匙后旧行照样能解，下次写入时换成新版本。",
+      "responsibility": "加密、解密一个站点的登录态：AES-256-GCM，附加数据是（主体，站点），把密文绑在这一行上，挪到别人名下解不开。密钥带版本号，换钥匙后旧行照样能解，下次写入时换成新版本。",
       "at": [
         0.1,
         2.75
@@ -221,11 +221,11 @@
       "methods": [
         [
           "+",
-          "seal(user, site, data) -> Sealed"
+          "seal(subject, site, data) -> Sealed"
         ],
         [
           "+",
-          "open(user, site, sealed) -> bytes"
+          "open(subject, site, sealed) -> bytes"
         ]
       ]
     },
@@ -246,11 +246,11 @@
         ],
         [
           "+",
-          "of_user(user) · get(user, site)"
+          "of_subject(subject) · get(subject, site)"
         ],
         [
           "+",
-          "delete(user, site)"
+          "delete(subject, site)"
         ]
       ]
     },
@@ -418,7 +418,7 @@
         {
           "name": "user_uuid",
           "type": "UUID",
-          "description": "登录态的主人（用户中心的用户）"
+          "description": "登录态的主人：沙箱主体的 uid（人，或以数字员工为权限时的数字员工）"
         },
         {
           "name": "site",

@@ -40,7 +40,7 @@
       "kind": "class",
       "name": "RunService",
       "stereotype": "应用服务",
-      "responsibility": "提交一轮：幂等键命中就回已有的 run（键按使用者隔离）→ 能用这个智能体吗（收回使用权后不能在已有会话里接着用）→ 取当前版本 → 这一轮按谁的权限判 → 定审批模式 → 占会话串行 → 用户消息和 run 行（queued）在同一个事务里写 → 交给执行器，立刻返回 run id。取消：写取消，再逐层取消还没结束的子孙 run，父 run 已结束也要做，否则页面上停不掉还在跑的子 run。界面要的 run 状态、轨迹、每个会话最近一轮也在这里查。",
+      "responsibility": "提交一轮：幂等键命中就回已有的 run（键按使用者隔离）→ 能在这个会话开 run 吗（应用建的会话只认这个应用）→ 能用这个智能体吗（收回使用权后不能在已有会话里接着用）→ 取当前版本 → 这一轮按谁的权限判 → 定审批模式 → 占会话串行 → 用户消息和 run 行（queued）在同一个事务里写 → 交给执行器，立刻返回 run id。取消：写取消，再逐层取消还没结束的子孙 run，父 run 已结束也要做，否则页面上停不掉还在跑的子 run。界面要的 run 状态、轨迹、每个会话最近一轮也在这里查。",
       "methods": [
         [
           "+",
@@ -143,13 +143,17 @@
     {
       "id": "access",
       "kind": "class",
-      "name": "AgentAccess",
+      "name": "AgentAccess · ThreadAccess",
       "external": true,
       "source": "鉴权组件",
       "methods": [
         [
           "+",
           "require_use(principal, agent)"
+        ],
+        [
+          "+",
+          "thread(principal, thread, action: READ | ACT | RUN)"
         ]
       ],
       "at": [
@@ -252,7 +256,7 @@
       "from": "svc",
       "to": "access",
       "type": "uses",
-      "description": "能用吗"
+      "description": "能用吗、能在这个会话里做吗"
     },
     {
       "from": "svc",
@@ -330,19 +334,19 @@
       "name": "发消息（提交一轮）",
       "entry": "RunService.submit(thread_uuid, input, *, principal, idempotency_key)",
       "callers": "HTTP 接口（界面、业务应用）",
-      "description": "幂等；能用智能体才能发；会话里已有没结束的 run 回 409；用户消息和 run 行同一个事务；立刻返回 run id，事件走会话事件流"
+      "description": "幂等；应用建的会话只接受这个应用来开（人从控制台直接发回 403，要回应用里发）；能用智能体才能发；会话里已有没结束的 run 回 409；用户消息和 run 行同一个事务；立刻返回 run id，事件走会话事件流"
     },
     {
       "name": "取消",
       "entry": "RunService.cancel(run_uuid)",
-      "callers": "HTTP 接口（停止按钮）",
-      "description": "取消这个 run，并逐层取消还没结束的子孙 run；父 run 已结束时只取消子孙"
+      "callers": "HTTP 接口（停止按钮；业务应用停下它的会话）",
+      "description": "能操作这个会话的人（以数字员工为权限：有使用权）或建会话的应用都能取消；取消这个 run，并逐层取消还没结束的子孙 run；父 run 已结束时只取消子孙"
     },
     {
       "name": "会话事件流",
       "entry": "ThreadStream.open(thread_uuid, after_seq)",
       "callers": "HTTP 接口（SSE，带 Last-Event-ID 重连）",
-      "description": "会话下所有 run 的事件；归档段 + Redis 实时段按会话序号接上；名额满了回 503"
+      "description": "会话下所有 run 的事件；能看这个会话就能订阅（以数字员工为权限：有使用权）；归档段 + Redis 实时段按会话序号接上；名额满了回 503"
     },
     {
       "name": "占会话",
@@ -358,6 +362,10 @@
     }
   ],
   "decisions": [
+    {
+      "decision": "应用建的会话，开新 run 只认这个应用",
+      "reason": "业务应用要记住每个 run 属于它的哪个业务对象（TeamFlow 的节点），停下时才知道取消哪一个；人在控制台里直接发消息会绕过应用的状态（评审中的节点被改）。看、回答、接管浏览器、停止不受这条限制，按数据权限判。是原来「应用建的会话只能回应用里继续」收窄到只管开 run。"
+    },
     {
       "decision": "提交和观看拆成两个请求",
       "reason": "一次性的响应流扛不住刷新页面、切后台、网络抖动和多个标签页；提交立刻返回 run id，事件走会话事件流，断了带游标重连即可。"

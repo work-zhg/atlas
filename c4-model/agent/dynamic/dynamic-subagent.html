@@ -633,6 +633,7 @@
     </svg>
 
     <h2>工作区与沙箱原理：一个人一个沙箱，父子、多会话共用</h2>
+    <p style="padding:10px 14px;border-left:3px solid #d9480f;background:#fff6f0">下面讲的是<b>以人为权限</b>的智能体。以数字员工为权限的智能体文件归数字员工（<code>{数字员工}/</code>，所有用它的人共用），一个会话（连同子孙会话）一个沙箱，工作目录还可以是业务应用给的应用工作空间（挂到 <code>/space</code>），见 <a href="../sandbox/design-workspace-subject.html" target="_blank" rel="noopener">按权限主体分的工作空间与沙箱</a>。</p>
     <p>一句话：对象存储<b>按人分前缀</b>：根会话一个 <code>workspace</code>，这个人所有会话共用一份 <code>skills</code> 和一份 <code>home/.claude</code>；<b>沙箱按人要</b>，整个 <code>/{user}/</code> 挂到 <code>/data</code>，这个人的新会话随时加入，不用改 Pod。父、子、孙智能体都以根会话的 <code>workspace</code> 为 cwd，技能从共用的目录里取各自智能体绑定的那几个版本；CLI 智能体也在同一个沙箱里跑，会话记录写进 <code>/data/home/.claude</code>，沙箱重建后接着原来的会话。下面的场景：用户 <code>u</code> 的根会话 <code>P</code>（原生智能体）派子会话 <code>C</code>，<code>C</code> 再派孙会话 <code>G</code>；<code>u</code> 同时开着另一个根会话 <code>Q</code>，是 CLI 智能体（Claude Code）。<code>{user}</code> 是会话的创建人。</p>
 
     <h3>图 1　对象存储：按人分前缀，根会话一个 workspace，一个人一份 skills 和 .claude</h3>

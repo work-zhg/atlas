@@ -30,17 +30,17 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：Agent 平台 - Agent 服务 - 沙箱 - 通用供给",
-  "description": "目标领域模型，只画期望的样子、不对照现状。建立在沙箱基座之上（code-sandbox-base-*.html）。按人管理沙箱；一个业务至多绑一个沙箱，现在一个沙箱只服务一个业务，以后可以共享。",
+  "description": "目标领域模型，只画期望的样子、不对照现状。建立在沙箱基座之上（code-sandbox-base-*.html）。按主体（人或数字员工，都是用户中心的 uid）管理沙箱；共不共享由业务种类给出的共享键决定：以人为权限的按人共享，以数字员工为权限的一个会话一个。整体设计见 design-workspace-subject.html",
   "component": "沙箱",
   "package": "沙箱 · 通用供给（目标模型）",
-  "overview": "通用供给按人管理沙箱：一个人名下有哪些沙箱，每个沙箱用哪个模板和镜像建、现在是什么状态、正在服务哪些业务。业务有两种类型：原生沙箱，业务 id 是工作区所属根会话的 uuid；CLI Agent，业务 id 是 CLI Agent 会话的 uuid。业务要用沙箱时，供给在这个人的沙箱账户里给它分配一个：现在是独占，已绑定的就复用，没有就登记一个新的，再交基座按同一个 sandbox_uuid 建；等业务类型判定就绪、标为 READY 后，才交出只含 sandbox_uuid 的 SandboxRef，地址和令牌留在基座。业务结束、沙箱闲置或业务已不在时解绑，沙箱没有业务了就退役。\n\n沙箱和业务分开记录，以后做共享（一个沙箱服务同一个人的多个业务）只要换分配策略，表结构不变。它不关心沙箱里跑什么：模板、准入、创建规格、附加配置和就绪判断由业务类型对应的种类（SandboxKind）给出；分配、配额、状态这些所有业务类型都一样的规则由它统一执行。只被原生沙箱、会话 Pod 两个领域调用。",
+  "overview": "通用供给按主体管理沙箱：一个主体名下有哪些沙箱，每个沙箱用哪个模板和镜像建、现在是什么状态、正在服务哪些业务。主体就是会话的文件主体：以人为权限的智能体是会话的创建人，以数字员工为权限的是数字员工。业务有两种类型：原生沙箱，业务 id 是工作区所属根会话的 uuid；CLI Agent，业务 id 是 CLI Agent 会话的 uuid。\n\n业务要用沙箱时，供给先问业务种类给不给共享键（Sharing）：给了，就在这个主体名下同一个共享键、没在退役、没满的沙箱里挑一个；不给（以数字员工为权限、评测档），就登记一个新的，再交基座按同一个 sandbox_uuid 建。以人为权限时，原生沙箱按（模板，镜像，带不带浏览器）共享，会话 Pod 按凭据集合共享、每个 Pod 有几个槽位，所以一个人的多个会话、父子会话共用沙箱；以数字员工为权限时，一个会话（连同子孙会话）一个沙箱，因为同一个数字员工同时被很多人用，进程、环境、浏览器的登录态不能混在一起，而且建沙箱时要挂上这个会话自己的工作目录。等业务类型判定就绪、标为 READY 后，才交出只含 sandbox_uuid 的 SandboxRef，地址和令牌留在基座。业务结束、沙箱闲置或业务已不在时解绑，沙箱没有业务了就退役。\n\n它不关心沙箱里跑什么：模板、准入、共享键、创建规格、附加配置和就绪判断由业务类型对应的种类（SandboxKind）给出；分配、配额、状态这些所有业务类型都一样的规则由它统一执行。只被原生沙箱、会话 Pod 两个领域调用。",
   "elements": [
     {
       "id": "prov",
       "kind": "class",
       "name": "SandboxProvisioning",
       "stereotype": "应用服务",
-      "responsibility": "领域的唯一入口和流程编排。各业务类型的种类在装配时登记，按 biz.biz_type 取用；ensure 的 req 是这个种类认识的请求（原生沙箱是 SandboxSpec，会话 Pod 是 PodRequest）。确保沙箱：按业务查绑定，已就绪直接交出；没绑定的经业务类型准入、构造规格，交给沙箱账户分配（挑一个或登记新的），保存后再建、附加、等就绪，标为 READY 才交出。建沙箱这一段不持锁、可重入：几个请求同时等同一个沙箱，或进程崩在半路，都按同一个 sandbox_uuid 接着做。另提供查询、确认已不在、退役、释放、按人查看、业务孤儿回收和对账。不含任何业务类型特有的逻辑。",
+      "responsibility": "领域的唯一入口和流程编排。各业务类型的种类在装配时登记，按 biz.biz_type 取用；ensure 的 req 是这个种类认识的请求（原生沙箱是 SandboxSpec，会话 Pod 是 PodRequest）。确保沙箱：按业务查绑定，已就绪直接交出；没绑定的经业务类型准入、构造规格，交给沙箱账户按种类给的共享键分配（挑一个或登记新的），保存后再建、附加、等就绪，标为 READY 才交出。建沙箱这一段不持锁、可重入：几个请求同时等同一个沙箱，或进程崩在半路，都按同一个 sandbox_uuid 接着做。另提供查询、确认已不在、退役、释放、按人查看、业务孤儿回收和对账。不含任何业务类型特有的逻辑。",
       "methods": [
         [
           "+",
@@ -68,7 +68,7 @@
         ],
         [
           "+",
-          "of_user(user_uuid) -> list[UserSandbox]"
+          "of_owner(owner_uuid) -> list[UserSandbox]"
         ],
         [
           "+",
@@ -103,7 +103,7 @@
       "kind": "interface",
       "name": "SandboxKind",
       "stereotype": "扩展点",
-      "responsibility": "一种业务类型用沙箱时和通用流程不一样的地方：准入（如镜像白名单）、创建规格（含模板 code、镜像、网络策略）、新建或复用后的附加配置（如写 git 凭据）、就绪判断（如 execd /ping、bridge /readyz）。由原生沙箱（NativeSandboxKind）、会话 Pod（CliPodKind）两个领域实现，各对应一个业务类型。实现必须无状态：装配时按 biz_type 登记一次，所有请求共用。",
+      "responsibility": "一种业务类型用沙箱时和通用流程不一样的地方：准入（如镜像白名单）、共享键（能和谁共用一个沙箱，按权限类型给）、创建规格（含模板 code、镜像、网络策略、挂载）、新建或复用后的附加配置（如写 git 凭据）、就绪判断（如 execd /ping、bridge /readyz）。由原生沙箱（NativeSandboxKind）、会话 Pod（CliPodKind）两个领域实现，装配时按 biz_type 登记。",
       "attributes": [
         [
           "+",
@@ -114,6 +114,10 @@
         [
           "+",
           "admit(req)"
+        ],
+        [
+          "+",
+          "share(req, biz) -> Sharing | None"
         ],
         [
           "+",
@@ -155,7 +159,7 @@
       "kind": "class",
       "name": "BizRef",
       "stereotype": "值对象",
-      "responsibility": "要用沙箱的一个业务：业务类型加业务 id，再带上人。原生沙箱的业务 id 是工作区所属根会话的 uuid（子智能体与父会话共用）；CLI Agent 的业务 id 是 CLI Agent 会话的 uuid。",
+      "responsibility": "要用沙箱的一个业务：业务类型加业务 id，再带上主体和它的种类。原生沙箱的业务 id 是工作区所属根会话的 uuid（子智能体与父会话共用）；CLI Agent 的业务 id 是 CLI Agent 会话的 uuid。主体是会话记下的文件主体。",
       "attributes": [
         [
           "+",
@@ -167,7 +171,11 @@
         ],
         [
           "+",
-          "user_uuid: str"
+          "owner_uuid: str（主体：人或数字员工）"
+        ],
+        [
+          "+",
+          "subject: PERSON | DIGITAL_EMPLOYEE"
         ]
       ],
       "at": [
@@ -201,11 +209,15 @@
       "kind": "class",
       "name": "SandboxAccount",
       "stereotype": "聚合根",
-      "responsibility": "一个人的沙箱账户：名下的全部沙箱，是按人管理的一致性边界。配额、一个业务至多绑一个沙箱、退役中的沙箱不再接业务，这些规则都在这里判；保存时用版本号 CAS，并发修改的一方重读后再判。分配交给 AllocationPolicy，配额交给 QuotaPolicy。",
+      "responsibility": "一个主体的沙箱账户：名下的全部沙箱，是按主体管理的一致性边界。配额、一个业务至多绑一个沙箱、退役中的沙箱不再接业务、按共享键挑沙箱，这些规则都在这里判；保存时用版本号 CAS，并发修改的一方重读后再判。分配交给 AllocationPolicy，配额交给 QuotaPolicy。",
       "attributes": [
         [
           "+",
-          "user_uuid: str"
+          "owner_uuid: str"
+        ],
+        [
+          "+",
+          "subject: PERSON | DIGITAL_EMPLOYEE"
         ],
         [
           "+",
@@ -223,7 +235,7 @@
         ],
         [
           "+",
-          "allocate(biz, spec, *, policy, quota) -> UserSandbox"
+          "allocate(biz, spec, sharing, *, policy, quota) -> UserSandbox"
         ],
         [
           "+",
@@ -248,7 +260,7 @@
       "kind": "class",
       "name": "UserSandbox",
       "stereotype": "实体",
-      "responsibility": "这个人名下的一个沙箱：基座里的哪个实例、用哪个模板和镜像建的、现在是什么状态、服务哪些业务。和基座的实例一对一，共用 sandbox_uuid。模板和镜像建好后不变；现在一个沙箱只绑一个业务，以后共享时可以绑多个。",
+      "responsibility": "这个主体名下的一个沙箱：基座里的哪个实例、用哪个模板和镜像建的、共享键是什么、现在是什么状态、服务哪些业务。和基座的实例一对一，共用 sandbox_uuid。模板、镜像、共享键建好后不变；有共享键的可以绑多个业务（满了为止），没有的只绑一个。",
       "attributes": [
         [
           "+",
@@ -256,11 +268,11 @@
         ],
         [
           "+",
-          "template_code: str"
+          "template_code · image"
         ],
         [
           "+",
-          "image: str"
+          "share_key: str | None（None = 不共享）"
         ],
         [
           "+",
@@ -276,6 +288,10 @@
         ]
       ],
       "methods": [
+        [
+          "+",
+          "accepts(share_key, capacity) -> bool"
+        ],
         [
           "+",
           "bind(biz)（RETIRING 时拒绝）"
@@ -303,11 +319,15 @@
       "kind": "class",
       "name": "SandboxBinding",
       "stereotype": "实体",
-      "responsibility": "沙箱正在服务的一个业务。按业务全局唯一：一个业务至多绑一个沙箱，由唯一约束兜底。",
+      "responsibility": "沙箱正在服务的一个业务。按业务全局唯一：一个业务至多绑一个沙箱，由唯一约束兜底。会话 Pod 共享时每个会话占一个槽位，起自己的 bridge。",
       "attributes": [
         [
           "+",
           "biz: BizRef"
+        ],
+        [
+          "+",
+          "slot: int | None（会话 Pod 的槽位）"
         ],
         [
           "+",
@@ -359,7 +379,7 @@
       "kind": "class",
       "name": "SandboxAccountRepository",
       "stereotype": "仓储",
-      "responsibility": "沙箱账户存在 sandbox_account、user_sandbox、sandbox_binding 三张表里，按人整体加载、整体保存，保存时校验并递增账户的版本号。by_biz 是热路径（工作区每次读写文件都要问），只读、进程内缓存 2 秒。",
+      "responsibility": "沙箱账户存在 sandbox_account、user_sandbox、sandbox_binding 三张表里，按主体整体加载、整体保存，保存时校验并递增账户的版本号。by_biz 是热路径（工作区每次读写文件都要问），只读、进程内缓存 2 秒。",
       "attributes": [
         [
           "-",
@@ -369,7 +389,7 @@
       "methods": [
         [
           "+",
-          "load(user_uuid) -> SandboxAccount"
+          "load(owner_uuid) -> SandboxAccount"
         ],
         [
           "+",
@@ -402,11 +422,11 @@
       "kind": "class",
       "name": "QuotaPolicy",
       "stereotype": "策略",
-      "responsibility": "每个人能同时有几个沙箱，用全局上限（部署配置）；原生沙箱和 CLI Agent 合计，只数 CREATING 和 READY 的。登记新沙箱前检查，超限抛 QuotaExceeded。",
+      "responsibility": "每个主体能同时有几个沙箱，上限按主体的种类分开配（部署配置）：人一个上限，数字员工另一个、要大得多（一个会话一个，同时被很多人用）；原生沙箱和 CLI Agent 合计，只数 CREATING 和 READY 的。登记新沙箱前检查，超限抛 QuotaExceeded。",
       "attributes": [
         [
-          "-",
-          "default_limit: int"
+          "+",
+          "limits: {PERSON: int, DIGITAL_EMPLOYEE: int}"
         ]
       ],
       "methods": [
@@ -425,11 +445,11 @@
       "kind": "class",
       "name": "AllocationPolicy",
       "stereotype": "策略",
-      "responsibility": "给还没绑定的业务挑沙箱，返回 None 就登记一个新的。现在是独占，一律返回 None。以后做共享只改这里：在同模板、同镜像、凭据集合相同（CredentialSet.codes）、没在退役、没满的沙箱里挑一个。",
+      "responsibility": "给还没绑定的业务挑沙箱，返回 None 就登记一个新的。种类给了共享键，就在同一个共享键、没在退役、没满的沙箱里挑（先挑 READY 的，再挑 CREATING 的）；种类不给共享键（以数字员工为权限、评测档），一律返回 None。共享键里已经含了模板、镜像（原生）或凭据集合（会话 Pod），所以只比键。",
       "methods": [
         [
           "+",
-          "pick(account, biz, spec) -> UserSandbox | None"
+          "pick(account, biz, sharing) -> UserSandbox | None"
         ]
       ],
       "at": [
@@ -475,8 +495,29 @@
         ]
       ],
       "at": [
-        4.8,
-        -0.1
+        4.9,
+        -1.0
+      ]
+    },
+    {
+      "id": "sharing",
+      "kind": "class",
+      "name": "Sharing",
+      "stereotype": "值对象",
+      "at": [
+        4.7,
+        3.45
+      ],
+      "responsibility": "种类给出的共享键和容量：同一个主体、同一个键的业务可以共用一个沙箱，容量是一个沙箱最多绑几个（会话 Pod 是槽位数，原生不限）。以数字员工为权限时种类不给它。",
+      "attributes": [
+        [
+          "+",
+          "key: str（如 native|sbx-strict|镜像|browser）"
+        ],
+        [
+          "+",
+          "capacity: int | None"
+        ]
       ]
     }
   ],
@@ -510,7 +551,7 @@
       "from": "prov",
       "to": "repo",
       "type": "association",
-      "description": "按人加载、CAS 保存"
+      "description": "按主体加载、CAS 保存"
     },
     {
       "from": "prov",
@@ -567,6 +608,18 @@
       "to": "btype",
       "type": "association",
       "description": "类型"
+    },
+    {
+      "from": "kind",
+      "to": "sharing",
+      "type": "uses",
+      "description": "按权限类型给出"
+    },
+    {
+      "from": "alloc",
+      "to": "sharing",
+      "type": "uses",
+      "description": "按键挑"
     }
   ],
   "capabilities": [
@@ -574,7 +627,7 @@
       "name": "确保沙箱",
       "entry": "ensure(biz, req)",
       "callers": "原生沙箱、会话 Pod",
-      "description": "已绑定且 READY 直接返回；CREATING 的接着建；没绑定的按业务类型准入、构造，经分配策略挑一个或登记新的（判配额），保存后建、附加、等就绪，标为 READY 再交出"
+      "description": "已绑定且 READY 直接返回；CREATING 的接着建；没绑定的按业务类型准入，问种类的共享键：有就在同主体同键的沙箱里挑一个，没有或都满了就登记新的（判配额），保存后建、附加、等就绪，标为 READY 再交出"
     },
     {
       "name": "查当前沙箱",
@@ -604,13 +657,13 @@
       "name": "释放业务",
       "entry": "release(biz, *, reason)",
       "callers": "原生沙箱、会话 Pod（闲置 idle、会话删除 release）",
-      "description": "解绑；沙箱没有业务了，就以这个原因退役。现在独占，等于直接退役；失败只记日志，由对账兜底"
+      "description": "解绑；沙箱没有业务了，就以这个原因退役。共享的沙箱还在服务别的业务就不动；失败只记日志，由对账兜底"
     },
     {
-      "name": "按人查看",
-      "entry": "of_user(user_uuid)",
+      "name": "按主体查看",
+      "entry": "of_owner(owner_uuid)",
       "callers": "管理界面（待接入）",
-      "description": "这个人名下的沙箱：模板、镜像、状态、服务的业务。运行状态另向基座查"
+      "description": "这个人或数字员工名下的沙箱：模板、镜像、共享键、状态、服务的业务。运行状态另向基座查"
     },
     {
       "name": "列出业务正在用的沙箱",
@@ -639,8 +692,8 @@
   ],
   "decisions": [
     {
-      "decision": "按人建聚合：一个人的沙箱账户（名下沙箱、绑定）是一个聚合，保存时用版本号 CAS",
-      "reason": "配额按人算，只有在一个一致性边界里判才精确：同一个人并发新建时，后保存的一方版本冲突，重读后再判，不会超（以前是先数基座实例再建，属于软上限）。以后做共享，也是在同一个人的沙箱里挑。"
+      "decision": "按主体建聚合：一个主体（人或数字员工）的沙箱账户是一个聚合，保存时用版本号 CAS",
+      "reason": "配额按主体算，只有在一个一致性边界里判才精确：并发新建时，后保存的一方版本冲突，重读后再判，不会超。共享也是在同一个主体的沙箱里挑：人和人之间、数字员工和用它的人之间都不共用沙箱。"
     },
     {
       "decision": "不用分布式锁：一致性靠聚合版本号和唯一约束，建沙箱靠基座按 uuid 幂等",
@@ -663,20 +716,20 @@
       "reason": "按人查看时能看出每个沙箱是什么环境；以后共享，也只能在模板和镜像都相同的沙箱之间进行。两者建好后不变，不会和基座的记录对不上。"
     },
     {
-      "decision": "分配规则收在 AllocationPolicy，现在是独占",
-      "reason": "共享的规则（同模板同镜像、一个沙箱最多几个业务、哪些业务类型能拼在一起）以后只改它，流程和表都不动。另外，共享之前还要先解决同一个沙箱里各会话之间的文件隔离。"
+      "decision": "共享键由种类按权限类型给，分配策略只比键",
+      "reason": "能不能共用一个沙箱取决于业务类型（原生看模板和镜像，会话 Pod 看凭据集合）和权限类型，这些只有种类知道；供给只在同一个主体里按键挑。以数字员工为权限不给键：同一个数字员工同时被很多人用，一个沙箱里混着不同人的进程、环境和浏览器登录态；而且它的会话可能挂着自己的应用工作空间，只能在建沙箱时挂上。"
     },
     {
-      "decision": "账户行只做并发锚点，上限用全局配置",
-      "reason": "判配额要「数这个人的沙箱、再插一条」，这个人一个沙箱都没有时，没有现成的行可以比对版本，所以每个人一行账户、带版本号。按人调上限现在没有需求，也没有谁会写它，先不造这份数据；以后要加，在这一行上加一列、补一个写入方即可。"
+      "decision": "账户行只做并发锚点，上限按主体的种类用全局配置",
+      "reason": "判配额要「数这个主体的沙箱、再插一条」，一个沙箱都没有时没有现成的行可以比对版本，所以每个主体一行账户、带版本号。人和数字员工的用法差别大（数字员工一个会话一个沙箱），上限分开配；按单个主体调上限现在没有需求，先不造这份数据。"
     },
     {
       "decision": "释放按绑定：业务结束、闲置、已不在都先解绑，沙箱没有业务了才退役；只有管理员能不看绑定直接退役",
-      "reason": "业务只知道自己闲不闲、在不在，不知道沙箱还服务谁。现在是独占，效果就是直接退役；以后共享，别的业务还在用就不删。"
+      "reason": "业务只知道自己闲不闲、在不在，不知道沙箱还服务谁。共享的沙箱里别的业务还在用就不删；不共享的，解绑就等于退役。"
     },
     {
-      "decision": "实例标签只写人和 sandbox_uuid，不写业务",
-      "reason": "标签在建沙箱时就定死了，而共享后绑定会变。业务归属以绑定表为准，基座只需要按人查、按 uuid 对账。"
+      "decision": "实例标签只写主体和 sandbox_uuid，不写业务",
+      "reason": "标签在建沙箱时就定死了，而共享时绑定会变。业务归属以绑定表为准，基座只需要按主体查、按 uuid 对账。"
     },
     {
       "decision": "模板记两处：供给记请求的模板 code 和镜像，基座记实际用的模板和版本；归属只在供给记",
@@ -695,11 +748,11 @@
       "reason": "会话删除时释放失败只记日志，不让删除本身失败。业务侧的孤儿由各业务领域给出活名单来回收；供给自己的对账负责重试 RETIRING，并删除基座里没有登记的实例。"
     }
   ],
-  "schemaNote": "主键约定同基座：id 自增，只在库内使用；xxx_uuid 是逻辑主键，引用和 API 都用它。sandbox_account 用用户中心的 user_uuid 作逻辑主键，user_sandbox 的 sandbox_uuid 和基座 sandbox_instance 共用同一个值（基座的表，不画在这里）。不建外键约束，引用由代码维护，ER 图里的连线是逻辑引用。退役完成后，user_sandbox 和它的绑定整行删除；历史看基座的生命周期日志 sandbox_event。",
+  "schemaNote": "主键约定同基座：id 自增，只在库内使用；xxx_uuid 是逻辑主键，引用和 API 都用它。sandbox_account 用主体的 uid（人或数字员工，都是用户中心的用户 uuid；列名沿用 user_uuid）作逻辑主键，user_sandbox 的 sandbox_uuid 和基座 sandbox_instance 共用同一个值（基座的表，不画在这里）。不建外键约束，引用由代码维护，ER 图里的连线是逻辑引用。退役完成后，user_sandbox 和它的绑定整行删除；历史看基座的生命周期日志 sandbox_event。",
   "tables": [
     {
       "name": "sandbox_account",
-      "description": "一个人的沙箱账户（聚合根 SandboxAccount）：只有版本号，是按人判配额时的并发锚点。第一次给这个人分配沙箱时建。",
+      "description": "一个主体的沙箱账户（聚合根 SandboxAccount）：版本号是按主体判配额时的并发锚点。第一次给这个主体分配沙箱时建。",
       "at": [
         0,
         0
@@ -716,7 +769,13 @@
           "name": "user_uuid",
           "type": "UUIDType",
           "key": "UK",
-          "description": "人（用户中心的用户 uuid），即账户的逻辑主键"
+          "description": "主体：人或数字员工的用户中心 uid（列名沿用），即账户的逻辑主键"
+        },
+        {
+          "name": "subject",
+          "type": "String(16)",
+          "default": "'person'",
+          "description": "person / digital_employee：配额上限按它取"
         },
         {
           "name": "version",
@@ -743,13 +802,13 @@
             "user_uuid"
           ],
           "unique": true,
-          "description": "一个人一个账户"
+          "description": "一个主体一个账户"
         }
       ]
     },
     {
       "name": "user_sandbox",
-      "description": "这个人名下的一个沙箱（实体 UserSandbox），和基座的 sandbox_instance 一对一。退役完成后整行删除。",
+      "description": "主体名下的一个沙箱（实体 UserSandbox），和基座的 sandbox_instance 一对一。退役完成后整行删除。",
       "at": [
         1.55,
         0
@@ -773,7 +832,7 @@
           "name": "user_uuid",
           "type": "UUIDType",
           "references": "sandbox_account.user_uuid",
-          "description": "归属的人"
+          "description": "归属的主体"
         },
         {
           "name": "template_code",
@@ -784,6 +843,12 @@
           "name": "image",
           "type": "String(255)",
           "description": "建它用的镜像，建好后不变"
+        },
+        {
+          "name": "share_key",
+          "type": "String(255)",
+          "nullable": true,
+          "description": "共享键，建时定、不变；空 = 不共享（数字员工、评测档）"
         },
         {
           "name": "status",
@@ -822,7 +887,7 @@
           "columns": [
             "user_uuid"
           ],
-          "description": "按人加载账户"
+          "description": "按主体加载账户"
         }
       ]
     },
@@ -865,6 +930,12 @@
           "description": "业务 id：原生是工作区所属根会话的 uuid，CLI Agent 是 CLI Agent 会话的 uuid"
         },
         {
+          "name": "slot",
+          "type": "Integer",
+          "nullable": true,
+          "description": "会话 Pod 里的槽位（bridge 端口 8900 + 槽位）；原生为空"
+        },
+        {
           "name": "bound_at",
           "type": "UTCDateTime",
           "default": "now()",
@@ -894,6 +965,15 @@
             "sandbox_uuid"
           ],
           "description": "按沙箱加载、退役时删绑定"
+        },
+        {
+          "name": "uk_sandbox_binding_slot",
+          "columns": [
+            "sandbox_uuid",
+            "slot"
+          ],
+          "unique": true,
+          "description": "一个 Pod 里槽位不重复"
         }
       ]
     }

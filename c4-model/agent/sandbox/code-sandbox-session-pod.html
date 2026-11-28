@@ -30,10 +30,10 @@
 <script type="application/json" id="c4-model">
 {
   "title": "代码图：Agent 平台 - Agent 服务 - 沙箱 - 会话 Pod",
-  "description": "目标领域模型，只画期望的样子、不对照现状。建立在沙箱基座之上（code-sandbox-base-*.html）。外部 CLI 智能体的会话 Pod：按会话要 Pod，Pod 归人、由通用供给管理；凭据由凭据组件授权后传入、经 Credential Vault 注入，交给运行时的是 bridge 服务令牌。",
+  "description": "目标领域模型，只画期望的样子、不对照现状。建立在沙箱基座之上（code-sandbox-base-*.html）。外部 CLI 智能体的会话 Pod：按会话要 Pod，Pod 归会话的文件主体、由通用供给管理；以人为权限的按凭据集合共用 Pod、每个会话一个槽位，以数字员工为权限的一棵会话树（会话和它派出的子孙会话）一个 Pod；凭据由凭据组件授权后传入、经 Credential Vault 注入，交给运行时的是 bridge 服务令牌。整体设计见 design-workspace-subject.html",
   "component": "沙箱",
   "package": "沙箱 · 会话 Pod（目标模型）",
-  "overview": "会话 Pod 是外部 CLI 智能体（经 bridge 接入）的运行环境。它按会话要 Pod：换算成通用供给的业务时，业务类型是 CLI_AGENT，业务 id 是这个会话的 uuid，人是会话的创建人；Pod 本身归人，由通用供给管理。工作区挂根会话的，技能和 CLI 的 HOME 挂自己的，HOME 持久化，Pod 重建后 CLI 能接着上次的会话。CLI 镜像、模型接入和凭据都由调用方准备好、作为参数传进来：镜像和模型来自这一轮的 Agent 版本快照，凭据由凭据组件按这一轮授权后给出；它不判断谁能用哪份凭据。凭据经 Credential Vault 注入，不进 Pod。交给 CLI 运行时的是 bridge 的地址和服务令牌，不是 execd 令牌。调用方是 CLI 运行时（每轮一次）、会话管理 · 会话（删除级联）和维护任务。",
+  "overview": "会话 Pod 是外部 CLI 智能体（经 bridge 接入）的运行环境。它按会话要 Pod：换算成通用供给的业务时，业务类型是 CLI_AGENT，业务 id 是这个会话的 uuid，主体是会话记下的文件主体；Pod 本身归主体，由通用供给管理。\n\n以人为权限：这个人凭据集合相同的 CLI 会话共用一个 Pod，每个会话占一个槽位、起自己的 bridge（端口 8900 + 槽位）；Pod 挂整个 {人}/ 到 /data，规格里没有会话信息，bridge 起来时才带上会话和工作目录。以数字员工为权限：一棵会话树一个 Pod（共享键带上根会话），挂 {数字员工}/ 到 /data，工作目录是应用工作空间时另挂到 /space。CLI 的 HOME 记录在 {主体}/home/.claude，Pod 重建后 CLI 能接着上次的会话。\n\nCLI 镜像、模型接入和凭据都由调用方准备好、作为参数传进来：镜像和模型来自这一轮的 Agent 版本快照，凭据由凭据组件按这一轮授权后给出；它不判断谁能用哪份凭据。凭据经 Credential Vault 注入，不进 Pod。交给 CLI 运行时的是 bridge 的地址和服务令牌，不是 execd 令牌。调用方是 CLI 运行时（每轮一次）、会话管理 · 会话（删除级联）和维护任务。",
   "elements": [
     {
       "id": "ep",
@@ -90,7 +90,7 @@
       "kind": "class",
       "name": "CliPodKind",
       "stereotype": "策略",
-      "responsibility": "会话 Pod 这一种：模板 cli；创建规格里挂工作区、技能和 CLI 状态目录，声明 bridge 的服务令牌变量，模型 Key 放进机密环境变量；凭据集合非空时开凭据注入，并让 CLI 信任 MITM CA。每轮都把凭据整份写一遍（覆盖），档案换了令牌或权限被收回，下一轮就生效；就绪 = bridge 的 /readyz 回 200。无状态，装配时按 biz_type = CLI_AGENT 登记到通用供给，由通用供给在确保沙箱时回调；SessionPods 不直接调它。挂载前缀（工作区、技能、CLI 的 HOME）取自 PodRequest.layout，不自己拼。",
+      "responsibility": "会话 Pod 这一种：模板 cli；共享键按权限类型给——以人为权限是凭据集合（容量 = 每个 Pod 的槽位数），以数字员工为权限不给（一个会话一个）；创建规格挂 /data ← {主体}/（不共享且工作目录是应用工作空间时另挂 /space），声明 bridge 的服务令牌变量，模型 Key 放进机密环境变量；凭据集合非空时开凭据注入，并让 CLI 信任 MITM CA。附加时在这个会话的槽位上起 bridge；每轮都把凭据整份写一遍（覆盖）；就绪 = 这个槽位的 bridge /readyz 回 200。无状态，装配时按 biz_type = CLI_AGENT 登记到通用供给。",
       "attributes": [
         [
           "+",
@@ -100,11 +100,15 @@
       "methods": [
         [
           "+",
+          "share(req, biz) -> Sharing | None"
+        ],
+        [
+          "+",
           "build(req, biz) -> CreateSpec"
         ],
         [
           "+",
-          "attach(ref, req, *, created)"
+          "attach(ref, req, *, created)（在槽位上起 bridge）"
         ],
         [
           "+",
@@ -121,11 +125,15 @@
       "kind": "class",
       "name": "PodRequest",
       "stereotype": "值对象",
-      "responsibility": "建一个会话 Pod 需要的会话信息：会话和它的工作区（根会话）、用户、CLI 镜像与 adapter、模型接入、已授权的凭据。",
+      "responsibility": "建或接上一个会话 Pod 需要的会话信息：会话和它的工作目录（根会话的）、文件主体和种类、CLI 镜像与 adapter、模型接入、已授权的凭据。",
       "attributes": [
         [
           "+",
-          "thread_uuid · workspace_uuid（根会话）· user_uuid"
+          "thread_uuid · workspace（根会话的工作目录）"
+        ],
+        [
+          "+",
+          "owner_uuid · subject（文件主体）"
         ],
         [
           "+",
@@ -456,8 +464,12 @@
   ],
   "decisions": [
     {
-      "decision": "按会话要 Pod，工作区挂根会话的，HOME 持久化",
-      "reason": "子智能体可以一层层再派子智能体，它们和主 agent 共享根会话的工作区；技能和 CLI 的状态目录挂自己的。CLI 把会话记录写在 HOME 下，Pod 会被删掉重建，HOME 持久化后 CLI 才能接着上次的会话。"
+      "decision": "按会话要 Pod；工作目录用根会话的，HOME 在主体前缀下持久化",
+      "reason": "子智能体可以一层层再派子智能体，它们和主 agent 共用根会话的工作目录。CLI 把会话记录写在 HOME 下，Pod 会被删掉重建，HOME 记在 {主体}/home/.claude，CLI 才能接着上次的会话。"
+    },
+    {
+      "decision": "以人为权限按凭据集合共用 Pod、一个会话一个槽位；以数字员工为权限一棵会话树一个 Pod",
+      "reason": "凭据注入只能在建 Pod 时开，凭据集合不同的会话不能共用；同一个人凭据相同的会话共用一个 Pod，省掉每个会话几十秒的冷启动。数字员工同时被很多人用，共用 Pod 会混着不同人的 CLI 进程和 HOME；它的会话还可能用应用工作空间作工作目录，只有一个会话一个 Pod 才能在建时挂上 /space。"
     },
     {
       "decision": "CLI 镜像、模型接入和凭据都走参数，不绑在实例上",
@@ -477,7 +489,7 @@
     },
     {
       "decision": "删除级联、孤儿回收只释放自己的业务，不直接删 Pod",
-      "reason": "Pod 归人，由通用供给管理；以后共享时，同一个沙箱可能还在服务这个人的别的业务。现在是独占，效果和直接删一样。"
+      "reason": "Pod 归主体，由通用供给管理；以人为权限的 Pod 是共享的，可能还在服务这个人的别的会话，只停掉这个会话的 bridge、释放槽位。不共享的，释放就等于删 Pod。"
     },
     {
       "decision": "模型 Key 用主体 Key，放进机密环境变量",

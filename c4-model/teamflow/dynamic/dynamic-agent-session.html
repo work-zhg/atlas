@@ -1,0 +1,1082 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dynamic View</title>
+<style>
+  body { margin: 0; background: #fff; color: #444; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { padding: 24px 32px 48px; }
+  svg { display: block; max-width: 100%; height: auto; }
+  h2 { margin: 40px 0 12px; font-size: 15px; font-weight: 600; color: #666; }
+  #c4-report { margin: 0 0 24px; padding: 12px 16px 12px 36px; border: 1px solid #e0b4b4; background: #fff6f6; font-size: 14px; line-height: 1.6; }
+  #c4-report li[data-level="error"] { color: #b00020; }
+  #c4-report li[data-level="warn"] { color: #8a5a00; }
+  #c4-details { max-width: 1280px; }
+  #c4-details article { margin: 0 0 28px; scroll-margin-top: 16px; }
+  #c4-details article:target h3 { background: #fff8d6; }
+  #c4-details h3 { margin: 0 0 8px; padding: 2px 4px; font-size: 15px; font-weight: 600; color: #333; }
+  #c4-details h3 .tech { margin-left: 8px; font-size: 13px; font-weight: 400; color: #888; }
+  #c4-details p { margin: 0 0 8px; font-size: 14px; line-height: 1.7; }
+  #c4-details table { width: 100%; margin: 0 0 8px; border-collapse: collapse; table-layout: fixed; font-size: 13px; line-height: 1.6; }
+  #c4-details th, #c4-details td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+  #c4-details th { background: #f6f8fa; font-weight: 600; }
+  #c4-details th:nth-child(1) { width: 14%; }
+  #c4-details th:nth-child(2) { width: 46%; }
+  #c4-details td.sample, #c4-details pre { font-family: Menlo, Consolas, "PingFang SC", monospace; }
+  #c4-details td.sample { word-break: break-all; }
+  #c4-details pre { margin: 0; padding: 10px 12px; border: 1px solid #e3e3e3; background: #f6f8fa; font-size: 12px; line-height: 1.5; overflow-x: auto; }
+  svg a { cursor: pointer; }
+
+  /* 原理：手写的静态图，不经渲染器 */
+  #principle { max-width: 1280px; }
+  #principle h3 { margin: 32px 0 8px; font-size: 15px; font-weight: 600; color: #333; }
+  #principle p { max-width: 1100px; margin: 8px 0; font-size: 14px; line-height: 1.7; }
+  #principle p.lead { padding: 10px 14px; border-left: 3px solid #1168bd; background: #f4f8fc; }
+  #principle code { padding: 0 3px; background: #f6f8fa; font-family: Menlo, Consolas, monospace; font-size: 12.5px; }
+  #principle a { color: #1168bd; }
+  #principle ol.steps { margin: 8px 0 0; padding: 0; list-style: none; }
+  #principle ol.steps li { position: relative; margin: 0 0 6px; padding-left: 30px; font-size: 14px; line-height: 1.7; }
+  #principle ol.steps li .n { position: absolute; left: 0; top: 2px; width: 20px; height: 20px; border-radius: 50%; background: #d9480f; color: #fff; font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+  #principle table { width: 100%; margin: 8px 0 0; border-collapse: collapse; font-size: 13px; line-height: 1.6; }
+  #principle th, #principle td { padding: 6px 10px; border: 1px solid #e3e3e3; text-align: left; vertical-align: top; }
+  #principle th { background: #f6f8fa; font-weight: 600; }
+  #principle svg { margin: 8px 0 4px; }
+  #principle svg text { font-size: 13px; fill: #444; }
+  #principle svg .t-name { font-size: 15px; fill: #1168bd; text-anchor: middle; }
+  #principle svg .t-sub { font-size: 12px; fill: #888; text-anchor: middle; }
+  #principle svg .t-head { font-size: 14px; font-weight: 600; fill: #1168bd; }
+  #principle svg .t-key { font-size: 12px; fill: #888; }
+  #principle svg .t-lab { font-size: 12px; fill: #666; }
+  #principle svg .t-hot { font-size: 12px; fill: #d9480f; }
+  #principle svg .t-mute { font-size: 12px; fill: #aaa; }
+  #principle svg .mid { text-anchor: middle; }
+  #principle svg .end { text-anchor: end; }
+  #principle svg .b { font-weight: 700; }
+  #principle svg .node { fill: #fff; stroke: #1168bd; stroke-width: 1.6; }
+  #principle svg .node-hot { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.6; }
+  #principle svg .bnd { fill: none; stroke: #1168bd; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .gap { fill: #fff6f0; stroke: #d9480f; stroke-width: 1.2; stroke-dasharray: 5 4; }
+  #principle svg .band-a { fill: #eef4fb; stroke: #1168bd; stroke-width: 1.2; }
+  #principle svg .band-b { fill: #fff3ea; stroke: #d9480f; stroke-width: 1.2; }
+  #principle svg .cell { fill: #fff; stroke: #bbb; stroke-width: 1.2; }
+  #principle svg .e { fill: none; stroke: #444; stroke-width: 1.6; }
+  #principle svg .e-dash { fill: none; stroke: #444; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .e-hot { fill: none; stroke: #d9480f; stroke-width: 2.2; }
+  #principle svg .e-mute { fill: none; stroke: #bbb; stroke-width: 1.4; stroke-dasharray: 6 4; }
+  #principle svg .badge circle { fill: #d9480f; stroke: #fff; stroke-width: 2; }
+  #principle svg .badge text { fill: #fff; font-size: 12px; font-weight: 700; text-anchor: middle; }
+</style>
+</head>
+<body>
+<!--
+  只改下面这段 JSON；渲染器不用动。字段说明见 dynamic/RULES.md 的「数据格式」。
+-->
+<script type="application/json" id="c4-model">
+{
+  "title": "动态图：AI TeamFlow - 节点会话与 Agent 平台：对话显示、挂起与恢复",
+  "description": "目标模型。F-1025「编码」第 1 轮：李工打开节点页，对话组件直连 Agent 平台；他在对话框里发一条消息，经 TeamFlow 开 run、记下 run 和节点的对应；数字员工改到一半问「幂等键要不要带商户号？」，Agent 平台挂起这次 run，问题卡片出现在页面上；李工在卡片里回答，Agent 平台续跑。挂起和回答都不经 TeamFlow，TeamFlow 也不跟随事件。原理见图下方；参与者见 component-server.html；整体设计见 design-teamflow.html",
+  "boundaries": [
+    {
+      "id": "tfb",
+      "name": "AI TeamFlow",
+      "type": "Software System"
+    },
+    {
+      "id": "srv",
+      "name": "TeamFlow 服务",
+      "type": "Container: Python / FastAPI",
+      "in": "tfb"
+    }
+  ],
+  "participants": [
+    {
+      "id": "member",
+      "kind": "person",
+      "name": "执行人（李工）",
+      "color": "#1a849c",
+      "tag": "团队成员"
+    },
+    {
+      "id": "web",
+      "kind": "container",
+      "name": "TeamFlow 前端",
+      "technology": "Next.js / React",
+      "in": "tfb"
+    },
+    {
+      "id": "flowapi",
+      "kind": "component",
+      "name": "流程接口",
+      "technology": "FastAPI Router + SSE",
+      "in": "srv"
+    },
+    {
+      "id": "proxy",
+      "kind": "component",
+      "name": "节点对话接口",
+      "technology": "FastAPI Router + httpx",
+      "in": "srv"
+    },
+    {
+      "id": "collab",
+      "kind": "component",
+      "name": "节点协作",
+      "technology": "asyncio 任务 + httpx",
+      "in": "srv"
+    },
+    {
+      "id": "atlas",
+      "kind": "system",
+      "name": "Agent 平台",
+      "color": "#ed8609"
+    }
+  ],
+  "messages": [
+    {
+      "from": "member",
+      "to": "web",
+      "description": "打开「编码」的节点页"
+    },
+    {
+      "from": "web",
+      "to": "flowapi",
+      "description": "取节点：状态、会话号、能不能发消息",
+      "technology": "JSON/HTTPS（经 API 网关）"
+    },
+    {
+      "from": "flowapi",
+      "to": "collab",
+      "description": "session_of(node)：会话号；能不能发 = 执行人、节点在人机协同中、没冻结、没被接管",
+      "details": {
+        "note": "「能不能发」只用来决定对话组件显不显示输入框。真正挡住的是第 9 步：开新 run 只能经 TeamFlow。"
+      }
+    },
+    {
+      "from": "web",
+      "to": "atlas",
+      "description": "对话组件直连：取会话、消息、待决事项，订阅会话事件流",
+      "technology": "JSON/HTTPS、SSE（经 API 网关）",
+      "details": {
+        "items": [
+          [
+            "接口根",
+            "对话组件参数 apiBase",
+            "/atlas（Agent 平台的接口，和 Agent 平台控制台同一个）"
+          ],
+          [
+            "开新 run",
+            "对话组件参数 submitRun",
+            "交给 TeamFlow：POST …/api/v1/processes/{流程}/nodes/{节点}/messages"
+          ],
+          [
+            "只读",
+            "对话组件参数 readOnly",
+            "第 3 步「不能发」时为真：输入框、卡片按钮都不显示"
+          ]
+        ]
+      }
+    },
+    {
+      "from": "atlas",
+      "to": "atlas",
+      "description": "按数据权限判：会话属于以数字员工为权限的「开发工程师」，李工对它有使用权 → 放行",
+      "details": {
+        "note": "使用权是发起流程时 TeamFlow 给流程里的人授的（见 dynamic-start-flow.html）。不要求李工是会话主人（会话由发起人建）。没有使用权的人（如只读成员）这里回 404。"
+      }
+    },
+    {
+      "from": "member",
+      "to": "web",
+      "description": "在对话框里发「幂等键先按渠道流水号做」"
+    },
+    {
+      "from": "web",
+      "to": "proxy",
+      "description": "对话组件调 submitRun：POST …/nodes/code/messages",
+      "technology": "JSON/HTTPS（经 API 网关）",
+      "details": {
+        "example": "{\n  \"content\": [{\"type\": \"text\", \"text\": \"幂等键先按渠道流水号做\"}],\n  \"idempotency_key\": \"<对话组件生成>\"\n}"
+      }
+    },
+    {
+      "from": "proxy",
+      "to": "collab",
+      "description": "send_human：核对李工是执行人、节点在人机协同中、没冻结、没被接管"
+    },
+    {
+      "from": "collab",
+      "to": "atlas",
+      "description": "以李工的身份开 run（带幂等键）",
+      "technology": "JSON/HTTP（X-Uid = 李工，X-Caller-App = teamflow）",
+      "details": {
+        "note": "Agent 平台只认建会话的应用来开新 run：人从 Agent 平台控制台直接发会回 403，要回到 TeamFlow 里发。会话里还有没结束的 run 时回 409，节点对话接口原样告诉对话组件。"
+      }
+    },
+    {
+      "from": "collab",
+      "to": "collab",
+      "description": "记一条 HUMAN 指令：run 号、作者、第几轮；节点会话的「最后开的 run」改成它",
+      "details": {
+        "note": "TeamFlow 只为一件事记 run 号：要停下这个节点（提交评审、接管、打回、终止）时，知道取消哪一个。"
+      }
+    },
+    {
+      "from": "proxy",
+      "to": "web",
+      "description": "202：run 号；这一轮的过程对话组件照常从会话事件流收",
+      "technology": "JSON/HTTPS"
+    },
+    {
+      "from": "atlas",
+      "to": "atlas",
+      "description": "数字员工调 ask_user_question：先登记事项，再记一项等待；这一段结束，run 挂起",
+      "details": {
+        "note": "原生智能体挂起后没有进程在跑、不占执行槽位，等几天也没有超时；CLI 智能体是 bridge 在线等，run 仍是 running，发出的事件一样。Agent 平台内部的过程见 ../agent/dynamic/dynamic-approval.html。"
+      }
+    },
+    {
+      "from": "atlas",
+      "to": "web",
+      "description": "推 approval.required：问题卡片出现",
+      "technology": "SSE",
+      "details": {
+        "note": "TeamFlow 不知道这件事：它不跟随会话事件。卡片就是提醒；刷新页面后，对话组件用待决事项接口（以库为准）把卡片找回来。"
+      }
+    },
+    {
+      "from": "member",
+      "to": "web",
+      "description": "在卡片里选「带商户号」，提交"
+    },
+    {
+      "from": "web",
+      "to": "atlas",
+      "description": "POST /v1/runs/{run}/approvals/{事项}（直连）",
+      "technology": "JSON/HTTPS（经 API 网关）",
+      "details": {
+        "example": "{\n  \"decision\": \"approved\",\n  \"answers\": [{\"selected\": [\"带商户号\"], \"other\": null}]\n}"
+      }
+    },
+    {
+      "from": "atlas",
+      "to": "atlas",
+      "description": "按数据权限判；只改还在等的那一行；等的都有结果了 → run 放回排队，就地抢锁续跑",
+      "details": {
+        "note": "回答本身就是唤醒，谁都不用发「继续」。周工同时提交的那次回 409，他的卡片刷新成「已被处理」。"
+      }
+    },
+    {
+      "from": "atlas",
+      "to": "web",
+      "description": "推 question.answered，正文接着出来，最后 run.finished",
+      "technology": "SSE"
+    }
+  ]
+}
+</script>
+
+<main>
+  <ul id="c4-report" hidden></ul>
+  <svg id="c4-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <section id="c4-details" hidden></section>
+  <h2>Diagram key</h2>
+  <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+
+  <section id="principle">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+      <defs>
+        <marker id="pr-a" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="10" markerHeight="10" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#444"/></marker>
+        <marker id="pr-h" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#d9480f"/></marker>
+        <marker id="pr-m" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto"><path d="M0 0 L10 5 L0 10 z" fill="#bbb"/></marker>
+      </defs>
+    </svg>
+
+    <h2>原理：TeamFlow 和 Agent 平台怎么配合</h2>
+    <p class="lead">一句话：<b>节点页的对话组件直连 Agent 平台，看对话、回答、接管浏览器、停止都不经 TeamFlow，Agent 平台只看「这个人对这个数字员工有没有使用权」；只有开新 run 经 TeamFlow，它记下每个 run 属于哪个节点，停下节点时取消它。挂起和恢复完全是 Agent 平台自己的事，TeamFlow 不跟随事件，也不知道数字员工在等人。</b></p>
+    <p>场景同上面的时序图。Agent 平台内部怎么挂起、续跑，见 <a href="../../agent/dynamic/dynamic-approval.html" target="_blank" rel="noopener">挂起与审批</a>；取消见 <a href="../../agent/dynamic/dynamic-cancel.html" target="_blank" rel="noopener">取消</a>；浏览器接管见 <a href="../../agent/dynamic/dynamic-browser-takeover.html" target="_blank" rel="noopener">人接管登录</a>；使用权在什么时候授，见 <a href="dynamic-start-flow.html" target="_blank" rel="noopener">发起流程</a>。</p>
+
+    <h3>先认识几个词</h3>
+    <table><thead><tr><th style="width: 12%">词</th><th>意思</th><th>例子</th></tr></thead><tbody><tr><td>会话、run、段</td><td>一个节点一个会话（thread）；每开一次 run，数字员工就做一轮；run 被挂起时切成几段，续跑是新的一段。</td><td>「编码」的会话里，李工发的那条消息是一个 run，中间挂起过一次，所以有两段。</td></tr><tr><td>使用权</td><td>用户中心里「这个人能不能用这个数字员工」的数据权限（AtlasAgent 的「使用」级别）。Agent 平台判对话能不能看、能不能答，只看它。</td><td>李工、周工对「开发工程师」有使用权。</td></tr><tr><td>接入人</td><td>把数字员工接入团队的人，必须是这个数字员工的 Owner；TeamFlow 以他的身份给流程里的人授使用权。</td><td>研发一部的「开发工程师」由李工接入。</td></tr><tr><td>事项</td><td>数字员工要人决定的一件事，Agent 平台在库里记一行，状态从「在等」变成「允许 / 拒绝 / 作废」。三种：提问、工具或计划审批、浏览器接管。</td><td>「幂等键要不要带商户号？」是一个提问事项。</td></tr><tr><td>挂起、续跑</td><td>原生智能体等人时，这一段结束、进程走掉，run 状态是 suspended；事项都有结果后，Agent 平台把 run 放回排队，任何一个实例抢到就从库里还原接着跑。CLI 智能体是 bridge 在线等，run 不挂起，但事件一样。</td><td>李工下午才回答，数字员工中午挂起，中间没有进程在等。</td></tr><tr><td>三种「接管」</td><td><b>浏览器接管</b>：数字员工请人操作浏览器，是 Agent 平台的一种事项。<b>节点接管</b>：执行人主动停下数字员工、自己改流程空间里的文件，是 TeamFlow 的操作。<b>实例接手</b>：Agent 平台某个实例挂了，别的实例接着跑同一个 run。</td><td>本页的「接管」不加说明时指节点接管。</td></tr></tbody></table>
+
+    <h3>图 1　节点页上的三条线</h3>
+    <svg width="1240" viewBox="0 0 1240 426" role="img" aria-label="节点页上的三条线">
+<g transform="translate(0,36)">
+<rect class="band-a" x="20" y="20" width="300" height="350" rx="6"/>
+<text class="t-head" x="36" y="46">浏览器：编码的节点页（李工）</text>
+<rect class="node" x="40" y="70" width="260" height="110" rx="4"/>
+<text class="t-name" x="170" y="96">对话区</text>
+<text class="t-sub" x="170" y="116">Atlas 对话组件（@atlas/chat-ui）</text>
+<text class="t-sub" x="170" y="134">apiBase = Agent 平台</text>
+<text class="t-sub" x="170" y="152">submitRun = 交给 TeamFlow</text>
+<text class="t-sub" x="170" y="170">readOnly = 不能发时</text>
+<rect class="node" x="40" y="270" width="260" height="80" rx="4"/>
+<text class="t-name" x="170" y="296">流程区</text>
+<text class="t-sub" x="170" y="316">节点状态、会话号、评审</text>
+<rect class="bnd" x="400" y="20" width="400" height="350" rx="6"/>
+<text class="t-head" x="416" y="46">TeamFlow 服务</text>
+<rect class="node" x="430" y="70" width="340" height="70" rx="4"/>
+<text class="t-name" x="600" y="96">节点对话接口</text>
+<text class="t-sub" x="600" y="116">只收「发消息」、接管、交还</text>
+<rect class="node" x="430" y="165" width="340" height="70" rx="4"/>
+<text class="t-name" x="600" y="191">节点协作</text>
+<text class="t-sub" x="600" y="211">开 run（系统指令、人发的），记 run 号；停下时取消</text>
+<rect class="node" x="430" y="280" width="340" height="70" rx="4"/>
+<text class="t-name" x="600" y="306">流程接口</text>
+<text class="t-sub" x="600" y="326">节点状态、会话号、能不能发</text>
+<rect class="band-b" x="880" y="20" width="340" height="350" rx="6"/>
+<text class="t-head" x="896" y="46">Agent 平台</text>
+<rect class="node" x="900" y="70" width="300" height="120" rx="4"/>
+<text class="t-name" x="1050" y="96">会话、事件流、事项、浏览器</text>
+<text class="t-sub" x="1050" y="116">读会话和消息、订阅事件流</text>
+<text class="t-sub" x="1050" y="134">回答提问和审批、浏览器接管</text>
+<text class="t-sub" x="1050" y="152">停止</text>
+<text class="t-sub" x="1050" y="170">按数字员工的数据权限判</text>
+<rect class="node" x="900" y="230" width="300" height="80" rx="4"/>
+<text class="t-name" x="1050" y="256">开 run、取消 run</text>
+<text class="t-sub" x="1050" y="276">开新 run 只认建会话的应用</text>
+<path class="e" d="M300 150 H428" marker-end="url(#pr-a)"/>
+<text class="t-lab mid" x="364" y="142">② 发消息</text>
+<path class="e" d="M600 140 V163" marker-end="url(#pr-a)"/>
+<path class="e" d="M770 200 H835 V260 H898" marker-end="url(#pr-a)"/>
+<path class="e" d="M428 315 H302" marker-end="url(#pr-a)"/>
+<text class="t-lab mid" x="364" y="307">③ 节点信息</text>
+<text class="t-key" x="900" y="336">流程里的人在发起时被授了</text>
+<text class="t-key" x="900" y="354">这个数字员工的使用权。</text>
+<g class="badge"><circle cx="40" cy="70" r="10"/><text x="40" y="74">1</text></g>
+<g class="badge"><circle cx="430" cy="70" r="10"/><text x="430" y="74">2</text></g>
+<g class="badge"><circle cx="40" cy="270" r="10"/><text x="40" y="274">3</text></g>
+</g>
+<path class="e-hot" d="M300 128 H340 V22 H1050 V104" marker-end="url(#pr-h)"/>
+<text class="t-hot mid" x="695" y="16">① 直连：看、答、接管浏览器、停止（HTTP、SSE、WebSocket）</text>
+</svg>
+    <ol class="steps"><li><span class="n">1</span>对话区就是 Agent 平台控制台的对话组件，同一份代码，直连 Agent 平台：读会话、订阅事件流、回答提问和审批、浏览器接管和实时画面、停止。TeamFlow 不转发这些请求，也不认识这些接口；Agent 平台加了新卡片、新事件，TeamFlow 重新构建就有。</li><li><span class="n">2</span>只有开新 run 经 TeamFlow：对话框里发的消息由对话组件的 <code>submitRun</code> 交给节点对话接口，核对后由节点协作开 run、记下 run 号。系统指令（开工、下一轮、交还）也由节点协作开。</li><li><span class="n">3</span>节点状态、会话号、能不能发消息这些流程上的事，从 TeamFlow 的流程接口取。</li></ol>
+    <p>对话组件是一个通用组件，接入方用参数决定它连哪里、开 run 交给谁、能不能写，组件里不写任何一个应用的接口：</p>
+    <table><thead><tr><th style="width: 16%">参数</th><th>作用</th><th>TeamFlow 传什么</th></tr></thead><tbody><tr><td><code>apiBase</code></td><td>接口根：读会话、消息、事件流、事项、浏览器都调它</td><td>Agent 平台的接口（经 API 网关），和 Agent 平台控制台一样</td></tr><tr><td><code>submitRun</code></td><td>开新 run 交给宿主：对话框发消息、重新生成都走它；不给就直接调 Agent 平台</td><td>调 TeamFlow 的 <code>…/nodes/{节点}/messages</code></td></tr><tr><td><code>readOnly</code></td><td>只读：输入框和卡片按钮都不显示，只看</td><td>不是执行人，或者节点不在人机协同中、被冻结、被接管</td></tr></tbody></table>
+    <p>一个会话里有系统指令和好几个执行人在说话，对话组件要显示每条用户消息是谁发的（「李工」「TeamFlow · 开工指令」），这要 Agent 平台给用户消息带上发送方：人发的记作者（开 run 时的 X-Uid），应用发的系统指令标明来源。</p>
+
+    <h3>图 2　谁能看、谁能答：只看数据权限</h3>
+    <svg width="1240" viewBox="0 0 1240 290" role="img" aria-label="谁能看、谁能答：只看数据权限">
+<text class="t-head" x="20" y="30">发起流程时（TeamFlow 做）</text>
+<rect class="node" x="20" y="44" width="230" height="80" rx="4"/>
+<text class="t-name" x="135" y="70">算出流程里的人</text>
+<text class="t-sub" x="135" y="90">各节点执行、评审角色</text>
+<text class="t-sub" x="135" y="108">当前分配的成员</text>
+<path class="e" d="M250 84 H278" marker-end="url(#pr-a)"/>
+<rect class="node" x="280" y="44" width="260" height="80" rx="4"/>
+<text class="t-name" x="410" y="70">算出流程里的数字员工</text>
+<text class="t-sub" x="410" y="90">各节点执行角色配的</text>
+<text class="t-sub" x="410" y="108">需求分析师、架构师、开发工程师…</text>
+<path class="e" d="M540 84 H568" marker-end="url(#pr-a)"/>
+<rect class="node-hot" x="570" y="44" width="300" height="80" rx="4"/>
+<text class="t-name" x="720" y="70" style="fill:#d9480f">经 Agent 平台的共享接口授「使用」</text>
+<text class="t-sub" x="720" y="90">操作人 = 接入人（数字员工的 Owner）</text>
+<text class="t-sub" x="720" y="108">已经有的不重复授</text>
+<path class="e" d="M870 84 H898" marker-end="url(#pr-a)"/>
+<rect class="node" x="900" y="44" width="320" height="80" rx="4"/>
+<text class="t-name" x="1060" y="70">用户中心：AtlasAgent 数据权限</text>
+<text class="t-sub" x="1060" y="90">李工、周工 → 开发工程师：使用</text>
+<text class="t-sub" x="1060" y="108">只读成员不授</text>
+<text class="t-head" x="20" y="176">之后每个直连请求（Agent 平台做）</text>
+<rect class="node" x="20" y="190" width="230" height="80" rx="4"/>
+<text class="t-name" x="135" y="216">李工的请求</text>
+<text class="t-sub" x="135" y="236">看会话、回答、接管、停止</text>
+<path class="e" d="M250 230 H278" marker-end="url(#pr-a)"/>
+<rect class="node" x="280" y="190" width="260" height="80" rx="4"/>
+<text class="t-name" x="410" y="216">会话属于哪个智能体？</text>
+<text class="t-sub" x="410" y="236">以数字员工为权限的</text>
+<text class="t-sub" x="410" y="254">「开发工程师」</text>
+<path class="e" d="M540 230 H568" marker-end="url(#pr-a)"/>
+<rect class="node" x="570" y="190" width="300" height="80" rx="4"/>
+<text class="t-name" x="720" y="216">李工对它有使用权吗？</text>
+<text class="t-sub" x="720" y="236">有 → 放行，不要求是会话主人</text>
+<text class="t-sub" x="720" y="254">没有 → 404</text>
+<path class="e-dash" d="M1060 124 V150 H720 V188" marker-end="url(#pr-a)"/>
+<text class="t-key mid" x="890" y="146">用户中心按授权回答</text>
+<rect class="node-hot" x="900" y="190" width="320" height="80" rx="4"/>
+<text class="t-name" x="1060" y="216" style="fill:#d9480f">要开新 run？</text>
+<text class="t-sub" x="1060" y="236">只认建会话的应用（teamflow）</text>
+<text class="t-sub" x="1060" y="254">人直接发 → 403，回 TeamFlow 里发</text>
+<path class="e" d="M870 230 H898" marker-end="url(#pr-a)"/>
+<g class="badge"><circle cx="20" cy="44" r="10"/><text x="20" y="48">1</text></g>
+<g class="badge"><circle cx="570" cy="44" r="10"/><text x="570" y="48">2</text></g>
+<g class="badge"><circle cx="570" cy="190" r="10"/><text x="570" y="194">3</text></g>
+<g class="badge"><circle cx="900" cy="190" r="10"/><text x="900" y="194">4</text></g>
+</svg>
+    <ol class="steps"><li><span class="n">1</span>发起流程时，TeamFlow 算出流程里的人（各节点执行、评审角色当前分配的成员）和流程里的数字员工（各节点执行角色配的）。项目后来改了分配，给新加的人补授。</li><li><span class="n">2</span>经 Agent 平台的共享接口给这些人授「使用」。用户中心规定：数字员工的授权只能由 Agent 平台写，已经有授权的数据再授要操作人是 Owner。所以接入数字员工的人必须是它的 Owner，TeamFlow 以接入人的身份授；已经有的不重复授，也不自动收回（同一个人可能在好几条流程里用它）。</li><li><span class="n">3</span>之后每个直连请求，Agent 平台只看会话属于哪个数字员工、这个人对它有没有使用权：有就能看、能答、能接管浏览器、能停止，不要求是会话主人；没有就 404。只读成员没被授，看不到节点对话。</li><li><span class="n">4</span>唯一的例外是开新 run：会话是 teamflow 建的，就只接受 teamflow 发来的；人在 Agent 平台控制台里直接发消息会被拒，要回到 TeamFlow 里发。</li></ol>
+    <p>注意：使用权是对数字员工的，不是对某条流程的。被授了权的人在 Agent 平台控制台里也能直接用这个数字员工开自己的会话。</p>
+
+    <h3>图 3　开 run 都经 TeamFlow：记下 run 和节点的对应</h3>
+    <svg width="1240" viewBox="0 0 1240 270" role="img" aria-label="开 run 都经 TeamFlow">
+<rect class="node" x="20" y="20" width="250" height="60" rx="4"/>
+<text class="t-name" x="145" y="46">系统指令</text>
+<text class="t-sub" x="145" y="66">开工、下一轮、交还的说明</text>
+<path class="e" d="M270 50 H308" marker-end="url(#pr-a)"/>
+<rect class="node" x="310" y="20" width="250" height="60" rx="4"/>
+<text class="t-name" x="435" y="46">排进指令队列</text>
+<text class="t-sub" x="435" y="66">和改流程状态同一个事务</text>
+<path class="e" d="M560 50 H598" marker-end="url(#pr-a)"/>
+<rect class="node" x="600" y="20" width="250" height="60" rx="4"/>
+<text class="t-name" x="725" y="46">提交后投递</text>
+<text class="t-sub" x="725" y="66">锁到节点会话行的副本</text>
+<rect class="node" x="20" y="120" width="250" height="60" rx="4"/>
+<text class="t-name" x="145" y="146">人在对话框里发的</text>
+<text class="t-sub" x="145" y="166">对话组件 submitRun</text>
+<path class="e" d="M270 150 H308" marker-end="url(#pr-a)"/>
+<rect class="node" x="310" y="120" width="250" height="60" rx="4"/>
+<text class="t-name" x="435" y="146">节点对话接口核对</text>
+<text class="t-sub" x="435" y="166">执行人 · 协同中 · 没冻结 · 没被接管</text>
+<path class="e" d="M560 150 H598" marker-end="url(#pr-a)"/>
+<rect class="node" x="600" y="120" width="250" height="60" rx="4"/>
+<text class="t-name" x="725" y="146">当场开 run</text>
+<text class="t-sub" x="725" y="166">以作者的身份</text>
+<path class="e" d="M850 50 H880 V100 H908" marker-end="url(#pr-a)"/>
+<path class="e" d="M850 150 H880 V100" marker-end="url(#pr-a)"/>
+<rect class="node-hot" x="910" y="60" width="310" height="80" rx="4"/>
+<text class="t-name" x="1065" y="86" style="fill:#d9480f">Agent 平台：开一次 run</text>
+<text class="t-sub" x="1065" y="106">幂等键 = 指令号</text>
+<text class="t-sub" x="1065" y="124">返回 run 号</text>
+<path class="e-hot" d="M1065 140 V178" marker-end="url(#pr-h)"/>
+<rect class="node" x="760" y="180" width="460" height="70" rx="4"/>
+<text class="t-name" x="990" y="206">TeamFlow 记：这个 run 属于哪个节点</text>
+<text class="t-sub" x="990" y="226">指令表一行（种类、作者、第几轮、run 号）</text>
+<text class="t-sub" x="990" y="244">节点会话的「最后开的 run」</text>
+<path class="e-hot" d="M760 215 H562" marker-end="url(#pr-h)"/>
+<rect class="node-hot" x="20" y="190" width="540" height="50" rx="4"/>
+<text class="t-name" x="290" y="220" style="fill:#d9480f">停下（提交评审、接管、打回、终止）→ 取消「最后开的 run」</text>
+<g class="badge"><circle cx="20" cy="20" r="10"/><text x="20" y="24">1</text></g>
+<g class="badge"><circle cx="20" cy="120" r="10"/><text x="20" y="124">2</text></g>
+<g class="badge"><circle cx="910" cy="60" r="10"/><text x="910" y="64">3</text></g>
+<g class="badge"><circle cx="760" cy="180" r="10"/><text x="760" y="184">4</text></g>
+</svg>
+    <ol class="steps"><li><span class="n">1</span>系统指令先排进队列，和改流程状态在同一个事务里；事务提交后，锁到这个节点会话行的副本去投递（多副本不会同时投同一个节点）。</li><li><span class="n">2</span>人发的消息不排队：节点对话接口核对执行人、节点在人机协同中、没冻结、没被接管后，当场以作者的身份开 run。</li><li><span class="n">3</span>Agent 平台一个会话同时只有一个没结束的 run。系统指令只在节点刚开工、刚取消之后发，撞上还在收尾的 run（409）就过几秒再投；人发的撞上了，原样告诉对话组件「数字员工正在运行」。</li><li><span class="n">4</span>TeamFlow 记的只有这些：指令表一行（种类、作者、第几轮、run 号），节点会话上的「最后开的 run」。它不记 run 后来怎么样了。</li></ol>
+
+    <h3>图 4　挂起和恢复：四条线上各发生了什么</h3>
+    <p>横着看是时间，竖着看是同一时刻四个地方各是什么状态（橙色是挂起那一刻，灰色是不参与）。</p>
+    <svg width="1240" viewBox="0 0 1240 312" role="img" aria-label="挂起和恢复：四条线">
+<text class="t-head mid" x="245" y="30">数字员工提问</text>
+<g class="badge"><circle cx="170" cy="25" r="10"/><text x="170" y="29">1</text></g>
+<text class="t-head mid" x="430" y="30">这一段结束</text>
+<g class="badge"><circle cx="330" cy="25" r="10"/><text x="330" y="29">2</text></g>
+<text class="t-head mid" x="625" y="30">等人：几小时到几天</text>
+<g class="badge"><circle cx="540" cy="25" r="10"/><text x="540" y="29">3</text></g>
+<text class="t-head mid" x="800" y="30">李工回答</text>
+<g class="badge"><circle cx="720" cy="25" r="10"/><text x="720" y="29">4</text></g>
+<text class="t-head mid" x="985" y="30">续跑</text>
+<g class="badge"><circle cx="890" cy="25" r="10"/><text x="890" y="29">5</text></g>
+<text class="t-head mid" x="1155" y="30">结束</text>
+<g class="badge"><circle cx="1090" cy="25" r="10"/><text x="1090" y="29">6</text></g>
+<text class="b" x="20" y="75">Agent 平台的 run</text>
+<rect class="node" x="170" y="44" width="150" height="52" rx="4"/>
+<text class="t-lab b mid" x="245" y="65">running</text>
+<text class="t-lab mid" x="245" y="83">调 ask_user_question</text>
+<rect class="node-hot" x="330" y="44" width="200" height="52" rx="4"/>
+<text class="t-hot b mid" x="430" y="65">先登记事项、记等待</text>
+<text class="t-hot mid" x="430" y="83">这一段结束 → suspended</text>
+<rect class="gap" x="540" y="44" width="170" height="52" rx="4"/>
+<text class="t-hot b mid" x="625" y="65">suspended</text>
+<text class="t-hot mid" x="625" y="83">没有进程在跑</text>
+<rect class="node" x="720" y="44" width="160" height="52" rx="4"/>
+<text class="t-lab b mid" x="800" y="65">事项都有结果</text>
+<text class="t-lab mid" x="800" y="83">→ 排队、抢锁续跑</text>
+<rect class="node" x="890" y="44" width="190" height="52" rx="4"/>
+<text class="t-lab b mid" x="985" y="65">running · 新的一段</text>
+<text class="t-lab mid" x="985" y="83">答案当工具结果</text>
+<rect class="node" x="1090" y="44" width="130" height="52" rx="4"/>
+<text class="t-lab mid" x="1155" y="74">finished</text>
+<text class="b" x="20" y="141">会话事件流</text>
+<rect class="node" x="170" y="110" width="150" height="52" rx="4"/>
+<text class="t-lab mid" x="245" y="140">tool.started</text>
+<rect class="node-hot" x="330" y="110" width="200" height="52" rx="4"/>
+<text class="t-hot b mid" x="430" y="131">approval.required</text>
+<text class="t-hot mid" x="430" y="149">run.suspended</text>
+<rect class="cell" x="540" y="110" width="170" height="52" rx="4"/>
+<text class="t-mute mid" x="625" y="140">只有心跳（15 秒）</text>
+<rect class="node" x="720" y="110" width="160" height="52" rx="4"/>
+<text class="t-lab mid" x="800" y="140">question.answered</text>
+<rect class="node" x="890" y="110" width="190" height="52" rx="4"/>
+<text class="t-lab b mid" x="985" y="131">run.started</text>
+<text class="t-lab mid" x="985" y="149">tool.completed …</text>
+<rect class="node" x="1090" y="110" width="130" height="52" rx="4"/>
+<text class="t-lab mid" x="1155" y="140">run.finished</text>
+<text class="b" x="20" y="207">节点页（李工）</text>
+<rect class="node" x="170" y="176" width="150" height="52" rx="4"/>
+<text class="t-lab mid" x="245" y="206">工具行：在提问</text>
+<rect class="node-hot" x="330" y="176" width="200" height="52" rx="4"/>
+<text class="t-hot mid" x="430" y="206">问题卡片出现</text>
+<rect class="node" x="540" y="176" width="170" height="52" rx="4"/>
+<text class="t-lab b mid" x="625" y="197">刷新也在</text>
+<text class="t-lab mid" x="625" y="215">（待决事项以库为准）</text>
+<rect class="node" x="720" y="176" width="160" height="52" rx="4"/>
+<text class="t-lab mid" x="800" y="206">直连提交答案</text>
+<rect class="node" x="890" y="176" width="190" height="52" rx="4"/>
+<text class="t-lab b mid" x="985" y="197">卡片「已回答」</text>
+<text class="t-lab mid" x="985" y="215">正文接着出来</text>
+<rect class="node" x="1090" y="176" width="130" height="52" rx="4"/>
+<text class="t-lab mid" x="1155" y="206">这一轮结束</text>
+<text class="b" x="20" y="273">TeamFlow</text>
+<rect class="cell" x="170" y="242" width="150" height="52" rx="4"/>
+<text class="t-mute mid" x="245" y="272">记过 run 号</text>
+<rect class="cell" x="330" y="242" width="200" height="52" rx="4"/>
+<text class="t-mute mid" x="430" y="272">不知道</text>
+<rect class="cell" x="540" y="242" width="170" height="52" rx="4"/>
+<text class="t-mute mid" x="625" y="272">不知道</text>
+<rect class="cell" x="720" y="242" width="160" height="52" rx="4"/>
+<text class="t-mute mid" x="800" y="272">不经过</text>
+<rect class="cell" x="890" y="242" width="190" height="52" rx="4"/>
+<text class="t-mute mid" x="985" y="272">不知道</text>
+<rect class="cell" x="1090" y="242" width="130" height="52" rx="4"/>
+<text class="t-mute mid" x="1155" y="272">不知道</text>
+</svg>
+    <ol class="steps"><li><span class="n">1</span>数字员工调 <code>ask_user_question</code>，工具行显示「在提问」。</li><li><span class="n">2</span>Agent 平台先在库里登记事项，再发 <code>approval.required</code>：事件到的时候库里一定已经有这一行。原生智能体随后这一段结束（<code>run.suspended</code>）；CLI 智能体是 bridge 在线等，不发 <code>run.suspended</code>，别的都一样。</li><li><span class="n">3</span>挂起期间没有进程在跑，也没有超时，等几天都行。卡片就是提醒：刷新页面后，对话组件用待决事项接口把卡片找回来。</li><li><span class="n">4</span>李工在卡片里直接向 Agent 平台提交，Agent 平台按使用权放行。</li><li><span class="n">5</span>回答本身就是唤醒：Agent 平台把 run 放回排队、续跑，谁都不用发「继续」。</li><li><span class="n">6</span>这一轮结束。整个过程 TeamFlow 只在开 run 时出现过一次。</li></ol>
+
+    <h3>图 5　恢复：回答直连 Agent 平台</h3>
+    <svg width="1240" viewBox="0 0 1240 280" role="img" aria-label="恢复：回答直连 Agent 平台">
+<rect class="node" x="20" y="30" width="180" height="70" rx="4"/>
+<text class="t-name" x="110" y="56">李工提交答案</text>
+<text class="t-sub" x="110" y="76">问题卡片</text>
+<path class="e" d="M200 65 H238" marker-end="url(#pr-a)"/>
+<rect class="node" x="240" y="30" width="220" height="70" rx="4"/>
+<text class="t-name" x="350" y="56">Agent 平台：判权限</text>
+<text class="t-sub" x="350" y="76">对开发工程师有使用权</text>
+<path class="e" d="M460 65 H498" marker-end="url(#pr-a)"/>
+<rect class="node" x="500" y="30" width="240" height="70" rx="4"/>
+<text class="t-name" x="620" y="56">Agent 平台：审批</text>
+<text class="t-sub" x="620" y="76">只改还在等的那一行</text>
+<path class="e" d="M740 65 H778" marker-end="url(#pr-a)"/>
+<rect class="node" x="780" y="30" width="200" height="70" rx="4"/>
+<text class="t-name" x="880" y="56">等的都有结果了？</text>
+<text class="t-sub" x="880" y="76">挂起 → 排队（CAS）</text>
+<path class="e-hot" d="M980 65 H1018" marker-end="url(#pr-h)"/>
+<rect class="node-hot" x="1020" y="30" width="200" height="70" rx="4"/>
+<text class="t-name" x="1120" y="56" style="fill:#d9480f">抢锁续跑</text>
+<text class="t-sub" x="1120" y="76">哪个实例都行</text>
+<path class="e-hot" d="M1120 100 V168" marker-end="url(#pr-h)"/>
+<rect class="node" x="1020" y="170" width="200" height="90" rx="4"/>
+<text class="t-name" x="1120" y="196">从库里还原</text>
+<text class="t-sub" x="1120" y="216">历史、等待、</text>
+<text class="t-sub" x="1120" y="234">决定（答案）</text>
+<path class="e" d="M1020 215 H982" marker-end="url(#pr-a)"/>
+<rect class="node" x="740" y="170" width="240" height="90" rx="4"/>
+<text class="t-name" x="860" y="196">答案当工具结果</text>
+<text class="t-sub" x="860" y="216">数字员工接着做</text>
+<text class="t-sub" x="860" y="234">事件接着发</text>
+<path class="e" d="M740 215 H682" marker-end="url(#pr-a)"/>
+<rect class="node" x="380" y="180" width="300" height="70" rx="4"/>
+<text class="t-name" x="530" y="206">节点页：卡片「已回答」</text>
+<text class="t-sub" x="530" y="226">事件直接从 Agent 平台来</text>
+<path class="e-hot" d="M620 100 V125 H180 V148" marker-end="url(#pr-h)"/>
+<rect class="node-hot" x="20" y="150" width="320" height="70" rx="4"/>
+<text class="t-name" x="180" y="176" style="fill:#d9480f">周工同时也提交了</text>
+<text class="t-sub" x="180" y="196">只有一个成功；另一个回 409，</text>
+<text class="t-sub" x="180" y="214">他的卡片刷新成「已被处理」</text>
+<path class="e-mute" d="M880 100 V122 H950" marker-end="url(#pr-m)"/>
+<text class="t-mute" x="956" y="126">还有别的在等：接着挂</text>
+<g class="badge"><circle cx="20" cy="30" r="10"/><text x="20" y="34">1</text></g>
+<g class="badge"><circle cx="240" cy="30" r="10"/><text x="240" y="34">2</text></g>
+<g class="badge"><circle cx="780" cy="30" r="10"/><text x="780" y="34">3</text></g>
+<g class="badge"><circle cx="1020" cy="30" r="10"/><text x="1020" y="34">4</text></g>
+<g class="badge"><circle cx="20" cy="150" r="10"/><text x="20" y="154">5</text></g>
+</svg>
+    <ol class="steps"><li><span class="n">1</span>李工在卡片里提交，请求直接到 Agent 平台。</li><li><span class="n">2</span>Agent 平台按使用权判，只改还在等的那一行，记下谁答的。</li><li><span class="n">3</span>一个 run 可能同时等好几项（一批调了两个要审批的工具）：全部有结果才续跑，只答了一项就接着挂。</li><li><span class="n">4</span>放回排队后，接到这次请求的实例就地抢锁续跑，没空槽就由兜底任务几秒内抢走。历史、等待、答案都从库里还原，和挂起前是哪个实例跑的无关。</li><li><span class="n">5</span>两个执行人同时答：只有一个成功，另一个回 409，对话组件重新查待决事项，卡片显示「已被处理」。</li></ol>
+    <p>挂起期间对话框不能发新消息：Agent 平台一个会话同一时刻只能有一个没结束的 run，挂起的也算。要往下走，只能在卡片里答、拒，或者点「停止」。</p>
+
+    <h3>图 6　TeamFlow 停下节点时，挂起的会话怎么收尾</h3>
+    <svg width="1240" viewBox="0 0 1240 240" role="img" aria-label="TeamFlow 停下节点">
+<rect class="node" x="20" y="20" width="240" height="50" rx="4"/>
+<text class="t-name" x="140" y="50">提交评审（冻结）</text>
+<rect class="node" x="20" y="85" width="240" height="50" rx="4"/>
+<text class="t-name" x="140" y="115">节点接管</text>
+<rect class="node" x="20" y="150" width="240" height="50" rx="4"/>
+<text class="t-name" x="140" y="180">打回、连带打回、终止流程</text>
+<path class="e" d="M260 45 H290 V110 H318" marker-end="url(#pr-a)"/>
+<path class="e" d="M260 110 H318" marker-end="url(#pr-a)"/>
+<path class="e" d="M260 175 H290 V110"/>
+<rect class="node" x="320" y="60" width="240" height="100" rx="4"/>
+<text class="t-name" x="440" y="86">节点协作</text>
+<text class="t-sub" x="440" y="106">同一事务：会话标冻结 / 接管 / 停下，</text>
+<text class="t-sub" x="440" y="124">记「要取消」；提交后取消</text>
+<text class="t-sub" x="440" y="142">「最后开的 run」</text>
+<path class="e-hot" d="M560 110 H618" marker-end="url(#pr-h)"/>
+<rect class="node-hot" x="620" y="70" width="280" height="80" rx="4"/>
+<text class="t-name" x="760" y="96" style="fill:#d9480f">Agent 平台：run 在挂起中</text>
+<text class="t-sub" x="760" y="116">没有进程会看见取消位，</text>
+<text class="t-sub" x="760" y="134">接到请求的实例当场收尾</text>
+<path class="e-hot" d="M900 110 H930 V50 H958" marker-end="url(#pr-h)"/>
+<path class="e-hot" d="M930 110 V140 H958" marker-end="url(#pr-h)"/>
+<rect class="node" x="960" y="20" width="260" height="60" rx="4"/>
+<text class="t-name" x="1090" y="46">待决事项作废</text>
+<text class="t-sub" x="1090" y="66">卡片不能再答</text>
+<rect class="node" x="960" y="110" width="260" height="60" rx="4"/>
+<text class="t-name" x="1090" y="136">run.cancelled</text>
+<text class="t-sub" x="1090" y="156">页面上这一轮显示已停止</text>
+<text class="t-key" x="320" y="200">在跑的 run 不一样：要等跑它的实例在下一个安全点看见取消位，自己收尾（Agent 平台的取消原理）。</text>
+<text class="t-key" x="320" y="220">取消调用失败（Agent 平台暂时不可用）就留着「要取消」，扫描时再取消。</text>
+<g class="badge"><circle cx="320" cy="60" r="10"/><text x="320" y="64">1</text></g>
+<g class="badge"><circle cx="620" cy="70" r="10"/><text x="620" y="74">2</text></g>
+<g class="badge"><circle cx="960" cy="20" r="10"/><text x="960" y="24">3</text></g>
+</svg>
+    <ol class="steps"><li><span class="n">1</span>TeamFlow 自己的「停」只有一种做法：在改流程状态的同一个事务里把节点会话标成冻结、接管或停下（挡住开新 run），记「要取消」；提交后取消「最后开的 run」。它不知道这个 run 是在跑、在挂起还是已经结束，也不需要知道。</li><li><span class="n">2</span>挂起中的 run 没有进程在跑，Agent 平台接到取消就当场收尾；已经结束的，取消没有副作用。</li><li><span class="n">3</span>它名下还在等的事项随之作废，卡片不能再答。</li></ol>
+    <table><thead><tr><th style="width: 18%">TeamFlow 的操作</th><th>挂起中的事项</th><th>之后这个会话里</th></tr></thead><tbody><tr><td>提交评审（冻结）</td><td>作废</td><td>评审期间不能发消息；驳回后，下一轮指令在同一个会话里发</td></tr><tr><td>节点接管</td><td>作废</td><td>交还时发一条指令（带人写的说明），新的 run 接着原来的上下文</td></tr><tr><td>打回、连带打回</td><td>作废</td><td>被打回的节点发下一轮指令；被连带打回的，等上游重新准出后重新走准入</td></tr><tr><td>终止流程</td><td>作废</td><td>不再开 run，流程空间转只读</td></tr></tbody></table>
+    <p>数字员工还在等回答时，执行人点「提交评审」或「接管」，页面先提示「开发工程师还在等你回答，继续会取消这次运行」。页面从对话组件知道还有没有卡片在等，不用问 TeamFlow。</p>
+
+    <h3>图 7　断了怎么接上：重投不会多一条</h3>
+    <svg width="1240" viewBox="0 0 1240 210" role="img" aria-label="重投不会多一条">
+<rect class="node" x="20" y="30" width="210" height="70" rx="4"/>
+<text class="t-name" x="125" y="56">指令行</text>
+<text class="t-sub" x="125" y="76">状态：排着（queued）</text>
+<path class="e" d="M230 65 H268" marker-end="url(#pr-a)"/>
+<rect class="node" x="270" y="30" width="250" height="70" rx="4"/>
+<text class="t-name" x="395" y="56">副本 A：开 run</text>
+<text class="t-sub" x="395" y="76">幂等键 = 指令号</text>
+<path class="e" d="M520 65 H558" marker-end="url(#pr-a)"/>
+<rect class="node" x="560" y="30" width="260" height="70" rx="4"/>
+<text class="t-name" x="690" y="56">Agent 平台建好 run</text>
+<text class="t-sub" x="690" y="76">run 号 7f3a…</text>
+<path class="e-mute" d="M820 65 H858" marker-end="url(#pr-m)"/>
+<rect class="node-hot" x="860" y="30" width="360" height="70" rx="4"/>
+<text class="t-name" x="1040" y="56" style="fill:#d9480f">副本 A：记「已发」+ run 号</text>
+<text class="t-sub" x="1040" y="76">✕ 还没写进库，副本 A 挂了</text>
+<path class="e-hot" d="M125 100 V150 H268" marker-end="url(#pr-h)"/>
+<text class="t-hot" x="135" y="175">指令仍是「排着」，</text>
+<text class="t-hot" x="135" y="193">会话行的锁随连接释放</text>
+<rect class="node" x="270" y="120" width="250" height="70" rx="4"/>
+<text class="t-name" x="395" y="146">副本 B：扫描到它</text>
+<text class="t-sub" x="395" y="166">锁住节点会话行</text>
+<path class="e" d="M520 155 H558" marker-end="url(#pr-a)"/>
+<rect class="node" x="560" y="120" width="260" height="70" rx="4"/>
+<text class="t-name" x="690" y="146">用同一个幂等键开 run</text>
+<text class="t-sub" x="690" y="166">Agent 平台返回同一个 run</text>
+<path class="e" d="M820 155 H858" marker-end="url(#pr-a)"/>
+<rect class="node" x="860" y="120" width="360" height="70" rx="4"/>
+<text class="t-name" x="1040" y="146">副本 B：记「已发」+ run 号</text>
+<text class="t-sub" x="1040" y="166">会话里还是一条消息、一个 run</text>
+<g class="badge"><circle cx="20" cy="30" r="10"/><text x="20" y="34">1</text></g>
+<g class="badge"><circle cx="860" cy="30" r="10"/><text x="860" y="34">2</text></g>
+<g class="badge"><circle cx="270" cy="120" r="10"/><text x="270" y="124">3</text></g>
+<g class="badge"><circle cx="560" cy="120" r="10"/><text x="560" y="124">4</text></g>
+</svg>
+    <p>投递分两步：先向 Agent 平台开 run，再在 TeamFlow 的库里记「已发」和 run 号。两步之间副本挂了，指令在库里还是「排着」；别的副本扫描到后用同一个幂等键（指令号）再开一次，Agent 平台认出是同一个请求，返回同一个 run。</p>
+    <table><thead><tr><th style="width: 24%">断的是什么</th><th>怎么接上</th></tr></thead><tbody><tr><td>李工刷新页面、网络断了</td><td>对话组件直连 Agent 平台重连，带 Last-Event-ID 从断的地方接着收；没有游标时回放最近 500 条。卡片还在不在等，以待决事项接口查到的为准。TeamFlow 不参与</td></tr><tr><td>TeamFlow 投递到一半，副本挂了</td><td>指令还是「排着」，别的副本扫描时用同一个幂等键再开一次，Agent 平台返回同一个 run（图 7）</td></tr><tr><td>TeamFlow 取消没发出去</td><td>节点会话上留着「要取消」，扫描时再取消；在这之前开新 run 已经被挡住了</td></tr><tr><td>跑这个 run 的 Agent 平台实例挂了</td><td>Agent 平台自己接手：别的实例接着跑同一个 run，发 run.resumed；对话组件丢掉重做的那段正文。TeamFlow 不知道，也不需要知道</td></tr></tbody></table>
+
+    <h3>设计决策</h3>
+    <table><thead><tr><th style="width: 28%">决策</th><th>理由</th></tr></thead><tbody><tr><td>开新 run 只经 TeamFlow，其余直连 Agent 平台</td><td>TeamFlow 只需要知道「哪个 run 属于哪个节点」，停下时才知道取消哪一个；看对话、回答、接管浏览器、停止都是 Agent 平台自己的事，TeamFlow 不认识这些接口，也不转发事件流和实时画面。</td></tr><tr><td>Agent 平台只看数据权限</td><td>谁能看、谁能答只看「对这个数字员工有没有使用权」，和别的接入方式一样，Agent 平台不知道流程、执行人、评审这些概念。流程状态由 TeamFlow 管：开新 run 要经它，停下时它取消 run。</td></tr><tr><td>发起流程时给流程里的人授使用权，以接入人的身份</td><td>用户中心规定数字员工的授权只能由 Agent 平台写、操作人必须是 Owner；接入数字员工时由 Owner 接入，等于把「给流程里的人授使用权」交给 TeamFlow。项目改分配时给新加的人补授。</td></tr><tr><td>开新 run 只认建会话的应用</td><td>沿用 Agent 平台现在「应用建的会话只能回应用里继续」的规则，收窄到只管开 run：否则有使用权的人能在 Agent 平台控制台给评审中的节点发消息，评审看到的就不是提交时的内容。</td></tr><tr><td>TeamFlow 不跟随会话事件</td><td>少了每个节点一条常驻连接，也不用解析 Agent 平台的执行事件；数字员工在等人时，节点页对话里的卡片就是提醒。</td></tr><tr><td>停下一律取消「最后开的 run」</td><td>TeamFlow 不知道 run 现在是在跑、在挂起还是已经结束，也不需要知道：取消已结束的 run 没有副作用，挂起中的会当场收尾、作废事项。</td></tr><tr><td>投递以指令号作幂等键</td><td>副本在「开了 run」和「记下 run 号」之间挂掉时，重投拿到同一个 run，会话里不会多一条消息。</td></tr><tr><td>对话组件用参数接入</td><td>接口根、开 run 交给谁、只读都是参数；TeamFlow 和以后别的应用各传各的，组件里不写任何一个应用的接口。</td></tr></tbody></table>
+  </section>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const FONT = '"Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  const INK = '#444444';
+  const LIFELINE = '#9a9a9a';
+  const SCOPE_COLOR = '#1168bd';
+  const PALETTE = {
+    person: ['#297e06', '#1a849c', '#6b8e23'],
+    system: ['#ed8609', '#bf101d', '#8411bd', '#5b6770', '#b8336a'],
+  };
+  const KIND_LABEL = { person: 'Person', system: 'Software System', container: 'Container', component: 'Component' };
+  const MAX_MESSAGES = 20;
+  const TXT = {
+    name: { size: 17, weight: 400, lh: 22 },
+    meta: { size: 12, weight: 400, lh: 16 },
+    msg: { size: 15, weight: 400, lh: 20 },
+    tech: { size: 12, weight: 400, lh: 16 },
+    bname: { size: 18, weight: 700, lh: 22 },
+    btype: { size: 12, weight: 700, lh: 16 },
+    key: { size: 13, weight: 400, lh: 18 },
+  };
+  const BOX_H = 52, ICON_H = 30, HEADER_H = 48, LABEL_W = 260, MIN_GAP = 70, SELF_W = 36, MARGIN = 50;
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const problems = [];
+  const fail = (msg) => problems.push({ level: 'error', msg });
+  const warn = (msg) => problems.push({ level: 'warn', msg });
+
+  const ctx = document.createElement('canvas').getContext('2d');
+  const measure = (s, st) => { ctx.font = `${st.weight} ${st.size}px ${FONT}`; return ctx.measureText(s).width; };
+
+  // 中文按字断行，英文按词断行；行首不放标点
+  const CJK = '\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f';
+  const TOKEN = new RegExp(`[${CJK}]|[^\\s${CJK}]+|\\s+`, 'g');
+  const NO_LINE_START = /^[，。、；：！？）》」』,.;:!?)]$/;
+  function wrap(text, st, maxW) {
+    const lines = [];
+    for (const para of String(text || '').split('\n')) {
+      let line = '';
+      for (const tok of para.match(TOKEN) || []) {
+        if (/^\s+$/.test(tok)) { if (line) line += ' '; continue; }
+        const next = line + tok;
+        if (line.trim() && measure(next.trimEnd(), st) > maxW && !NO_LINE_START.test(tok)) {
+          lines.push(line.trimEnd());
+          line = tok;
+        } else {
+          line = next;
+        }
+      }
+      if (line.trim()) lines.push(line.trimEnd());
+    }
+    return lines;
+  }
+
+  // 行数不变的前提下收窄宽度，让各行长度接近，避免末行只剩一两个字
+  function wrapBalanced(text, st, maxW) {
+    const lines = wrap(text, st, maxW);
+    if (lines.length < 2) return lines;
+    let lo = maxW / 2, hi = maxW;
+    while (hi - lo > 4) {
+      const mid = (lo + hi) / 2;
+      if (wrap(text, st, mid).length > lines.length) lo = mid; else hi = mid;
+    }
+    return wrap(text, st, hi);
+  }
+
+  function node(tag, attrs, parent) {
+    const n = document.createElementNS(svgNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    parent.appendChild(n);
+    return n;
+  }
+  // top 是文字块上沿
+  function textLines(parent, lines, x, top, st, color, anchor = 'middle') {
+    const t = node('text', { x, y: top + st.lh / 2 + st.size * 0.35, 'text-anchor': anchor,
+      'font-family': FONT, 'font-size': st.size, 'font-weight': st.weight, fill: color }, parent);
+    lines.forEach((ln, i) => { node('tspan', { x, dy: i ? st.lh : 0 }, t).textContent = ln; });
+    return t;
+  }
+
+  // 参与者头：人员和数据库画图标 + 文字，其余画方框
+  const iconHead = (p) => p.kind === 'person' || (p.kind === 'container' && p.shape === 'database');
+  function headSize(p) {
+    const w = Math.max(measure(p.name, TXT.name), measure(p.meta, TXT.meta)) + 24;
+    return { w, h: iconHead(p) ? ICON_H + 4 + TXT.name.lh + TXT.meta.lh : BOX_H };
+  }
+  function drawHead(g, p, cx, top) {
+    const c = p.color;
+    let textTop = top + (BOX_H - TXT.name.lh - TXT.meta.lh) / 2;
+    if (p.kind === 'person') {
+      node('circle', { cx, cy: top + 8, r: 7, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      node('path', { d: `M${cx - 14} ${top + ICON_H} Q${cx - 14} ${top + 16} ${cx} ${top + 16} Q${cx + 14} ${top + 16} ${cx + 14} ${top + ICON_H} Z`, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      textTop = top + ICON_H + 4;
+    } else if (iconHead(p)) {
+      const rx = 17, ry = 5, y0 = top + ry, y1 = top + ICON_H - ry;
+      node('path', { d: `M${cx - rx} ${y0} V${y1} A${rx} ${ry} 0 0 0 ${cx + rx} ${y1} V${y0}`, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      node('ellipse', { cx, cy: y0, rx, ry, fill: '#fff', stroke: c, 'stroke-width': 1.8 }, g);
+      textTop = top + ICON_H + 4;
+    } else {
+      node('rect', { x: cx - p.size.w / 2, y: top, width: p.size.w, height: BOX_H, rx: 4, fill: '#fff', stroke: c, 'stroke-width': 1.6 }, g);
+    }
+    textLines(g, [p.name], cx, textTop, TXT.name, c);
+    textLines(g, [p.meta], cx, textTop + TXT.name.lh, TXT.meta, c);
+  }
+  function drawArrow(g, x0, x1, y) {
+    const dir = Math.sign(x1 - x0), L = 10, W = 7;
+    node('line', { x1: x0, y1: y, x2: x1 - dir * L, y2: y, stroke: INK, 'stroke-width': 1.6, 'stroke-dasharray': '8 5' }, g);
+    node('polygon', { points: `${x1},${y} ${x1 - dir * L},${y - W / 2} ${x1 - dir * L},${y + W / 2}`, fill: INK }, g);
+  }
+
+  function render() {
+    const model = JSON.parse(document.getElementById('c4-model').textContent);
+    if (model.title) document.title = model.title;
+    else fail('缺少 title（建议「Dynamic View: 系统名 - 场景」）');
+
+    // ---- 边界 ----
+    const bById = new Map();
+    for (const b of model.boundaries || []) {
+      if (!b.id) { fail(`边界 ${b.name || ''}：缺少 id`); continue; }
+      if (bById.has(b.id)) { fail(`边界 id 重复：${b.id}`); continue; }
+      if (!b.name || !b.type) fail(`边界 ${b.id}：name、type 都要写，type 如「Software System」「Container: Python / FastAPI」`);
+      bById.set(b.id, b);
+    }
+    const chain = (id) => {   // 从里到外的边界链
+      const out = [];
+      for (let cur = id; cur; cur = bById.get(cur) && bById.get(cur).in) {
+        if (!bById.has(cur) || out.includes(cur)) return null;
+        out.push(cur);
+      }
+      return out;
+    };
+    for (const b of bById.values()) {
+      if (b.in && !chain(b.id)) { fail(`边界 ${b.id}：in 指向不存在的边界，或者边界互相嵌套成了环`); b.broken = true; }
+    }
+
+    // ---- 参与者 ----
+    const pById = new Map();
+    const ps = [];
+    for (const p of model.participants || []) {
+      const who = p.id || p.name || '(未命名参与者)';
+      if (!p.id) { fail(`${who}：缺少 id`); continue; }
+      if (pById.has(p.id)) { fail(`参与者 id 重复：${p.id}`); continue; }
+      if (!KIND_LABEL[p.kind]) { fail(`${who}：kind 只能是 person / system / container / component`); continue; }
+      if (!p.name) fail(`${who}：缺少 name`);
+      if ((p.kind === 'container' || p.kind === 'component') && !p.technology) fail(`${who}：${p.kind} 缺少 technology`);
+      if (p.in && (!bById.has(p.in) || bById.get(p.in).broken)) { fail(`${who}：in 指向的边界 ${p.in} 不存在`); p.in = null; }
+      p.chain = p.in ? chain(p.in) : [];
+      p.meta = p.technology && (p.kind === 'container' || p.kind === 'component') ? `[${KIND_LABEL[p.kind]}: ${p.technology}]` : `[${KIND_LABEL[p.kind]}]`;
+      pById.set(p.id, p);
+      ps.push(p);
+    }
+    if (ps.length < 2) fail('至少要有两个参与者');
+    const assigned = new Map(), used = { person: 0, system: 0 };
+    for (const p of ps) {
+      if (p.color) continue;
+      if (p.kind === 'container' || p.kind === 'component' || (p.kind === 'system' && p.scope)) { p.color = SCOPE_COLOR; continue; }
+      const k = `${p.kind}:${p.tag || p.id}`;
+      if (!assigned.has(k)) assigned.set(k, PALETTE[p.kind][used[p.kind]++ % PALETTE[p.kind].length]);
+      p.color = assigned.get(k);
+    }
+    // 同一边界里的参与者在左右顺序上必须相邻，否则边界框会把别的参与者框进去
+    for (const b of bById.values()) {
+      const idx = ps.map((p, i) => (p.chain.includes(b.id) ? i : -1)).filter((i) => i >= 0);
+      b.members = idx.map((i) => ps[i]);
+      if (!idx.length) { fail(`边界「${b.name}」里没有任何参与者`); continue; }
+      if (idx[idx.length - 1] - idx[0] + 1 !== idx.length) fail(`边界「${b.name}」里的参与者在 participants 里不相邻，调整顺序`);
+    }
+
+    // ---- 消息 ----
+    const msgs = (model.messages || []).filter((m, i) => {
+      const who = `第 ${i + 1} 条消息（${m.from} → ${m.to}）`;
+      if (!pById.has(m.from) || !pById.has(m.to)) { fail(`${who}：端点 id 不存在`); return false; }
+      if (!m.description) fail(`${who}：缺少 description（写做什么）`);
+      const a = pById.get(m.from), b = pById.get(m.to);
+      const crossProcess = a.kind !== 'person' && b.kind !== 'person' && !(a.kind === 'component' && b.kind === 'component') && a !== b;
+      if (crossProcess && !m.technology) fail(`${who}：涉及 container 或软件系统，是跨进程交互，要写 technology`);
+      if (m.details !== undefined) {
+        const d = m.details;
+        const isText = (v) => typeof v === 'string';
+        if (!d || typeof d !== 'object' || Array.isArray(d)) {
+          fail(`${who}：details 要写成对象 { note, items, example }`);
+          m.details = undefined;
+        } else {
+          if (d.note !== undefined && !isText(d.note)) fail(`${who}：details.note 要写成字符串`);
+          if (d.example !== undefined && !isText(d.example)) fail(`${who}：details.example 要写成字符串，多行用 \\n`);
+          if (d.items !== undefined && !(Array.isArray(d.items) && d.items.every((r) => Array.isArray(r) && r.length === 3 && r.every(isText)))) {
+            fail(`${who}：details.items 的每一行要写成 [项, 来源, 样例] 三个字符串`);
+          }
+          if (!d.note && !d.example && !(Array.isArray(d.items) && d.items.length)) warn(`${who}：details 是空的，删掉或补上内容`);
+        }
+      }
+      m.n = i + 1;
+      return true;
+    });
+    if (!msgs.length) fail('至少要有一条消息');
+    if (msgs.length > MAX_MESSAGES) warn(`消息有 ${msgs.length} 条，超过 ${MAX_MESSAGES} 条：只画这个场景的关键交互，或者拆成几张图`);
+    for (const p of ps) {
+      if (!msgs.some((m) => m.from === p.id || m.to === p.id)) warn(`「${p.name}」没有参与任何消息：与这个场景无关就删掉`);
+    }
+
+    // ---- 横向：列间距按参与者宽度和消息标签宽度撑开 ----
+    for (const p of ps) p.size = headSize(p);
+    const index = new Map(ps.map((p, i) => [p.id, i]));
+    for (const m of msgs) {
+      m.lines = wrapBalanced(`${m.n}: ${m.description || ''}${m.details ? ' ⓘ' : ''}`, TXT.msg, LABEL_W);
+      m.tech = m.technology ? `[${m.technology}]` : '';
+      m.labelW = Math.max(...m.lines.map((s) => measure(s, TXT.msg)), m.tech ? measure(m.tech, TXT.tech) : 0);
+      m.labelH = m.lines.length * TXT.msg.lh + (m.tech ? TXT.tech.lh : 0);
+    }
+    const gaps = ps.slice(1).map((p, i) => (ps[i].size.w + p.size.w) / 2 + MIN_GAP);
+    let rightExtra = 0;
+    const spanOf = (m) => Math.abs(index.get(m.to) - index.get(m.from));
+    for (const m of [...msgs].sort((a, b) => spanOf(a) - spanOf(b))) {
+      const i = index.get(m.from), j = index.get(m.to);
+      if (i === j) {   // 自调用：标签在生命线右边，占下一列间距
+        const need = SELF_W + 16 + m.labelW + 20;
+        if (i < gaps.length) gaps[i] = Math.max(gaps[i], need); else rightExtra = Math.max(rightExtra, need);
+        continue;
+      }
+      const lo = Math.min(i, j), hi = Math.max(i, j);
+      const span = gaps.slice(lo, hi).reduce((s, g) => s + g, 0);
+      const need = m.labelW + 40;
+      if (span < need) for (let k = lo; k < hi; k++) gaps[k] += (need - span) / (hi - lo);
+    }
+    let x = 0;
+    ps.forEach((p, i) => { if (i) x += gaps[i - 1]; p.x = x; });
+
+    // ---- 纵向：边界标题 → 参与者头 → 消息 → 底部参与者头 ----
+    const depthOf = (b) => chain(b.id).length;
+    const live = [...bById.values()].filter((b) => !b.broken && b.members && b.members.length);
+    const maxDepth = Math.max(0, ...live.map(depthOf));
+    const headTop = maxDepth * HEADER_H + (maxDepth ? 10 : 0);
+    const headH = Math.max(...ps.map((p) => p.size.h), BOX_H);
+    let y = headTop + headH + 24;
+    for (const m of msgs) {
+      m.labelTop = y;
+      m.y = y + m.labelH + 8;
+      y = m.y + (m.from === m.to ? 46 : 26);
+    }
+    const bottomTop = y + 8, bottom = bottomTop + headH;
+
+    // 边界框：外层比内层多留一圈
+    const below = (b) => Math.max(0, ...live.filter((c) => c.in === b.id).map((c) => 1 + below(c)));
+    for (const b of live) {
+      const pad = 14 + 16 * below(b);
+      const d = depthOf(b);
+      b.rect = {
+        x: Math.min(...b.members.map((p) => p.x - p.size.w / 2)) - pad,
+        y: (d - 1) * HEADER_H,
+        w: 0, h: 0,
+      };
+      b.rect.w = Math.max(...b.members.map((p) => p.x + p.size.w / 2)) + pad - b.rect.x;
+      b.rect.h = bottom + 10 + 14 * below(b) - b.rect.y;
+      const titleW = Math.max(measure(b.name, TXT.bname), measure(`[${b.type}]`, TXT.btype)) + 20;
+      if (titleW > b.rect.w) warn(`边界「${b.name}」的标题比边界还宽，名字写短一点`);
+    }
+    for (const b of live) {
+      for (const p of ps) {
+        if (!b.members.includes(p) && p.x + p.size.w / 2 > b.rect.x && p.x - p.size.w / 2 < b.rect.x + b.rect.w) {
+          fail(`「${p.name}」不在边界「${b.name}」里，却和边界框重叠，调整 participants 顺序`);
+        }
+      }
+    }
+
+    // ---- 绘制 ----
+    const svg = document.getElementById('c4-diagram');
+    const gB = node('g', {}, svg), gLife = node('g', {}, svg), gM = node('g', {}, svg), gH = node('g', {}, svg), gT = node('g', {}, svg);
+    for (const b of [...live].sort((a, c) => depthOf(a) - depthOf(c))) {
+      const r = b.rect;
+      node('rect', { x: r.x, y: r.y, width: r.w, height: r.h, fill: 'none', stroke: SCOPE_COLOR, 'stroke-width': 1.6 }, gB);
+      textLines(gB, [b.name], r.x + r.w / 2, r.y + 4, TXT.bname, SCOPE_COLOR);
+      textLines(gB, [`[${b.type}]`], r.x + r.w / 2, r.y + 4 + TXT.bname.lh, TXT.btype, SCOPE_COLOR);
+    }
+    for (const p of ps) {
+      node('line', { x1: p.x, y1: headTop + p.size.h, x2: p.x, y2: bottomTop, stroke: LIFELINE, 'stroke-width': 1, 'stroke-dasharray': '4 4' }, gLife);
+      drawHead(gH, p, p.x, headTop);
+      drawHead(gH, p, p.x, bottomTop);
+    }
+    for (const m of msgs) {
+      const a = pById.get(m.from), b = pById.get(m.to);
+      let lx;
+      if (a === b) {
+        const x0 = a.x, x1 = a.x + SELF_W;
+        node('polyline', { points: `${x0},${m.y} ${x1},${m.y} ${x1},${m.y + 20} ${x0 + 10},${m.y + 20}`, fill: 'none', stroke: INK, 'stroke-width': 1.6, 'stroke-dasharray': '8 5' }, gM);
+        node('polygon', { points: `${x0},${m.y + 20} ${x0 + 10},${m.y + 16.5} ${x0 + 10},${m.y + 23.5}`, fill: INK }, gM);
+        lx = x1 + 12;
+      } else {
+        drawArrow(gM, a.x, b.x, m.y);
+        lx = Math.min(a.x, b.x) + 12;
+      }
+      // 有 details 的消息：标签链接到图下方「消息说明」里的同号条目
+      const gL = m.details ? node('a', { href: `#c4-msg-${m.n}` }, gM) : gM;
+      node('rect', { x: lx - 3, y: m.labelTop - 1, width: m.labelW + 6, height: m.labelH + 2, fill: '#fff' }, gL);
+      textLines(gL, m.lines, lx, m.labelTop, TXT.msg, INK, 'start');
+      if (m.tech) textLines(gL, [m.tech], lx, m.labelTop + m.lines.length * TXT.msg.lh, TXT.tech, INK, 'start');
+    }
+    const minX = Math.min(...ps.map((p) => p.x - p.size.w / 2), ...live.map((b) => b.rect.x));
+    let maxX = Math.max(...ps.map((p) => p.x + p.size.w / 2 + (p === ps[ps.length - 1] ? rightExtra : 0)), ...live.map((b) => b.rect.x + b.rect.w));
+    let maxY = Math.max(bottom, ...live.map((b) => b.rect.y + b.rect.h));
+    const title = { size: 26, weight: 400, lh: 34 }, sub = { size: 15, weight: 400, lh: 22 };
+    textLines(gT, [model.title || ''], minX, maxY + 36, title, INK, 'start');
+    if (model.description) textLines(gT, [model.description], minX, maxY + 36 + title.lh, sub, '#666', 'start');
+    maxX = Math.max(maxX, minX + measure(model.title || '', title), minX + measure(model.description || '', sub));
+    maxY += 36 + title.lh + (model.description ? sub.lh : 0);
+    const vw = maxX - minX + 2 * MARGIN, vh = maxY + 2 * MARGIN;
+    svg.setAttribute('viewBox', `${minX - MARGIN} ${-MARGIN} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', model.title || 'Dynamic diagram');
+
+    renderKey(ps, live);
+    renderDetails(msgs);
+  }
+
+  // ---- 消息说明：每条带 details 的消息一节（说明、[项, 来源, 样例] 表、数据样例）----
+  function renderDetails(msgs) {
+    const list = msgs.filter((m) => m.details);
+    if (!list.length) return;
+    const sec = document.getElementById('c4-details');
+    const el = (tag, cls, text) => {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text !== undefined) e.textContent = text;
+      return e;
+    };
+    sec.appendChild(el('h2', '', '消息说明'));
+    for (const m of list) {
+      const d = m.details;
+      const art = el('article');
+      art.id = `c4-msg-${m.n}`;
+      const h = el('h3', '', `${m.n}: ${m.description || ''}`);
+      if (m.technology) h.appendChild(el('span', 'tech', `[${m.technology}]`));
+      art.appendChild(h);
+      if (typeof d.note === 'string' && d.note) art.appendChild(el('p', '', d.note));
+      const rows = Array.isArray(d.items) ? d.items.filter((r) => Array.isArray(r)) : [];
+      if (rows.length) {
+        const table = el('table');
+        const head = table.createTHead().insertRow();
+        for (const c of ['项', '来源', '样例']) head.appendChild(el('th', '', c));
+        const body = table.createTBody();
+        for (const r of rows) {
+          const tr = body.insertRow();
+          r.slice(0, 3).forEach((c, i) => tr.appendChild(el('td', i === 2 ? 'sample' : '', String(c))));
+        }
+        art.appendChild(table);
+      }
+      if (typeof d.example === 'string' && d.example) art.appendChild(el('pre', '', d.example));
+      sec.appendChild(art);
+    }
+    sec.hidden = false;
+  }
+
+  // ---- 图例：每种参与者一项，再加边界和消息 ----
+  function renderKey(ps, boundaries) {
+    const svg = document.getElementById('c4-key');
+    const rank = { person: 0, system: 1, container: 2, component: 3 };
+    const label = (p) => {
+      if (p.kind === 'person') return `Person, ${p.tag || p.name}`;
+      if (p.kind === 'system') return p.tag || p.name;
+      if (p.kind === 'container') return p.shape === 'database' ? 'Container, Database' : 'Container';
+      return 'Component';
+    };
+    const groups = new Map();
+    for (const p of [...ps].sort((a, b) => rank[a.kind] - rank[b.kind])) {
+      const k = `${p.kind}|${iconHead(p)}|${p.color}`;
+      if (!groups.has(k)) groups.set(k, { proto: p, labels: [] });
+      if (!groups.get(k).labels.includes(label(p))) groups.get(k).labels.push(label(p));
+    }
+    const items = [...groups.values()].map((g) => ({ kind: 'head', proto: g.proto, text: g.labels.join('、') }));
+    if (boundaries.length) items.push({ kind: 'boundary', text: 'Boundary（系统 / 容器）' });
+    items.push({ kind: 'message', text: 'n: 交互（编号 = 先后顺序）' });
+    const CELL_W = 230, CELL_H = 110, PER_ROW = 6;
+    items.forEach((it, i) => {
+      const cx = (i % PER_ROW) * CELL_W + CELL_W / 2, top = Math.floor(i / PER_ROW) * CELL_H;
+      const g = node('g', {}, svg);
+      if (it.kind === 'head') {
+        const p = { ...it.proto, name: it.text.length > 22 ? it.text.slice(0, 21) + '…' : it.text, meta: '' };
+        p.size = { w: Math.min(CELL_W - 20, measure(p.name, TXT.name) + 24), h: BOX_H };
+        drawHead(g, p, cx, top + 10);
+        return;
+      }
+      if (it.kind === 'boundary') {
+        node('rect', { x: cx - 95, y: top + 10, width: 190, height: 56, fill: 'none', stroke: SCOPE_COLOR, 'stroke-width': 1.6 }, g);
+        textLines(g, [it.text], cx, top + 10 + 4, TXT.key, SCOPE_COLOR);
+        return;
+      }
+      drawArrow(g, cx - 90, cx + 90, top + 46);
+      textLines(g, [it.text], cx - 88, top + 18, TXT.key, INK, 'start');
+    });
+    const rows = Math.ceil(items.length / PER_ROW), cols = Math.min(items.length, PER_ROW);
+    svg.setAttribute('viewBox', `0 0 ${cols * CELL_W} ${rows * CELL_H}`);
+    svg.setAttribute('width', cols * CELL_W);
+    svg.setAttribute('aria-label', 'Diagram key');
+  }
+
+  try {
+    render();
+  } catch (e) {
+    fail(`渲染异常：${e && e.message}`);
+    console.error(e);
+  }
+  const status = problems.some((p) => p.level === 'error') ? 'error' : problems.length ? 'warn' : 'ok';
+  document.documentElement.dataset.c4Status = status;
+  const report = document.getElementById('c4-report');
+  for (const p of problems) {
+    const li = document.createElement('li');
+    li.dataset.level = p.level;
+    li.textContent = p.msg;
+    report.appendChild(li);
+  }
+  report.hidden = !problems.length;
+  if (problems.length) console.warn('[c4]', problems);
+})();
+</script>
+</body>
+</html>

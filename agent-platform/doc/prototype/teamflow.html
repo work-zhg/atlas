@@ -1,0 +1,1927 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI TeamFlow — 原型（面向团队协作的 AI 工作流平台）</title>
+<style>
+/* 视觉与 Atlas、用户中心、运营中心、定时任务原型一致（同一套浅色设计 token） */
+:root {
+  --bg: #f6f7f9; --surface: #ffffff; --surface-2: #fbfbfd; --hover: #f2f4f8;
+  --ink: #0f172a; --ink-2: #334155; --ink-3: #64748b; --ink-4: #94a3b8;
+  --line: #e6e8ee; --line-2: #eef0f4;
+  --primary: #4f46e5; --primary-2: #6366f1; --primary-weak: #eef0ff; --primary-ink: #4338ca;
+  --secondary: #0ea5e9; --secondary-weak: #e6f6fe;
+  --success: #16a34a; --success-weak: #e7f6ec;
+  --warning: #d97706; --warning-weak: #fef3e2;
+  --danger: #dc2626; --danger-weak: #fdeaea;
+  --radius: 12px; --radius-sm: 8px; --radius-xs: 6px;
+  --shadow-xs: 0 1px 2px rgba(16,24,40,.05);
+  --shadow-md: 0 6px 18px rgba(16,24,40,.08), 0 2px 6px rgba(16,24,40,.05);
+  --shadow-lg: 0 20px 48px rgba(16,24,40,.16);
+  --font: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  --top-h: 52px; --sider-w: 248px; --sider-w-min: 60px;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { font-family: var(--font); background: var(--bg); color: var(--ink); font-size: 14px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
+a { color: var(--primary); text-decoration: none; cursor: pointer; }
+button, input, select, textarea { font-family: inherit; font-size: inherit; color: inherit; }
+h1, h2, h3, h4 { margin: 0; color: var(--ink); }
+h1 { font-size: 20px; font-weight: 650; }
+h2 { font-size: 16px; font-weight: 650; }
+h3 { font-size: 14px; font-weight: 650; }
+p { margin: 0; }
+code, .mono { font-family: var(--mono); font-size: 12px; }
+code { background: var(--line-2); padding: 1px 5px; border-radius: 5px; }
+svg.i { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+svg.i.fill { fill: currentColor; stroke: none; }
+.muted { color: var(--ink-3); }
+.faint { color: var(--ink-4); }
+.sm { font-size: 12.5px; }
+.xs { font-size: 12px; }
+.row { display: flex; align-items: center; gap: 8px; }
+.col { display: flex; flex-direction: column; gap: 8px; }
+.grow { flex: 1; min-width: 0; }
+.ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp { flex: 1; }
+.hide { display: none !important; }
+
+/* ---------- 顶栏：一级菜单（平台） ---------- */
+.top { height: var(--top-h); background: var(--surface); border-bottom: 1px solid var(--line); display: flex; align-items: center; padding: 0 16px 0 14px; gap: 20px; position: relative; z-index: 20; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 15px; letter-spacing: .01em; cursor: pointer; }
+.brand .logo { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, #6366f1, #0ea5e9); color: #fff; display: grid; place-items: center; font-size: 14px; }
+.pnav { display: flex; gap: 2px; height: 100%; }
+.pnav a { display: flex; align-items: center; gap: 7px; padding: 0 14px; color: var(--ink-2); font-weight: 550; position: relative; }
+.pnav a:hover { color: var(--ink); background: var(--hover); }
+.pnav a.on { color: var(--primary-ink); }
+.pnav a.on::after { content: ""; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 2px; background: var(--primary); border-radius: 2px; }
+.top-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.avatar { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-size: 12.5px; font-weight: 650; flex: none; }
+.avatar.sq { border-radius: 8px; }
+
+/* ---------- 左侧：二级菜单（可收缩） ---------- */
+.body { display: flex; height: calc(100vh - var(--top-h)); }
+.sider { width: var(--sider-w); flex: none; background: var(--surface-2); border-right: 1px solid var(--line); display: flex; flex-direction: column; transition: width .18s ease; overflow: hidden; }
+.sider.min { width: var(--sider-w-min); }
+.sider-top { padding: 12px 10px 6px; display: flex; flex-direction: column; gap: 2px; }
+.snav { display: flex; align-items: center; gap: 10px; height: 36px; padding: 0 10px; border-radius: var(--radius-sm); color: var(--ink-2); font-weight: 520; white-space: nowrap; cursor: pointer; position: relative; }
+.snav:hover { background: var(--hover); color: var(--ink); }
+.snav.on { background: var(--primary-weak); color: var(--primary-ink); font-weight: 600; }
+.snav .badge { margin-left: auto; }
+.sider.min .snav { justify-content: center; padding: 0; }
+.sider.min .snav span, .sider.min .snav .badge, .sider.min .hist, .sider.min .new-chat span, .sider.min .sider-foot span { display: none; }
+.new-chat { display: flex; align-items: center; justify-content: center; gap: 8px; height: 38px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); font-weight: 600; color: var(--ink); cursor: pointer; margin-bottom: 8px; box-shadow: var(--shadow-xs); white-space: nowrap; }
+.new-chat:hover { border-color: #cfd3dd; background: var(--hover); }
+.hist { flex: 1; overflow-y: auto; padding: 4px 10px 10px; border-top: 1px solid var(--line-2); margin-top: 6px; }
+.hist-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 6px 4px; }
+.hist-group { font-size: 11.5px; color: var(--ink-4); padding: 10px 8px 4px; }
+.hist-item { display: flex; align-items: center; gap: 6px; height: 34px; padding: 0 6px 0 10px; border-radius: var(--radius-sm); color: var(--ink-2); cursor: pointer; }
+.hist-item:hover { background: var(--hover); }
+.hist-item.on { background: #e9ebf3; color: var(--ink); font-weight: 550; }
+.hist-item .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.hist-item .more { opacity: 0; }
+.hist-item:hover .more { opacity: 1; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.dot.run { background: var(--success); box-shadow: 0 0 0 3px var(--success-weak); }
+.dot.wait { background: var(--warning); box-shadow: 0 0 0 3px var(--warning-weak); }
+.sider-foot { border-top: 1px solid var(--line-2); padding: 8px 10px; }
+.main { flex: 1; min-width: 0; overflow-y: auto; position: relative; }
+.main.white { background: var(--surface); }
+.page { padding: 24px 32px 60px; max-width: 1280px; margin: 0 auto; }
+.page-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; min-height: 36px; }
+
+/* ---------- 通用组件 ---------- */
+.btn { height: 34px; padding: 0 14px; border-radius: var(--radius-sm); border: 1px solid var(--line); background: var(--surface); display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; font-weight: 550; white-space: nowrap; color: var(--ink); }
+.btn:hover { border-color: #cfd3dd; background: var(--hover); }
+.btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+.btn.primary:hover { background: var(--primary-2); }
+.btn.danger { color: var(--danger); }
+.btn.danger.solid { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.ghost { border-color: transparent; background: transparent; }
+.btn.ghost:hover { background: var(--hover); }
+.btn.sm { height: 28px; padding: 0 10px; font-size: 13px; }
+.btn[disabled] { opacity: .5; cursor: not-allowed; }
+.ibtn { width: 32px; height: 32px; border-radius: var(--radius-sm); border: none; background: transparent; display: inline-grid; place-items: center; cursor: pointer; color: var(--ink-3); flex: none; }
+.ibtn:hover { background: var(--hover); color: var(--ink); }
+.ibtn.sm { width: 26px; height: 26px; }
+.ibtn.on { background: var(--primary-weak); color: var(--primary-ink); }
+.input, .select, textarea.input { height: 34px; border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 11px; background: var(--surface); outline: none; width: 100%; }
+textarea.input { height: auto; padding: 9px 11px; resize: vertical; line-height: 1.6; }
+.input:focus, .select:focus { border-color: var(--primary-2); box-shadow: 0 0 0 3px var(--primary-weak); }
+.search { position: relative; }
+.search svg { position: absolute; left: 10px; top: 9px; color: var(--ink-4); }
+.search .input { padding-left: 32px; }
+.tag { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 550; background: var(--line-2); color: var(--ink-2); white-space: nowrap; }
+.tag.primary { background: var(--primary-weak); color: var(--primary-ink); }
+.tag.success { background: var(--success-weak); color: var(--success); }
+.tag.warning { background: var(--warning-weak); color: var(--warning); }
+.tag.danger { background: var(--danger-weak); color: var(--danger); }
+.tag.blue { background: var(--secondary-weak); color: #0369a1; }
+.badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: #fff; font-size: 11px; font-weight: 650; display: inline-grid; place-items: center; }
+.badge.gray { background: var(--line); color: var(--ink-2); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.card.pad { padding: 16px 18px; }
+.tabs { display: flex; gap: 22px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+.tabs a { padding: 10px 0; color: var(--ink-3); font-weight: 550; position: relative; }
+.tabs a:hover { color: var(--ink); }
+.tabs a.on { color: var(--ink); }
+.tabs a.on::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; background: var(--primary); border-radius: 2px; }
+.seg { display: inline-flex; background: var(--line-2); border-radius: 9px; padding: 3px; gap: 2px; }
+.seg a { padding: 4px 12px; border-radius: 7px; color: var(--ink-3); font-weight: 550; font-size: 13px; }
+.seg a.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-xs); }
+.switch { display: inline-block; vertical-align: middle; width: 36px; height: 20px; border-radius: 10px; background: #d5d9e2; position: relative; cursor: pointer; flex: none; transition: background .15s; }
+.switch::after { content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%; background: #fff; top: 2px; left: 2px; transition: left .15s; box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+.switch.on { background: var(--primary); }
+.switch.on::after { left: 18px; }
+.switch.dis { opacity: .45; cursor: not-allowed; }
+.table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.table th { text-align: left; font-weight: 600; font-size: 12.5px; color: var(--ink-3); background: var(--surface-2); padding: 10px 14px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.table td { padding: 12px 14px; border-bottom: 1px solid var(--line-2); vertical-align: middle; }
+.table tr:last-child td { border-bottom: none; }
+.table tr.click:hover td { background: var(--surface-2); cursor: pointer; }
+.empty { text-align: center; padding: 56px 20px; color: var(--ink-3); }
+.empty .ill { width: 56px; height: 56px; border-radius: 16px; background: var(--primary-weak); color: var(--primary); display: grid; place-items: center; margin: 0 auto 14px; }
+.empty .ill svg { width: 26px; height: 26px; }
+.empty h3 { margin-bottom: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); font-size: 13px; }
+.chip .x { color: var(--ink-4); cursor: pointer; }
+.chip .x:hover { color: var(--danger); }
+.kv { display: grid; grid-template-columns: 110px 1fr; gap: 10px 14px; font-size: 13.5px; }
+.kv dt { color: var(--ink-3); }
+.kv dd { margin: 0; }
+.divider { height: 1px; background: var(--line-2); margin: 14px 0; }
+.label { font-size: 13px; font-weight: 600; color: var(--ink-2); margin-bottom: 6px; display: block; }
+.help { font-size: 12.5px; color: var(--ink-3); margin-top: 4px; }
+.radio-card { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; cursor: pointer; display: flex; gap: 10px; align-items: flex-start; background: var(--surface); }
+.radio-card:hover { border-color: #cfd3dd; }
+.radio-card.on { border-color: var(--primary-2); background: #f8f8ff; box-shadow: 0 0 0 3px var(--primary-weak); }
+.radio-card .r { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid #c5cad6; flex: none; margin-top: 2px; }
+.radio-card.on .r { border: 5px solid var(--primary); }
+
+/* 下拉菜单 / 浮层 */
+.pop { position: absolute; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-lg); padding: 6px; z-index: 60; min-width: 200px; }
+.pop .mi { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 7px; cursor: pointer; color: var(--ink-2); }
+.pop .mi:hover { background: var(--hover); color: var(--ink); }
+.pop .mi.on { color: var(--primary-ink); }
+.pop .mi.danger { color: var(--danger); }
+.pop .sep { height: 1px; background: var(--line-2); margin: 5px 4px; }
+.pop .ph { font-size: 11.5px; color: var(--ink-4); padding: 6px 10px 2px; }
+.mask { position: fixed; inset: 0; background: rgba(15,23,42,.36); z-index: 80; display: grid; place-items: center; }
+.modal { background: var(--surface); border-radius: 14px; width: 560px; max-width: calc(100vw - 40px); max-height: calc(100vh - 60px); display: flex; flex-direction: column; box-shadow: var(--shadow-lg); }
+.modal.wide { width: 760px; }
+.modal-h { display: flex; align-items: center; padding: 16px 20px; border-bottom: 1px solid var(--line-2); }
+.modal-b { padding: 18px 20px; overflow-y: auto; }
+.modal-f { padding: 12px 20px; border-top: 1px solid var(--line-2); display: flex; justify-content: flex-end; gap: 8px; }
+.drawer-mask { position: fixed; inset: 0; background: rgba(15,23,42,.2); z-index: 70; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: 520px; max-width: 92vw; background: var(--surface); z-index: 71; box-shadow: var(--shadow-lg); display: flex; flex-direction: column; }
+.toast { position: fixed; top: 64px; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 9px 16px; border-radius: 10px; font-size: 13.5px; z-index: 100; box-shadow: var(--shadow-md); }
+
+/* ---------- 设计说明（评审用，非产品界面） ---------- */
+.notes { width: 300px; flex: none; overflow-y: auto; background: #fffdf3; border-left: 1px solid #f3e3a6; padding: 14px 16px; font-size: 13px; }
+.notes h4 { font-size: 13px; margin: 10px 0 4px; color: #92400e; }
+.notes ul { margin: 0; padding-left: 18px; }
+.notes li { margin: 3px 0; color: #57534e; }
+.notes .be { display: inline-block; font-size: 11px; background: #fde68a; color: #92400e; border-radius: 4px; padding: 0 5px; margin-right: 4px; }
+.notes .demo { margin-top: 12px; padding-top: 10px; border-top: 1px dashed #f3e3a6; }
+.notes .demo .seg { flex-wrap: wrap; }
+.notes .demo .seg a { font-size: 12px; padding: 3px 8px; }
+/* ---------- TeamFlow 原型 ---------- */
+.logo.tf { background: linear-gradient(135deg, #4f46e5, #0ea5e9); }
+.teamsw { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; font-weight: 550; font-size: 13px; color: var(--ink-2); background: var(--surface); }
+.teamsw:hover { background: var(--hover); }
+.sgroup { font-size: 11.5px; color: var(--ink-4); font-weight: 600; padding: 14px 10px 4px; letter-spacing: .02em; }
+.sider .snav .badge { margin-left: auto; }
+.tenant { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600; color: var(--ink-3); margin-right: -10px; }
+.tenant svg { width: 14px; height: 14px; }
+
+/* 状态 */
+.st { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.st::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.st.pending { background: #f1f3f7; color: #64748b; }
+.st.working { background: #e6f6fe; color: #0369a1; }
+.st.exit_review { background: #fef3e2; color: #b45309; }
+.st.exited { background: #e6faf6; color: #0f766e; }
+.st.admit_review { background: #f5edff; color: #7e22ce; }
+.st.passed { background: var(--success-weak); color: var(--success); }
+.st.returned { background: var(--danger-weak); color: var(--danger); }
+.st.running { background: #e6f6fe; color: #0369a1; }
+.st.completed { background: var(--success-weak); color: var(--success); }
+.st.terminated { background: #f1f3f7; color: #64748b; }
+
+/* 流程图 */
+.flow { display: flex; align-items: center; gap: 0; overflow-x: auto; padding: 22px 18px 18px; }
+.flow .arrow { width: 26px; flex: none; height: 2px; background: #cfd5df; position: relative; }
+.flow .arrow::after { content: ""; position: absolute; right: -1px; top: -4px; border: 5px solid transparent; border-left: 7px solid #cfd5df; border-right: 0; }
+.flow .par { display: flex; flex-direction: column; gap: 12px; padding: 10px; border: 1px dashed #c9cfdc; border-radius: 12px; position: relative; flex: none; }
+.flow .par .plabel { position: absolute; top: -10px; left: 10px; background: var(--surface); padding: 0 6px; font-size: 11.5px; color: var(--ink-4); font-weight: 600; }
+.fnode { width: 152px; flex: none; border: 1.5px solid var(--line); border-radius: 11px; background: var(--surface); padding: 10px 11px; cursor: pointer; transition: box-shadow .12s; }
+.fnode:hover { box-shadow: var(--shadow-md); }
+.fnode.on { box-shadow: 0 0 0 3px var(--primary-weak); border-color: var(--primary-2) !important; }
+.fnode .nm { font-weight: 650; font-size: 13.5px; display: flex; align-items: center; gap: 6px; }
+.fnode .who { display: flex; align-items: center; gap: 5px; margin-top: 7px; font-size: 12px; color: var(--ink-3); }
+.fnode .rv { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+.fnode.pending { border-color: #e6e8ee; }
+.fnode.working { border-color: #7cc7ee; background: #fbfdff; }
+.fnode.exit_review { border-color: #f5c46b; background: #fffdf7; }
+.fnode.exited { border-color: #6fd3c4; background: #f9fefd; }
+.fnode.admit_review { border-color: #c9a2f2; background: #fdfaff; }
+.fnode.passed { border-color: #8fd5a6; }
+.fnode.returned { border-color: #f1a3a3; background: #fffafa; }
+.rtag { white-space: nowrap; font-size: 11px; height: 18px; padding: 0 6px; border-radius: 5px; display: inline-flex; align-items: center; background: var(--line-2); color: var(--ink-3); font-weight: 600; }
+.rtag.exit { background: #fef3e2; color: #b45309; }
+.rtag.admit { background: #f5edff; color: #7e22ce; }
+.rtag.exec { background: #e6f6fe; color: #0369a1; }
+.legend { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 10px 18px; border-top: 1px solid var(--line-2); font-size: 12px; color: var(--ink-3); }
+
+/* 进度条（流程列表里每个节点一格） */
+.pbar { display: flex; gap: 3px; }
+.pbar i { width: 16px; height: 7px; border-radius: 3px; background: #e6e8ee; }
+.pbar i.working { background: #38bdf8; } .pbar i.exit_review { background: #f59e0b; } .pbar i.exited { background: #2dd4bf; }
+.pbar i.admit_review { background: #a855f7; } .pbar i.passed { background: #22c55e; } .pbar i.returned { background: #ef4444; }
+
+/* 节点页：左对话 + 右面板 */
+.nodepage { display: grid; grid-template-columns: minmax(0, 1fr) 420px; height: 100%; }
+.nodesw { margin-top: 8px; overflow-x: auto; max-width: 100%; display: flex; }
+.nodesw a { white-space: nowrap; }
+.nodepage .left { display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--line); background: var(--surface); }
+.nodepage .right { overflow-y: auto; background: var(--bg); }
+.nhead { padding: 14px 20px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.nhead .crumb { font-size: 12.5px; color: var(--ink-3); margin-bottom: 6px; }
+.locks { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.lock { display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 8px; border-radius: 6px; font-size: 12px; background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-2); }
+.lock svg { width: 12px; height: 12px; color: var(--ink-4); }
+.conv { flex: 1; overflow-y: auto; padding: 16px 20px 24px; display: flex; flex-direction: column; gap: 12px; }
+.msg { display: flex; gap: 10px; max-width: 760px; }
+.msg .bd { min-width: 0; flex: 1; }
+.msg .who { font-size: 12.5px; font-weight: 650; display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+.msg .who .t { color: var(--ink-4); font-weight: 500; }
+.msg .txt { background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 10px; padding: 9px 12px; line-height: 1.65; }
+.msg.me .txt { background: var(--primary-weak); border-color: #dfe2ff; }
+.msg.agent .txt { background: var(--surface); }
+.sysline { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-3); padding: 2px 0; }
+.sysline::before, .sysline::after { content: ""; flex: 1; height: 1px; background: var(--line-2); }
+.instr { border: 1px solid #dfe2ff; background: #f8f8ff; border-radius: 10px; padding: 10px 12px; }
+.instr .h { font-size: 12px; font-weight: 650; color: var(--primary-ink); display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+.inchip { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border-radius: 6px; background: var(--surface); border: 1px solid var(--line); font-size: 12px; margin: 4px 6px 0 0; }
+.inchip code { background: none; padding: 0; color: var(--ink-3); }
+.stepsbox { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.stepsbox .sh { padding: 7px 12px; font-size: 12.5px; color: var(--ink-3); display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.stepsbox .sb { padding: 2px 12px 10px 32px; font-size: 12.5px; color: var(--ink-2); }
+.stepsbox .sb div { padding: 2px 0; }
+.save { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 9px 12px; display: flex; gap: 10px; align-items: flex-start; }
+.hash { font-family: var(--mono); font-size: 12px; color: var(--primary-ink); background: var(--primary-weak); border-radius: 5px; padding: 1px 6px; }
+.snap { font-size: 12px; font-weight: 550; color: var(--primary-ink); background: var(--primary-weak); border-radius: 5px; padding: 1px 6px; white-space: nowrap; }
+.files { font-family: var(--mono); font-size: 12px; color: var(--ink-3); margin-top: 4px; }
+.files .a { color: var(--success); } .files .d { color: var(--danger); }
+.askcard { border: 1px solid #c7d2fe; border-radius: 10px; background: #fff; padding: 11px 13px; }
+.askcard .q { font-weight: 600; margin-bottom: 8px; }
+.askopt { display: flex; gap: 8px; align-items: flex-start; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; margin-top: 6px; cursor: pointer; }
+.askopt:hover { background: var(--hover); }
+.askopt.on { border-color: var(--primary-2); background: #f8f8ff; }
+.checkcard { border: 1px solid var(--line); border-radius: 10px; background: var(--surface); padding: 10px 12px; }
+.checkcard .row2 { display: flex; gap: 8px; align-items: flex-start; padding: 3px 0; font-size: 13px; }
+.ok { color: var(--success); } .bad { color: var(--danger); } .warn { color: var(--warning); }
+.nfoot { border-top: 1px solid var(--line); padding: 12px 20px 14px; background: var(--surface); }
+.nfoot textarea { width: 100%; border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; resize: none; min-height: 64px; outline: none; line-height: 1.6; }
+.nfoot textarea:focus { border-color: #c7cbf6; box-shadow: 0 0 0 3px var(--primary-weak); }
+.readonly { padding: 10px 14px; background: var(--surface-2); border: 1px dashed var(--line); border-radius: 10px; color: var(--ink-3); font-size: 13px; }
+
+/* 右侧面板 */
+.rp { padding: 14px 16px 30px; display: flex; flex-direction: column; gap: 12px; }
+.rp .tabs { margin-bottom: 4px; gap: 18px; }
+.pcard { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.pcard h3 { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.doc { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; line-height: 1.7; font-size: 13.5px; }
+.doc h1 { font-size: 17px; margin: 0 0 8px; } .doc h2 { font-size: 14.5px; margin: 14px 0 6px; } .doc ul { margin: 4px 0; padding-left: 20px; }
+.doc table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin: 6px 0; } .doc td, .doc th { border: 1px solid var(--line); padding: 4px 6px; text-align: left; }
+.doc .add { background: #e7f6ec; } .doc .del { background: #fdeaea; text-decoration: line-through; color: #9b1c1c; }
+.dochead { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 12.5px; color: var(--ink-3); }
+.vote { display: flex; align-items: flex-start; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--line-2); }
+.vote:last-child { border-bottom: none; }
+.decide { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.decide .radio-card { padding: 9px 10px; }
+.banner2 { display: flex; gap: 10px; align-items: flex-start; padding: 10px 14px; border-radius: 10px; font-size: 13px; }
+.banner2.danger { background: var(--danger-weak); color: #7f1d1d; border: 1px solid #f7caca; }
+.banner2.info { background: #eef6ff; color: #1e3a8a; border: 1px solid #cfe0fb; }
+.banner2.warn { background: var(--warning-weak); color: #78350f; border: 1px solid #f6d9a8; }
+.banner2.purple { background: #f5edff; color: #581c87; border: 1px solid #e4cffb; }
+
+/* 追溯时间线 */
+.tline { position: relative; padding-left: 22px; }
+.tline::before { content: ""; position: absolute; left: 7px; top: 4px; bottom: 4px; width: 2px; background: var(--line); }
+.tev { position: relative; padding: 7px 0 7px 6px; }
+.tev .dot2 { position: absolute; left: -20px; top: 12px; width: 12px; height: 12px; border-radius: 50%; background: var(--surface); border: 2px solid #c5cad6; }
+.tev .dot2.k-lock { border-color: #6366f1; } .tev .dot2.k-review { border-color: #f59e0b; } .tev .dot2.k-save { border-color: #0ea5e9; } .tev .dot2.k-ask { border-color: #94a3b8; }
+.tev .dot2.k-reject { border-color: #ef4444; background: #fdeaea; } .tev .dot2.k-pass { border-color: #16a34a; background: #e7f6ec; }
+.tnode { margin: 14px 0 4px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+
+/* 模板编排 */
+.editor { display: grid; grid-template-columns: minmax(0, 1fr) 360px; height: 100%; }
+.flow.v { flex-direction: column; align-items: center; }
+.flow.v .arrow { width: 2px; height: 24px; }
+.flow.v .arrow::after { right: auto; left: -4px; top: auto; bottom: -2px; border: 5px solid transparent; border-top: 7px solid #cfd5df; border-bottom: 0; }
+.flow.v .par { flex-direction: row; align-items: center; }
+.flow.v .addbtn { margin: 4px 0; }
+.canvas { overflow: auto; background-color: #f7f8fb; background-image: radial-gradient(#dfe3ea 1px, transparent 1px); background-size: 18px 18px; position: relative; }
+.canvas .flow { padding: 40px 32px; min-height: 100%; align-items: center; }
+.addbtn { width: 30px; height: 30px; flex: none; border-radius: 50%; border: 1.5px dashed #b9c0cd; display: grid; place-items: center; color: var(--ink-3); cursor: pointer; background: var(--surface); margin: 0 4px; }
+.addbtn:hover { border-color: var(--primary-2); color: var(--primary); }
+.inspector { overflow-y: auto; background: var(--surface); border-left: 1px solid var(--line); padding: 16px 18px 30px; }
+.inspector .fld { margin-bottom: 14px; }
+.edtop { height: 52px; display: flex; align-items: center; gap: 10px; padding: 0 18px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.issue { display: flex; gap: 8px; padding: 6px 0; font-size: 13px; }
+
+/* 卡片栅格 */
+.cgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.tcard { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; cursor: pointer; transition: box-shadow .12s, border-color .12s; }
+.tcard:hover { box-shadow: var(--shadow-md); border-color: #d9dce5; }
+.tcard .ic2 { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; color: #fff; flex: none; }
+.mini { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 10px; font-size: 11.5px; color: var(--ink-3); }
+.mini span.n { padding: 2px 6px; border-radius: 5px; background: var(--line-2); }
+.sec2 { margin-top: 22px; }
+.sec2 > h2 { margin-bottom: 10px; display: flex; align-items: center; gap: 8px; }
+.ftsec { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--surface); margin-bottom: 8px; display: flex; gap: 10px; }
+.ftsec .grip { color: var(--ink-4); cursor: grab; margin-top: 2px; }
+
+/* 两级菜单：项目列表（二级菜单下方，像 Atlas 的对话历史） */
+.hist-item .badge { margin-left: auto; }
+.hist-item svg { color: var(--ink-4); }
+.hist-item.on svg { color: var(--primary); }
+.top .pnav { margin-left: 4px; }
+
+/* 提交评审：从流程空间选产出物 */
+.pickrow { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; background: var(--surface); }
+.pickrow:hover { background: var(--hover); }
+.pickrow.on { border-color: var(--primary-2); background: #f8f8ff; }
+.pickrow input { margin: 0; accent-color: var(--primary); pointer-events: none; }
+
+/* 流程空间文件表：选中的行 */
+.table tr.sel td { background: var(--primary-weak); }
+
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+/* =====================================================================
+ * 图标（lucide 风格，内联 SVG）
+ * ===================================================================== */
+const ICONS = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+  bot: '<rect x="3" y="8" width="18" height="12" rx="3"/><path d="M12 8V4M8.5 14h.01M15.5 14h.01"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  users: '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 3.1a4 4 0 0 1 0 7.8M22 21a7 7 0 0 0-5-6.7"/>',
+  book: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20V3H6.5A2.5 2.5 0 0 0 4 5.5z"/><path d="M4 19.5A2.5 2.5 0 0 0 6.5 22H20v-5"/>',
+  spark: '<path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 17l.6 1.6L21 19l-1.4.5L19 21l-.6-1.5L17 19l1.4-.4z"/>',
+  plug: '<path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/>',
+  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
+  sliders: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  left: '<path d="m15 18-6-6 6-6"/>',
+  right: '<path d="m9 18 6-6-6-6"/>',
+  down: '<path d="m6 9 6 6 6-6"/>',
+  more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
+  up: '<path d="M12 19V5M5 12l7-7 7 7"/>',
+  clip: '<path d="m21.4 11.1-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  share: '<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>',
+  like: '<path d="M7 10v11H4V10zM7 10l4-8a3 3 0 0 1 3 3v4h5.5a2 2 0 0 1 2 2.3l-1.4 8A2 2 0 0 1 18 21H7"/>',
+  dislike: '<path d="M17 14V3h3v11zM17 14l-4 8a3 3 0 0 1-3-3v-4H4.5a2 2 0 0 1-2-2.3l1.4-8A2 2 0 0 1 6 3h11"/>',
+  terminal: '<path d="m4 17 6-5-6-5M12 19h8"/>',
+  pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/>',
+  archive: '<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4"/>',
+  bulb: '<path d="M9 18h6M10 22h4M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="m10.7 12.3 9.8-9.8M17 6l3 3M14 9l2 2"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>',
+  panel: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>',
+  alert: '<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
+  play: '<path d="M7 4l13 8-13 8z"/>',
+  list: '<path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/>',
+  bookmark: '<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>',
+  help: '<circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3M12 17h.01"/>',
+  shield: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.5l6.1-.9z"/>',
+  zap: '<path d="M13 2 3 14h8l-1 8 10-12h-8z"/>',
+  link: '<path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/>',
+};
+const ic = (n, cls = '') => `<svg class="i ${n === 'more' ? 'fill' : ''} ${cls}" viewBox="0 0 24 24">${ICONS[n] || ''}</svg>`;
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const COLORS = ['#6366f1', '#0ea5e9', '#f59e0b', '#10b981', '#ec4899', '#8b5cf6', '#14b8a6', '#ef4444'];
+const av = (name, color, size = 30, sq = true) =>
+  `<span class="avatar ${sq ? 'sq' : ''}" style="width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px;background:${color}">${esc((name || '?').slice(0, 1))}</span>`;
+
+
+Object.assign(ICONS, {
+  laptop: '<rect x="4" y="4" width="16" height="11" rx="2"/><path d="M2 19h20"/>',
+  monitor: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  wifioff: '<path d="M2 2l20 20M8.5 16.4a5 5 0 0 1 7 0M5 12.9a10 10 0 0 1 5.2-2.8M19 12.9a10 10 0 0 0-2.3-1.7M2 8.8a15 15 0 0 1 4.2-2.6M22 8.8A15 15 0 0 0 11 5M12 20h.01"/>',
+  git: '<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="9" r="2.5"/><path d="M6 8.5v7M18 11.5c0 4-6 3-10 5"/>',
+  dl: '<path d="M12 4v12M6 10l6 6 6-6M4 20h16"/>',
+  cog: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+});
+/* =====================================================================
+ * 示例数据：租户「星海科技」下的研发一部（软件研发）+ 内容运营组（技术文章）；
+ * 流程市场由系统租户「平台运营」的运营管理员维护
+ * ===================================================================== */
+Object.assign(ICONS, {
+  flow: '<rect x="2" y="9" width="6" height="6" rx="1.5"/><rect x="16" y="3" width="6" height="6" rx="1.5"/><rect x="16" y="15" width="6" height="6" rx="1.5"/><path d="M8 12h4M12 6v12M12 6h4M12 18h4"/>',
+  inbox: '<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1z"/>',
+  home: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/>',
+  template: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/>',
+  settings: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>',
+  box: '<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
+  bell: '<path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0"/>',
+  send2: '<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
+  hand: '<path d="M18 11V6a2 2 0 0 0-4 0M14 10V4a2 2 0 0 0-4 0v2M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-6-2.4l-3.6-3.6a2 2 0 0 1 2.8-2.8L7 15"/>',
+  undo: '<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>',
+  history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/>',
+  diff: '<path d="M12 3v14M5 10h14M5 21h14"/>',
+  merge: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><circle cx="6" cy="18" r="2.5"/><path d="M6 8.5v7M8.5 6H13a5 5 0 0 1 5 5v4.5"/>',
+  doc: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h8M8 9h2"/>',
+  pen: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  scale: '<path d="M12 3v18M7 21h10M5 7h14M5 7l-3 7a3 3 0 0 0 6 0zM19 7l-3 7a3 3 0 0 0 6 0z"/>',
+  chart: '<path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 6-6"/>',
+  wrench: '<path d="M14.7 6.3a4 4 0 0 0 5 5L22 14l-8 8-2.3-2.3a4 4 0 0 0-5-5L2 10l8-8z"/>',
+  store: '<path d="M3 9l1.5-5h15L21 9"/><path d="M3 9h18v1.5a3 3 0 0 1-6 0 3 3 0 0 1-6 0 3 3 0 0 1-6 0z"/><path d="M5 13v8h14v-8M10 21v-5h4v5"/>',
+});
+const clone = (o) => JSON.parse(JSON.stringify(o));
+
+/* 租户 = 企业，登录时由用户中心确定，界面里不能切换。系统租户「平台运营」的人是运营管理员 */
+const TENANT = { name: '星海科技' };
+const SYS_TENANT = { name: '平台运营', sys: true };
+/* 演示身份：李工（星海科技，用户中心里有「团队管理员」角色；研发一部 Owner、内容运营组读写成员）/ 林运营（系统租户，流程市场读写） */
+const USERS = {
+  li: { id: 'u-li', name: '李工', color: '#0ea5e9', canCreateTeam: true },
+  ops: { id: 'u-lin', name: '林运营', color: '#64748b', ops: true },
+};
+let ME = USERS.li;
+const PEOPLE = {
+  'u-zhang': { name: '张明', color: '#6366f1', title: '产品负责人' },
+  'u-li': { name: '李工', color: '#0ea5e9', title: '研发负责人' },
+  'u-zhou': { name: '周工', color: '#f59e0b', title: '高级开发' },
+  'u-chen': { name: '陈运', color: '#10b981', title: '测试负责人' },
+  'u-wang': { name: '王芳', color: '#ec4899', title: '内容主编' },
+  'u-sun': { name: '孙悦', color: '#8b5cf6', title: '编辑' },
+  'u-he': { name: '何总', color: '#14b8a6', title: '研发总监' },
+  'u-lin': { name: '林运营', color: '#64748b', title: '平台运营' },
+};
+/* 数字员工 = Atlas 里的智能体（TeamFlow 只引用、不创建）；产出物的格式写在它的技能里 */
+const AGENTS = {
+  'a-ba': { name: '需求分析师', kind: '原生智能体', model: 'MiniMax M3', color: '#6366f1', skills: ['需求澄清', 'PRD 撰写'], now: 'F-1026 · 需求澄清', st: 'busy', done: 23, avgR: 1.4 },
+  'a-arch': { name: '架构师', kind: '原生智能体', model: 'MiniMax M3', color: '#0ea5e9', skills: ['技术方案', '接口设计'], now: 'F-1022 · 技术方案（等你回答）', st: 'wait', done: 17, avgR: 1.6 },
+  'a-dev': { name: '开发工程师', kind: 'CLI 智能体 · Claude Code', model: 'MiniMax M3', color: '#f59e0b', skills: ['编码', '单元测试'], now: '空闲', st: 'idle', done: 21, avgR: 1.9 },
+  'a-qa': { name: '测试工程师', kind: 'CLI 智能体 · Claude Code', model: 'MiniMax M3.1 Flash', color: '#10b981', skills: ['测试用例', '测试执行'], now: 'F-1024 · 测试用例', st: 'busy', done: 19, avgR: 1.3 },
+  'a-writer': { name: '撰稿人', kind: '原生智能体', model: 'MiniMax M3', color: '#ec4899', skills: ['选题', '长文撰写'], now: '空闲', st: 'idle', done: 8, avgR: 2.1 },
+  'a-editor': { name: '审校员', kind: '原生智能体', model: 'MiniMax M3', color: '#8b5cf6', skills: ['文字审校', '事实核查'], now: 'F-0031 · 文字审校', st: 'busy', done: 9, avgR: 1.2 },
+};
+/* 团队成员和级别 = 用户中心的团队数据权限（TeamFlow 不存）：owner 团队管理员 / rw 读写 / ro 只读 */
+const LEVEL = { owner: '团队管理员（Owner）', rw: '读写', ro: '只读' };
+const TEAMS = {
+  rd: { name: '研发一部', desc: '负责 Atlas 控制台和支付中台的研发', members: { 'u-li': 'owner', 'u-zhang': 'rw', 'u-zhou': 'rw', 'u-chen': 'rw', 'u-he': 'ro' }, agents: ['a-ba', 'a-arch', 'a-dev', 'a-qa'] },
+  content: { name: '内容运营组', desc: '技术博客和产品文档', members: { 'u-wang': 'owner', 'u-sun': 'rw', 'u-li': 'rw' }, agents: ['a-writer', 'a-editor', 'a-arch'] },
+};
+
+/* 流程市场：产品自带，不属于任何租户；运营管理员维护。status：on 上架 / off 下架 / draft 还没发布。
+ * 模板只存结构（顺序步骤 + 并行组）；节点不配产出物，格式由执行数字员工的技能约定，工作说明里可以点名技能 */
+const MCATS = { all: '全部', rd: '软件研发', content: '内容', legal: '法务与合规', data: '数据分析' };
+const MARKET = {
+  'm-rd': {
+    name: '软件研发', cat: 'rd', ver: 2, status: 'on', copies: 37, tenants: 12, color: '#4f46e5', icon: 'terminal', who: '产品、研发、测试负责人分环节把关',
+    desc: '一句话需求 → 澄清 → PRD → 技术方案 → 编码与测试用例并行 → 测试执行',
+    roles: { product: '产品', arch: '架构', dev: '开发', qa: '测试' },
+    steps: ['clarify', 'prd', 'design', ['code', 'cases'], 'exec'],
+    nodes: {
+      clarify: { name: '需求澄清', exec: 'product', exit: ['product'], desc: '用「需求澄清」技能把一句话需求问清楚：目标用户、范围、约束、不做什么，写成澄清记录' },
+      prd: { name: 'PRD', exec: 'product', exit: ['product'], desc: '用「PRD 撰写」技能写需求文档，验收标准逐条可测' },
+      design: { name: '技术方案', exec: 'arch', admit: ['arch'], exit: ['arch'], desc: '读 PRD，用「技术方案」技能给出方案、接口、数据结构、风险和工作量' },
+      code: { name: '编码', exec: 'dev', admit: ['dev'], exit: ['dev'], rule: 'all', desc: '按技术方案改流程空间里的代码、补单元测试，产出补丁和变更说明' },
+      cases: { name: '测试用例', exec: 'qa', admit: ['qa'], exit: ['qa'], desc: '用「测试用例」技能，按 PRD 的验收标准和技术方案写测试用例' },
+      exec: { name: '测试执行', exec: 'qa', admit: ['qa'], exit: ['qa', 'product'], rule: 'all', desc: '在测试环境跑用例，出测试报告' },
+    },
+  },
+  'm-bug': {
+    name: '缺陷修复', cat: 'rd', ver: 1, status: 'on', copies: 41, tenants: 15, color: '#dc2626', icon: 'wrench', who: '测试确认复现与回归',
+    desc: '复现 → 修复 → 回归', roles: { dev: '开发', qa: '测试' }, steps: ['repro', 'fix', 'regress'],
+    nodes: {
+      repro: { name: '复现', exec: 'qa', exit: ['qa'], desc: '按缺陷描述复现，写清复现步骤和环境' },
+      fix: { name: '修复', exec: 'dev', admit: ['dev'], exit: ['dev'], desc: '定位根因、修复、补回归测试' },
+      regress: { name: '回归', exec: 'qa', admit: ['qa'], exit: ['qa'], desc: '按复现步骤回归，出回归报告' },
+    },
+  },
+  'm-content': {
+    name: '内容生产', cat: 'content', ver: 1, status: 'on', copies: 18, tenants: 9, color: '#ec4899', icon: 'pen', who: '主编定选题、审稿',
+    desc: '选题 → 撰写 → 技术审校与文字审校并行 → 发布', roles: { editor: '编辑', tech: '技术审校', copy: '文字审校' },
+    steps: ['topic', 'draft', ['techrev', 'copyrev'], 'publish'],
+    nodes: {
+      topic: { name: '选题', exec: 'editor', exit: ['editor'], desc: '用「选题」技能定选题、读者和大纲' },
+      draft: { name: '撰写', exec: 'editor', exit: ['editor'], desc: '用「长文撰写」技能按大纲写正文' },
+      techrev: { name: '技术审校', exec: 'tech', admit: ['tech'], exit: ['tech'], desc: '核对技术细节、代码片段、数据' },
+      copyrev: { name: '文字审校', exec: 'copy', admit: ['copy'], exit: ['copy'], desc: '用「文字审校」技能改错别字、病句和风格' },
+      publish: { name: '发布', exec: 'editor', admit: ['editor'], exit: ['editor'], desc: '合并审校意见、排版、发布' },
+    },
+  },
+  'm-contract': {
+    name: '合同与合规审查', cat: 'legal', ver: 1, status: 'on', copies: 6, tenants: 4, color: '#8b5cf6', icon: 'scale', who: '法务、财务各自把关',
+    desc: '合同解析 → 法务审查与财务审查并行 → 意见汇总 → 定稿', roles: { biz: '业务', legal: '法务', fin: '财务' },
+    steps: ['parse', ['legal', 'fin'], 'merge', 'final'],
+    nodes: {
+      parse: { name: '合同解析', exec: 'biz', exit: ['biz'], desc: '抽取主体、金额、期限、违约条款，写条款摘要' },
+      legal: { name: '法务审查', exec: 'legal', admit: ['legal'], exit: ['legal'], desc: '逐条标风险等级和修改建议' },
+      fin: { name: '财务审查', exec: 'fin', admit: ['fin'], exit: ['fin'], desc: '核对付款节点、税率、发票条款' },
+      merge: { name: '意见汇总', exec: 'biz', admit: ['biz'], exit: ['legal', 'fin'], rule: 'all', desc: '合并两方意见，冲突处列出来' },
+      final: { name: '定稿', exec: 'biz', admit: ['biz'], exit: ['biz'], desc: '按汇总意见改出定稿' },
+    },
+  },
+  'm-report': {
+    name: '数据分析报告', cat: 'data', ver: 0, status: 'draft', copies: 0, tenants: 0, color: '#0ea5e9', icon: 'chart', who: '业务方确认口径和结论',
+    desc: '问题定义 → 取数与清洗 → 分析 → 报告撰写', roles: { biz: '业务方', analyst: '分析师' },
+    steps: ['define', 'fetch', 'analyze', 'write'],
+    nodes: {
+      define: { name: '问题定义', exec: 'biz', exit: ['biz'], desc: '要回答什么问题、口径、时间范围' },
+      fetch: { name: '取数与清洗', exec: 'analyst', admit: ['analyst'], exit: ['analyst'], desc: '写取数 SQL、清洗规则和数据说明' },
+      analyze: { name: '分析', exec: 'analyst', admit: ['analyst'], exit: ['analyst', 'biz'], rule: 'all', desc: '出分析结论和图表' },
+      write: { name: '报告撰写', exec: 'analyst', admit: ['analyst'], exit: ['biz'], desc: '写成给业务方看的报告' },
+    },
+  },
+};
+/* 团队的流程模板：从流程市场拷贝（记来源）或空白新建；拷过来就是团队自己的，市场之后更新不影响 */
+const fromMarket = (mid, extra) => ({ ...clone({ roles: MARKET[mid].roles, steps: MARKET[mid].steps, nodes: MARKET[mid].nodes }), from: { mid, ver: 1 }, ...extra });
+const TPLS = {
+  rd: fromMarket('m-rd', { name: '软件研发（标准）', ver: 3, team: 'rd', color: '#4f46e5', icon: 'terminal', status: '已发布', used: 14, draft: true, desc: '一句话需求 → 澄清 → PRD → 技术方案 → 编码与测试用例并行 → 测试执行' }),
+  hotfix: fromMarket('m-bug', { name: '缺陷修复', ver: 1, team: 'rd', color: '#dc2626', icon: 'wrench', status: '已发布', used: 9, desc: '复现 → 修复 → 回归' }),
+  release: {
+    name: '版本发布', ver: 1, team: 'rd', color: '#0ea5e9', icon: 'zap', status: '已发布', used: 2,
+    desc: '发布说明 → 发布检查 → 上线', roles: { dev: '开发', qa: '测试', ops: '运维' }, steps: ['notes', 'check', 'ship'],
+    nodes: { notes: { name: '发布说明', exec: 'dev', exit: ['dev'], desc: '汇总本版本的变更，写发布说明' }, check: { name: '发布检查', exec: 'qa', admit: ['qa'], exit: ['qa', 'ops'], rule: 'all', desc: '按发布检查单逐项确认' }, ship: { name: '上线', exec: 'ops', admit: ['ops'], exit: ['ops'], desc: '上线并记录上线结果' } },
+  },
+  blog: fromMarket('m-content', { name: '技术文章', ver: 1, team: 'content', color: '#ec4899', icon: 'pen', status: '已发布', used: 5, desc: '选题 → 撰写 → 技术审校与文字审校并行 → 发布' }),
+};
+
+/* 项目 = 能发起哪些流程（绑定的流程模板，可以多个）+ 每个模板的角色由谁担任（项目 × 模板 × 角色 → 成员 + 数字员工） */
+const RD_ROLES = () => ({ product: { m: ['u-zhang'], a: 'a-ba' }, arch: { m: ['u-li'], a: 'a-arch' }, dev: { m: ['u-li', 'u-zhou'], a: 'a-dev' }, qa: { m: ['u-chen'], a: 'a-qa' } });
+const PROJECTS = {
+  'p-app': { name: 'Atlas 控制台', team: 'rd', desc: 'Atlas 前端控制台的需求和迭代', bind: { rd: RD_ROLES(), hotfix: { dev: { m: ['u-zhou'], a: 'a-dev' }, qa: { m: ['u-chen'], a: 'a-qa' } } } },
+  'p-pay': { name: '支付中台', team: 'rd', desc: '支付渠道接入、对账和回调', bind: { rd: RD_ROLES(), hotfix: { dev: { m: ['u-li'], a: 'a-dev' }, qa: { m: [], a: '' } } } },
+  'p-blog': { name: '技术博客', team: 'content', desc: '面向开发者的技术文章', bind: { blog: { editor: { m: ['u-wang'], a: 'a-writer' }, tech: { m: ['u-li'], a: 'a-arch' }, copy: { m: ['u-sun'], a: 'a-editor' } } } },
+};
+
+/* 流程实例：模板在发起时锁定；space = 发起时向 Atlas 申请的流程空间；节点状态和轮次；
+ * sub = 最近一次提交评审时从流程空间选的文件（subR 是哪一轮，缺省 = 当前轮）。产物不做版本管理，只记路径 */
+const FLOWS = {
+  'F-1024': {
+    title: '登录验证码限流', tpl: 'rd', ver: 3, project: 'p-app', status: 'running', by: 'u-zhang', at: '11-24 10:12', upd: '2 小时前', space: 'ws-7f3a2c',
+    req: '登录接口最近被刷验证码，按手机号和 IP 限流，超过限制要人机验证',
+    nodes: { clarify: { st: 'passed', r: 1, sub: ['需求澄清/澄清记录.md'] }, prd: { st: 'passed', r: 2, sub: ['PRD/PRD.md'] }, design: { st: 'exited', r: 1, sub: ['技术方案/技术方案.md'] }, code: { st: 'admit_review', r: 0 }, cases: { st: 'working', r: 1 }, exec: { st: 'pending', r: 0 } },
+  },
+  'F-1025': {
+    title: '支付回调幂等', tpl: 'rd', ver: 3, project: 'p-pay', status: 'running', by: 'u-zhang', at: '11-21 15:40', upd: '40 分钟前', space: 'ws-91c0e4',
+    req: '支付渠道重复回调导致少数订单重复入账，回调处理要做到幂等',
+    nodes: { clarify: { st: 'passed', r: 1, sub: ['需求澄清/澄清记录.md'] }, prd: { st: 'passed', r: 1, sub: ['PRD/PRD.md'] }, design: { st: 'passed', r: 1, sub: ['技术方案/技术方案.md'] }, code: { st: 'exit_review', r: 1, sub: ['编码/变更.patch', '编码/变更说明.md'] }, cases: { st: 'exited', r: 1, sub: ['测试用例/测试用例.md'] }, exec: { st: 'pending', r: 0 } },
+  },
+  'F-1022': {
+    title: '订单导出优化', tpl: 'rd', ver: 2, project: 'p-pay', status: 'running', by: 'u-zhang', at: '11-18 09:30', upd: '30 分钟前', space: 'ws-3be8d1',
+    req: '订单导出超过 10 万行会超时，改成异步导出并支持断点续传',
+    nodes: { clarify: { st: 'passed', r: 1, sub: ['需求澄清/澄清记录.md'] }, prd: { st: 'passed', r: 1, sub: ['PRD/PRD.md'] }, design: { st: 'working', r: 2, sub: ['技术方案/技术方案.md'], subR: 1, back: { by: 'u-zhou', from: 'code', why: '导出分页上限没有区分租户；导出失败后的重试和断点续传没写，编码没法开工' } }, code: { st: 'pending', r: 0 }, cases: { st: 'returned', r: 1, sub: ['测试用例/测试用例.md'] }, exec: { st: 'pending', r: 0 } },
+  },
+  'F-1026': {
+    title: '首页改版', tpl: 'rd', ver: 3, project: 'p-app', status: 'running', by: 'u-zhang', at: '今天 09:05', upd: '5 分钟前', space: 'ws-c25a90',
+    nodes: { clarify: { st: 'working', r: 1 }, prd: { st: 'pending', r: 0 }, design: { st: 'pending', r: 0 }, code: { st: 'pending', r: 0 }, cases: { st: 'pending', r: 0 }, exec: { st: 'pending', r: 0 } },
+  },
+  'F-1019': {
+    title: '权限审计日志', tpl: 'rd', ver: 2, project: 'p-app', status: 'completed', by: 'u-zhang', at: '11-10 14:20', upd: '11-19', space: 'ws-0d47b3',
+    req: '管理员的授权操作要记审计日志，可按人、时间查询',
+    nodes: { clarify: { st: 'passed', r: 1, sub: ['需求澄清/澄清记录.md'] }, prd: { st: 'passed', r: 1, sub: ['PRD/PRD.md'] }, design: { st: 'passed', r: 2, sub: ['技术方案/技术方案.md'] }, code: { st: 'passed', r: 3, sub: ['编码/变更.patch', '编码/变更说明.md'] }, cases: { st: 'passed', r: 1, sub: ['测试用例/测试用例.md'] }, exec: { st: 'passed', r: 1, sub: ['测试执行/测试报告.md'] } },
+  },
+  'F-1017': {
+    title: '旧版报表下线', tpl: 'rd', ver: 2, project: 'p-app', status: 'terminated', by: 'u-zhang', at: '11-06 11:00', upd: '11-08', space: 'ws-5e19aa',
+    req: '下线旧版报表入口',
+    nodes: { clarify: { st: 'passed', r: 1, sub: ['需求澄清/澄清记录.md'] }, prd: { st: 'working', r: 1 }, design: { st: 'pending', r: 0 }, code: { st: 'pending', r: 0 }, cases: { st: 'pending', r: 0 }, exec: { st: 'pending', r: 0 } },
+  },
+  'F-0031': {
+    title: '「Atlas 多租户上线」技术博客', tpl: 'blog', ver: 1, project: 'p-blog', status: 'running', by: 'u-wang', at: '11-25 16:00', upd: '1 天前', space: 'ws-a8f203',
+    req: '写一篇介绍 Atlas 多租户隔离设计的技术博客，面向开发者，3000 字左右',
+    nodes: { topic: { st: 'passed', r: 1, sub: ['选题/选题单.md'] }, draft: { st: 'exited', r: 2, sub: ['撰写/正文.md', '撰写/配图/租户上下文.png'] }, techrev: { st: 'admit_review', r: 0 }, copyrev: { st: 'working', r: 1 }, publish: { st: 'pending', r: 0 } },
+  },
+};
+/* 流程空间里的文件：[路径, 最后改它的人或数字员工, 在哪个节点的会话里改的（空 = 人直接上传）, 时间, 大小]；以 / 结尾的是目录。
+ * 没列的流程按节点的提交推出来 */
+const FILES = {
+  'F-1024': [
+    ['资料/登录接口现状.md', 'u-zhang', '', '11-24 10:20', '4 KB'],
+    ['需求澄清/澄清记录.md', 'a-ba', 'clarify', '11-24 10:31', '3 KB'],
+    ['PRD/PRD.md', 'a-ba', 'prd', '11-24 14:30', '9 KB'],
+    ['技术方案/技术方案.md', 'a-arch', 'design', '11-25 11:02', '7 KB'],
+    ['测试用例/测试用例.md', 'a-qa', 'cases', '11-26 10:40', '12 KB'],
+    ['测试用例/边界值草稿.md', 'a-qa', 'cases', '11-26 10:12', '2 KB'],
+  ],
+  'F-1025': [
+    ['需求澄清/澄清记录.md', 'a-ba', 'clarify', '11-21 16:02', '3 KB'],
+    ['PRD/PRD.md', 'a-ba', 'prd', '11-22 10:15', '8 KB'],
+    ['技术方案/技术方案.md', 'a-arch', 'design', '11-24 17:30', '6 KB'],
+    ['代码/pay-core/', 'u-zhou', '', '11-26 09:00', '214 个文件'],
+    ['编码/变更.patch', 'a-dev', 'code', '11-26 10:21', '18 KB'],
+    ['编码/变更说明.md', 'a-dev', 'code', '11-26 10:21', '2 KB'],
+    ['测试用例/测试用例.md', 'a-qa', 'cases', '11-26 11:05', '10 KB'],
+  ],
+  'F-1022': [
+    ['需求澄清/澄清记录.md', 'a-ba', 'clarify', '11-18 10:02', '3 KB'],
+    ['PRD/PRD.md', 'a-ba', 'prd', '11-19 15:40', '8 KB'],
+    ['技术方案/技术方案.md', 'a-arch', 'design', '11-25 10:50', '6 KB'],
+    ['测试用例/测试用例.md', 'a-qa', 'cases', '11-25 16:30', '9 KB'],
+  ],
+  'F-1026': [],
+  'F-0031': [
+    ['选题/选题单.md', 'a-writer', 'topic', '11-25 16:40', '2 KB'],
+    ['撰写/正文.md', 'a-writer', 'draft', '11-26 15:10', '11 KB'],
+    ['撰写/配图/租户上下文.png', 'u-wang', '', '11-26 14:30', '186 KB'],
+    ['文字审校/审校意见.md', 'a-editor', 'copyrev', '11-27 09:40', '3 KB'],
+  ],
+};
+
+/* 等我处理的（李工）：显示在项目流程列表的「等你」列和通知里 */
+const TODOS = [
+  { id: 'td1', kind: 'admit', flow: 'F-1024', node: 'code', what: '审核上游「技术方案」提交的 技术方案.md，通过后编码开工', since: '2 小时前' },
+  { id: 'td2', kind: 'exit', flow: 'F-1025', node: 'code', what: '开发工程师交了第 1 轮：变更.patch（3 个文件）、变更说明.md，单测 18 个全过；周工已同意', since: '40 分钟前' },
+  { id: 'td3', kind: 'ask', flow: 'F-1022', node: 'design', what: '架构师在问：导出分页上限按用户算还是按租户算？', since: '30 分钟前' },
+  { id: 'td4', kind: 'admit', flow: 'F-0031', node: 'techrev', what: '审核上游「撰写」提交的 正文.md，通过后技术审校开工', since: '1 天前' },
+];
+const NOTIFS = [
+  { t: '周工 同意了「支付回调幂等 · 编码」第 1 轮', at: '40 分钟前', go: '#/flows/F-1025/n/code', unread: true },
+  { t: '架构师在「订单导出优化 · 技术方案」里问你一个问题', at: '30 分钟前', go: '#/flows/F-1022/n/design', unread: true },
+  { t: '「登录验证码限流 · 技术方案」已准出，等你准入', at: '2 小时前', go: '#/flows/F-1024/n/code', unread: false },
+  { t: '周工 在准入时打回了「订单导出优化 · 技术方案」', at: '昨天 17:20', go: '#/flows/F-1022/n/design', unread: false },
+];
+
+/* =====================================================================
+ * 工具
+ * ===================================================================== */
+const ST = { pending: '待开始', working: '人机协同中', exit_review: '待准出', exited: '待下游准入', admit_review: '准入评审中', passed: '已通过', returned: '已打回' };
+const FST = { running: '进行中', completed: '已完成', terminated: '已终止' };
+const stTag = (s) => `<span class="st ${s}">${ST[s]}</span>`;
+const fstTag = (s) => `<span class="st ${s}">${FST[s]}</span>`;
+const pc = (id, size = 20) => { const p = PEOPLE[id]; return p ? `<span class="row" style="gap:5px;display:inline-flex">${av(p.name, p.color, size, false)}<span>${esc(p.name)}</span></span>` : ''; };
+const ac = (id, size = 20) => { const a = AGENTS[id]; return a ? `<span class="row" style="gap:5px;display:inline-flex">${av(a.name, a.color, size, true)}<span>${esc(a.name)}</span></span>` : ''; };
+const who = (id, size = 18) => (AGENTS[id] ? ac(id, size) : pc(id, size));
+const tplOf = (f) => TPLS[f.tpl];
+const flat = (tpl) => tpl.steps.flat();
+const stepIdx = (tpl, nid) => tpl.steps.findIndex((s) => (Array.isArray(s) ? s.includes(nid) : s === nid));
+const asArr = (s) => (Array.isArray(s) ? s : [s]);
+const ups = (tpl, nid) => { const i = stepIdx(tpl, nid); return i > 0 ? asArr(tpl.steps[i - 1]) : []; };
+const downs = (tpl, nid) => { const i = stepIdx(tpl, nid); return i >= 0 && i < tpl.steps.length - 1 ? asArr(tpl.steps[i + 1]) : []; };
+const roleNames = (tpl, rs) => (rs || []).map((r) => tpl.roles[r]).join('、');
+const ruleText = (n) => (n.exit.length > 1 || n.rule === 'all' ? '全部同意' : '任一人同意');
+/* 角色分配取项目配置（项目 × 模板 × 角色），流程上不另存 */
+const projOf = (f) => PROJECTS[f.project];
+const bindOf = (f) => projOf(f).bind[f.tpl] || {};
+const membersOf = (f, role) => bindOf(f)[role]?.m || [];
+const agentOfRole = (f, role) => bindOf(f)[role]?.a || null;
+const isMine = (f, role) => membersOf(f, role).includes(ME.id);
+const nodeHref = (fid, nid) => `#/flows/${fid}/n/${nid}`;
+const unreadCount = () => NOTIFS.filter((n) => n.unread).length;
+const TODO_KIND = {
+  exit: ['准出评审', 'shield', '#b45309', '#fef3e2'],
+  admit: ['准入评审', 'inbox', '#7e22ce', '#f5edff'],
+  ask: ['回答提问', 'help', '#0369a1', '#e6f6fe'],
+  take: ['请你接管', 'hand', '#dc2626', '#fdeaea'],
+};
+const todosOf = (fid) => TODOS.filter((t) => t.flow === fid && !S.done[t.id]);
+const lockChip = (text, title = '') => `<span class="lock" title="${esc(title)}">${ic('lock')}${text}</span>`;
+/* 提交：从流程空间选的文件，只记路径（产物不做版本管理） */
+const subR = (s) => s.subR || s.r;
+const subLabel = (f, nid) => `第 ${subR(f.nodes[nid])} 轮提交`;
+const base = (p) => p.replace(/\/$/, '').split('/').pop();
+const fileChip = (p) => `<span class="inchip" title="${esc(p)}">${ic(p.endsWith('/') ? 'folder' : 'file')}${esc(base(p))}</span>`;
+const spaceChip = (fid) => `<a class="lock" href="#/flows/${fid}/space" title="向 Atlas 申请的流程空间：这条流程所有节点的数字员工会话都挂载它">${ic('folder')}流程空间 <span class="mono">${esc(FLOWS[fid].space)}</span></a>`;
+/* 流程空间的文件：FILES 里有就用，没有就按各节点的提交推出来 */
+function filesOf(fid) {
+  if (FILES[fid]) return FILES[fid];
+  const f = FLOWS[fid];
+  const tpl = tplOf(f);
+  return flat(tpl).flatMap((n) => (f.nodes[n].sub || []).map((p) => [p, agentOfRole(f, tpl.nodes[n].exec), n, f.upd, '—']));
+}
+/* 哪些节点（第几轮）把这个文件选为产出物 */
+const subsOfFile = (fid, p) => { const f = FLOWS[fid]; return flat(tplOf(f)).filter((n) => (f.nodes[n].sub || []).includes(p)); };
+/* 团队权限：用户中心的团队数据权限 */
+const levelOf = (team, uid = ME.id) => TEAMS[team]?.members[uid];
+const isAdmin = (team = S.team) => levelOf(team) === 'owner';
+const asOps = () => !!ME.ops;
+const levelTag = (lv) => (lv === 'owner' ? `<span class="tag primary">${LEVEL[lv]}</span>` : `<span class="tag">${LEVEL[lv]}</span>`);
+const execs = (tpl, rk) => flat(tpl).some((n) => tpl.nodes[n].exec === rk);
+/* 没配齐的角色：没有成员，或者要执行却没有数字员工 */
+const missingRoles = (tid, bind) => { const tpl = TPLS[tid]; return Object.keys(tpl.roles).filter((rk) => !bind[rk]?.m?.length || (execs(tpl, rk) && !bind[rk]?.a)); };
+const teamProjects = () => Object.keys(PROJECTS).filter((k) => PROJECTS[k].team === S.team);
+const waitOfProject = (pid) => Object.keys(FLOWS).filter((id) => FLOWS[id].project === pid).reduce((s, id) => s + todosOf(id).length, 0);
+const crumbs = (fid, last) => {
+  const f = FLOWS[fid];
+  const head = `<a href="#/projects/${f.project}">${esc(projOf(f).name)}</a> / <a href="#/projects/${f.project}">流程</a> / `;
+  return head + (last ? `<a href="#/flows/${fid}">${fid} ${esc(f.title)}</a> / ${last}` : `<span class="mono">${fid}</span>`);
+};
+const current = (f) => {
+  const tpl = tplOf(f);
+  const act = flat(tpl).filter((n) => !['pending', 'passed'].includes(f.nodes[n].st));
+  return act.length ? act.map((n) => `<span class="row" style="gap:4px;display:inline-flex;margin-right:8px;white-space:nowrap"><b class="sm">${esc(tpl.nodes[n].name)}</b>${stTag(f.nodes[n].st)}</span>`).join('') : '<span class="muted sm">—</span>';
+};
+const pbar = (f) => `<span class="pbar">${flat(tplOf(f)).map((n) => `<i class="${f.nodes[n].st}" title="${esc(tplOf(f).nodes[n].name)} · ${ST[f.nodes[n].st]}"></i>`).join('')}</span>`;
+const miniSteps = (t) => `<div class="mini">${t.steps.map((s) => asArr(s).map((x) => `<span class="n">${esc(t.nodes[x].name)}</span>`).join(Array.isArray(s) ? ' ∥ ' : '')).join(' → ')}</div>`;
+
+/* 流程图：步骤从左到右，并行组内轨道上下排列 */
+function nodeBox(tpl, f, nid, sel, href) {
+  const n = tpl.nodes[nid];
+  const s = f ? f.nodes[nid] : null;
+  const st = s ? s.st : '';
+  const ag = f ? agentOfRole(f, n.exec) : null;
+  return `<div class="fnode ${st} ${sel === nid ? 'on' : ''}" ${href ? `data-go="${href}"` : `data-act="selNode" data-id="${nid}"`}>
+    <div class="nm"><span class="grow ellipsis">${esc(n.name)}</span>${s && s.r > 1 ? `<span class="rtag">第 ${s.r} 轮</span>` : ''}</div>
+    ${s ? `<div style="margin-top:6px">${stTag(st)}</div>` : ''}
+    <div class="who">${ag ? `${av(AGENTS[ag].name, AGENTS[ag].color, 18, true)}${esc(AGENTS[ag].name)}` : `${ic('bot')}执行：${esc(tpl.roles[n.exec])}`}</div>
+    <div class="rv">${n.admit ? `<span class="rtag admit" title="准入评审：开工前审核上游提交的产出物">准入 ${roleNames(tpl, n.admit)}</span>` : ''}<span class="rtag exit" title="准出评审，${ruleText(n)}">准出 ${roleNames(tpl, n.exit)}</span></div>
+  </div>`;
+}
+function flowView(tpl, f, sel, opt = {}) {
+  const href = (nid) => (opt.edit ? '' : f ? nodeHref(opt.fid, nid) : '');
+  const parts = tpl.steps.map((s, i) => {
+    const arrow = i ? '<span class="arrow"></span>' : '';
+    if (Array.isArray(s)) {
+      return `${arrow}<div class="par"><span class="plabel">并行</span>${s.map((nid) => nodeBox(tpl, f, nid, sel, href(nid))).join('')}${opt.edit ? `<div class="row" style="justify-content:center"><span class="addbtn" data-act="toast" data-msg="添加一条并行轨道" title="添加并行轨道">${ic('plus')}</span></div>` : ''}</div>`;
+    }
+    return arrow + nodeBox(tpl, f, s, sel, href(s));
+  });
+  const tail = opt.edit ? `<span class="arrow"></span><span class="addbtn" data-act="toast" data-msg="在末尾添加步骤（单个节点或并行组）" title="添加步骤">${ic('plus')}</span>` : '';
+  return `<div class="flow ${opt.edit ? 'v' : ''}">${parts.join('')}${tail}</div>`;
+}
+const legend = () => `<div class="legend">${Object.keys(ST).map((k) => stTag(k)).join('')}<span class="sp"></span><span class="rtag admit">准入</span><span>开工前审上游</span><span class="rtag exit">准出</span><span>交付前审本节点</span></div>`;
+
+/* =====================================================================
+ * 外壳：一级菜单横在顶栏，二级菜单竖在左侧（和 Atlas 一样）
+ * ===================================================================== */
+const S = {
+  notes: true, pop: null, modal: null, toast: null,
+  team: 'rd', ffilter: 'running', ptab: {}, selNode: 'code', mcat: 'all',
+  dec: {}, ask: {}, r1open: false, spaceSel: {},
+  done: {}, stepsOpen: {}, collapsed: false, expandFull: false,
+};
+function parseRoute() {
+  const h = (location.hash || '#/projects').slice(2).split('/');
+  return { p: h[0] || 'projects', a: h[1] || '', b: h[2] || '', c: h[3] || '' };
+}
+const go = (h) => { S.pop = null; location.hash = h; };
+window.addEventListener('hashchange', () => { S.modal = null; S.pop = null; S.expandFull = false; render(); document.querySelector('.main')?.scrollTo(0, 0); });
+
+const PLATFORMS = [
+  { id: 'projects', name: '项目', icon: 'box' },
+  { id: 'team', name: '团队', icon: 'users' },
+  { id: 'market', name: '流程市场', icon: 'store' },
+];
+const platformOf = (r) => (r.p === 'flows' ? 'projects' : r.p);
+const curProject = (r) => (r.p === 'projects' ? r.a : r.p === 'flows' ? FLOWS[r.a]?.project || '' : '');
+
+function topbar(r) {
+  const n = unreadCount();
+  const ops = asOps();
+  const pl = platformOf(r);
+  return `<header class="top">
+    <div class="brand" data-go="${ops ? '#/market' : '#/projects'}"><span class="logo tf">T</span>AI TeamFlow</div>
+    <span class="tenant" title="租户（企业）：登录时确定，不能切换。看到的团队、成员、数字员工、流程空间都只属于这个租户">${ic('globe')}${esc(ops ? `${SYS_TENANT.name}（系统租户）` : TENANT.name)}</span>
+    ${ops ? '' : `<span class="teamsw" data-pop="team" title="团队：项目和团队菜单都按当前团队显示">${ic('users')}${esc(TEAMS[S.team].name)}${ic('down')}</span>`}
+    <nav class="pnav">${PLATFORMS.filter((p) => !ops || p.id === 'market').map((p) => `<a href="#/${p.id}" class="${pl === p.id ? 'on' : ''}">${ic(p.icon)}${p.name}</a>`).join('')}</nav>
+    <div class="top-right">
+      ${ops ? '' : `<div class="search" style="width:220px"><svg class="i" viewBox="0 0 24 24">${ICONS.search}</svg><input class="input" style="width:100%;height:32px" placeholder="搜索流程、节点、文件" /></div>`}
+      <button class="btn sm ${S.notes ? '' : 'ghost'}" data-act="toggleNotes">${ic('bulb')}设计说明</button>
+      ${ops ? '' : `<button class="ibtn" data-pop="bell" title="通知：要你评审、回答、接管的事" style="position:relative">${ic('bell')}${n ? `<span class="badge" style="position:absolute;top:2px;right:0">${n}</span>` : ''}</button>`}
+      <span style="cursor:pointer" data-pop="me" title="演示身份">${av(ME.name, ME.color, 30, false)}</span>
+    </div></header>`;
+}
+const snav = (it) => `<a class="snav ${it.on ? 'on' : ''}" ${it.h ? `href="${it.h}"` : `data-act="${it.act}" data-v="${it.v}"`} title="${esc(it.t)}">${ic(it.icon)}<span>${esc(it.t)}</span>${it.badge ? `<b class="badge">${it.badge}</b>` : ''}${it.dot ? '<span class="dot wait" style="margin-left:auto"></span>' : ''}</a>`;
+function siderItems(r) {
+  const pl = platformOf(r);
+  if (pl === 'projects') {
+    const pid = curProject(r);
+    const p = PROJECTS[pid];
+    if (!p) return [];
+    const miss = Object.entries(p.bind).some(([t, b]) => missingRoles(t, b).length) || !Object.keys(p.bind).length;
+    return [
+      { h: `#/projects/${pid}`, icon: 'flow', t: '流程', on: r.p === 'flows' || r.b !== 'config' },
+      { h: `#/projects/${pid}/config`, icon: 'settings', t: '配置', on: r.p === 'projects' && r.b === 'config', dot: miss && isAdmin(p.team) },
+    ];
+  }
+  if (pl === 'team') {
+    const adm = isAdmin();
+    return [
+      { h: '#/team', icon: 'users', t: '成员与数字员工', on: !r.a },
+      ...(adm ? [{ h: '#/team/templates', icon: 'template', t: '流程模板', on: r.a === 'templates' }, { h: '#/team/settings', icon: 'settings', t: '团队设置', on: r.a === 'settings' }] : []),
+    ];
+  }
+  if (pl === 'market') {
+    return Object.entries(MCATS).map(([k, t]) => ({ act: 'mcat', v: k, icon: k === 'all' ? 'grid' : MARKET_CAT_ICON[k], t, on: !r.a && S.mcat === k }));
+  }
+  return [];
+}
+const MARKET_CAT_ICON = { rd: 'terminal', content: 'pen', legal: 'scale', data: 'chart' };
+/* 项目的二级菜单下面：本团队的项目列表（像 Atlas 的对话历史），点一下切换 */
+function projectList(r) {
+  const pid = curProject(r);
+  const list = teamProjects();
+  const tail = r.p === 'projects' && r.b === 'config' ? '/config' : '';
+  return `<div class="hist"><div class="hist-head"><span class="xs faint" style="font-weight:600">项目 · ${esc(TEAMS[S.team].name)}</span>${isAdmin() ? `<button class="ibtn sm" data-act="newProject" title="新建项目">${ic('plus')}</button>` : ''}</div>
+    ${list.length ? list.map((k) => { const w = waitOfProject(k); return `<a class="hist-item ${k === pid ? 'on' : ''}" href="#/projects/${k}${tail}" title="${esc(PROJECTS[k].desc)}">${ic('box')}<span class="t">${esc(PROJECTS[k].name)}</span>${w ? `<span class="badge" title="等你处理">${w}</span>` : ''}</a>`; }).join('') : `<div class="xs faint" style="padding:8px 10px">还没有项目${isAdmin() ? '' : '，等团队管理员建'}</div>`}</div>`;
+}
+function sider(r, full) {
+  const min = full ? !S.expandFull : S.collapsed;
+  const pl = platformOf(r);
+  const items = siderItems(r);
+  const hint = pl === 'team' && !isAdmin() ? `<div class="xs faint hist" style="padding:8px 10px;line-height:1.6;border:none">你在「${esc(TEAMS[S.team].name)}」是${LEVEL[levelOf(S.team)]}成员：流程模板、团队设置只有团队管理员能看</div>` : '';
+  return `<aside class="sider ${min ? 'min' : ''}"><div class="sider-top">${items.map(snav).join('')}${hint}</div>
+    ${pl === 'projects' && !min ? projectList(r) : '<div class="sp"></div>'}
+    <div class="sider-foot"><a class="snav" data-act="collapse" data-v="${full ? 1 : 0}" title="${min ? '展开菜单' : '收起菜单'}">${ic(min ? 'right' : 'left')}<span>收起</span></a></div></aside>`;
+}
+function render() {
+  const r = parseRoute();
+  /* 运营管理员只用流程市场；租户的人不能进市场的编辑页 */
+  if (asOps() && r.p !== 'market') { location.replace('#/market'); return; }
+  if (!asOps() && r.p === 'market' && r.b === 'edit') { location.replace(`#/market/${r.a}`); return; }
+  /* 「项目」直接进当前团队的第一个项目 */
+  if (r.p === 'projects' && !r.a && teamProjects().length) { location.replace(`#/projects/${teamProjects()[0]}`); return; }
+  /* 看哪个项目的东西，团队就跟着切过去（我得是那个团队的成员） */
+  const pid = curProject(r);
+  if (pid && PROJECTS[pid] && levelOf(PROJECTS[pid].team)) S.team = PROJECTS[pid].team;
+  const full = (r.p === 'flows' && r.b === 'n') || (r.p === 'team' && r.a === 'templates' && r.b) || (r.p === 'market' && r.b === 'edit');
+  document.getElementById('app').innerHTML = topbar(r) +
+    `<div class="body">${sider(r, full)}<main class="main ${full ? 'white' : ''}" ${full ? 'style="overflow:hidden"' : ''}>${page(r)}</main>${S.notes ? notesPanel(r) : ''}</div>` +
+    modal() + (S.toast ? `<div class="toast">${esc(S.toast)}</div>` : '') + pop();
+}
+function page(r) {
+  if (r.p === 'flows' && r.a && r.b === 'n') return nodePage(r.a, r.c);
+  if (r.p === 'flows' && r.a && r.b === 'trace') return tracePage(r.a);
+  if (r.p === 'flows' && r.a && r.b === 'space') return spacePage(r.a);
+  if (r.p === 'flows' && r.a) return flowDetail(r.a);
+  if (r.p === 'projects' && r.a) return projectPage(r.a, r.b);
+  if (r.p === 'team' && r.a === 'templates' && r.b) return tplEditor(TPLS[r.b], 'team', r.b);
+  if (r.p === 'team' && r.a === 'templates') return templatesPage();
+  if (r.p === 'team' && r.a === 'settings') return settingsPage();
+  if (r.p === 'team') return teamPage();
+  if (r.p === 'market' && r.a && r.b === 'edit') return tplEditor(MARKET[r.a], 'market', r.a);
+  if (r.p === 'market' && r.a) return marketDetail(r.a);
+  if (r.p === 'market') return marketPage();
+  return noProject();
+}
+function toast(msg) { S.toast = msg; render(); clearTimeout(toast.t); toast.t = setTimeout(() => { S.toast = null; render(); }, 2600); }
+function pop() {
+  if (!S.pop) return '';
+  const style = `style="left:${S.pop.x}px;top:${S.pop.y}px;min-width:320px"`;
+  if (S.pop.id === 'team') {
+    return `<div class="pop" ${style} data-stop><div class="xs faint" style="padding:6px 10px">${esc(TENANT.name)} · 我能进的团队</div>${Object.entries(TEAMS).filter(([, t]) => t.members[ME.id]).map(([k, t]) => `<div class="mi ${S.team === k ? 'on' : ''}" data-act="team" data-v="${k}">${ic('users')}<span class="grow">${esc(t.name)}</span><span class="xs faint">${LEVEL[t.members[ME.id]]}</span></div>`).join('')}
+      ${ME.canCreateTeam ? `<div class="sep"></div><div class="mi" data-act="newTeam">${ic('plus')}新建团队</div>` : ''}</div>`;
+  }
+  if (S.pop.id === 'me') {
+    const x = Math.max(12, window.innerWidth - 360);
+    return `<div class="pop" style="left:${x}px;top:${S.pop.y}px;min-width:340px" data-stop><div class="ph">演示身份（原型用，产品里就是登录的人）</div>
+      <div class="mi ${S.who !== 'ops' ? 'on' : ''}" data-act="who" data-v="li">${av('李', '#0ea5e9', 22, false)}<div class="grow"><div class="sm">李工 · ${esc(TENANT.name)}</div><div class="xs faint">研发一部团队管理员、内容运营组读写成员</div></div></div>
+      <div class="mi ${S.who === 'ops' ? 'on' : ''}" data-act="who" data-v="ops">${av('林', '#64748b', 22, false)}<div class="grow"><div class="sm">林运营 · ${esc(SYS_TENANT.name)}（系统租户）</div><div class="xs faint">运营管理员：维护流程市场</div></div></div>
+      <div class="sep"></div><div class="mi" data-act="toast" data-msg="（原型）退出登录">${ic('logout')}退出登录</div></div>`;
+  }
+  return `<div class="pop" ${style} data-stop><div class="row" style="padding:6px 10px"><b>通知</b><span class="sp"></span><a class="xs" data-act="readAll">全部已读</a></div>
+    ${NOTIFS.map((n) => `<div class="mi" data-go="${n.go}" style="align-items:flex-start">${n.unread ? '<span class="dot wait" style="margin-top:7px"></span>' : '<span style="width:7px"></span>'}<div class="grow"><div class="sm" style="color:var(--ink)">${esc(n.t)}</div><div class="xs faint">${n.at}</div></div></div>`).join('')}
+    <div class="sep"></div><div class="xs faint" style="padding:4px 10px 6px">也推到企业微信 / 钉钉（个人设置里绑定）</div></div>`;
+}
+const demoSeg = (k, opts) => `<div class="seg">${opts.map(([v, t]) => `<a class="${S[k] === v ? 'on' : ''}" data-act="setS" data-k="${k}" data-v="${v}">${t}</a>`).join('')}</div>`;
+
+/* =====================================================================
+ * 项目：流程 / 配置（二级菜单）
+ * ===================================================================== */
+function noProject() {
+  const add = isAdmin() ? `<button class="btn primary" data-act="newProject">${ic('plus')}新建项目</button>` : '';
+  return `<div class="page"><div class="card"><div class="empty"><div class="ill">${ic('box')}</div><h3>「${esc(TEAMS[S.team].name)}」还没有项目</h3><div class="sm">${isAdmin() ? '新建项目，绑定流程模板、分配角色后就能发起流程' : '等团队管理员建好项目'}</div>${add ? `<div style="margin-top:12px">${add}</div>` : ''}</div></div></div>`;
+}
+function projectPage(pid, tab) {
+  const p = PROJECTS[pid];
+  if (!p) return '<div class="page">项目不存在</div>';
+  const canStart = levelOf(p.team) && levelOf(p.team) !== 'ro';
+  const cfg = tab === 'config';
+  return `<div class="page">
+    <div class="xs muted" style="margin-bottom:6px">${esc(p.name)} / ${cfg ? '配置' : '流程'}</div>
+    <div class="page-head" style="align-items:flex-start"><div class="grow"><h1>${cfg ? '项目配置' : '流程'}</h1>
+      <div class="row sm muted" style="margin-top:4px;flex-wrap:wrap"><b style="color:var(--ink-2)">${esc(p.name)}</b><span>·</span>${esc(p.desc)}<span>·</span>${esc(TEAMS[p.team].name)}</div></div>
+      ${!cfg && canStart ? `<button class="btn primary" data-act="newFlow" data-v="${pid}">${ic('plus')}发起流程</button>` : ''}</div>
+    ${cfg ? projectConfig(pid) : projectFlows(pid)}</div>`;
+}
+function projectFlows(pid) {
+  const p = PROJECTS[pid];
+  const rows = Object.entries(FLOWS).filter(([, f]) => f.project === pid && (S.ffilter === 'all' || f.status === S.ffilter)).sort((a, b) => (b[1].fresh ? 1 : 0) - (a[1].fresh ? 1 : 0));
+  return `<div class="row" style="margin-bottom:12px">${demoSeg('ffilter', [['running', '进行中'], ['completed', '已完成'], ['terminated', '已终止'], ['all', '全部']])}
+      <select class="select" style="width:170px"><option>全部模板</option>${Object.keys(p.bind).map((t) => `<option>${esc(TPLS[t].name)}</option>`).join('')}</select>
+      <span class="sp"></span><span class="sm muted">${rows.length} 条</span></div>
+    ${rows.length ? flowTable(rows) : `<div class="card"><div class="empty"><div class="ill">${ic('flow')}</div><h3>没有这类流程</h3><div class="sm">点右上角「发起流程」：选模板、写标题就行</div></div></div>`}`;
+}
+function flowTable(rows) {
+  return `<table class="table"><thead><tr><th style="width:90px">编号</th><th style="width:200px">标题</th><th>当前进展</th><th style="width:130px">各节点</th><th style="width:150px">模板</th><th style="width:120px">等你</th><th style="width:84px">更新</th></tr></thead><tbody>
+    ${rows.map(([id, f]) => `<tr class="click" data-go="#/flows/${id}"><td class="mono">${id}</td><td><b>${esc(f.title)}</b><div class="xs faint" style="white-space:nowrap">${pc(f.by, 16)} 发起 · ${f.at}</div></td><td>${f.status === 'running' ? current(f) : fstTag(f.status)}</td><td>${pbar(f)}</td><td class="sm">${esc(tplOf(f).name)} <span class="faint">v${f.ver}</span></td>
+      <td>${todosOf(id).map((t) => { const [k, , c, bg] = TODO_KIND[t.kind]; return `<a class="tag" style="background:${bg};color:${c}" data-go="${nodeHref(id, t.node)}" title="${esc(t.what)}">${k}</a>`; }).join(' ') || '<span class="faint sm">—</span>'}</td><td class="sm muted" style="white-space:nowrap">${f.upd}</td></tr>`).join('')}
+    </tbody></table>`;
+}
+function projectConfig(pid) {
+  const p = PROJECTS[pid];
+  const tm = TEAMS[p.team];
+  const adm = isAdmin(p.team);
+  const bound = Object.keys(p.bind);
+  return `${adm ? '' : `<div class="banner2 info" style="margin-bottom:12px">${ic('lock')}<div>项目配置只有团队管理员能改；你在「${esc(tm.name)}」的权限是${LEVEL[levelOf(p.team)]}</div></div>`}
+    <div class="card pad" style="margin-bottom:16px"><h2 style="margin-bottom:10px">基本信息</h2><dl class="kv"><dt>名称</dt><dd>${esc(p.name)}</dd><dt>说明</dt><dd>${esc(p.desc)}</dd><dt>团队</dt><dd>${esc(tm.name)}</dd>
+      <dt>流程空间</dt><dd class="sm">每条流程发起时向 Atlas 申请一个，这条流程所有节点的数字员工会话都挂载它<div class="xs faint">节点提交评审时，由执行人从流程空间选这一轮的产出物</div></dd></dl></div>
+    <div class="row" style="margin-bottom:10px"><h2>流程</h2><span class="sm muted">本项目能发起的流程：绑定流程模板，再给模板里的每个角色分配成员和数字员工</span><span class="sp"></span>${adm ? `<button class="btn" data-act="bindTpl" data-v="${pid}">${ic('plus')}绑定流程模板</button>` : ''}</div>
+    ${bound.length ? bound.map((tid) => bindCard(pid, tid, adm)).join('') : `<div class="card"><div class="empty"><div class="ill">${ic('flow')}</div><h3>还没绑定流程模板</h3><div class="sm">绑定后给角色分配成员和数字员工，就能在这个项目里发起</div></div></div>`}`;
+}
+function bindCard(pid, tid, adm) {
+  const p = PROJECTS[pid];
+  const tpl = TPLS[tid];
+  const bind = p.bind[tid];
+  const miss = missingRoles(tid, bind);
+  const tm = TEAMS[p.team];
+  return `<div class="card" style="margin-bottom:14px"><div class="row" style="padding:12px 16px;border-bottom:1px solid var(--line-2)"><span class="ic2" style="background:${tpl.color};width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:#fff">${ic(tpl.icon)}</span><div class="grow"><b>${esc(tpl.name)}</b><div class="xs faint">${tpl.ver ? `跟随最新发布版 v${tpl.ver}，发起时锁定版本` : '还没发布'}</div></div>
+      ${miss.length ? `<span class="tag warning">还差 ${miss.length} 个角色：${esc(miss.map((r) => tpl.roles[r]).join('、'))}</span>` : '<span class="tag success">已配齐，可以发起</span>'}
+      ${adm ? `<a class="sm" href="#/team/templates/${tid}">看模板</a><button class="ibtn sm" data-act="toast" data-msg="解绑：已发起的流程不受影响，之后不能再用这个模板发起" title="解绑">${ic('trash')}</button>` : ''}</div>
+    <table class="table" style="border:none;border-radius:0 0 12px 12px"><thead><tr><th style="width:90px">角色</th><th>负责的节点</th><th style="width:290px">成员（下指令、评审）</th><th style="width:220px">数字员工（执行）</th></tr></thead><tbody>
+    ${Object.entries(tpl.roles).map(([rk, rn]) => {
+      const ex = flat(tpl).filter((n) => tpl.nodes[n].exec === rk).map((n) => tpl.nodes[n].name);
+      const ad = flat(tpl).filter((n) => (tpl.nodes[n].admit || []).includes(rk)).map((n) => tpl.nodes[n].name);
+      const et = flat(tpl).filter((n) => tpl.nodes[n].exit.includes(rk)).map((n) => tpl.nodes[n].name);
+      const a = bind[rk] || { m: [], a: '' };
+      const mem = a.m.map((m) => `<span class="chip" style="height:28px;margin:2px">${pc(m, 18)}${adm ? `<span class="x">${ic('x')}</span>` : ''}</span>`).join('')
+        + (adm ? `<span class="chip" style="height:28px;margin:2px;color:var(--ink-3);cursor:pointer" data-act="toast" data-msg="从本团队「读写」以上的成员里选（只读的人不能担任角色）">${ic('plus')}</span>` : '')
+        + (a.m.length ? '' : ' <span class="warn sm">未分配</span>');
+      const skills = a.a ? `<div class="xs faint" style="margin-top:4px" title="产出物的格式由技能约定">技能：${esc(AGENTS[a.a].skills.join('、'))}</div>` : '';
+      const ag = !ex.length ? '<span class="faint sm">只评审，不执行</span>'
+        : adm ? `<select class="select" style="width:100%">${a.a ? '' : '<option selected>未分配</option>'}${tm.agents.map((id) => `<option ${id === a.a ? 'selected' : ''}>${esc(AGENTS[id].name)}</option>`).join('')}</select>${skills}`
+        : a.a ? ac(a.a, 18) + skills : '<span class="warn sm">未分配</span>';
+      return `<tr><td><b>${rn}</b></td><td class="sm">${ex.length ? `<div><span class="rtag exec">执行</span> ${ex.join('、')}</div>` : ''}${ad.length ? `<div style="margin-top:3px"><span class="rtag admit">准入</span> ${ad.join('、')}</div>` : ''}${et.length ? `<div style="margin-top:3px"><span class="rtag exit">准出</span> ${et.join('、')}</div>` : ''}</td><td>${mem}</td><td>${ag}</td></tr>`;
+    }).join('')}</tbody></table></div>`;
+}
+
+/* =====================================================================
+ * 流程详情 / 流程空间 / 追溯
+ * ===================================================================== */
+function flowDetail(fid) {
+  const f = FLOWS[fid];
+  if (!f) return '<div class="page">流程不存在</div>';
+  const tpl = tplOf(f);
+  const first = flat(tpl)[0];
+  const fs = f.nodes[first];
+  const reqCard = f.req && ['passed', 'exited'].includes(fs.st)
+    ? `<div class="row xs muted" style="margin-bottom:4px">${ic('file')}需求 · 取自「${esc(tpl.nodes[first].name)}」提交的 ${(fs.sub || []).map((p) => esc(base(p))).join('、')}<span class="sp"></span><a href="#/flows/${fid}/space">在流程空间看</a></div>${esc(f.req)}`
+    : `<div class="xs muted" style="margin-bottom:4px">需求</div><span class="muted">发起时只写了标题。「${esc(tpl.nodes[first].name)}」的数字员工正在找执行人问清楚，准出后这里显示它提交的文件</span>`;
+  const subs = flat(tpl).filter((n) => f.nodes[n].sub);
+  return `<div class="page">
+    <div class="xs muted" style="margin-bottom:6px">${crumbs(fid)}</div>
+    <div class="page-head" style="align-items:flex-start"><div class="grow"><div class="row"><h1>${esc(f.title)}</h1>${fstTag(f.status)}</div>
+      <div class="row sm muted" style="margin-top:6px;flex-wrap:wrap">${esc(tpl.name)} <b style="color:var(--ink-2)">v${f.ver}</b>${lockChip('发起时锁定', '模板之后发布的新版本不影响这条流程')}<span>·</span>${spaceChip(fid)}<span>·</span>${pc(f.by, 18)} ${f.at} 发起</div></div>
+      <button class="btn" data-go="#/flows/${fid}/space">${ic('folder')}流程空间</button><button class="btn" data-go="#/flows/${fid}/trace">${ic('history')}追溯</button><button class="ibtn" data-act="toast" data-msg="终止流程：进行中的数字员工会话停下，未完成的评审取消；流程空间转只读保留">${ic('more')}</button></div>
+    <div class="card pad" style="margin-bottom:14px">${reqCard}</div>
+    <div class="card">${flowView(tpl, f, '', { fid })}${legend()}</div>
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:16px">
+      <div class="card pad"><div class="row" style="margin-bottom:8px"><h2>产出物</h2><span class="xs faint">各节点提交评审时从流程空间选的文件</span><span class="sp"></span><a class="sm" href="#/flows/${fid}/space">打开流程空间</a></div>
+        ${subs.length ? subs.map((n) => `<div class="row" style="padding:6px 0;border-bottom:1px solid var(--line-2);align-items:flex-start"><b class="sm" style="width:72px;flex:none;margin-top:5px">${esc(tpl.nodes[n].name)}</b><span class="grow">${f.nodes[n].sub.map(fileChip).join('')}</span><span class="xs faint" style="margin-top:6px;white-space:nowrap">${subLabel(f, n)}</span></div>`).join('') : '<div class="sm muted">还没有节点提交过产出物</div>'}</div>
+      <div class="card pad"><div class="row" style="margin-bottom:8px"><h2>最近</h2><span class="sp"></span><a class="sm" href="#/flows/${fid}/trace">完整追溯</a></div>
+        ${traceEvents(fid).slice(-5).reverse().map((e) => `<div class="row" style="padding:5px 0;align-items:flex-start"><span class="xs faint" style="width:76px;flex:none">${e.at}</span><span class="sm">${e.html}</span></div>`).join('')}</div>
+    </div>
+    <div class="card pad" style="margin-top:16px"><div class="row" style="margin-bottom:6px"><h2>角色分配</h2><span class="xs faint">来自项目配置；改分配只影响还没开工的节点，已开工节点的执行 Agent 已锁定</span><span class="sp"></span>${isAdmin(projOf(f).team) ? `<a class="sm" href="#/projects/${f.project}/config">去项目配置改</a>` : ''}</div>
+      <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:24px">${Object.entries(tpl.roles).map(([rk, rn]) => `<div class="row" style="padding:7px 0;border-bottom:1px solid var(--line-2)"><b class="sm" style="width:72px">${rn}</b><span class="grow">${membersOf(f, rk).map((m) => pc(m, 18)).join(' ')}</span>${agentOfRole(f, rk) ? ac(agentOfRole(f, rk), 18) : ''}</div>`).join('')}</div></div>
+    </div>`;
+}
+/* 流程空间：向 Atlas 申请的工作空间，这条流程所有节点共用 */
+function spacePage(fid) {
+  const f = FLOWS[fid];
+  if (!f) return '<div class="page">流程不存在</div>';
+  const tpl = tplOf(f);
+  /* 按节点在流程里的顺序排，直接上传的在前 */
+  const order = (node) => (node ? flat(tpl).indexOf(node) : -1);
+  const files = [...filesOf(fid)].sort((a, b) => order(a[2]) - order(b[2]) || a[0].localeCompare(b[0], 'zh'));
+  const pick = S.spaceSel[fid] || files.find(([p]) => docOf(fid, p))?.[0] || files[0]?.[0];
+  const canWrite = levelOf(projOf(f).team) && levelOf(projOf(f).team) !== 'ro' && f.status === 'running';
+  const row = ([p, by, node, at, size]) => {
+    const dir = p.endsWith('/');
+    const parts = p.replace(/\/$/, '').split('/');
+    const subs = subsOfFile(fid, p);
+    return `<tr class="click ${p === pick ? 'sel' : ''}" ${dir ? '' : `data-act="spacePick" data-k="${fid}" data-v="${esc(p)}"`}><td><span class="row" style="gap:6px">${ic(dir ? 'folder' : 'file')}<span class="mono xs" style="white-space:nowrap"><span class="faint">${esc(parts.slice(0, -1).join('/'))}${parts.length > 1 ? '/' : ''}</span>${esc(parts[parts.length - 1])}${dir ? '/' : ''}</span></span></td>
+      <td>${subs.map((n) => `<span class="tag success" title="${esc(tpl.nodes[n].name)}把它选为第 ${subR(f.nodes[n])} 轮的产出物">${esc(tpl.nodes[n].name)} · 第 ${subR(f.nodes[n])} 轮</span>`).join(' ') || '<span class="faint xs">过程文件</span>'}</td>
+      <td class="sm" style="white-space:nowrap">${who(by, 16)}<div class="xs faint">${node ? `在「${esc(tpl.nodes[node].name)}」会话里` : '直接上传'} · ${at}</div></td><td class="xs muted" style="white-space:nowrap">${size}</td></tr>`;
+  };
+  const doc = pick ? docOf(fid, pick) : null;
+  return `<div class="page">
+    <div class="xs muted" style="margin-bottom:6px">${crumbs(fid, '流程空间')}</div>
+    <div class="page-head" style="align-items:flex-start"><div class="grow"><h1>流程空间 · ${esc(f.title)}</h1>
+      <div class="row sm muted" style="margin-top:6px;flex-wrap:wrap">${ic('folder')}Atlas 工作空间 <span class="mono xs">${esc(f.space)}</span><span>·</span>发起时向 Atlas 申请<span>·</span>这条流程所有节点的数字员工会话都挂载它</div></div>
+      ${canWrite ? `<button class="btn" data-act="toast" data-msg="上传到流程空间：参考资料、代码副本……数字员工在会话里直接能读">${ic('upload')}上传</button>` : ''}<button class="btn" data-act="toast" data-msg="打包下载整个流程空间（zip）">${ic('dl')}下载全部</button></div>
+    ${f.status === 'running' ? '' : `<div class="banner2 info" style="margin-bottom:12px">${ic('lock')}<div>流程${FST[f.status]}：流程空间只读保留</div></div>`}
+    ${files.length ? `<div style="display:grid;grid-template-columns:minmax(0,1.8fr) minmax(0,1fr);gap:16px;align-items:start">
+      <table class="table"><thead><tr><th>文件</th><th style="width:120px">提交</th><th style="width:165px">最后修改</th><th style="width:64px">大小</th></tr></thead><tbody>${files.map(row).join('')}</tbody></table>
+      <div>${pick ? `<div class="dochead">${ic('file')}<b style="color:var(--ink)">${esc(pick)}</b><span class="sp"></span><a data-act="toast" data-msg="下载这个文件" title="下载">${ic('dl')}</a></div>${doc ? `<div class="doc">${doc}</div>` : '<div class="pcard sm muted">（原型没画这个文件的内容）</div>'}` : ''}
+        <div class="xs faint" style="margin-top:8px">产物不做版本管理：这里永远是文件的当前内容。「提交」列记的是哪个节点第几轮把它选为产出物</div></div></div>`
+      : `<div class="card"><div class="empty"><div class="ill">${ic('folder')}</div><h3>流程空间还是空的</h3><div class="sm">数字员工在节点会话里写的文件、成员上传的资料都会出现在这里</div></div></div>`}</div>`;
+}
+/* 追溯：指令、产出依据、评审意见、修改轮次全程留痕 */
+function traceEvents(fid) {
+  const fl = (...ps) => ps.map((p) => `<span class="mono xs" style="color:var(--primary-ink)">${esc(p)}</span>`).join('、');
+  if (fid !== 'F-1024') {
+    const f = FLOWS[fid];
+    return [{ at: f.at, node: '', k: 'lock', html: `${pc(f.by, 16)} 在「${esc(projOf(f).name)}」发起流程，锁定模板 v${f.ver}；向 Atlas 申请流程空间 <span class="mono xs">${esc(f.space)}</span>` }];
+  }
+  return [
+    { at: '11-24 10:12', node: '', k: 'lock', html: `${pc('u-zhang', 16)} 在「Atlas 控制台」发起流程（只填了标题），锁定模板「软件研发（标准）」<b>v3</b>；向 Atlas 申请流程空间 <span class="mono xs">ws-7f3a2c</span>` },
+    { at: '11-24 10:12', node: 'clarify', k: 'lock', html: '需求澄清开工：锁定执行 Agent「需求分析师」v5，会话挂载流程空间' },
+    { at: '11-24 10:13', node: 'clarify', k: 'ask', html: `需求分析师提了 4 个问题；${pc('u-zhang', 16)} 回答（限流维度、超限后的处理、白名单、要不要后台可配）` },
+    { at: '11-24 10:20', node: '', k: 'save', html: `${pc('u-zhang', 16)} 上传 ${fl('资料/登录接口现状.md')}` },
+    { at: '11-24 10:31', node: 'clarify', k: 'save', html: `写入 ${fl('需求澄清/澄清记录.md')}` },
+    { at: '11-24 10:33', node: 'clarify', k: 'review', html: `${pc('u-zhang', 16)} 提交准出评审（第 1 轮）：产出物 ${fl('澄清记录.md')}、评审人 ${pc('u-zhang', 16)}` },
+    { at: '11-24 10:40', node: 'clarify', k: 'pass', html: `${pc('u-zhang', 16)} 同意 → 准出；PRD 无准入评审，直接开工` },
+    { at: '11-24 10:41', node: 'prd', k: 'lock', html: `PRD 开工：锁定执行 Agent「需求分析师」v5；输入 = 需求澄清提交的 ${fl('澄清记录.md')}` },
+    { at: '11-24 11:20', node: 'prd', k: 'save', html: `写入 ${fl('PRD/PRD.md')}；按技能「PRD 撰写」自查 4/4 通过` },
+    { at: '11-24 11:22', node: 'prd', k: 'review', html: `${pc('u-zhang', 16)} 提交准出评审（第 1 轮）：产出物 ${fl('PRD.md')}、评审人 ${pc('u-zhang', 16)}` },
+    { at: '11-24 14:05', node: 'prd', k: 'reject', html: `${pc('u-zhang', 16)} 驳回修改：「验收标准里『短时间内多次』要给具体数字；人机验证失败几次后锁定也没写」` },
+    { at: '11-24 14:06', node: 'prd', k: 'lock', html: '第 2 轮开始（不重新锁定，沿用需求分析师 v5）；驳回意见作为指令发给 Agent' },
+    { at: '11-24 14:30', node: 'prd', k: 'save', html: `改 ${fl('PRD/PRD.md')}（+18 −6）` },
+    { at: '11-24 16:10', node: 'prd', k: 'pass', html: `${pc('u-zhang', 16)} 同意 → 准出（第 2 轮提交 ${fl('PRD.md')}）` },
+    { at: '11-24 16:12', node: 'design', k: 'pass', html: `${pc('u-li', 16)} 准入通过：审核 PRD 提交的 ${fl('PRD.md')} → 技术方案开工；PRD 的全部下游都已开工，PRD 通过` },
+    { at: '11-25 11:02', node: 'design', k: 'save', html: `写入 ${fl('技术方案/技术方案.md')}` },
+    { at: '11-25 15:30', node: 'design', k: 'pass', html: `${pc('u-li', 16)} 同意 → 准出（第 1 轮提交 ${fl('技术方案.md')}）；等编码、测试用例准入` },
+    { at: '11-26 09:15', node: 'cases', k: 'pass', html: `${pc('u-chen', 16)} 准入通过：审核技术方案提交的 ${fl('技术方案.md')} → 测试用例开工` },
+    { at: '11-26 10:40', node: 'cases', k: 'save', html: `写入 ${fl('测试用例/测试用例.md')}（32 条）；按技能「测试用例」自查发现 2 条没关联需求编号，自己补上` },
+  ];
+}
+function tracePage(fid) {
+  const f = FLOWS[fid];
+  const tpl = tplOf(f);
+  const evs = traceEvents(fid);
+  const groups = [['', '流程'], ...flat(tpl).map((n) => [n, tpl.nodes[n].name])].filter(([n]) => evs.some((e) => e.node === n));
+  return `<div class="page" style="max-width:1000px">
+    <div class="xs muted" style="margin-bottom:6px">${crumbs(fid, '追溯')}</div>
+    <div class="page-head"><h1>追溯 · ${esc(f.title)}</h1><span class="sp"></span><select class="select" style="width:150px"><option>全部节点</option>${flat(tpl).map((n) => `<option>${esc(tpl.nodes[n].name)}</option>`).join('')}</select><select class="select" style="width:130px"><option>全部事件</option><option>指令</option><option>写入</option><option>提交与评审</option><option>锁定</option></select><button class="btn" data-act="toast" data-msg="导出为审计报告（PDF / JSON）：事件、每轮提交的文件清单、评审意见">${ic('upload')}导出</button></div>
+    <div class="card pad"><div class="tline">${groups.map(([n, name]) => `<div class="tnode">${esc(name)}${n ? stTag(f.nodes[n].st) : ''}${n ? `<a class="sm" style="font-weight:500" href="${nodeHref(fid, n)}">打开节点</a>` : ''}</div>${evs.filter((e) => e.node === n).map((e) => `<div class="tev"><span class="dot2 k-${e.k}"></span><div class="row" style="align-items:flex-start"><span class="xs faint" style="width:80px;flex:none;margin-top:2px">${e.at}</span><span class="sm">${e.html}</span></div></div>`).join('')}`).join('')}</div></div>
+    <div class="xs faint" style="margin-top:10px">每轮评审记的是「这一轮提交了哪些文件」和评审意见；文件本身不留历史版本。对话原文点「打开节点」看</div></div>`;
+}
+
+/* =====================================================================
+ * 节点页：一个节点 = 一个数字员工会话（挂载流程空间）；左边对话，右边产出物 / 输入 / 流程空间 / 评审
+ * ===================================================================== */
+const AV = { 'a-ba': 5, 'a-arch': 6, 'a-dev': 4, 'a-qa': 4, 'a-writer': 3, 'a-editor': 2 };
+const ASK_Q1 = {
+  id: 'q1', q: '导出分页上限按什么算？',
+  opts: [['按租户', '每个租户同时最多 10 个导出任务'], ['按用户', '每个人同时最多 2 个导出任务'], ['两层都限（推荐）', '租户总量 10 个 + 每人 2 个：防止一个人占满整个租户的额度']],
+};
+function convOf(key) {
+  if (key === 'F-1025/code') return [
+    { t: 'sys', text: '11-26 09:02 · 开工：锁定执行 Agent「开发工程师」v4 · 会话挂载流程空间 ws-91c0e4' },
+    { t: 'instr', by: 'auto', at: '09:02', text: '按技术方案实现支付回调幂等：以「渠道 + 渠道流水号」为唯一键，重复回调直接返回上次的处理结果；补单元测试。改流程空间里 代码/pay-core/ 的代码，在「编码/」下产出 变更.patch 和 变更说明.md。上游提交的文件不要改，有问题就提出来。', inputs: [['技术方案/技术方案.md', '技术方案'], ['PRD/PRD.md', 'PRD']] },
+    { t: 'user', by: 'u-zhou', at: '09:10', text: '唯一键冲突时返回上次的处理结果，不要抛异常；老数据里有流水号为空的，迁移脚本里先补成 legacy-{订单号}' },
+    { t: 'steps', id: 'c1', title: '读取输入、改代码、跑测试（14 步）', items: ['读取 技术方案/技术方案.md、PRD/PRD.md（上游提交的）', '修改 代码/pay-core/pay/callback/handler.py：先查唯一键，命中就返回上次结果', '新增迁移 0057_callback_idem.py：补 legacy 流水号、加唯一索引', '新增 tests/test_callback_idem.py：18 个用例', 'pytest tests/test_callback_idem.py → 18 passed', '导出 编码/变更.patch（3 个文件 +265 −12）'] },
+    { t: 'save', at: '10:21', msg: '回调幂等：渠道 + 流水号唯一键；重复回调返回上次结果', files: [['M', '代码/pay-core/pay/callback/handler.py', '+46 −12'], ['A', '代码/pay-core/pay/migrations/0057_callback_idem.py', '+31'], ['A', '代码/pay-core/tests/test_callback_idem.py', '+188'], ['A', '编码/变更.patch', '3 个文件 +265 −12'], ['A', '编码/变更说明.md', '+40']] },
+    { t: 'check', title: '按技能「编码」的要求自查', items: [[1, '改动都在技术方案列出的模块里（3 处）'], [1, '每条验收标准都有测试（R1–R4 → 18 个用例）'], [1, '有数据迁移，写了回滚方式'], [1, '单元测试全部通过']] },
+    { t: 'agent', by: 'a-dev', at: '10:23', text: '做完了：补丁是 <code>编码/变更.patch</code>，说明在 <code>编码/变更说明.md</code>。周工确认后提交评审时勾这两个文件就行。' },
+    { t: 'sys', text: '10:25 · 周工 提交准出评审（第 1 轮）· 产出物：变更.patch、变更说明.md · 锁定评审人：李工、周工' },
+    { t: 'sys', text: '10:40 · 周工 同意' },
+  ];
+  if (key === 'F-1024/cases') return [
+    { t: 'sys', text: '11-26 09:15 · 陈运 准入通过 → 开工：锁定执行 Agent「测试工程师」v4 · 会话挂载流程空间 ws-7f3a2c' },
+    { t: 'instr', by: 'auto', at: '09:15', text: '用「测试用例」技能，按 PRD 的验收标准和技术方案写测试用例，产出写在「测试用例/」下。', inputs: [['PRD/PRD.md', 'PRD'], ['技术方案/技术方案.md', '技术方案']] },
+    { t: 'user', by: 'u-chen', at: '09:20', text: '边界值重点覆盖：每手机号每分钟 1 次、每小时 5 次，每 IP 每小时 20 次；NAT 白名单也要有用例' },
+    { t: 'steps', id: 'q2', title: '读取输入、写用例（9 步）', items: ['读取 PRD/PRD.md（验收标准 R1–R6）', '读取 技术方案/技术方案.md', '先把边界值列在 测试用例/边界值草稿.md', '生成用例 32 条：功能 18、边界 9、异常 5'] },
+    { t: 'save', at: '10:38', msg: '测试用例：32 条', files: [['A', '测试用例/边界值草稿.md', '+41'], ['A', '测试用例/测试用例.md', '+212']] },
+    { t: 'check', title: '按技能「测试用例」的格式自查', items: [[1, '每条用例有前置条件、步骤、预期结果'], [1, '覆盖 PRD 全部验收标准（R1–R6）'], [0, '每条用例关联需求编号：TC-17、TC-23 没写'], [1, '边界值用例覆盖阈值 −1 / 等于 / +1']] },
+    { t: 'agent', by: 'a-qa', at: '10:39', text: '自查发现 TC-17、TC-23 没关联需求编号，补上。' },
+    { t: 'save', at: '10:40', msg: '补齐 TC-17、TC-23 的需求编号', files: [['M', '测试用例/测试用例.md', '+2 −2']] },
+    { t: 'check', title: '再次自查', items: [[1, '4 / 4 通过']] },
+    { t: 'agent', by: 'a-qa', at: '10:41', text: '32 条用例都写好了：功能 18、边界 9、异常 5。陈运确认后可以提交评审（产出物是 <code>测试用例/测试用例.md</code>，草稿不用交）。' },
+  ];
+  if (key === 'F-1022/design') {
+    const s = FLOWS['F-1022'].nodes.design;
+    const m = [
+      { t: 'fold', text: '第 1 轮：对话 14 条 · 提交 技术方案.md · 李工 同意准出（11-25 11:40）' },
+      { t: 'sys', text: '11-25 17:20 · 周工 在「编码」准入时打回到本节点；已开工的下游「测试用例」标记为已打回，它进行中的评审已取消' },
+      { t: 'sys', text: '第 2 轮开始 · 打回重开不重新锁定：沿用架构师 v6' },
+      { t: 'instr', by: 'auto', at: '17:21', text: '上一轮在「编码」准入时被打回，意见：「导出分页上限没有区分租户；导出失败后的重试和断点续传没写，编码没法开工」。直接改 技术方案/技术方案.md，只改相关章节。', inputs: [['技术方案/技术方案.md', '本节点第 1 轮'], ['PRD/PRD.md', 'PRD']] },
+      { t: 'steps', id: 'd2', title: '读取方案和打回意见（3 步）', items: ['读取 技术方案/技术方案.md', '读取 PRD/PRD.md（R4：导出不能影响在线业务）', '定位要改的章节：3.2 限额、4 失败处理'] },
+      { t: 'agent', by: 'a-arch', at: '17:24', text: '重试和断点续传我按「分片 + 游标」补上：每 1 万行一片，失败的片单独重试 3 次，游标记在任务表里。分页上限有个口径要你定：' },
+      { t: 'ask', ...ASK_Q1 },
+    ];
+    if (S.ask.q1 != null) {
+      m.push({ t: 'user', by: ME.id, at: '刚刚', text: `选「${ASK_Q1.opts[S.ask.q1][0]}」` });
+      m.push({ t: 'steps', id: 'd3', title: '改方案（4 步）', items: ['改 3.2 限额：按你选的口径写阈值和超限提示', '补 4 失败处理：分片重试、游标续传、取消', '更新 5 工作量：编码 3 天 → 4 天'] });
+      m.push({ t: 'save', at: '刚刚', msg: '技术方案第 2 轮：限额口径、分片重试与断点续传', files: [['M', '技术方案/技术方案.md', '+37 −9']] });
+      m.push({ t: 'check', title: '按技能「技术方案」的格式自查', items: [[1, '回应了打回意见里的两点'], [1, '接口、数据结构、风险、工作量都在'], [1, '没有超出 PRD 的范围']] });
+      m.push({ t: 'agent', by: 'a-arch', at: '刚刚', text: '改好了。提交评审时勾 <code>技术方案/技术方案.md</code>：本轮准出评审人还是你，通过后再由「编码」做准入。' });
+    }
+    if (S.done.d1022) m.push({ t: 'sys', text: `刚刚 · 李工 提交准出评审（第 2 轮）· 产出物：${s.sub.map(base).join('、')} · 锁定评审人：李工` });
+    return m;
+  }
+  if (key === 'F-1024/prd') return [
+    { t: 'sys', text: '11-24 10:41 · 开工：锁定执行 Agent「需求分析师」v5 · 会话挂载流程空间 ws-7f3a2c' },
+    { t: 'instr', by: 'auto', at: '10:41', text: '用「PRD 撰写」技能写需求文档，验收标准逐条可测；产出写在「PRD/」下。', inputs: [['需求澄清/澄清记录.md', '需求澄清']] },
+    { t: 'save', at: '11:20', msg: 'PRD 第 1 版', files: [['A', 'PRD/PRD.md', '+96']] },
+    { t: 'sys', text: '11:22 · 张明 提交准出评审（第 1 轮）· 产出物：PRD.md · 14:05 驳回修改：「『短时间内多次』要给具体数字；人机验证失败几次后锁定也没写」' },
+    { t: 'sys', text: '第 2 轮：驳回意见作为指令发给 Agent；改的还是同一个文件' },
+    { t: 'save', at: '14:30', msg: 'PRD：验收标准量化、补锁定策略', files: [['M', 'PRD/PRD.md', '+18 −6']] },
+    { t: 'sys', text: '16:10 · 张明 提交准出评审（第 2 轮）· 产出物：PRD.md → 同意 → 准出；16:12 技术方案准入通过，PRD 通过' },
+  ];
+  return null;
+}
+/* 刚发起的流程：第一个节点只有标题，数字员工先找执行人问清楚 */
+function freshConv(fid, nid) {
+  const f = FLOWS[fid];
+  const tpl = tplOf(f);
+  if (!f.fresh || nid !== flat(tpl)[0]) return null;
+  const n = tpl.nodes[nid];
+  const a = agentOfRole(f, n.exec);
+  const people = membersOf(f, n.exec).map((u) => PEOPLE[u].name).join('、');
+  return [
+    { t: 'sys', text: `刚刚 · ${PEOPLE[f.by].name} 发起流程，锁定模板「${tpl.name}」v${f.ver}；已向 Atlas 申请流程空间 ${f.space}` },
+    { t: 'sys', text: `「${n.name}」开工：锁定执行 Agent「${AGENTS[a].name}」v${AV[a]} · 会话挂载流程空间` },
+    { t: 'instr', by: 'auto', at: '刚刚', text: `流程「${f.title}」发起时只有标题。${n.desc || n.name}。先找执行人（${tpl.roles[n.exec]} · ${people}）问清楚再动手；产出写在「${n.name}/」下。`, inputs: [] },
+    { t: 'agent', by: a, at: '刚刚', text: `${esc(people)}，「${esc(f.title)}」我先确认几件事：<br>1. 在什么场景下遇到的，现在是什么表现？<br>2. 做到什么程度算完成？<br>3. 有没有明确不做的？` },
+  ];
+}
+function msgHtml(m) {
+  if (m.t === 'sys') return `<div class="sysline">${esc(m.text)}</div>`;
+  if (m.t === 'fold') return `<div class="stepsbox"><div class="sh" data-act="r1open">${ic(S.r1open ? 'down' : 'right')}${esc(m.text)}<span class="sp"></span><span class="xs">${S.r1open ? '收起' : '展开'}</span></div>${S.r1open ? '<div class="sb"><div>（第 1 轮的指令、提问、提交和评审，和本轮一样展示）</div></div>' : ''}</div>`;
+  if (m.t === 'instr') {
+    return `<div class="instr"><div class="h">${ic('send2')}${m.by === 'auto' ? '开工指令（工作说明 + 上游提交的产出物，系统自动发）' : '指令'}<span class="sp"></span><span class="faint" style="font-weight:500">${m.at}</span></div><div class="sm">${esc(m.text)}</div>
+      <div>${m.inputs.map(([p, from]) => `<span class="inchip" title="在流程空间里，数字员工直接读">${ic('file')}${esc(p)} <span class="faint">${esc(from)}提交</span></span>`).join('')}</div></div>`;
+  }
+  if (m.t === 'user') {
+    const p = PEOPLE[m.by];
+    return `<div class="msg ${m.by === ME.id ? 'me' : ''}">${av(p.name, p.color, 28, false)}<div class="bd"><div class="who">${esc(p.name)}<span class="t">${m.at}</span></div><div class="txt">${esc(m.text)}</div></div></div>`;
+  }
+  if (m.t === 'agent') {
+    const a = AGENTS[m.by];
+    return `<div class="msg agent">${av(a.name, a.color, 28, true)}<div class="bd"><div class="who">${esc(a.name)}<span class="tag" style="height:18px">数字员工</span><span class="t">${m.at}</span></div><div class="txt">${m.text}</div></div></div>`;
+  }
+  if (m.t === 'steps') {
+    const open = S.stepsOpen[m.id];
+    return `<div class="stepsbox" style="margin-left:38px"><div class="sh" data-act="steps" data-id="${m.id}">${ic(open ? 'down' : 'right')}${ic('terminal')}${esc(m.title)}</div>${open ? `<div class="sb">${m.items.map((i) => `<div>· ${esc(i)}</div>`).join('')}</div>` : ''}</div>`;
+  }
+  if (m.t === 'save') {
+    return `<div class="save" style="margin-left:38px">${ic('folder')}<div class="grow"><div class="row"><b class="sm">${esc(m.msg)}</b><span class="xs faint">写入流程空间</span><span class="sp"></span><span class="xs faint">${m.at}</span></div>
+      <div class="files">${m.files.map(([k, p, d]) => `<div><span class="${k === 'A' ? 'a' : k === 'D' ? 'd' : ''}">${k}</span> ${esc(p)} <span class="faint">${d}</span></div>`).join('')}</div></div></div>`;
+  }
+  if (m.t === 'check') {
+    return `<div class="checkcard" style="margin-left:38px"><div class="xs muted" style="margin-bottom:4px;font-weight:600">${ic('shield')} ${esc(m.title)}</div>${m.items.map(([ok, t]) => `<div class="row2"><span class="${ok ? 'ok' : 'bad'}">${ic(ok ? 'check' : 'x')}</span><span>${esc(t)}</span></div>`).join('')}</div>`;
+  }
+  if (m.t === 'ask') {
+    const pick = S.ask[m.id];
+    return `<div class="askcard" style="margin-left:38px"><div class="q">${ic('help')} ${esc(m.q)}</div>${m.opts.map(([t, d], i) => `<div class="askopt ${pick === i ? 'on' : ''}" ${pick == null ? `data-act="ask" data-id="${m.id}" data-v="${i}"` : ''}><span class="radio-card" style="padding:0;border:none;background:none;box-shadow:none"><span class="r" style="${pick === i ? 'border:5px solid var(--primary)' : ''}"></span></span><div><b class="sm">${esc(t)}</b><div class="xs muted">${esc(d)}</div></div></div>`).join('')}
+      ${pick == null ? '<div class="xs faint" style="margin-top:8px">也可以在下面的输入框里直接回答</div>' : ''}</div>`;
+  }
+  return '';
+}
+const reviewersOf = (f, nid) => tplOf(f).nodes[nid].exit.flatMap((r) => membersOf(f, r)).filter((v, i, a) => a.indexOf(v) === i);
+function nodeLocks(fid, nid) {
+  const f = FLOWS[fid];
+  const tpl = tplOf(f);
+  const n = tpl.nodes[nid];
+  const s = f.nodes[nid];
+  const ag = agentOfRole(f, n.exec);
+  const rev = s.st === 'exit_review' ? reviewersOf(f, nid).map((m) => PEOPLE[m].name).join('、') : '';
+  return `<div class="locks">${s.r > 0 ? lockChip(`执行 Agent「${esc(AGENTS[ag].name)}」v${AV[ag]}`, '首次开工时锁定；打回重开不重新锁定') : `<span class="lock">${ic('clock')}执行 Agent：开工时锁定</span>`}
+    ${spaceChip(fid)}${rev ? lockChip(`评审人：${rev}`, '进入评审时锁定') : ''}<span class="lock">${ic('user')}执行：${esc(tpl.roles[n.exec])} · ${membersOf(f, n.exec).map((m) => PEOPLE[m].name).join('、')}</span></div>`;
+}
+function nodePage(fid, nid) {
+  const f = FLOWS[fid];
+  const tpl = tplOf(f);
+  const n = tpl.nodes[nid];
+  const s = f.nodes[nid];
+  const key = `${fid}/${nid}`;
+  const msgs = convOf(key) || freshConv(fid, nid);
+  const mineExec = isMine(f, n.exec);
+  let conv;
+  if (msgs) conv = msgs.map(msgHtml).join('');
+  else if (['pending', 'admit_review'].includes(s.st)) {
+    const upNames = ups(tpl, nid).map((u) => `${tpl.nodes[u].name}${f.nodes[u].sub ? `：${f.nodes[u].sub.map(base).join('、')}` : ''}`).join('；');
+    conv = `<div class="empty" style="padding:70px 30px"><div class="ill">${ic('clock')}</div><h3>${s.st === 'admit_review' ? '等准入评审' : '还没开工'}</h3><div class="sm" style="max-width:440px;margin:0 auto">${s.st === 'admit_review' ? '准入通过后开工' : '上游准出、通过本节点的准入后开工'}。开工时系统把工作说明和上游提交的产出物（${esc(upNames || '流程标题')}）作为第一条指令发给「${esc(AGENTS[agentOfRole(f, n.exec)]?.name || tpl.roles[n.exec])}」。文件都在流程空间里，直接读，不拷贝；不带上游的对话。</div></div>`;
+  } else conv = `<div class="empty"><div class="ill">${ic('chat')}</div><h3>第 ${s.r} 轮的对话</h3><div class="sm">（原型只画了几个节点的对话）</div></div>`;
+  let foot;
+  if (['passed', 'exited'].includes(s.st)) foot = `<div class="readonly">${ic('lock')} 节点已准出（${subLabel(f, nid)}：${(s.sub || []).map(base).join('、') || '—'}）。要改只能由下游准入时打回</div>`;
+  else if (s.st === 'exit_review') foot = `<div class="readonly">${ic('shield')} 评审中（第 ${s.r} 轮提交：${(s.sub || []).map(base).join('、')}）：执行人不能再发指令、数字员工不再写入。要改请评审「驳回修改」</div>`;
+  else if (s.st === 'returned') foot = `<div class="readonly">${ic('undo')} 已打回：上游重做后重新走准入</div>`;
+  else if (['pending', 'admit_review'].includes(s.st)) foot = '';
+  else if (!mineExec) foot = `<div class="readonly">${ic('eye')} 执行人：${esc(tpl.roles[n.exec])} · ${membersOf(f, n.exec).map((m) => PEOPLE[m].name).join('、')}。你可以看，不能发指令</div>`;
+  else {
+    foot = `<textarea placeholder="给「${esc(AGENTS[agentOfRole(f, n.exec)].name)}」下指令、回答它的问题…（Enter 发送）"></textarea>
+      <div class="row" style="margin-top:8px"><button class="btn sm" data-act="toast" data-msg="接管：数字员工停下，你在同一个会话里直接改流程空间的文件（终端、文件），改完交还，它接着做">${ic('hand')}接管</button><span class="xs faint">只放行本节点的会话和子会话</span><span class="sp"></span>
+      <button class="btn sm primary" data-act="submit" data-k="${key}">${ic('send2')}提交评审</button></div>`;
+  }
+  return `<div class="nodepage"><div class="left">
+    <div class="nhead"><div class="crumb">${crumbs(fid, esc(n.name))}</div>
+      <div class="row"><h2 style="white-space:nowrap">${esc(n.name)}</h2>${stTag(s.st)}${s.r ? `<span class="rtag">第 ${s.r} 轮</span>` : ''}</div>
+      <div class="seg nodesw">${flat(tpl).map((x) => `<a class="${x === nid ? 'on' : ''}" href="${nodeHref(fid, x)}" title="${ST[f.nodes[x].st]}">${esc(tpl.nodes[x].name)}</a>`).join('')}</div>
+      ${nodeLocks(fid, nid)}
+      ${s.back ? `<div class="banner2 danger" style="margin-top:10px">${ic('undo')}<div><b>被打回</b>：${pc(s.back.by, 16)} 在「${esc(tpl.nodes[s.back.from].name)}」准入时打回 — ${esc(s.back.why)}</div></div>` : ''}</div>
+    <div class="conv">${conv}</div>${foot ? `<div class="nfoot">${foot}</div>` : ''}</div>
+    <div class="right">${rightPanel(fid, nid)}</div></div>`;
+}
+
+/* ---------- 文件内容（流程空间里的当前内容） ---------- */
+const DOC_DESIGN = `<h1>技术方案：登录验证码限流</h1>
+<h2>1 方案</h2><ul><li>登录服务前加限流：Redis 滑动窗口，键 <code>sms:phone:{手机号}</code>、<code>sms:ip:{IP}</code></li><li>阈值取 PRD 的 R1–R3：每手机号每分钟 1 次、每小时 5 次；每 IP 每小时 20 次</li><li>超限返回 429 + <code>challenge_id</code>，前端拉起滑块验证；通过后发一次性豁免令牌</li></ul>
+<h2>2 接口</h2><table><tr><th>接口</th><th>变化</th></tr><tr><td>POST /auth/sms/send</td><td>超限 429，带 challenge_id</td></tr><tr><td>POST /auth/challenge/verify</td><td>新增：校验滑块，返回豁免令牌</td></tr></table>
+<h2>3 风险</h2><ul><li>公司出口 NAT 共享 IP：IP 维度可配白名单网段</li><li>Redis 不可用时放行并告警（不挡登录）</li></ul>
+<h2>4 工作量</h2><p>编码 2 天，测试 1 天</p>`;
+const DOC_PRD = `<h1>PRD：登录验证码限流</h1><h2>验收标准</h2><ul>
+<li>R1 同一手机号每分钟最多 1 次、每小时最多 5 次，超过返回「请稍后再试」</li><li>R2 同一 IP 每小时最多 20 次</li><li>R3 超限后要求人机验证，通过后可再发一次</li><li>R4 人机验证连续失败 5 次，该手机号锁定 30 分钟</li></ul>
+<h2>不做什么</h2><ul><li>不改注册流程</li></ul>`;
+const DOC_CASES = `<table><tr><th>编号</th><th>需求</th><th>用例</th><th>预期</th></tr>
+<tr><td>TC-01</td><td>R1</td><td>同一手机号 1 分钟内第 2 次请求</td><td>提示稍后再试</td></tr><tr><td>TC-09</td><td>R1</td><td>1 小时内第 5 次（边界）</td><td>成功</td></tr><tr><td>TC-10</td><td>R1</td><td>1 小时内第 6 次</td><td>429 + 人机验证</td></tr><tr><td>TC-17</td><td>R2</td><td>NAT 白名单 IP 第 21 次</td><td>成功</td></tr><tr><td colspan="4" class="faint">… 共 32 条</td></tr></table>`;
+const DOC_ARTICLE = `<h1>一个请求怎么知道自己属于哪个租户：Atlas 的多租户隔离</h1>
+<p>多租户最怕的不是做不出来，而是某天某个查询忘了带租户条件……</p>
+<h2>1 租户上下文从哪来</h2><p>网关验过访问令牌后写入租户请求头，服务在请求入口进入租户作用域；后台任务显式带上租户……</p>
+<h2>2 自动过滤</h2><p>所有带租户字段的表在查询时自动加条件，缺上下文直接报错，而不是查出全部……</p>
+<h2>3 我们踩过的坑</h2><ul><li>定时任务里忘了进入租户作用域</li><li>唯一约束要改成「租户内唯一」</li></ul>`;
+const DOC_CHG = `<h1>变更说明：支付回调幂等</h1><ul><li>唯一键：渠道 + 渠道流水号；重复回调直接返回上次的处理结果</li><li>迁移 0057：老数据流水号为空的补成 legacy-{订单号}，再加唯一索引；回滚 = 删索引</li><li>测试：tests/test_callback_idem.py 18 个用例全过</li></ul>`;
+function doc1022() {
+  const a = S.ask.q1;
+  return `<h1>技术方案：订单导出优化</h1><h2>1 方案</h2><p>导出改异步：建导出任务，后台分片生成，完成后通知下载</p>
+    <h2>3.2 限额</h2><p>${a == null ? '每个用户同时最多 2 个导出任务' : `按「${esc(ASK_Q1.opts[a][0])}」：${esc(ASK_Q1.opts[a][1])}`}</p>
+    <h2>4 失败处理</h2>${a == null ? '<p class="faint">（第 1 轮没写）</p>' : '<ul><li>每 1 万行一片，失败的片单独重试 3 次</li><li>游标记在 export_task.cursor，断点续传从游标继续</li><li>取消：停止派发新分片，已写的临时文件删除</li></ul>'}`;
+}
+function docOf(fid, p) {
+  if (fid === 'F-1022' && p === '技术方案/技术方案.md') return doc1022();
+  return {
+    'F-1024|技术方案/技术方案.md': DOC_DESIGN, 'F-1024|PRD/PRD.md': DOC_PRD, 'F-1024|测试用例/测试用例.md': DOC_CASES,
+    'F-0031|撰写/正文.md': DOC_ARTICLE, 'F-1025|编码/变更说明.md': DOC_CHG,
+  }[`${fid}|${p}`] || null;
+}
+const docView = (fid, p, label) => { const d = docOf(fid, p); return `<div class="dochead">${ic('file')}<b style="color:var(--ink)">${esc(p)}</b>${label ? `<span class="snap">${label}</span>` : ''}<span class="sp"></span><a data-act="toast" data-msg="下载这个文件" title="下载">${ic('dl')}</a></div>${d ? `<div class="doc">${d}</div>` : '<div class="pcard sm muted">（原型没画这个文件的内容）</div>'}`; };
+function decideBox(key, opts, needWhy) {
+  const d = S.dec[key];
+  return `<div class="decide" style="grid-template-columns:repeat(${opts.length},1fr)">${opts.map(([v, t, sub, color]) => `<div class="radio-card ${d === v ? 'on' : ''}" data-act="dec" data-k="${key}" data-v="${v}"><span class="r"></span><div><b class="sm" style="color:${color}">${t}</b><div class="xs muted">${sub}</div></div></div>`).join('')}</div>
+    <textarea class="input" style="width:100%;margin-top:8px" rows="3" placeholder="${needWhy}"></textarea>`;
+}
+/* 上游的准出评审（准入时给评审人参考） */
+const UP_REVIEW = {
+  'F-1024/code': ['u-li', '11-25 15:30', '阈值和 PRD 对上了；NAT 白名单要能按网段配'],
+  'F-0031/techrev': ['u-wang', '11-26 15:40', '第 2 轮补了坑的部分，可以了'],
+};
+function rightPanel(fid, nid) {
+  const f = FLOWS[fid];
+  const tpl = tplOf(f);
+  const n = tpl.nodes[nid];
+  const s = f.nodes[nid];
+  const key = `${fid}/${nid}`;
+  /* 准入评审：审核上游提交的产出物 */
+  if (s.st === 'admit_review' && UP_REVIEW[key]) {
+    const up = ups(tpl, nid)[0];
+    const us = f.nodes[up];
+    const [rv, at, why] = UP_REVIEW[key];
+    const others = downs(tpl, up).filter((x) => x !== nid);
+    const started = others.filter((x) => !['pending', 'admit_review'].includes(f.nodes[x].st)).map((x) => tpl.nodes[x].name);
+    return `<div class="rp"><div class="banner2 purple">${ic('inbox')}<div><b>准入评审</b> · 你是「${esc(roleNames(tpl, n.admit))}」角色。审核上游「${esc(tpl.nodes[up].name)}」提交的产出物：能开工就准入，不能就打回上游</div></div>
+      <div class="row" style="flex-wrap:wrap">${us.sub.map(fileChip).join('')}<span class="xs faint">${subLabel(f, up)}</span></div>
+      ${docView(fid, us.sub[0], '流程空间当前内容')}
+      <div class="pcard"><h3>${ic('shield')}上游的准出评审</h3><div class="vote">${pc(rv, 22)}<div class="grow"><span class="tag success">同意</span><div class="sm" style="margin-top:3px">${esc(why)}</div></div><span class="xs faint">${at}</span></div></div>
+      <div class="pcard"><h3>${ic('check')}你的结论</h3>${decideBox(key, [['ok', '准入通过', '本节点开工', 'var(--success)'], ['back', '打回上游', '上游重做一轮', 'var(--danger)']], '打回时必填：要上游改什么（会作为上游下一轮的指令）')}
+        ${S.dec[key] === 'back' ? `<div class="banner2 warn" style="margin-top:8px">${ic('alert')}<div>打回「${esc(tpl.nodes[up].name)}」：它回到第 ${us.r + 1} 轮。${started.length ? `已开工的下游「${esc(started.join('、'))}」会标记为已打回，进行中的评审取消。` : ''}</div></div>` : ''}
+        <div class="row" style="margin-top:10px"><span class="xs faint">评审可以跨天，不会超时</span><span class="sp"></span><button class="btn primary" data-act="admit" data-k="${key}" ${S.dec[key] ? '' : 'disabled'}>提交结论</button></div></div></div>`;
+  }
+  /* 准出评审：审核本节点这一轮提交的产出物 */
+  if (key === 'F-1025/code' && s.st === 'exit_review') {
+    return `<div class="rp"><div class="banner2 warn">${ic('shield')}<div><b>准出评审 · 第 1 轮</b> · 规则：评审人全部同意才准出。看的是执行人提交时选的文件（流程空间里的当前内容）；评审期间本节点会话不再写入</div></div>
+      <div class="pcard"><h3>${ic('diff')}变更.patch <span class="xs faint" style="font-weight:500">3 个文件 · +265 −12</span><span class="sp"></span><a class="xs" data-act="toast" data-msg="下载补丁：可以在本地 git apply 看">下载</a></h3>
+        <div class="files" style="font-size:12.5px">${[['M', 'pay/callback/handler.py', '+46 −12'], ['A', 'pay/migrations/0057_callback_idem.py', '+31'], ['A', 'tests/test_callback_idem.py', '+188']].map(([k, p, d]) => `<div style="padding:3px 0"><span class="${k === 'A' ? 'a' : ''}">${k}</span> ${p} <span class="faint">${d}</span></div>`).join('')}</div>
+        <div class="divider"></div><div class="sm"><b>单元测试</b> 18 passed · <b>自查</b> 4 / 4</div></div>
+      ${docView(fid, '编码/变更说明.md')}
+      <div class="pcard"><h3>${ic('users')}评审人（进入评审时锁定）</h3>
+        <div class="vote">${pc('u-zhou', 22)}<div class="grow"><span class="tag success">同意</span><div class="sm" style="margin-top:3px">迁移脚本在测试库跑过了，回滚语句也验证了</div></div><span class="xs faint">10:40</span></div>
+        <div class="vote">${pc('u-li', 22)}<div class="grow">${S.done.td2 ? `<span class="tag ${S.dec[key] === 'ok' ? 'success' : 'danger'}">${S.dec[key] === 'ok' ? '同意' : '驳回'}</span>` : '<span class="tag warning">等你</span>'}</div></div></div>
+      ${S.done.td2 ? '' : `<div class="pcard"><h3>${ic('check')}你的结论</h3>${decideBox(key, [['ok', '同意', '全部同意就准出', 'var(--success)'], ['rework', '驳回修改', '本节点再做一轮', 'var(--danger)']], '驳回时必填：要改什么（会作为下一轮的指令发给开发工程师）')}
+        <div class="row" style="margin-top:10px"><span class="sp"></span><button class="btn primary" data-act="exitReview" data-k="${key}" ${S.dec[key] ? '' : 'disabled'}>提交结论</button></div></div>`}</div>`;
+  }
+  /* 已通过的节点：每轮提交了什么、评审意见；文件只有当前内容 */
+  if (key === 'F-1024/prd') {
+    return `<div class="rp"><div class="pcard"><h3>${ic('history')}评审记录</h3>
+        <div class="vote"><span class="rtag" style="margin-top:3px">第 1 轮</span><div class="grow"><div class="row">${fileChip('PRD/PRD.md')}</div><div class="row" style="margin-top:6px">${pc('u-zhang', 20)}<span class="tag danger">驳回修改</span><span class="xs faint">11-24 14:05</span></div><div class="sm" style="margin-top:3px">「短时间内多次」要给具体数字；人机验证失败几次后锁定也没写</div></div></div>
+        <div class="vote"><span class="rtag" style="margin-top:3px">第 2 轮</span><div class="grow"><div class="row">${fileChip('PRD/PRD.md')}</div><div class="row" style="margin-top:6px">${pc('u-zhang', 20)}<span class="tag success">同意</span><span class="xs faint">11-24 16:10</span></div><div class="sm" style="margin-top:3px">可以了</div></div></div>
+        <div class="xs faint" style="margin-top:6px">产物不做版本管理：每轮只记提交了哪些文件和评审意见。两轮改了什么看对话里的写入记录</div></div>
+      ${docView(fid, 'PRD/PRD.md', '流程空间当前内容')}</div>`;
+  }
+  /* 进行中 / 其他：产出物、输入、流程空间、本节点 */
+  const tab = S.ptab[key] || 'out';
+  const tabs = `<div class="tabs">${[['out', '产出物'], ['in', '输入'], ['space', '流程空间'], ['cfg', '本节点']].map(([k, t]) => `<a class="${tab === k ? 'on' : ''}" data-act="ptab" data-k="${key}" data-v="${k}">${t}</a>`).join('')}</div>`;
+  const touched = filesOf(fid).filter(([p, , node]) => node === nid && !p.endsWith('/')).map(([p]) => p);
+  let body = '';
+  if (tab === 'in') {
+    const us = ups(tpl, nid);
+    body = us.length ? us.map((u) => `<div class="pcard"><div class="row"><b class="sm">${esc(tpl.nodes[u].name)}</b><span class="xs faint">${f.nodes[u].sub ? subLabel(f, u) : '还没提交'}</span><span class="sp"></span>${stTag(f.nodes[u].st)}</div><div style="margin-top:4px">${(f.nodes[u].sub || []).map(fileChip).join('') || '<span class="sm muted">—</span>'}</div></div>`).join('') + '<div class="xs faint">上游提交的文件就在流程空间里，开工指令列出路径，数字员工直接读；节点之间不传对话历史</div>' : `<div class="pcard"><b class="sm">流程标题</b><div class="sm" style="margin-top:4px">${esc(f.title)}</div><div class="xs muted" style="margin-top:4px">第一个节点没有上游：数字员工先找执行人问清楚</div></div>`;
+  } else if (tab === 'space') {
+    body = `<div class="pcard"><div class="row" style="margin-bottom:6px"><b class="sm">流程空间</b><span class="mono xs faint">${esc(f.space)}</span><span class="sp"></span><a class="sm" href="#/flows/${fid}/space">打开</a></div>
+      ${filesOf(fid).map(([p, by, node, at]) => `<div class="row" style="padding:5px 0;border-top:1px solid var(--line-2)">${ic(p.endsWith('/') ? 'folder' : 'file')}<span class="mono xs grow ellipsis" title="${esc(p)}">${esc(p)}</span>${node === nid ? '<span class="tag blue" style="height:18px">本节点</span>' : ''}<span class="xs faint" style="white-space:nowrap">${at}</span></div>`).join('') || '<div class="sm muted">还是空的</div>'}</div>
+      <div class="xs faint">本节点的会话挂载这个目录；上游、并行节点的文件都在里面</div>`;
+  } else if (tab === 'cfg') {
+    const ag = agentOfRole(f, n.exec);
+    body = `<div class="pcard"><dl class="kv" style="grid-template-columns:82px 1fr"><dt>工作说明</dt><dd class="sm">${esc(n.desc || '—')}</dd>
+      <dt>执行</dt><dd class="sm">${esc(tpl.roles[n.exec])}：${membersOf(f, n.exec).map((m) => pc(m, 16)).join(' ')} + ${ag ? ac(ag, 16) : ''}</dd>
+      <dt>技能</dt><dd class="sm">${ag ? AGENTS[ag].skills.map((k) => `<span class="tag" style="margin:0 4px 4px 0">${esc(k)}</span>`).join('') : '—'}<div class="xs faint">产出物的格式由数字员工的技能约定</div></dd>
+      <dt>产出目录</dt><dd class="sm"><span class="mono xs">${esc(n.name)}/</span><div class="xs faint">开工指令里的约定；提交时由执行人选文件，不限目录</div></dd>
+      ${n.admit ? `<dt>准入</dt><dd class="sm">${esc(roleNames(tpl, n.admit))}</dd>` : ''}<dt>准出</dt><dd class="sm">${esc(roleNames(tpl, n.exit))} · ${ruleText(n)}</dd></dl></div>`;
+  } else if (s.sub && subR(s) === s.r && !['working', 'pending'].includes(s.st)) {
+    body = `<div class="row" style="flex-wrap:wrap">${s.sub.map(fileChip).join('')}<span class="xs faint">${subLabel(f, nid)}</span></div>${docView(fid, s.sub[0], '流程空间当前内容')}`;
+  } else if (s.st === 'working') {
+    body = `<div class="banner2 info">${ic('send2')}<div>本轮还没提交。点「提交评审」时从流程空间选这一轮的产出物${s.sub ? `（第 ${subR(s)} 轮提交过：${s.sub.map(base).join('、')}）` : ''}</div></div>
+      ${touched.length ? `<div class="xs muted">本节点会话改过的文件</div><div class="row" style="flex-wrap:wrap">${touched.map(fileChip).join('')}</div>${docView(fid, touched.find((p) => docOf(fid, p)) || touched[0], '流程空间当前内容')}` : `<div class="pcard sm muted">本节点的会话还没写文件</div>`}`;
+  } else {
+    body = `<div class="pcard sm muted">还没有产出物：开工后数字员工写进流程空间，提交评审时由执行人选</div>`;
+  }
+  return `<div class="rp">${tabs}${body}</div>`;
+}
+
+/* =====================================================================
+ * 团队 → 流程模板（归团队；从流程市场拷贝或空白新建）
+ * ===================================================================== */
+const lockedPage = (what) => `<div class="page"><div class="card"><div class="empty"><div class="ill">${ic('lock')}</div><h3>${what}只有团队管理员能看</h3><div class="sm">你在「${esc(TEAMS[S.team].name)}」是${LEVEL[levelOf(S.team)]}成员</div></div></div></div>`;
+const fromTag = (t) => (t.from ? `<span class="tag" title="拷过来就是团队自己的，市场之后更新不影响">${ic('store')}拷贝自流程市场「${esc(MARKET[t.from.mid].name)}」v${t.from.ver}</span>` : '<span class="tag">自建</span>');
+function templatesPage() {
+  if (!isAdmin()) return lockedPage('流程模板');
+  const list = Object.entries(TPLS).filter(([, t]) => t.team === S.team);
+  return `<div class="page"><div class="page-head"><div class="grow"><h1>流程模板</h1><div class="sm muted" style="margin-top:2px">${esc(TEAMS[S.team].name)} 的流程模板：项目绑定后才能发起。节点交什么由执行人提交评审时从流程空间选，格式由数字员工的技能约定</div></div>
+      <button class="btn" data-go="#/market">${ic('store')}去流程市场拷贝</button><button class="btn primary" data-act="toast" data-msg="空白新建：从一个节点开始编排">${ic('plus')}空白新建</button></div>
+    <div class="cgrid">${list.map(([k, t]) => `<div class="tcard" data-go="#/team/templates/${k}"><div class="row"><span class="ic2" style="background:${t.color}">${ic(t.icon)}</span><div class="grow"><b>${esc(t.name)}</b><div class="xs faint">${t.ver ? `v${t.ver} · ${t.status} · 发起过 ${t.used} 次` : '草稿，还没发布'}</div></div>${t.draft ? '<span class="tag warning">有草稿</span>' : ''}</div>
+      <div class="sm muted" style="margin-top:8px">${esc(t.desc)}</div>${miniSteps(t)}<div class="row" style="margin-top:10px;flex-wrap:wrap">${fromTag(t)}</div>
+      <div class="xs muted" style="margin-top:8px">用在：${Object.values(PROJECTS).filter((p) => p.bind[k]).map((p) => esc(p.name)).join('、') || '还没有项目绑定'}</div></div>`).join('')}</div></div>`;
+}
+/* 编排器：团队模板和流程市场模板共用，mode = team / market */
+function tplEditor(tpl, mode, key) {
+  if (!tpl) return '<div class="page">模板不存在</div>';
+  if (mode === 'team' && !isAdmin(tpl.team)) return lockedPage('流程模板');
+  const nid = tpl.nodes[S.selNode] ? S.selNode : flat(tpl)[0];
+  const n = tpl.nodes[nid];
+  const isFirst = stepIdx(tpl, nid) === 0;
+  const mk = mode === 'market';
+  const roleSel = (cur, multi) => `<div class="row" style="flex-wrap:wrap;gap:6px">${Object.entries(tpl.roles).map(([k, v]) => `<span class="chip" style="height:28px;cursor:pointer;${(multi ? (cur || []).includes(k) : cur === k) ? 'border-color:var(--primary-2);background:var(--primary-weak);color:var(--primary-ink)' : ''}" data-act="toast" data-msg="切换角色（原型）">${v}</span>`).join('')}</div>`;
+  const verTags = mk
+    ? `<span class="tag primary">${ic('store')}流程市场</span>${tpl.ver ? `<span class="tag">v${tpl.ver} ${tpl.status === 'on' ? '上架中' : '已下架'}</span>` : ''}<span class="tag warning">草稿 v${tpl.ver + 1} 编辑中</span><span class="xs faint">租户拷走的是拷贝：发布新版本不影响已经拷走的</span>`
+    : `${tpl.ver ? `<span class="tag">v${tpl.ver} 已发布</span>` : ''}<span class="tag warning">草稿 v${tpl.ver + 1} 编辑中</span>${fromTag(tpl)}<span class="xs faint">进行中的流程锁在发起时的版本</span>`;
+  return `<div style="display:flex;flex-direction:column;height:100%">
+    <div class="edtop"><a class="ibtn" href="${mk ? `#/market/${key}` : '#/team/templates'}">${ic('left')}</a><b>${esc(tpl.name)}</b>${verTags}<span class="sp"></span>
+      <button class="btn sm" data-act="toast" data-msg="角色只是占位：${mk ? '租户拷贝后在项目配置里分配成员和数字员工' : '在项目配置里给每个角色分配成员和数字员工'}">${ic('users')}角色（${Object.keys(tpl.roles).length}）</button><button class="btn sm" data-act="validate" data-v="${mode}" data-k="${key}">${ic('check')}校验</button><button class="btn sm primary" data-act="validate" data-v="${mode}" data-k="${key}">发布 v${tpl.ver + 1}</button></div>
+    <div class="editor" style="flex:1;min-height:0"><div class="canvas">${flowView(tpl, null, nid, { edit: true })}
+      <div class="xs faint" style="position:absolute;left:18px;bottom:14px">模板只存结构：顺序步骤 + 并行组。节点依赖由结构推导，不用连线</div></div>
+      <div class="inspector"><div class="row" style="margin-bottom:12px"><h2 class="grow">${esc(n.name)}</h2><button class="ibtn sm" data-act="toast" data-msg="删除节点">${ic('trash')}</button></div>
+        <div class="fld"><label class="label">名称</label><input class="input" style="width:100%" value="${esc(n.name)}" /></div>
+        <div class="fld"><label class="label">工作说明</label><textarea class="input" style="width:100%" rows="4">${esc(n.desc || '')}</textarea><div class="help">开工时和上游提交的产出物一起，作为第一条指令发给执行的数字员工。产出物的格式由数字员工的技能约定（例如「PRD 撰写」技能写了 PRD 的章节和自查规则），这里可以点名要用的技能</div></div>
+        <div class="fld"><label class="label">执行角色</label>${roleSel(n.exec)}<div class="help">这个角色的成员下指令、必要时接管、提交评审时选产出物；分配的数字员工干活</div></div>
+        <div class="divider"></div>
+        <div class="fld"><label class="label">准入评审 <span class="rtag admit">开工前</span></label>${isFirst ? '<div class="help">第一个节点没有上游，不设准入</div>' : `${roleSel(n.admit, true)}<div class="help">审核上游「${esc(ups(tpl, nid).map((u) => tpl.nodes[u].name).join('、'))}」提交的产出物；不通过可打回上游</div>`}</div>
+        <div class="fld"><label class="label">准出评审 <span class="rtag exit">交付前</span></label>${roleSel(n.exit, true)}
+          <div class="row" style="margin-top:8px"><span class="sm muted">通过规则</span>${`<div class="seg"><a class="${n.rule === 'all' || n.exit.length > 1 ? '' : 'on'}">任一人同意</a><a class="${n.rule === 'all' || n.exit.length > 1 ? 'on' : ''}">全部同意</a></div>`}</div>
+          <div class="help">结论：同意（准出）/ 驳回修改（本节点再做一轮）；打回上游在下游准入时做</div></div>
+      </div></div></div>`;
+}
+
+/* =====================================================================
+ * 流程市场：产品自带的流程模板；运营管理员维护，租户只能拷贝
+ * ===================================================================== */
+const MST = { on: ['上架中', 'success'], off: ['已下架', ''], draft: ['还没发布', 'warning'] };
+const copiedIn = (mid) => Object.entries(TPLS).filter(([, t]) => t.team === S.team && t.from?.mid === mid);
+function marketPage() {
+  const ops = asOps();
+  const list = Object.entries(MARKET).filter(([, m]) => (ops || m.status === 'on') && (S.mcat === 'all' || m.cat === S.mcat));
+  const sub = ops ? '产品自带的流程模板，不属于任何租户。你在这里新建、编辑、发布、上下架；租户拷走的是拷贝，之后和市场无关' : '产品自带的流程模板。团队管理员拷贝到本团队后再改；市场里的模板不能改';
+  return `<div class="page"><div class="page-head"><div class="grow"><h1>流程市场${S.mcat === 'all' ? '' : ` · ${MCATS[S.mcat]}`}</h1><div class="sm muted" style="margin-top:2px">${sub}</div></div>${ops ? `<button class="btn primary" data-act="mNew">${ic('plus')}新建模板</button>` : ''}</div>
+    ${list.length ? `<div class="cgrid">${list.map(([k, m]) => {
+      const cp = copiedIn(k);
+      return `<div class="tcard" data-go="#/market/${k}"><div class="row"><span class="ic2" style="background:${m.color}">${ic(m.icon)}</span><div class="grow"><b>${esc(m.name)}</b><div class="xs faint">${MCATS[m.cat]} · ${esc(m.who)}</div></div>${ops ? `<span class="tag ${MST[m.status][1]}">${MST[m.status][0]}</span>` : ''}</div>
+        ${miniSteps(m)}<div class="row xs muted" style="margin-top:10px"><span>${m.ver ? `v${m.ver}` : '草稿'}</span><span>·</span><span>${m.copies} 个团队拷贝过${ops ? `（${m.tenants} 个租户）` : ''}</span><span class="sp"></span>${!ops && cp.length ? `<span class="tag success">${esc(TEAMS[S.team].name)}已拷贝</span>` : ''}</div></div>`;
+    }).join('')}</div>` : `<div class="card"><div class="empty"><div class="ill">${ic('store')}</div><h3>这个分类还没有模板</h3></div></div>`}</div>`;
+}
+function marketDetail(mid) {
+  const m = MARKET[mid];
+  if (!m || (!asOps() && m.status !== 'on')) return '<div class="page">模板不存在或已下架</div>';
+  const ops = asOps();
+  const nid = m.nodes[S.selNode] ? S.selNode : flat(m)[0];
+  const n = m.nodes[nid];
+  const cp = copiedIn(mid);
+  const adm = isAdmin();
+  const act = ops
+    ? `<button class="btn" data-act="mToggle" data-v="${mid}" ${m.status === 'draft' ? 'disabled title="先发布第一个版本"' : ''}>${m.status === 'on' ? '下架' : '上架'}</button><button class="btn primary" data-go="#/market/${mid}/edit">${ic('pencil')}编辑</button>`
+    : adm ? `<button class="btn primary" data-act="copy" data-v="${mid}">${ic('copy')}拷贝到${esc(TEAMS[S.team].name)}</button>` : `<button class="btn" disabled title="只有团队管理员能拷贝">${ic('copy')}拷贝到本团队</button>`;
+  return `<div class="page">
+    <div class="xs muted" style="margin-bottom:6px"><a href="#/market">流程市场</a> / ${esc(m.name)}</div>
+    <div class="page-head" style="align-items:flex-start"><span class="ic2" style="background:${m.color};width:40px;height:40px;border-radius:10px;display:grid;place-items:center;color:#fff;flex:none">${ic(m.icon)}</span><div class="grow"><div class="row"><h1>${esc(m.name)}</h1>${ops ? `<span class="tag ${MST[m.status][1]}">${MST[m.status][0]}</span>` : ''}</div>
+      <div class="row sm muted" style="margin-top:4px;flex-wrap:wrap">${MCATS[m.cat]}<span>·</span>${m.ver ? `v${m.ver}` : '草稿'}<span>·</span>${esc(m.who)}<span>·</span>${m.copies} 个团队拷贝过${ops ? `（${m.tenants} 个租户）` : ''}</div></div>${act}</div>
+    ${!ops && cp.length ? `<div class="banner2 info" style="margin-bottom:12px">${ic('check')}<div>${esc(TEAMS[S.team].name)}已经拷贝过：${cp.map(([k, t]) => `<a href="#/team/templates/${k}">「${esc(t.name)}」</a>（拷自 v${t.from.ver}）`).join('、')}。拷过去的是团队自己的，市场后来的更新不会带过去；要新版本就再拷一份</div></div>` : ''}
+    ${!ops && !adm ? `<div class="banner2 info" style="margin-bottom:12px">${ic('lock')}<div>只有团队管理员能把市场模板拷贝到团队；你在「${esc(TEAMS[S.team].name)}」是${LEVEL[levelOf(S.team)]}成员</div></div>` : ''}
+    <div class="card pad" style="margin-bottom:14px"><div class="sm">${esc(m.desc)}</div></div>
+    <div class="card">${flowView(m, null, nid)}<div class="legend"><span>点节点看工作说明</span><span class="sp"></span><span class="rtag admit">准入</span><span>开工前审上游</span><span class="rtag exit">准出</span><span>交付前审本节点</span></div></div>
+    <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:16px">
+      <div class="card pad"><h2 style="margin-bottom:10px">${esc(n.name)}</h2><dl class="kv" style="grid-template-columns:82px 1fr"><dt>工作说明</dt><dd class="sm">${esc(n.desc || '—')}</dd><dt>执行</dt><dd class="sm">${esc(m.roles[n.exec])}</dd>${n.admit ? `<dt>准入</dt><dd class="sm">${esc(roleNames(m, n.admit))}</dd>` : ''}<dt>准出</dt><dd class="sm">${esc(roleNames(m, n.exit))} · ${ruleText(n)}</dd></dl></div>
+      <div class="card pad"><h2 style="margin-bottom:10px">角色</h2>${Object.entries(m.roles).map(([rk, rn]) => `<div class="row" style="padding:6px 0;border-bottom:1px solid var(--line-2);align-items:flex-start"><b class="sm" style="width:72px;flex:none">${rn}</b><span class="sm muted">执行 ${flat(m).filter((x) => m.nodes[x].exec === rk).map((x) => m.nodes[x].name).join('、') || '—'}；评审 ${flat(m).filter((x) => (m.nodes[x].admit || []).includes(rk) || m.nodes[x].exit.includes(rk)).map((x) => m.nodes[x].name).join('、') || '—'}</span></div>`).join('')}
+        <div class="xs faint" style="margin-top:8px">角色是占位：拷到团队后，在项目配置里给每个角色分配成员和数字员工；产出物的格式看数字员工的技能</div></div></div></div>`;
+}
+
+/* =====================================================================
+ * 团队 → 成员与数字员工 / 团队设置
+ * ===================================================================== */
+function teamPage() {
+  const tm = TEAMS[S.team];
+  const adm = isAdmin();
+  const roleOf = (uid) => {
+    const s = new Set();
+    Object.values(PROJECTS).filter((p) => p.team === S.team).forEach((p) => Object.entries(p.bind).forEach(([tid, b]) => Object.entries(b).forEach(([rk, a]) => { if (a.m.includes(uid)) s.add(TPLS[tid].roles[rk]); })));
+    return [...s].join('、') || '—';
+  };
+  return `<div class="page"><div class="page-head"><h1>成员与数字员工 · ${esc(tm.name)}</h1><span class="sp"></span>${adm ? `<button class="btn" data-act="toast" data-msg="从用户中心选本租户的人，设团队权限（只读 / 读写 / 团队管理员）">${ic('plus')}添加成员</button><button class="btn primary" data-act="toast" data-msg="从本租户 Atlas 的智能体里选：TeamFlow 只引用，不创建；它的技能、知识库、模型在 Atlas 里配">${ic('bot')}接入数字员工</button>` : ''}</div>
+    ${adm ? '' : `<div class="banner2 info" style="margin-bottom:14px">${ic('lock')}<div>加人、改权限、接入数字员工只有团队管理员能做；你在这个团队是${LEVEL[levelOf(S.team)]}成员</div></div>`}
+    <h2 style="margin-bottom:4px">数字员工</h2><div class="sm muted" style="margin-bottom:10px">产出物的格式写在数字员工的技能里（例如「PRD 撰写」约定了 PRD 的章节和自查规则）；要统一格式，就在 Atlas 里给它装对应的技能</div>
+    <div class="cgrid">${tm.agents.map((id) => { const a = AGENTS[id]; return `<div class="tcard"><div class="row">${av(a.name, a.color, 38, true)}<div class="grow"><b>${esc(a.name)}</b><div class="xs faint">${esc(a.kind)} · ${esc(a.model)} · v${AV[id]}</div></div>${a.st === 'busy' ? '<span class="tag blue">干活中</span>' : a.st === 'wait' ? '<span class="tag warning">等人</span>' : '<span class="tag">空闲</span>'}</div>
+      <div class="row" style="gap:6px;margin-top:10px;flex-wrap:wrap"><span class="xs faint">技能</span>${a.skills.map((s) => `<span class="tag">${esc(s)}</span>`).join('')}</div>
+      <div class="xs muted" style="margin-top:8px">${esc(a.now)}</div><div class="divider" style="margin:10px 0"></div>
+      <div class="row xs muted" style="white-space:nowrap"><span>本月 <b style="color:var(--ink)">${a.done}</b> 个节点</span><span>平均 <b style="color:var(--ink)">${a.avgR}</b> 轮通过</span><span class="sp"></span>${adm ? '<a data-act="toast" data-msg="在 Atlas 里编辑这个智能体（技能、知识库、模型）">在 Atlas 里编辑</a>' : ''}</div></div>`; }).join('')}</div>
+    <div class="sec2"><h2>成员<span class="xs faint" style="font-weight:500">团队权限存在用户中心的团队数据权限里</span></h2><table class="table"><thead><tr><th>成员</th><th>职位</th><th style="width:180px">团队权限</th><th>在项目里担任</th>${adm ? '<th style="width:60px"></th>' : ''}</tr></thead><tbody>${Object.entries(tm.members).map(([m, lv]) => `<tr><td>${pc(m, 24)}</td><td class="sm muted">${esc(PEOPLE[m].title)}</td><td>${levelTag(lv)}</td><td class="sm">${lv === 'ro' ? '<span class="faint">只读成员不担任角色</span>' : esc(roleOf(m))}</td>${adm ? `<td><button class="ibtn sm" data-act="toast" data-msg="改团队权限或移出团队：以你的身份写用户中心（至少保留一个团队管理员）">${ic('more')}</button></td>` : ''}</tr>`).join('')}</tbody></table>
+      <div class="xs faint" style="margin-top:8px">读写：发起流程，按项目配置的角色执行、评审 · 只读：看流程、流程空间和追溯 · 团队管理员：另外能配置团队、流程模板、项目</div></div></div>`;
+}
+function settingsPage() {
+  if (!isAdmin()) return lockedPage('团队设置');
+  const tm = TEAMS[S.team];
+  const owners = Object.keys(tm.members).filter((u) => tm.members[u] === 'owner');
+  const sw = (on, t, d) => `<div class="row" style="padding:8px 0;border-bottom:1px solid var(--line-2)"><div class="grow"><b class="sm">${t}</b><div class="xs muted">${d}</div></div><span class="switch ${on ? 'on' : ''}" data-act="toast" data-msg="（原型）"></span></div>`;
+  return `<div class="page" style="max-width:1000px"><div class="page-head"><h1>团队设置 · ${esc(tm.name)}</h1></div>
+    <div class="card pad" style="margin-bottom:16px"><h2 style="margin-bottom:12px">基本信息</h2><div class="col" style="gap:12px;max-width:560px">
+      <div><label class="label">团队名称</label><input class="input" style="width:100%" value="${esc(tm.name)}" /><div class="help">在「${esc(TENANT.name)}」里唯一</div></div>
+      <div><label class="label">说明</label><textarea class="input" style="width:100%" rows="2">${esc(tm.desc)}</textarea></div>
+      <div class="row"><span class="sp"></span><button class="btn primary" data-act="toast" data-msg="已保存">保存</button></div></div></div>
+    <div class="card pad" style="margin-bottom:16px"><div class="row" style="margin-bottom:10px"><h2>团队管理员</h2><span class="sp"></span><button class="btn sm" data-act="toast" data-msg="从团队成员里选，授团队 Owner（写进用户中心）">${ic('plus')}添加团队管理员</button></div>
+      <div class="row" style="flex-wrap:wrap;gap:8px">${owners.map((u) => `<span class="chip" style="height:30px">${pc(u, 20)}</span>`).join('')}</div>
+      <div class="xs faint" style="margin-top:8px">团队管理员 = 这个团队的 Owner（用户中心团队数据权限）：配置团队（成员、数字员工、本页）和流程（流程模板、项目）。至少保留一个</div></div>
+    <div class="card pad" style="margin-bottom:16px"><h2 style="margin-bottom:4px">通知</h2><div class="xs muted" style="margin-bottom:4px">评审、提问、接管推给对应的人；每个人在个人设置里绑定自己的账号</div>
+      ${sw(true, '企业微信', '团队用企业微信时打开')}${sw(false, '钉钉', '团队用钉钉时打开')}${sw(true, '邮件', '每天汇总一次没处理的事')}</div>
+    <div class="card pad"><div class="row"><div class="grow"><h2>归档团队</h2><div class="sm muted" style="margin-top:4px">归档后不能再发起流程，进行中的流程继续跑完；成员权限仍在用户中心</div></div><button class="btn danger" data-act="toast" data-msg="（原型）归档团队">归档</button></div></div></div>`;
+}
+
+/* =====================================================================
+ * 弹窗
+ * ===================================================================== */
+const mShell = (title, body, foot, wide = false) => `<div class="mask" data-act="closeModal"><div class="modal ${wide ? 'wide' : ''}" data-stop><div class="modal-h"><h2 class="grow">${title}</h2><button class="ibtn sm" data-act="closeModal">${ic('x')}</button></div><div class="modal-b">${body}</div>${foot ? `<div class="modal-f">${foot}</div>` : ''}</div></div>`;
+const editTarget = (m) => (m.mode === 'market' ? MARKET[m.key] : TPLS[m.key]);
+function modal() {
+  const m = S.modal;
+  if (!m) return '';
+  if (m.type === 'validate') {
+    const tpl = editTarget(m);
+    const mk = m.mode === 'market';
+    const used = Object.values(PROJECTS).filter((p) => p.bind[m.key]).map((p) => p.name);
+    const after = mk
+      ? `发布后：各租户在流程市场看到 v${tpl.ver + 1}，之后拷贝的拿到这一版；已经拷走的是租户自己的，不受影响${tpl.status === 'draft' ? '。这是第一个版本，发布即上架' : ''}`
+      : `发布后：新发起的流程用 v${tpl.ver + 1}；进行中的流程仍锁在各自发起时的版本。${used.length ? `绑定了这个模板的项目（${esc(used.join('、'))}）跟着用新版本，新版本多了角色时要在项目配置里补上` : '还没有项目绑定，发布后到项目配置里绑'}`;
+    return mShell(`发布 v${tpl.ver + 1} 前校验`, `${[[1, '每个节点都有执行角色'], [1, '除第一个节点外都配了准入评审'], [1, '每个节点都配了准出评审'], [1, '每个节点都写了工作说明'], ...(m.key === 'rd' ? [[2, '「测试执行」的准出要求产品、测试全部同意：评审人可能跨团队，确认产品角色会有人']] : [])].map(([k, t]) => `<div class="issue"><span class="${k === 1 ? 'ok' : 'warn'}">${ic(k === 1 ? 'check' : 'alert')}</span>${esc(t)}</div>`).join('')}
+      <div class="banner2 info" style="margin-top:10px">${ic('lock')}<div>${after}</div></div>`,
+      '<button class="btn" data-act="closeModal">再改改</button><button class="btn primary" data-act="publish">发布</button>');
+  }
+  if (m.type === 'copy') {
+    const g = MARKET[m.mid];
+    return mShell(`拷贝「${esc(g.name)}」到${esc(TEAMS[S.team].name)}`, `<div class="col" style="gap:12px"><div><label class="label">模板名称</label><input class="input" style="width:100%" data-bind="name" value="${esc(m.name)}" /><div class="help">团队内唯一；拷到顶栏选中的团队，要拷到别的团队先切换</div></div>
+        <div class="sm muted">会拷贝：节点、并行组、角色、准入准出评审、工作说明（v${g.ver}）。拷过来是本团队的草稿，改完发布；市场之后更新、下架都不影响它</div>
+        ${miniSteps(g)}</div>`,
+      '<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="copyOk">拷贝为草稿</button>');
+  }
+  if (m.type === 'submit') {
+    const f = FLOWS[m.fid];
+    const tpl = tplOf(f);
+    const n = tpl.nodes[m.nid];
+    const s = f.nodes[m.nid];
+    const upSub = {};
+    ups(tpl, m.nid).forEach((u) => (f.nodes[u].sub || []).forEach((p) => { upSub[p] = tpl.nodes[u].name; }));
+    const files = [...filesOf(m.fid)].filter(([p]) => !p.endsWith('/')).sort((a, b) => (b[2] === m.nid) - (a[2] === m.nid) || a[0].localeCompare(b[0], 'zh'));
+    const revs = reviewersOf(f, m.nid).map((u) => PEOPLE[u].name).join('、');
+    const rows = files.map(([p, by, node, at]) => {
+      const on = m.sel.includes(p);
+      return `<div class="pickrow ${on ? 'on' : ''}" data-act="subPick" data-v="${esc(p)}"><input type="checkbox" ${on ? 'checked' : ''} /><span class="mono xs grow">${esc(p)}</span>${node === m.nid ? '<span class="tag blue">本节点改过</span>' : ''}${upSub[p] ? `<span class="tag">${esc(upSub[p])}提交的</span>` : ''}<span class="xs faint" style="white-space:nowrap">${at}</span></div>`;
+    }).join('');
+    return mShell(`提交评审 · ${esc(n.name)} 第 ${s.r} 轮`, `<div class="sm muted">从流程空间勾选这一轮要评审的产出物。评审人看的是这些文件的当前内容，下游开工时拿到的也是它们</div>
+      <div class="row" style="margin:12px 0 6px"><b class="sm">流程空间</b><span class="mono xs faint">${esc(f.space)}</span><span class="sp"></span><span class="xs muted">已选 ${m.sel.length} 个</span></div>
+      <div class="col" style="gap:6px;max-height:300px;overflow-y:auto">${rows || '<div class="sm muted">流程空间是空的</div>'}</div>
+      <div class="banner2 info" style="margin-top:14px">${ic('shield')}<div>提交后进入准出评审：锁定评审人 ${esc(revs)}（${ruleText(n)}）；评审期间本节点会话不再写入。产物不做版本管理，只记下这一轮提交了哪些文件</div></div>`,
+      `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" ${m.sel.length ? 'data-act="subGo"' : 'disabled title="至少选一个文件"'}>${ic('send2')}提交评审</button>`, true);
+  }
+  if (m.type === 'newFlow') {
+    const p = PROJECTS[m.pid];
+    const tpl = TPLS[m.tpl];
+    const b = p.bind[m.tpl];
+    const first = tpl.nodes[flat(tpl)[0]];
+    const ok = !missingRoles(m.tpl, b).length;
+    const cards = Object.keys(p.bind).map((k) => {
+      const t = TPLS[k];
+      const miss = missingRoles(k, p.bind[k]);
+      return `<div class="radio-card ${k === m.tpl ? 'on' : ''}" ${miss.length ? 'style="opacity:.6;cursor:not-allowed"' : `data-act="nfTpl" data-v="${k}"`}><span class="r"></span><div class="grow"><div class="row"><b class="sm">${esc(t.name)}</b><span class="xs faint">v${t.ver}</span></div>${miniSteps(t)}
+        ${miss.length ? `<div class="xs warn" style="margin-top:6px">还差 ${miss.length} 个角色没分配（${esc(miss.map((r) => t.roles[r]).join('、'))}），配齐前不能发起${isAdmin(p.team) ? ` · <a href="#/projects/${m.pid}/config">去项目配置</a>` : '：找团队管理员'}</div>` : ''}</div></div>`;
+    }).join('');
+    return mShell(`发起流程 · ${esc(p.name)}`, `<label class="label">流程模板</label><div class="col" style="gap:8px;margin-bottom:14px">${cards}</div>
+      <label class="label">标题</label><input class="input" style="width:100%" data-bind="title" value="${esc(m.title)}" placeholder="一句话说清要做什么" />
+      ${ok ? `<div class="banner2 info" style="margin-top:14px">${ic('bulb')}<div>其他都不用填：角色和数字员工按项目配置。发起时先向 Atlas 申请这条流程的流程空间，然后「${esc(first.name)}」开工，${ac(b[first.exec].a, 16)} 先找 ${esc(tpl.roles[first.exec])} · ${b[first.exec].m.map((u) => esc(PEOPLE[u].name)).join('、')} 问清楚要做什么</div></div>` : ''}`,
+      `<button class="btn" data-act="closeModal">取消</button><button class="btn primary" ${ok ? 'data-act="nfGo"' : 'disabled'}>${ic('play')}发起</button>`);
+  }
+  if (m.type === 'bindTpl') {
+    const p = PROJECTS[m.pid];
+    const cand = Object.entries(TPLS).filter(([k, t]) => t.team === p.team && t.ver && !p.bind[k]);
+    return mShell(`给「${esc(p.name)}」绑定流程模板`, cand.length ? `<div class="sm muted" style="margin-bottom:10px">本团队已发布的流程模板。绑定后在项目配置里给每个角色分配成员和数字员工</div><div class="col" style="gap:8px">${cand.map(([k, t]) => `<div class="radio-card" data-act="bindOk" data-v="${k}"><span class="ic2" style="background:${t.color};width:30px;height:30px;border-radius:8px;display:grid;place-items:center;color:#fff;flex:none">${ic(t.icon)}</span><div class="grow"><div class="row"><b class="sm">${esc(t.name)}</b><span class="xs faint">v${t.ver} · ${Object.keys(t.roles).length} 个角色</span></div>${miniSteps(t)}</div></div>`).join('')}</div>`
+      : `<div class="empty" style="padding:30px"><h3>本团队已发布的流程模板都绑定了</h3><div class="sm">要新的先去「团队 → 流程模板」新建，或从流程市场拷贝</div></div>`, '<button class="btn" data-act="closeModal">取消</button>');
+  }
+  if (m.type === 'newTeam') {
+    return mShell('新建团队', `<div class="col" style="gap:12px"><div><label class="label">团队名称</label><input class="input" style="width:100%" data-bind="name" value="${esc(m.name)}" placeholder="如：研发二部" /><div class="help">在「${esc(TENANT.name)}」里唯一</div></div>
+        <div><label class="label">说明（可选）</label><input class="input" style="width:100%" placeholder="这个团队做什么" /></div>
+        <div><label class="label">团队管理员</label><span class="chip" style="height:30px">${pc(ME.id, 20)}<span class="xs faint">你</span></span><div class="help">新建团队的人自动成为它的团队管理员（Owner）；以后可以再加</div></div>
+        <div><label class="label">初始成员（可选）</label><span class="chip" style="height:30px;color:var(--ink-3);cursor:pointer" data-act="toast" data-msg="从本租户的用户里选，默认读写">${ic('plus')}添加</span></div>
+        <div class="banner2 info">${ic('shield')}<div>权限写进用户中心的团队数据权限：你 = Owner，初始成员 = 读写。你能建团队，是因为你在用户中心有「团队管理员」角色</div></div></div>`,
+      '<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="newTeamOk">创建</button>');
+  }
+  if (m.type === 'newProject') {
+    return mShell(`新建项目 · ${esc(TEAMS[S.team].name)}`, `<div class="col" style="gap:12px"><div><label class="label">项目名称</label><input class="input" style="width:100%" data-bind="name" value="${esc(m.name)}" /><div class="help">团队内唯一</div></div>
+        <div><label class="label">说明（可选）</label><input class="input" style="width:100%" placeholder="这个项目做什么" /></div>
+        <div class="xs muted">建好后到「配置」绑定流程模板、给角色分配成员和数字员工</div></div>`,
+      '<button class="btn" data-act="closeModal">取消</button><button class="btn primary" data-act="newProjectOk">创建</button>');
+  }
+  if (m.type === 'tenant') return mShell('专题：多租户与权限', tenantDoc(), '<button class="btn primary" data-act="closeModal">知道了</button>', true);
+  return '';
+}
+function tenantDoc() {
+  const tb = (head, rows) => `<table class="table" style="margin:6px 0 16px"><thead><tr>${head.map((h) => `<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c, i) => `<td class="sm" ${i ? '' : 'style="white-space:nowrap;font-weight:600"'}>${c}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  return `<h3>多租户</h3><div class="sm muted" style="margin:4px 0 0">一个租户 = 一家企业。TeamFlow 的每条数据都属于一个租户，按平台已有的多租户方案做，不另起一套</div>
+    ${tb(['', '做法'], [
+      ['租户从哪来', '网关验过访问令牌后写入租户；TeamFlow 在请求入口进入租户作用域，查询自动带租户条件，缺租户直接报错。后台推进（监督器、扫描、唤醒）按流程行上的租户逐条进入'],
+      ['数据', '每张业务表都记租户。团队名、模板名在租户内唯一，项目名在团队内唯一；流程编号在租户内递增'],
+      ['跨系统', '调用户中心、Atlas 时带上本次的用户和租户（已有）。成员只能选本租户的人，数字员工只能选本租户 Atlas 的智能体；流程空间向 Atlas 按本租户申请'],
+      ['流程市场', '产品自带，不属于任何租户（同技能市场）；运营管理员维护。租户拷贝到自己的团队后是自己的，之后和市场无关'],
+      ['租户状态', 'TeamFlow 不存、也不问。租户停用、到期后，用户中心在角色权限和数据权限上返回「无权限」'],
+      ['开通与关闭', '在运营中心登记 TeamFlow；开通时 TeamFlow 不用准备什么，关闭时按顺序删掉本租户的数据（含向 Atlas 释放流程空间）。应用目录（操作码、菜单、角色、数据编码「团队」）由运营人员在运营中心录入'],
+      ['和现在的差别', '现在表里没有租户，模板、流程角色全局唯一，只给默认租户开通了'],
+    ])}
+    <h3>角色与数据权限</h3><div class="sm muted" style="margin:4px 0 0">角色只决定「能做哪类事」，「对哪个团队」一律看团队数据权限。允许 = 角色 ∧ 团队权限 ∧ 流程角色（执行人按项目配置，评审人按本轮锁定的名单）</div>
+    ${tb(['', '角色（用户中心）', '数据权限', '能做什么'], [
+      ['团队管理员', '团队管理员', '团队 Owner（自己建的团队自动是）', '新建团队；团队配置（成员、数字员工、团队设置）；流程配置（流程模板、项目、项目配置）；从流程市场拷贝'],
+      ['成员', '团队成员', '团队 读写', '看项目和流程、发起流程、按项目配置的角色执行和评审、往流程空间上传'],
+      ['只读成员', '团队成员', '团队 只读', '看流程、流程空间和追溯，不发起、不担任角色'],
+      ['管本租户全部团队', '不加角色', '「全部团队」Owner（编码级授权）', '和每个团队的团队管理员一样'],
+      ['运营管理员', '不加角色（系统租户的人）', '运营模块「流程市场」读写（和运营中心一致）', '在流程市场新建、编辑、发布、上下架模板；只读 = 只能看'],
+    ])}
+    <div class="xs faint">没有「平台管理员」：多租户以后没有跨租户的管理者；平台的事归运营管理员（系统租户）</div>`;
+}
+
+/* =====================================================================
+ * 设计说明（评审用，非产品界面）
+ * ===================================================================== */
+function N(title, items, be = [], demo = '') { return { title, items, be, demo }; }
+const TOPIC = '<a data-act="tenantDoc">专题：多租户与权限</a>';
+const WHO_DEMO = '<a data-act="who" data-v="ops">切到运营管理员（林运营）</a>';
+function notesFor(r) {
+  if (r.p === 'flows' && r.b === 'trace') return N('追溯', [
+    '一条流程从发起到结束的全部事件：申请流程空间、指令、提问与回答、写入、上传、提交评审（这一轮选了哪些文件）、评审结论和意见、打回、锁定',
+    '产物不做版本管理：追溯里记的是「第几轮提交了哪些文件」和评审意见，文件本身没有历史版本',
+    '可按节点、事件类型筛；导出审计报告（PDF / JSON）',
+    '和现在的差别：现在只能一个节点一个节点看；改成按流程的时间线',
+  ], ['流程事件表：状态迁移、指令、提交评审（文件路径列表）、评审结论、锁定各记一条（现有审计表扩展）', '对话原文仍在 Atlas 会话里，事件只存摘要和链接']);
+  if (r.p === 'flows' && r.b === 'space') return N('流程空间', [
+    '每条流程一个流程空间：发起时 TeamFlow 先调 Atlas 申请（Atlas 的工作空间，不归个人，归这条流程），拿到空间编号再建流程；申请失败就不发起',
+    '这条流程所有节点的数字员工会话都挂载它：上游写的文件下游直接读，不拷贝；人可以上传资料、代码副本',
+    '「提交」列：哪个节点第几轮把它选为产出物；没被选过的是过程文件（草稿、中间结果）',
+    '产物不做版本管理：这里只有文件的当前内容',
+    '谁能看：本团队成员（只读也能看、能下载）；读写成员能上传。权限跟团队走，不跟某个人的 Atlas 工作空间走',
+    '流程完成或终止后转只读保留；什么时候删（团队归档？保留期？）待定',
+  ], ['Atlas：申请 / 释放工作空间的接口（按租户，归申请的应用，返回空间编号）；按空间编号列文件、预览、上传、下载', '★ Atlas 沙箱现在按人共享，/data 在 Pod 创建时就挂成 {user}/，独立的流程空间挂不进已有的个人沙箱：要么按流程空间起沙箱（沙箱的键从「人」扩成「人或空间」），要么另想挂载方式。这是这次改动里后端最大的一块，要单独设计', '原生智能体和 CLI 智能体都要能挂', 'TeamFlow 代理流程空间的文件接口，按团队权限放行（只读看、读写传）']);
+  if (r.p === 'flows' && r.b === 'n') return N('节点：一个节点 = 一个数字员工会话', [
+    '左边是人和数字员工的对话：人下指令、回答提问、必要时接管；数字员工按自己的技能干活、按技能约定的格式自查',
+    '会话挂载这条流程的流程空间：所有节点在同一个目录里读写',
+    '开工指令由系统发：工作说明 + 上游提交的文件路径（不拷贝、不带上游对话）。约定产出写在「{节点名}/」下、不改上游提交的文件（有问题就提，或者打回）',
+    '提交评审：执行人点「提交评审」，从流程空间勾选这一轮的产出物（至少一个）。评审人和下游看的都是这些文件的当前内容',
+    '产物不做版本管理：轮次只记「提交了哪些文件」和评审意见；评审期间本节点会话不再写入',
+    '评审结论：准出 → 同意 / 驳回修改（本节点下一轮）；准入 → 准入通过（开工）/ 打回上游。驳回、打回必须写意见，意见就是下一轮的指令',
+    '打回沿流程图求后代：已开工的下游标记为已打回，进行中的评审取消',
+    '接管：数字员工停下，人在同一个会话里直接改流程空间的文件，改完交还',
+    '编码节点：代码副本放进流程空间（人上传，或数字员工在会话里拉），产出 变更.patch + 变更说明.md；以后再集成代码仓库',
+    '和上一版的差别：去掉快照、内容哈希、「输入/」拷贝、两轮对比和「内容没变不能提交」；去掉文件模板，自查按技能',
+  ], ['建会话时带上流程空间编号，会话的工作目录就是它（见「流程空间」页的后端说明）', '提交评审记一行：节点 × 轮次 × 文件路径列表（现有产物版本表改成只存路径，不存内容、不算哈希）', '开工指令里列出上游最近一次提交的文件路径', '节点对话经代理透传 Atlas 会话接口，只放行本节点的会话与子会话（已有）', '驳回 / 打回意见自动拼成下一轮的开工指令（已有）'],
+  `<b>演示</b><div class="sm" style="margin-top:4px;line-height:1.8"><a href="#/flows/F-1022/n/design">订单导出优化 · 技术方案</a>：回答问题 → 数字员工写入 → 提交评审（选文件）<br><a href="#/flows/F-1024/n/code">登录验证码限流 · 编码</a>：准入通过 / 打回上游（看流程图怎么变）<br><a href="#/flows/F-1025/n/code">支付回调幂等 · 编码</a>：准出评审，两人都要同意<br><a href="#/flows/F-1024/n/prd">登录验证码限流 · PRD</a>：评审记录 · <a href="#/flows/F-1024/n/cases">测试用例</a>：按技能自查<br><a href="#/flows/F-0031/n/techrev">技术博客 · 技术审校</a>：非代码产出</div>`);
+  if (r.p === 'flows' && r.a) return N('流程详情', [
+    '流程图：步骤从左到右，并行组上下排列。节点卡上是状态、轮次、执行的数字员工、准入和准出由谁审',
+    '七种状态：待开始、人机协同中、待准出（准出评审中）、待下游准入（已准出，等下游开工）、准入评审中、已通过、已打回',
+    '准入是「下阶段准入」：上游准出后等下游准入；全部下游开工后上游才算通过；末节点准出，流程完成',
+    '推进不靠定时器：每次状态迁移后检查依赖是否就绪，并行轨道不用特殊处理',
+    '流程空间：顶部按钮进；「产出物」卡片列出各节点最近一次提交的文件',
+    '需求：发起时只有标题，第一个节点准出后显示它提交的文件',
+    '角色分配显示项目配置的当前值，要改去项目配置；只影响还没开工的节点',
+  ], ['流程图按模板结构渲染，状态来自节点表（已有）', '流程行加流程空间编号（发起时写入）']);
+  if (r.p === 'projects' && r.a && r.b === 'config') return N('项目 → 配置', [
+    '项目配置 = 绑定流程模板 + 给模板里的每个角色分配成员和数字员工；只有团队管理员能改，其他人只能看',
+    '一个项目可以绑定多个流程模板。角色按模板分开配：「缺陷修复」的开发可以和「软件研发」的不一样',
+    '成员只能选本团队「读写」以上的人（只读的人不能担任角色）；数字员工只能选本团队接入的智能体',
+    '数字员工下面显示它的技能：产出物的格式由技能约定，选数字员工就决定了产出物长什么样',
+    '模板跟随最新发布版，发起时锁定版本；新版本多了角色，这里标「还差 n 个角色」，配齐前不能用这个模板发起',
+    '改分配只影响还没开工的节点：执行 Agent 在节点首次开工时锁定，评审人在进入评审时锁定',
+  ], ['项目和流程模板改成多对多', '角色分配加模板这一层：项目 × 模板 × 角色 → 成员 / 数字员工', '执行人取项目当前的分配（现状不变）'],
+  '<b>演示</b><div class="sm" style="margin-top:4px;line-height:1.8"><a href="#/projects/p-pay/config">支付中台</a>：缺陷修复还差测试角色，发起时灰掉<br><a data-act="bindTpl" data-v="p-app">给 Atlas 控制台绑定流程模板</a>：绑「版本发布」后看「还差 3 个角色」<br>点左侧的「技术博客」：李工在内容运营组是读写成员，只能看</div>');
+  if (r.p === 'projects' && r.a) return N('项目 → 流程', [
+    '菜单和 Atlas 一样两级：一级（项目 / 团队 / 流程市场）横在顶栏，二级竖在左侧。项目的二级 = 流程、配置；下面是本团队的项目列表（像 Atlas 的对话历史），点一下切换，红点数是等你处理的',
+    '原来首页的项目卡片去掉了：进「项目」直接到第一个项目的流程',
+    '流程列表：当前节点和状态、每个节点一格的进度、哪里在等我（「等你」列，点了直接到节点）',
+    '发起只选模板、写标题：角色和数字员工按项目配置；发起时向 Atlas 申请流程空间；需求由第一个节点的数字员工找执行人问清楚',
+    '能选的模板 = 项目绑定的、而且角色配齐的；没配齐的灰掉。只读成员没有「发起流程」',
+  ], ['发起接口只收模板和标题：校验角色配齐 → 向 Atlas 申请流程空间 → 建流程（编号在租户内递增）→ 第一个节点开工', '「等你」= 评审名单 + 数字员工提问 + 接管请求，按流程汇总'],
+  '<b>演示</b><div class="sm" style="margin-top:4px"><a data-act="newFlow" data-v="p-app">在 Atlas 控制台发起流程</a>：发起后到流程详情，点第一个节点看数字员工提问</div>');
+  if (r.p === 'team' && r.a === 'templates' && r.b) return N('流程模板编排', [
+    '可视化编排：顺序步骤 + 并行组。不做任意连线和条件分支：依赖由结构推导、状态机可串行化；真要分支就拆成两个模板',
+    '节点配置：名称、工作说明（开工指令的一部分）、执行角色、准入评审（非首节点）、准出评审（角色 + 通过规则）',
+    '节点不配产出物、没有文件模板：交什么由执行人在提交评审时从流程空间选；格式由数字员工的技能约定，工作说明里可以点名技能',
+    '角色只是占位（产品、架构……），在项目配置里分配成员和数字员工',
+    '草稿 → 校验 → 发布；发布新版本不影响进行中的流程（各自锁在发起时的版本）',
+    '从流程市场拷来的模板标着来源；拷过来就是团队自己的，随便改',
+  ], ['模板只存结构（已有）；编排器直接编辑这份结构；节点去掉产出物字段', '发布前校验（已有的发布校验，去掉「文件模板已发布」这一条）'],
+  '<b>演示</b><div class="sm" style="margin-top:4px">点画布上的节点切换右侧配置 · 点「发布」看校验</div>');
+  if (r.p === 'team' && r.a === 'templates') return N('团队 → 流程模板', [
+    '流程模板归团队，只有团队管理员能建、能改；项目绑定后才能发起',
+    '两种来源：从流程市场拷贝（记下拷自哪个模板的哪一版），或空白新建',
+    '拷过来就是团队自己的：市场之后更新、下架都不影响；要新版本就再拷一份',
+    '去掉了文件模板：数字员工可以用技能，技能里约定产出物的格式',
+  ], ['模板加团队归属（现在全局唯一）和来源（市场模板编号 + 版本）', '文件模板相关的表和接口删掉']);
+  if (r.p === 'team' && r.a === 'settings') return N('团队 → 团队设置', [
+    '只有团队管理员能进：基本信息、团队管理员、通知、归档',
+    '团队管理员 = 团队的 Owner。用户中心的「团队管理员」角色只决定能不能新建团队；管哪个团队看数据权限，新建团队的人自动成为它的 Owner',
+    '没有代码托管设置：产出物都在每条流程的流程空间里',
+    '团队名在租户内唯一',
+  ], ['新建团队：一次写入 管理员 = Owner、初始成员 = 读写（已有）'],
+  `<b>演示</b><div class="sm" style="margin-top:4px"><a data-act="newTeam">新建团队</a> · ${TOPIC}</div>`);
+  if (r.p === 'team') return N('团队 → 成员与数字员工', [
+    '团队的二级菜单：成员与数字员工、流程模板、团队设置；后两个只有团队管理员看得到',
+    '成员来自用户中心，只能选本租户的人。团队权限三级：团队管理员（Owner）、读写、只读，都存在用户中心的团队数据权限里，TeamFlow 不存',
+    '读写：发起流程，按项目配置的角色执行和评审；只读：看流程、流程空间和追溯',
+    '数字员工就是本租户 Atlas 里的智能体：TeamFlow 只引用、不创建；技能、知识库、模型在 Atlas 里配。产出物的格式写在技能里',
+    '卡片上看它现在在做什么，以及本月完成几个节点、平均几轮通过（返工率）',
+  ], ['加人、改级别 = 以当前用户的身份写用户中心的数据权限（已有）', '数字员工的技能从 Atlas 读（智能体详情），不在 TeamFlow 存', '数字员工统计：按 Agent 汇总节点的完成数和轮次'],
+  `<b>演示</b><div class="sm" style="margin-top:4px">顶栏切到「内容运营组」：李工是读写成员，二级菜单只剩成员与数字员工 · ${TOPIC}</div>`);
+  if (r.p === 'market' && r.b === 'edit') return N('流程市场 → 编辑（运营管理员）', [
+    '和团队用同一个编排器：结构、角色、准入准出、工作说明',
+    '发布新版本：之后拷贝的租户拿到新版本；已经拷走的是租户自己的，不受影响',
+    '第一次发布即上架；之后上架 / 下架在模板详情里',
+  ], ['运营接口：保存草稿、发布版本（版本号在市场里递增）'],
+  '<b>演示</b><div class="sm" style="margin-top:4px">点「发布」看校验和发布后的影响</div>');
+  if (r.p === 'market') {
+    const ops = asOps();
+    return N(ops ? '流程市场（运营管理员）' : '流程市场', ops ? [
+      '流程市场 = 原来的「场景模板库」，产品自带，不属于任何租户（和技能市场一样）',
+      '运营管理员 = 系统租户里、运营模块「流程市场」有读写数据权限的人（和运营中心的做法一致）；不加 TeamFlow 自己的账号',
+      '能做：新建、编辑、发布新版本、上架 / 下架；看每个模板被多少团队、多少租户拷贝过',
+      '下架只是不能再拷；已经拷走的不动',
+      '放在 TeamFlow 而不是运营中心：编排器只做一份；鉴权和运营中心一致',
+      '运营管理员登录 TeamFlow 只看到「流程市场」（系统租户的人也能建团队用项目，原型里略）',
+    ] : [
+      '流程市场 = 原来的「场景模板库」：产品自带的流程模板，不属于任何租户，由运营管理员维护',
+      '租户只能拷贝：团队管理员「拷贝到本团队」→ 成为团队的草稿模板，改完发布、项目绑定后就能用；市场里的模板租户改不了',
+      '拷贝而不是引用：市场后来改了、下架了，不影响已经拷走的（和技能市场一致）',
+      '只列上架的；左侧二级菜单按分类。读写 / 只读成员能看，不能拷贝',
+      '市场模板的节点不带文件模板：格式由数字员工的技能约定，工作说明里点名了建议的技能',
+    ], ops ? ['运营接口 /ops/v1/market/…：鉴权 = 系统租户 + 运营模块数据编码（同技能市场的运营接口）', '市场模板两张表（模板 + 版本），不带租户'] : ['市场模板两张表（模板 + 版本），不带租户（同技能市场）', '拷贝接口：把市场某一版的结构写成团队的草稿模板，记来源（市场模板编号 + 版本）'],
+    `<b>演示</b><div class="sm" style="margin-top:4px;line-height:1.8">${ops ? '<a data-act="who" data-v="li">切回李工</a> · <a href="#/market/m-rd/edit">编辑「软件研发」</a> · <a href="#/market/m-report">「数据分析报告」还没发布</a>' : `<a href="#/market/m-rd">软件研发</a>：研发一部已拷贝过 · <a href="#/market/m-contract">合同与合规审查</a>：拷贝到本团队<br>${WHO_DEMO}`}</div>`);
+  }
+  return N('项目', [
+    '这个团队还没有项目：团队管理员新建项目，绑定流程模板、分配角色后就能发起',
+    '左上角是租户（企业）：登录时确定，所有数据都在这个租户里；旁边是团队，项目和团队菜单都按当前团队显示',
+  ], [], `<b>演示</b><div class="sm" style="margin-top:4px">${TOPIC}</div>`);
+}
+function notesPanel(r) {
+  const n = notesFor(r);
+  return `<div class="notes"><div class="row"><b style="color:#92400e">${ic('bulb')} ${n.title}</b><span class="sp"></span><button class="ibtn sm" data-act="toggleNotes">${ic('x')}</button></div>
+    <h4>设计要点</h4><ul>${n.items.map((i) => `<li>${esc(i)}</li>`).join('')}</ul>
+    ${n.be.length ? `<h4>需要后端配合</h4><ul>${n.be.map((i) => `<li><span class="be">后端</span>${esc(i)}</li>`).join('')}</ul>` : ''}
+    ${n.demo ? `<div class="demo">${n.demo}</div>` : ''}
+    <h4>本原型的页面</h4><ul>
+      ${asOps() ? `<li><a href="#/market">流程市场</a> · <a href="#/market/m-rd">模板详情</a> · <a href="#/market/m-rd/edit">编辑</a></li><li><a data-act="who" data-v="li">切回李工（租户的人）</a></li>` : `
+      <li>项目：<a href="#/projects/p-app">流程</a> · <a href="#/projects/p-app/config">配置</a> · <a data-act="newFlow" data-v="p-app">发起流程</a></li>
+      <li><a href="#/flows/F-1024">流程详情</a> · <a href="#/flows/F-1024/space">流程空间</a> · <a href="#/flows/F-1024/trace">追溯</a></li>
+      <li>节点：<a href="#/flows/F-1024/n/code">准入评审</a> · <a href="#/flows/F-1025/n/code">准出评审</a> · <a href="#/flows/F-1022/n/design">被打回、提交评审</a> · <a href="#/flows/F-1024/n/prd">评审记录</a></li>
+      <li>团队：<a href="#/team">成员与数字员工</a> · <a href="#/team/templates">流程模板</a> · <a href="#/team/templates/rd">编排</a> · <a href="#/team/settings">团队设置</a> · <a data-act="newTeam">新建团队</a></li>
+      <li><a href="#/market">流程市场</a> · ${WHO_DEMO}</li>`}
+      <li>${TOPIC}</li></ul></div>`;
+}
+
+/* =====================================================================
+ * 交互
+ * ===================================================================== */
+function todoOf(fid, nid) { return TODOS.find((t) => t.flow === fid && t.node === nid); }
+const ACT = {
+  toggleNotes: () => { S.notes = !S.notes; },
+  toast: (el) => { toast(el.dataset.msg || '（原型）'); return false; },
+  setS: (el) => { const v = el.dataset.v; S[el.dataset.k] = v === 'true' ? true : v === 'false' ? false : /^\d+$/.test(v) ? +v : v; },
+  collapse: (el) => { if (el.dataset.v === '1') S.expandFull = !S.expandFull; else S.collapsed = !S.collapsed; },
+  team: (el) => { S.team = el.dataset.v; S.pop = null; if (parseRoute().p === 'projects' || parseRoute().p === 'flows') { go('#/projects'); return false; } },
+  who: (el) => { S.who = el.dataset.v; ME = USERS[S.who]; S.pop = null; S.modal = null; const h = S.who === 'ops' ? '#/market' : '#/projects'; if (location.hash !== h) { go(h); return false; } },
+  mcat: (el) => { S.mcat = el.dataset.v; if (parseRoute().a) { go('#/market'); return false; } },
+  readAll: () => { NOTIFS.forEach((n) => { n.unread = false; }); S.pop = null; },
+  closeModal: () => { S.modal = null; },
+  tenantDoc: () => { S.modal = { type: 'tenant' }; },
+  spacePick: (el) => { S.spaceSel[el.dataset.k] = el.dataset.v; },
+  newFlow: (el) => {
+    const pid = el.dataset.v;
+    const bind = PROJECTS[pid].bind;
+    const ready = Object.keys(bind).find((k) => !missingRoles(k, bind[k]).length);
+    if (!Object.keys(bind).length) { toast('这个项目还没绑定流程模板：先到配置里绑'); return false; }
+    S.pop = null;
+    S.modal = { type: 'newFlow', pid, tpl: ready || Object.keys(bind)[0], title: '导出任务支持取消' };
+  },
+  nfTpl: (el) => { S.modal.tpl = el.dataset.v; },
+  nfGo: () => {
+    const m = S.modal;
+    const title = (m.title || '').trim();
+    if (!title) { toast('写个标题'); return false; }
+    const p = PROJECTS[m.pid];
+    const tpl = TPLS[m.tpl];
+    const first = flat(tpl)[0];
+    const fid = `F-${Math.max(...Object.keys(FLOWS).map((k) => +k.slice(2))) + 1}`;
+    const space = `ws-${(0x100000 + Object.keys(FLOWS).length * 7919).toString(16).slice(-6)}`;
+    FLOWS[fid] = {
+      title, tpl: m.tpl, ver: tpl.ver, project: m.pid, status: 'running', by: ME.id, at: '刚刚', upd: '刚刚', fresh: true, space,
+      nodes: Object.fromEntries(flat(tpl).map((x) => [x, { st: x === first ? 'working' : 'pending', r: x === first ? 1 : 0 }])),
+    };
+    FILES[fid] = [];
+    const b = p.bind[m.tpl][tpl.nodes[first].exec];
+    S.modal = null;
+    go(`#/flows/${fid}`);
+    toast(`已发起 ${fid}「${title}」：向 Atlas 申请了流程空间 ${space}；「${tpl.nodes[first].name}」开工，${AGENTS[b.a].name} 在找 ${b.m.map((u) => PEOPLE[u].name).join('、')} 问清楚要做什么`);
+    return false;
+  },
+  bindTpl: (el) => { S.modal = { type: 'bindTpl', pid: el.dataset.v }; },
+  bindOk: (el) => {
+    const pid = S.modal.pid;
+    PROJECTS[pid].bind[el.dataset.v] = {};
+    S.modal = null;
+    go(`#/projects/${pid}/config`);
+    toast(`已绑定「${TPLS[el.dataset.v].name}」：给角色分配成员和数字员工后就能发起`);
+    return false;
+  },
+  newTeam: () => { S.pop = null; S.modal = { type: 'newTeam', name: '研发二部' }; },
+  newTeamOk: () => {
+    const name = (S.modal.name || '').trim();
+    if (!name) { toast('写个团队名称'); return false; }
+    const k = `t-${Object.keys(TEAMS).length + 1}`;
+    TEAMS[k] = { name, desc: '', members: { [ME.id]: 'owner' }, agents: [] };
+    S.team = k; S.modal = null;
+    go('#/projects');
+    toast(`已建「${name}」：你是团队管理员（Owner），已写进用户中心`);
+    return false;
+  },
+  newProject: () => { S.modal = { type: 'newProject', name: '运营后台' }; },
+  newProjectOk: () => {
+    const name = (S.modal.name || '').trim();
+    if (!name) { toast('写个项目名称'); return false; }
+    const k = `p-${Object.keys(PROJECTS).length + 1}`;
+    PROJECTS[k] = { name, team: S.team, desc: '（还没写说明）', bind: {} };
+    S.modal = null;
+    go(`#/projects/${k}/config`);
+    toast(`已建项目「${name}」：绑定流程模板、分配角色后就能发起`);
+    return false;
+  },
+  selNode: (el) => { S.selNode = el.dataset.id; },
+  steps: (el) => { S.stepsOpen[el.dataset.id] = !S.stepsOpen[el.dataset.id]; },
+  r1open: () => { S.r1open = !S.r1open; },
+  ptab: (el) => { S.ptab[el.dataset.k] = el.dataset.v; },
+  dec: (el) => { S.dec[el.dataset.k] = el.dataset.v; },
+  ask: (el) => {
+    S.ask[el.dataset.id] = +el.dataset.v;
+    S.done.td3 = true;
+    AGENTS['a-arch'].st = 'busy';
+    AGENTS['a-arch'].now = 'F-1022 · 技术方案（第 2 轮改完，等提交评审）';
+    const f = FILES['F-1022'].find(([p]) => p === '技术方案/技术方案.md');
+    f[3] = '刚刚'; f[4] = '7 KB';
+    toast('已回答：架构师改完方案，写进了流程空间');
+    return false;
+  },
+  /* 提交评审：从流程空间选这一轮的产出物 */
+  submit: (el) => { const [fid, nid] = el.dataset.k.split('/'); S.modal = { type: 'submit', fid, nid, sel: [] }; },
+  subPick: (el) => { const s = S.modal.sel; const p = el.dataset.v; const i = s.indexOf(p); if (i < 0) s.push(p); else s.splice(i, 1); },
+  subGo: () => {
+    const { fid, nid, sel } = S.modal;
+    const f = FLOWS[fid];
+    const s = f.nodes[nid];
+    s.st = 'exit_review'; s.sub = [...sel]; delete s.subR;
+    if (fid === 'F-1022' && nid === 'design') S.done.d1022 = true;
+    const revs = reviewersOf(f, nid).map((u) => PEOPLE[u].name).join('、');
+    S.modal = null;
+    toast(`已提交准出评审（第 ${s.r} 轮）：产出物 ${sel.map(base).join('、')}；锁定评审人 ${revs}`);
+    return false;
+  },
+  admit: (el) => {
+    const key = el.dataset.k;
+    const [fid, nid] = key.split('/');
+    const f = FLOWS[fid];
+    const tpl = tplOf(f);
+    const up = ups(tpl, nid)[0];
+    let msg;
+    if (S.dec[key] === 'ok') {
+      f.nodes[nid].st = 'working'; f.nodes[nid].r = 1;
+      const all = downs(tpl, up).every((x) => !['pending', 'admit_review'].includes(f.nodes[x].st));
+      if (all) f.nodes[up].st = 'passed';
+      msg = `准入通过：「${tpl.nodes[nid].name}」开工${all ? `；「${tpl.nodes[up].name}」的下游都已开工 → 已通过` : ''}`;
+    } else {
+      f.nodes[up].st = 'working'; f.nodes[up].subR = f.nodes[up].r; f.nodes[up].r += 1;
+      f.nodes[up].back = { by: ME.id, from: nid, why: '（你刚写的打回意见）' };
+      const hit = [];
+      downs(tpl, up).forEach((x) => {
+        if (x === nid) f.nodes[x].st = 'pending';
+        else if (!['pending', 'admit_review'].includes(f.nodes[x].st)) { f.nodes[x].st = 'returned'; hit.push(tpl.nodes[x].name); }
+      });
+      msg = `已打回「${tpl.nodes[up].name}」，回到第 ${f.nodes[up].r} 轮${hit.length ? `；「${hit.join('、')}」标记为已打回` : ''}`;
+    }
+    const t = todoOf(fid, nid);
+    if (t) S.done[t.id] = true;
+    go(`#/flows/${fid}`);
+    toast(msg);
+    return false;
+  },
+  exitReview: (el) => {
+    const key = el.dataset.k;
+    const [fid, nid] = key.split('/');
+    const f = FLOWS[fid];
+    S.done.td2 = true;
+    if (S.dec[key] === 'ok') {
+      f.nodes[nid].st = 'exited';
+      if (f.nodes.cases.st === 'exited') f.nodes.exec.st = 'admit_review';
+      toast('全部同意 → 编码准出；「测试执行」的两个上游都已准出，进入准入评审（陈运）');
+    } else {
+      f.nodes[nid].st = 'working'; f.nodes[nid].subR = f.nodes[nid].r; f.nodes[nid].r += 1;
+      toast('已驳回：开发工程师开始第 2 轮，你的意见作为第一条指令');
+    }
+    go(`#/flows/${fid}`);
+    return false;
+  },
+  validate: (el) => { S.modal = { type: 'validate', mode: el.dataset.v, key: el.dataset.k }; },
+  publish: () => {
+    const m = S.modal;
+    const t = editTarget(m);
+    t.ver += 1; t.draft = false;
+    if (m.mode === 'market' && t.status === 'draft') t.status = 'on';
+    if (m.mode === 'team') t.status = '已发布';
+    S.modal = null;
+    toast(m.mode === 'market' ? `已发布市场 v${t.ver}：之后拷贝的租户拿到这一版，已经拷走的不受影响` : `已发布 v${t.ver}：新发起的流程用这一版`);
+    return false;
+  },
+  /* 流程市场 */
+  copy: (el) => { S.modal = { type: 'copy', mid: el.dataset.v, name: MARKET[el.dataset.v].name }; },
+  copyOk: () => {
+    const { mid } = S.modal;
+    const name = (S.modal.name || '').trim();
+    if (!name) { toast('写个模板名称'); return false; }
+    const g = MARKET[mid];
+    const k = `tpl-${Object.keys(TPLS).length + 1}`;
+    TPLS[k] = { ...clone({ roles: g.roles, steps: g.steps, nodes: g.nodes }), name, ver: 0, team: S.team, color: g.color, icon: g.icon, status: '草稿', used: 0, draft: true, desc: g.desc, from: { mid, ver: g.ver } };
+    g.copies += 1;
+    S.modal = null;
+    S.selNode = flat(g)[0];
+    go(`#/team/templates/${k}`);
+    toast(`已拷贝为「${TEAMS[S.team].name}」的草稿：改完发布，再到项目配置里绑定`);
+    return false;
+  },
+  mToggle: (el) => {
+    const m = MARKET[el.dataset.v];
+    m.status = m.status === 'on' ? 'off' : 'on';
+    toast(m.status === 'on' ? '已上架：各租户能看到、能拷贝' : '已下架：租户不能再拷贝；已经拷走的不受影响');
+    return false;
+  },
+  mNew: () => {
+    const k = `m-${Object.keys(MARKET).length + 1}`;
+    MARKET[k] = { name: '未命名模板', cat: S.mcat === 'all' ? 'rd' : S.mcat, ver: 0, status: 'draft', copies: 0, tenants: 0, color: '#64748b', icon: 'flow', who: '—', desc: '（还没写说明）', roles: { r1: '执行人' }, steps: ['n1'], nodes: { n1: { name: '第一步', exec: 'r1', exit: ['r1'], desc: '' } } };
+    S.selNode = 'n1';
+    go(`#/market/${k}/edit`);
+    toast('已建草稿：编排好后发布，第一次发布即上架');
+    return false;
+  },
+};
+document.addEventListener('click', (e) => {
+  if (e.target.matches('input:not([type=checkbox]),select,textarea')) return;
+  const el = e.target.closest('[data-go],[data-act],[data-pop]');
+  if (!el) { if (S.pop && !e.target.closest('[data-stop]')) { S.pop = null; render(); } return; }
+  if (el.dataset.act === 'closeModal' && el.classList.contains('mask') && e.target !== el) return;
+  if (el.hasAttribute('disabled')) return;
+  e.preventDefault();
+  if (el.dataset.pop) {
+    e.stopPropagation();
+    const rc = el.getBoundingClientRect();
+    S.pop = S.pop?.id === el.dataset.pop ? null : { id: el.dataset.pop, x: Math.max(12, Math.min(rc.left, window.innerWidth - 360)), y: rc.bottom + 6 };
+    return render();
+  }
+  if (el.dataset.go) { S.modal = null; S.pop = null; if (location.hash === el.dataset.go) return render(); return go(el.dataset.go); }
+  const fn = ACT[el.dataset.act];
+  if (fn) { if (fn(el, e) !== false) render(); }
+});
+/* 弹窗里的输入框：重绘前把值记进 S.modal，切换选项不丢字 */
+document.addEventListener('input', (e) => { if (S.modal && e.target.dataset.bind) S.modal[e.target.dataset.bind] = e.target.value; });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && (S.modal || S.pop)) { S.modal = null; S.pop = null; render(); } });
+render();
+
+</script>
+</body>
+</html>

@@ -33,7 +33,7 @@
   "description": "目标领域模型，只画期望的样子、不对照现状。智能体在平台外的身份（数字员工、数据对象、两把 Key）、共享授权、这一轮按谁的权限判。",
   "component": "智能体管理",
   "package": "智能体管理 · 身份与共享（目标模型）",
-  "overview": "身份与共享管智能体在平台外的存在：用户中心里的数字员工和数据对象（共享和可见范围靠它），模型管理平台和 MCP 网关上各一把 Key（能用哪些模型、工具靠它）。这些登记都按智能体 uuid 幂等，失败可以重做。共享就是数据对象的授权；权限类型决定这一轮按谁的权限判，规则只写在 AuthSubjectPolicy 一处。\n\n它只认 AgentRef 这几个值，不依赖智能体配置的类型，也不写 agent 表：数字员工 uid 由智能体配置拿到后自己存。",
+  "overview": "身份与共享管智能体在平台外的存在：用户中心里的数字员工和数据对象（共享和可见范围靠它），模型管理平台和 MCP 网关上各一把 Key（能用哪些模型、工具靠它）。这些登记都按智能体 uuid 幂等，失败可以重做。共享就是数据对象的授权；权限类型决定这一轮按谁的权限判，也决定会话的文件归谁（进而决定沙箱怎么共享），规则只写在 AuthSubjectPolicy 一处。\n\n它只认 AgentRef 这几个值，不依赖智能体配置的类型，也不写 agent 表：数字员工 uid 由智能体配置拿到后自己存。",
   "elements": [
     {
       "id": "reg",
@@ -86,11 +86,19 @@
       "kind": "class",
       "name": "AuthSubjectPolicy",
       "stereotype": "策略",
-      "responsibility": "这一轮按谁的权限判，权限类型只在这一处起作用。以人为权限：请求里的权限主体（人直接操作时就是发起人）。以 Agent 为权限：数字员工，与发起人无关；还没有数字员工就拒绝，不回退到发起人——回退会让「谁来用结果都一样」悄悄失效。子 run 沿用父 run 记下的主体，不再判。",
+      "responsibility": "这一轮按谁的权限判，权限类型只在这一处起作用。以人为权限：请求里的权限主体（人直接操作时就是发起人）。以 Agent 为权限：数字员工，与发起人无关；还没有数字员工就拒绝，不回退到发起人——回退会让「谁来用结果都一样」悄悄失效。子 run 沿用父 run 记下的主体，不再判。另外决定会话的文件主体：以人为权限是会话的创建人，以数字员工为权限是数字员工（同样没有数字员工就拒绝）；会话把它记下，之后沙箱按主体共享或独占、文件放在 {主体}/ 下。TeamFlow 这类业务应用只接以数字员工为权限的智能体，靠 is_digital_employee 判。",
       "methods": [
         [
           "+",
           "auth_uid_for(ref, requested) -> uuid"
+        ],
+        [
+          "+",
+          "workspace_owner(ref, creator) -> (owner_uuid, subject)"
+        ],
+        [
+          "+",
+          "is_digital_employee(ref) -> bool"
         ]
       ],
       "at": [
@@ -245,6 +253,23 @@
         5.9,
         4.45
       ]
+    },
+    {
+      "id": "threadSvc",
+      "kind": "class",
+      "name": "ThreadService",
+      "external": true,
+      "source": "会话管理 · 会话领域",
+      "at": [
+        -2.7,
+        0.75
+      ],
+      "methods": [
+        [
+          "+",
+          "create(…)：定文件主体"
+        ]
+      ]
     }
   ],
   "relationships": [
@@ -311,6 +336,12 @@
       "to": "kb",
       "type": "uses",
       "description": "能读哪些库"
+    },
+    {
+      "from": "threadSvc",
+      "to": "policy",
+      "type": "uses",
+      "description": "建会话时定文件主体"
     }
   ],
   "capabilities": [
@@ -335,7 +366,7 @@
     {
       "name": "共享",
       "entry": "AgentSharing.grants · grant · update · revoke",
-      "callers": "HTTP 接口（所有者）",
+      "callers": "HTTP 接口（所有者；业务应用以所有者的身份调，如 TeamFlow 发起流程时给流程里的人授使用权）",
       "description": "用户中心数据对象 AtlasAgent 的授权；授权行必须属于这个智能体"
     },
     {
@@ -356,7 +387,7 @@
     },
     {
       "decision": "权限类型只在 AuthSubjectPolicy 一处起作用",
-      "reason": "它决定这一轮发出的所有调用 X-Auth-Uid 写谁。散在各处判的话，总有一处漏掉，「以 Agent 为权限时谁来用结果都一样」就不成立了。"
+      "reason": "它决定这一轮发出的所有调用 X-Auth-Uid 写谁，也决定会话的文件归谁、沙箱是按人共享还是一个会话一个。散在各处判的话，总有一处漏掉，「以 Agent 为权限时谁来用结果都一样」就不成立了——数字员工读到的文件也得是同一份。"
     },
     {
       "decision": "以 Agent 为权限而没有数字员工时拒绝，不回退到发起人",

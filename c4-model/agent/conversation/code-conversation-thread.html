@@ -33,14 +33,14 @@
   "description": "目标领域模型，只画期望的样子、不对照现状。会话和消息：建、改、删、归档，消息视图，标题，技能投送。",
   "component": "会话管理",
   "package": "会话管理 · 会话（目标模型）",
-  "overview": "会话领域管 thread 和 message 两张表：一段对话和它的消息。建会话时把该定的都定下来（能不能用、记忆开关、凭据档案、技能投送），删会话时连同子会话一起删并释放沙箱。消息表是执行的事实源，用户的输入、模型和工具的消息都在这里；界面看到的是折叠成一轮一条的视图。子智能体的会话也是 thread，挂在派出它的那一层下面，工作区和事件流归根会话。\n\n它不认识 run：提交一轮、取消、事件流在对话领域，那边往这里写用户消息；文件、预览、上下文和手动压缩在工作区与上下文领域。",
+  "overview": "会话领域管 thread 和 message 两张表：一段对话和它的消息。建会话时把该定的都定下来（能不能用、文件主体和工作目录、记忆开关、凭据档案、技能投送），删会话时连同子会话一起删并释放沙箱。消息表是执行的事实源，用户的输入、模型和工具的消息都在这里；界面看到的是折叠成一轮一条的视图。子智能体的会话也是 thread，挂在派出它的那一层下面，工作区和事件流归根会话。\n\n它不认识 run：提交一轮、取消、事件流在对话领域，那边往这里写用户消息；文件、预览、上下文和手动压缩在工作区与上下文领域。",
   "elements": [
     {
       "id": "svc",
       "kind": "class",
       "name": "ThreadService",
       "stereotype": "应用服务",
-      "responsibility": "会话的增删改查。建：能用这个智能体才能建（看不到的与不存在一样 404）；业务应用建的默认关记忆；凭据档案在这时选定、经凭据组件校验，之后不改；智能体当前版本引用的技能在这时拷进会话，失败整个不建，不留技能残缺的会话；登记记忆实例，失败不挡（下一轮再登记）。删：连同子会话一起删，再经沙箱组件释放会话 Pod 和工作区沙箱，失败只记日志，由孤儿回收兜底。智能体归档时把它的会话一起归档。本机 CLI 智能体建会话时，经设备会话领域定设备和项目目录：直接新建用用户选的（默认选中默认设备、目录默认「默认项目地址 / 会话 id」），建子会话（被委派）用默认设备和「默认项目地址 / 根会话 id」；设备不是本人的、没有默认设备就不建。删除时也请设备会话领域作废会话令牌、停掉电脑上的 bridge。",
+      "responsibility": "会话的增删改查。建：能用这个智能体才能建（看不到的与不存在一样 404）；按智能体的权限类型定文件主体（AuthSubjectPolicy：以人为权限是创建人，以数字员工为权限是数字员工）；定工作目录：没指定就是主体的 files/workspace，以人为权限只能在自己的 files/ 下另选，以数字员工为权限还可以在数字员工的 files/ 下另选，或用业务应用给的应用工作空间（AppWorkspaces.attach 校验），子会话照搬根会话的；业务应用建的默认关记忆；凭据档案在这时选定、经凭据组件校验，之后不改；智能体当前版本引用的技能在这时拷进会话，失败整个不建，不留技能残缺的会话；登记记忆实例，失败不挡（下一轮再登记）。删：连同子会话一起删，再经沙箱组件释放会话 Pod 和工作区沙箱，失败只记日志，由孤儿回收兜底。智能体归档时把它的会话一起归档。本机 CLI 智能体建会话时，经设备会话领域定设备和项目目录：直接新建用用户选的（默认选中默认设备、目录默认「默认项目地址 / 会话 id」），建子会话（被委派）用默认设备和「默认项目地址 / 根会话 id」；设备不是本人的、没有默认设备就不建。删除时也请设备会话领域作废会话令牌、停掉电脑上的 bridge。",
       "methods": [
         [
           "+",
@@ -69,7 +69,7 @@
       "kind": "class",
       "name": "Thread",
       "stereotype": "聚合根",
-      "responsibility": "一段对话。子智能体的会话也是一行 thread，挂在派出它的那一层下面，会话随 run 长成一棵树；工作区和事件流都归根会话，技能归自己。会话记住用户选的审批模式，作用于下一条消息；凭据档案、来源应用建时定、子会话继承。用户改过的标题永不被自动生成覆盖。本机 CLI 的会话还记着跑在哪台设备、电脑上的哪个项目目录：建时定、不改；子会话不照搬父会话，按委派规则另定。",
+      "responsibility": "一段对话。子智能体的会话也是一行 thread，挂在派出它的那一层下面，会话随 run 长成一棵树；工作区和事件流都归根会话，技能归自己。文件主体和工作目录建时定、不改，子会话照搬根会话的。会话记住用户选的审批模式，作用于下一条消息；凭据档案、来源应用建时定、子会话继承。用户改过的标题永不被自动生成覆盖。本机 CLI 的会话还记着跑在哪台设备、电脑上的哪个项目目录：建时定、不改；子会话不照搬父会话，按委派规则另定。",
       "attributes": [
         [
           "+",
@@ -78,6 +78,10 @@
         [
           "+",
           "parent · root · subagent_name"
+        ],
+        [
+          "",
+          "owner（文件主体）· workspace：files/{目录} | 应用工作空间（建时定、不改）"
         ],
         [
           "+",
@@ -175,7 +179,7 @@
       "kind": "class",
       "name": "SkillSeeder",
       "stereotype": "领域服务",
-      "responsibility": "把智能体（或子智能体）引用的技能按钉死的版本，从技能目录拷进这个人的技能目录 {user}/skills/{slug}/{版本}，已经有这一版就不拷；已下架的跳过并记下。在建会话时做，不拖到第一轮。",
+      "responsibility": "把智能体（或子智能体）引用的技能按钉死的版本，从技能目录拷进文件主体的技能目录 {主体}/skills/{slug}/{版本}，已经有这一版就不拷；已下架的跳过并记下。在建会话时做，不拖到第一轮。",
       "methods": [
         [
           "+",
@@ -215,13 +219,17 @@
     {
       "id": "access",
       "kind": "class",
-      "name": "AgentAccess",
+      "name": "AgentAccess · ThreadAccess",
       "external": true,
       "source": "鉴权组件",
       "methods": [
         [
           "+",
           "require(principal, agent)"
+        ],
+        [
+          "+",
+          "thread(principal, thread, action: READ | ACT | RUN)"
         ]
       ],
       "at": [
@@ -232,34 +240,21 @@
     {
       "id": "agents",
       "kind": "class",
-      "name": "AgentService",
+      "name": "AgentService · AgentArchived",
       "external": true,
       "source": "智能体管理 · 智能体配置领域",
       "methods": [
         [
           "+",
-          "get(agent_uuid) -> Agent（含当前版本）"
+          "get(agent_uuid) -> Agent（含当前版本、权限类型）"
+        ],
+        [
+          "+",
+          "订阅 AgentArchived(agent_uuid)"
         ]
       ],
       "at": [
         1.6,
-        -0.95
-      ]
-    },
-    {
-      "id": "archived",
-      "kind": "class",
-      "name": "AgentArchived",
-      "external": true,
-      "source": "智能体管理 · 智能体配置领域",
-      "methods": [
-        [
-          "+",
-          "agent_uuid"
-        ]
-      ],
-      "at": [
-        4.0,
         -0.95
       ]
     },
@@ -298,32 +293,15 @@
       ]
     },
     {
-      "id": "native",
-      "kind": "class",
-      "name": "NativeSandboxService",
-      "external": true,
-      "source": "沙箱 · 原生沙箱领域",
-      "methods": [
-        [
-          "+",
-          "release(ws)"
-        ]
-      ],
-      "at": [
-        6.3,
-        0.0
-      ]
-    },
-    {
       "id": "pods",
       "kind": "class",
-      "name": "SessionPods · DeviceSessions",
+      "name": "NativeSandboxService · SessionPods · DeviceSessions",
       "external": true,
       "source": "沙箱 · 会话 Pod 领域；设备 · 设备会话领域",
       "methods": [
         [
           "+",
-          "release(thread)"
+          "release(ws) · release(thread)"
         ],
         [
           "+",
@@ -351,6 +329,40 @@
         -2.9,
         4.45
       ]
+    },
+    {
+      "id": "subject",
+      "kind": "class",
+      "name": "AuthSubjectPolicy",
+      "external": true,
+      "source": "智能体管理 · 身份与共享",
+      "at": [
+        4.0,
+        -0.95
+      ],
+      "methods": [
+        [
+          "+",
+          "workspace_owner(ref, creator) -> (owner_uuid, subject)"
+        ]
+      ]
+    },
+    {
+      "id": "spaces",
+      "kind": "class",
+      "name": "AppWorkspaces",
+      "external": true,
+      "source": "工作区 · 应用工作空间",
+      "at": [
+        6.4,
+        -0.95
+      ],
+      "methods": [
+        [
+          "+",
+          "attach(space_uuid, *, app, agent) -> 工作目录"
+        ]
+      ]
     }
   ],
   "relationships": [
@@ -358,20 +370,13 @@
       "from": "svc",
       "to": "access",
       "type": "uses",
-      "description": "能用吗"
+      "description": "能用吗、能看吗"
     },
     {
       "from": "svc",
       "to": "agents",
       "type": "uses",
-      "description": "智能体和当前版本"
-    },
-    {
-      "from": "svc",
-      "to": "archived",
-      "type": "uses",
-      "description": "订阅",
-      "labelAt": 0.6
+      "description": "智能体、当前版本、权限类型；订阅归档"
     },
     {
       "from": "svc",
@@ -384,12 +389,6 @@
       "to": "memory",
       "type": "uses",
       "description": "登记记忆实例"
-    },
-    {
-      "from": "svc",
-      "to": "native",
-      "type": "uses",
-      "description": "删除级联"
     },
     {
       "from": "svc",
@@ -434,6 +433,18 @@
       "from": "title",
       "to": "titler",
       "type": "implements"
+    },
+    {
+      "from": "svc",
+      "to": "subject",
+      "type": "uses",
+      "description": "定文件主体"
+    },
+    {
+      "from": "svc",
+      "to": "spaces",
+      "type": "uses",
+      "description": "挂应用工作空间前校验"
     }
   ],
   "capabilities": [
@@ -441,7 +452,7 @@
       "name": "建会话",
       "entry": "ThreadService.create(payload, principal)",
       "callers": "HTTP 接口（界面、TeamFlow 等业务应用）",
-      "description": "能用智能体才能建；凭据档案校验、技能投送失败就不建；记忆实例登记失败不挡；本机 CLI 定设备和项目目录，建时定、不改"
+      "description": "能用智能体才能建；文件主体按权限类型定，工作目录建时定（应用工作空间只给以数字员工为权限的智能体、只能由登记它的应用指定）；凭据档案校验、技能投送失败就不建；记忆实例登记失败不挡；本机 CLI 定设备和项目目录，建时定、不改"
     },
     {
       "name": "改、删、归档",
@@ -453,7 +464,7 @@
       "name": "会话和消息列表",
       "entry": "ThreadService.list · get · messages",
       "callers": "HTTP 接口",
-      "description": "列表只有用户会话；消息按一轮一条折叠、去掉工具调用块；最近一轮的状态由对话领域补上"
+      "description": "列表只有用户会话；看单个会话按 ThreadAccess：以人为权限的会话只有创建人能看、能操作；以数字员工为权限的会话按数据权限判：对这个数字员工有使用权就能看、能答、能接管浏览器、能停止，不看创建人；消息按一轮一条折叠、去掉工具调用块；最近一轮的状态由对话领域补上"
     },
     {
       "name": "生成标题",
@@ -470,8 +481,16 @@
   ],
   "decisions": [
     {
+      "decision": "以数字员工为权限的会话按数据权限判，不看创建人",
+      "reason": "「谁来用结果都一样」：文件、沙箱已经归数字员工，会话也一样。业务应用（如 TeamFlow）要让哪些人参与，就给这些人授这个数字员工的使用权，平台不认识应用里的流程、执行人、评审人。以人为权限的会话是个人数据，仍然只有创建人。判断在鉴权组件（ThreadAccess），各领域只问一句。"
+    },
+    {
       "decision": "子智能体的会话也是 thread，工作区和事件流归根会话",
       "reason": "子智能体可以一层层再派，会话随 run 长成一棵树；共享根会话的工作区才能接着处理父会话的文件，事件进根会话那条流用户才看得到子 run 的过程和审批。技能归自己，读共享、技能隔离是结构性的。"
+    },
+    {
+      "decision": "文件主体和工作目录建会话时定、不改，子会话照搬根会话的",
+      "reason": "工作目录要挂进沙箱，沙箱建好后挂载不能改；主体决定文件放在谁的前缀下、沙箱记在谁名下。智能体中途改了权限类型，只影响之后新建的会话，已有的会话照旧，不会一半文件在人那边、一半在数字员工那边。"
     },
     {
       "decision": "技能在建会话时投送，失败就不建",
@@ -479,7 +498,7 @@
     },
     {
       "decision": "删除级联只经沙箱组件释放，失败不挡删除",
-      "reason": "会话 Pod 和工作区沙箱归人，由沙箱组件的通用供给决定退不退役；清理失败不该让用户删不掉会话，残留由维护任务的孤儿回收收掉。"
+      "reason": "会话 Pod 和工作区沙箱归会话的文件主体（人或数字员工），由沙箱组件的通用供给决定退不退役；清理失败不该让用户删不掉会话，残留由维护任务的孤儿回收收掉。"
     },
     {
       "decision": "会话不认识 run",
@@ -579,7 +598,7 @@
           "name": "source_app",
           "type": "String(32)",
           "nullable": true,
-          "description": "建会话的业务应用（X-Caller-App）；子会话继承"
+          "description": "建会话的业务应用（X-Caller-App）；子会话继承。这个会话开新 run 只认它"
         },
         {
           "name": "device_uuid",
@@ -601,7 +620,29 @@
         {
           "name": "created_by_uuid",
           "type": "UUIDType",
-          "description": "创建人；工作区路径按它分"
+          "description": "创建人"
+        },
+        {
+          "name": "owner_uuid",
+          "type": "UUIDType",
+          "description": "文件主体：以人为权限是创建人，以数字员工为权限是数字员工；建时定、不改，子会话照搬根会话的。工作区路径按它分"
+        },
+        {
+          "name": "owner_kind",
+          "type": "String(8)",
+          "default": "'user'",
+          "description": "文件主体的种类 user / agent：agent 一棵会话树一个沙箱，对这个数字员工有使用权的人都能看、能答、能停；建时定、不改"
+        },
+        {
+          "name": "workspace_dir",
+          "type": "String(512)",
+          "description": "工作目录，相对主体的 files/；用应用工作空间时不用（存默认值）"
+        },
+        {
+          "name": "app_workspace_uuid",
+          "type": "UUIDType",
+          "nullable": true,
+          "description": "用的应用工作空间（工作区 · 应用工作空间的 app_workspace.space_uuid）；和 workspace_dir 二选一"
         },
         {
           "name": "created_at",

@@ -43,7 +43,7 @@
         0
       ],
       "name": "AI TeamFlow",
-      "description": "让 AI 智能体作为团队成员参与研发流程的产品。"
+      "description": "面向团队协作的 AI 工作流平台：数字员工（以数字员工为权限的智能体）按团队定的流程干活，人在准入、准出时评审。"
     },
     {
       "id": "usercenter",
@@ -212,7 +212,7 @@
         4.6
       ],
       "name": "会话工作区",
-      "description": "每个会话的文件，以 /workspace 挂进沙箱和会话 Pod。"
+      "description": "人和数字员工的文件 {主体}/，挂到 /data；应用工作空间 {应用}/{空间}/，挂到 /space。"
     },
     {
       "id": "devicegw",
@@ -312,7 +312,7 @@
     {
       "from": "teamflow",
       "to": "server",
-      "description": "引用智能体，经会话下发任务并取回输出",
+      "description": "引用数字员工；为每条流程申请应用工作空间、读写其中的文件；建会话挂上它，下发任务并取回输出",
       "technology": "JSON/HTTP"
     },
     {
@@ -385,19 +385,19 @@
     {
       "from": "server",
       "to": "workspace",
-      "description": "读写会话文件",
+      "description": "读写会话和应用工作空间的文件",
       "technology": "S3 API/HTTP"
     },
     {
       "from": "shell",
       "to": "workspace",
-      "description": "挂载 /workspace",
+      "description": "挂载 /data、/space",
       "technology": "S3 CSI"
     },
     {
       "from": "acp",
       "to": "workspace",
-      "description": "挂载 /workspace",
+      "description": "挂载 /data、/space",
       "technology": "S3 CSI"
     },
     {

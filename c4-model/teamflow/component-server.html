@@ -1,0 +1,932 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Component View</title>
+<style>
+  body { margin: 0; background: #fff; color: #444; font-family: "Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif; }
+  main { padding: 24px 32px 48px; }
+  svg { display: block; max-width: 100%; height: auto; }
+  h2 { margin: 40px 0 12px; font-size: 15px; font-weight: 600; color: #666; }
+  #c4-report { margin: 0 0 24px; padding: 12px 16px 12px 36px; border: 1px solid #e0b4b4; background: #fff6f6; font-size: 14px; line-height: 1.6; }
+  #c4-report li[data-level="error"] { color: #b00020; }
+  #c4-report li[data-level="warn"] { color: #8a5a00; }
+</style>
+</head>
+<body>
+<!--
+  只改下面这段 JSON；渲染器不用动。字段说明见 component/RULES.md 的「数据格式」。
+-->
+<script type="application/json" id="c4-model">
+{
+  "title": "组件图：AI TeamFlow - TeamFlow 服务",
+  "description": "目标模型。组件按领域拆：访问控制、团队、项目、流程模板、流程市场、流程运行、流程空间、节点协作、待办与通知，前面是四个入口，协调层是多副本共用的基础设施（领域之间的类级依赖见 code-domains.html）。三个业务入口都先经访问控制判身份、操作码和团队级别，图中只画了管理接口那条；流程结构（顺序步骤 + 并行组、依赖推导、发布校验）是流程模板、流程市场、流程运行共用的共享内核，图中不画。各领域读写自己的表（PostgreSQL，除流程市场外都带租户，按当前租户自动过滤），图中不画数据库；运营接口删租户时还要分批删各领域的表，图中未画。代码按领域分包：access/、teams/、projects/、templates/、market/、process/、space/、collab/、inbox/，api/ 是入口。整体设计见 design-teamflow.html",
+  "system": "AI TeamFlow",
+  "container": "TeamFlow 服务",
+  "elements": [
+    {
+      "id": "web",
+      "kind": "container",
+      "shape": "browser",
+      "technology": "Next.js / React（antd + 共享对话组件 chat-ui）",
+      "name": "TeamFlow 前端",
+      "description": "两级菜单：项目、团队、流程市场；流程图、节点对话、流程空间、追溯。",
+      "at": [
+        1.4,
+        -0.1
+      ]
+    },
+    {
+      "id": "mgmt",
+      "kind": "component",
+      "name": "管理接口",
+      "technology": "FastAPI Router",
+      "description": "/api/v1：团队、成员与数字员工、流程模板（编排、校验、发布、从市场拷贝）、流程市场（浏览；运营管理员编辑、发布、上下架）、项目与项目配置。",
+      "at": [
+        -0.6,
+        1.3
+      ]
+    },
+    {
+      "id": "flowapi",
+      "kind": "component",
+      "name": "流程接口",
+      "technology": "FastAPI Router + SSE",
+      "description": "/api/v1：发起、开始首节点、流程列表与详情、提交评审、评审结论、终止、追溯、节点的会话号和能不能发消息、流程空间的文件、等你处理与通知（含团队的通知渠道）；按流程推送实时事件。",
+      "at": [
+        1.4,
+        1.3
+      ]
+    },
+    {
+      "id": "proxy",
+      "kind": "component",
+      "name": "节点对话接口",
+      "technology": "FastAPI Router + httpx",
+      "description": "节点页对话框里发的消息：核对执行人、节点在协同中、没冻结、没被接管后，经节点协作当场开 run；接管与交还。看对话、回答、浏览器接管、停止由前端直连 Atlas，不经这里。",
+      "at": [
+        3.9,
+        1.3
+      ]
+    },
+    {
+      "id": "opsapi",
+      "kind": "component",
+      "name": "运营接口",
+      "technology": "FastAPI Router + 运营接口库",
+      "description": "/ops/v1：租户的创建（不用准备什么）、删除（先向 Atlas 释放本租户的流程空间，再分批删表）；只给运营中心，先验签名。",
+      "at": [
+        5.2,
+        1.3
+      ]
+    },
+    {
+      "id": "access",
+      "kind": "component",
+      "name": "访问控制",
+      "technology": "FastAPI 依赖 + httpx",
+      "description": "身份取网关写的请求头；操作码、团队级别（Owner / 读写 / 只读，取单条和「全部团队」里高的）、流程市场维护权（系统租户 + 流程市场读写）；授权缓存 30 秒。",
+      "at": [
+        -1.9,
+        1.3
+      ]
+    },
+    {
+      "id": "teams",
+      "kind": "component",
+      "name": "团队",
+      "technology": "SQLAlchemy 异步",
+      "description": "团队（租户内不重名）、成员与级别（存在用户中心的团队数据权限里，以当前用户身份写）、数字员工（引用本租户 Atlas 里以数字员工为权限的智能体，接入人是它的 Owner；以接入人的身份给流程里的人授使用权）、归档。",
+      "at": [
+        -1.9,
+        3.25
+      ]
+    },
+    {
+      "id": "projects",
+      "kind": "component",
+      "name": "项目",
+      "technology": "SQLAlchemy 异步",
+      "description": "项目、绑定流程模板（可以多个）、按模板给角色分配成员和数字员工；算「还差哪些角色」；给流程运行解析当前的执行人、数字员工和评审人。",
+      "at": [
+        -0.6,
+        2.6
+      ]
+    },
+    {
+      "id": "templates",
+      "kind": "component",
+      "name": "流程模板",
+      "technology": "SQLAlchemy 异步",
+      "description": "团队的流程模板：草稿、校验、发布版本（发布后不改）；空白新建，或从流程市场拷贝（记来源）。",
+      "at": [
+        0.5,
+        2.6
+      ]
+    },
+    {
+      "id": "market",
+      "kind": "component",
+      "name": "流程市场",
+      "technology": "SQLAlchemy 异步",
+      "description": "产品自带的流程模板，不属于任何租户：运营管理员编辑、发布、上下架；给团队导出某一版的结构，记拷贝。",
+      "at": [
+        0.5,
+        3.9
+      ]
+    },
+    {
+      "id": "process",
+      "kind": "component",
+      "name": "流程运行",
+      "technology": "SQLAlchemy 异步",
+      "description": "发起（锁模板版本）、节点状态机与依赖推进、准出 / 准入评审、驳回与打回、终止；提交评审只记文件路径；流程事件（追溯）。",
+      "at": [
+        1.6,
+        3.9
+      ]
+    },
+    {
+      "id": "space",
+      "kind": "component",
+      "name": "流程空间",
+      "technology": "SQLAlchemy 异步 + httpx",
+      "description": "每条流程一个，是 Atlas 的应用工作空间 teamflow/{空间编号}/：发起时申请（先登记、按编号幂等，建流程失败的不回收）、流程结束转只读、删租户时释放；列文件、预览、上传、下载都经 Atlas。",
+      "at": [
+        2.9,
+        2.6
+      ]
+    },
+    {
+      "id": "collab",
+      "kind": "component",
+      "name": "节点协作",
+      "technology": "asyncio 任务 + httpx",
+      "description": "一个节点一个 Atlas 会话（挂流程空间）：开 run 都经这里（系统指令排队、提交后投递，人发的当场开），记 run 号；停下就取消最后开的 run；人接管与交还、评审期间冻结。不跟随会话事件。",
+      "at": [
+        2.9,
+        3.9
+      ]
+    },
+    {
+      "id": "inbox",
+      "kind": "component",
+      "name": "待办与通知",
+      "technology": "SQLAlchemy 异步 + httpx",
+      "description": "「等你」= 评审名单里还没表态的；按流程事件生成站内通知，推到团队开的渠道和个人绑定的账号。",
+      "at": [
+        0.9,
+        5.2
+      ]
+    },
+    {
+      "id": "coord",
+      "kind": "component",
+      "name": "协调层",
+      "technology": "redis-py 异步",
+      "description": "事务提交后的唤醒广播、实时事件扇出到各副本、团队级别缓存的失效广播；不配 Redis 时退回单进程内存实现。",
+      "at": [
+        2.9,
+        5.2
+      ]
+    },
+    {
+      "id": "redis",
+      "kind": "container",
+      "shape": "queue",
+      "technology": "Redis 7",
+      "name": "Redis",
+      "description": "唤醒广播、实时事件扇出、缓存失效广播。",
+      "at": [
+        2.9,
+        6.5
+      ]
+    },
+    {
+      "id": "atlas",
+      "kind": "system",
+      "name": "Agent 平台",
+      "color": "#ed8609",
+      "description": "智能体的配置、会话与执行：跑每一轮对话，实时推送模型、工具和子智能体的执行过程。",
+      "at": [
+        6.6,
+        3.25
+      ]
+    },
+    {
+      "id": "usercenter",
+      "kind": "system",
+      "name": "用户中心",
+      "color": "#bf101d",
+      "description": "用户、组织、租户与权限的唯一数据源，负责统一登录。",
+      "at": [
+        -3.3,
+        1.95
+      ]
+    },
+    {
+      "id": "opscenter",
+      "kind": "system",
+      "name": "运营中心",
+      "color": "#8a6d00",
+      "description": "管平台本身的独立系统：开通、停用、关闭租户，分份额，维护系统参数；看不到租户的业务内容。",
+      "at": [
+        6.6,
+        1.3
+      ]
+    },
+    {
+      "id": "notify",
+      "kind": "system",
+      "name": "通知渠道",
+      "color": "#8411bd",
+      "description": "企业微信、钉钉和邮件：把评审、打回推给对应的人。",
+      "at": [
+        -3.3,
+        5.2
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "from": "web",
+      "to": "mgmt",
+      "description": "配置团队、模板、市场和项目",
+      "technology": "JSON/HTTPS（经 API 网关）"
+    },
+    {
+      "from": "web",
+      "to": "flowapi",
+      "description": "发起、评审、看流程和空间，订阅实时事件",
+      "technology": "JSON/HTTPS、SSE（经 API 网关）"
+    },
+    {
+      "from": "web",
+      "to": "proxy",
+      "description": "对话框发消息、接管、交还",
+      "technology": "JSON/HTTPS（经 API 网关）"
+    },
+    {
+      "from": "opscenter",
+      "to": "opsapi",
+      "description": "开通时创建、关闭时删除租户",
+      "technology": "JSON/HTTP（运营接口，签名）"
+    },
+    {
+      "from": "mgmt",
+      "to": "access",
+      "description": "身份、操作码、团队级别"
+    },
+    {
+      "from": "mgmt",
+      "to": "teams",
+      "description": "团队、成员、数字员工"
+    },
+    {
+      "from": "mgmt",
+      "to": "projects",
+      "description": "项目、绑模板、分配角色"
+    },
+    {
+      "from": "mgmt",
+      "to": "templates",
+      "description": "编排、发布、拷贝"
+    },
+    {
+      "from": "mgmt",
+      "to": "market",
+      "description": "浏览、维护",
+      "labelAt": 0.3
+    },
+    {
+      "from": "flowapi",
+      "to": "process",
+      "description": "发起、评审、终止、追溯"
+    },
+    {
+      "from": "flowapi",
+      "to": "space",
+      "description": "空间文件"
+    },
+    {
+      "from": "flowapi",
+      "to": "inbox",
+      "description": "等你处理、通知",
+      "labelAt": 0.78
+    },
+    {
+      "from": "flowapi",
+      "to": "coord",
+      "description": "订阅本流程的实时事件",
+      "labelAt": 0.45
+    },
+    {
+      "from": "proxy",
+      "to": "collab",
+      "description": "核对、当场开 run，接管、交还"
+    },
+    {
+      "from": "opsapi",
+      "to": "space",
+      "description": "释放本租户的流程空间"
+    },
+    {
+      "from": "access",
+      "to": "usercenter",
+      "description": "授权快照、团队级别",
+      "technology": "JSON/HTTP（开放接口）"
+    },
+    {
+      "from": "teams",
+      "to": "usercenter",
+      "description": "列成员、以当前用户身份授和收团队级别",
+      "technology": "JSON/HTTP（开放接口）"
+    },
+    {
+      "from": "teams",
+      "to": "atlas",
+      "description": "列数字员工类型的智能体、读技能；以接入人的身份授使用权",
+      "technology": "JSON/HTTP",
+      "labelAt": 0.12
+    },
+    {
+      "from": "projects",
+      "to": "teams",
+      "description": "成员级别、数字员工；授使用权"
+    },
+    {
+      "from": "projects",
+      "to": "templates",
+      "description": "最新发布版的角色"
+    },
+    {
+      "from": "templates",
+      "to": "market",
+      "description": "导出结构、记拷贝",
+      "labelAt": 0.3
+    },
+    {
+      "from": "process",
+      "to": "projects",
+      "description": "角色配齐了吗，当前执行人和评审人；授使用权",
+      "labelAt": 0.68
+    },
+    {
+      "from": "process",
+      "to": "templates",
+      "description": "锁定的版本",
+      "labelAt": 0.72
+    },
+    {
+      "from": "process",
+      "to": "space",
+      "description": "申请、查文件、转只读",
+      "labelAt": 0.72
+    },
+    {
+      "from": "process",
+      "to": "coord",
+      "description": "提交后唤醒"
+    },
+    {
+      "from": "collab",
+      "to": "process",
+      "description": "实现 NodeWork，写流程事件"
+    },
+    {
+      "from": "collab",
+      "to": "atlas",
+      "description": "建会话（挂流程空间）、开 run、取消",
+      "technology": "JSON/HTTP"
+    },
+    {
+      "from": "collab",
+      "to": "coord",
+      "description": "收唤醒"
+    },
+    {
+      "from": "space",
+      "to": "atlas",
+      "description": "申请、释放应用工作空间，读写文件",
+      "technology": "JSON/HTTP"
+    },
+    {
+      "from": "inbox",
+      "to": "process",
+      "description": "待评审、新事件"
+    },
+    {
+      "from": "inbox",
+      "to": "notify",
+      "description": "推送",
+      "technology": "HTTPS（Webhook）、SMTP"
+    },
+    {
+      "from": "coord",
+      "to": "redis",
+      "description": "发布订阅",
+      "technology": "Redis 协议"
+    }
+  ]
+}
+</script>
+
+<main>
+  <ul id="c4-report" hidden></ul>
+  <svg id="c4-diagram" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+  <h2>Diagram key</h2>
+  <svg id="c4-key" xmlns="http://www.w3.org/2000/svg" role="img"></svg>
+</main>
+
+<script>
+(() => {
+  'use strict';
+  const FONT = '"Open Sans", "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif';
+  const INK = '#444444';
+  const SCOPE_COLOR = '#1168bd';
+  const PALETTE = {
+    person: ['#297e06', '#1a849c', '#6b8e23'],
+    system: ['#ed8609', '#bf101d', '#8411bd', '#5b6770', '#b8336a'],
+  };
+  const KIND_LABEL = { person: 'Person', system: 'Software System', container: 'Container', component: 'Component' };
+  const COL = 560, ROW = 420;                 // 网格间距：at 的一个单位
+  const BOX = { w: 300, h: 200, rx: 12 };     // 软件系统、容器、组件
+  const BODY = { w: 300, h: 190, rx: 48 };    // 人员身体
+  const HEAD_R = 66, HEAD_OVERLAP = 16;       // 人员头部
+  const STROKE = 4, PAD = 18, MARGIN = 60;
+  const TXT = {
+    name: { size: 20, weight: 700, lh: 25 },
+    meta: { size: 12, weight: 400, lh: 18 },
+    desc: { size: 15, weight: 400, lh: 20 },
+    rel: { size: 14, weight: 400, lh: 18 },
+    tech: { size: 11, weight: 400, lh: 15 },
+    key: { size: 14, weight: 400, lh: 18 },
+  };
+  const LABEL_W = 220, ARROW_L = 16, ARROW_W = 13, GAP = 4;
+
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const problems = [];
+  const fail = (msg) => problems.push({ level: 'error', msg });
+  const warn = (msg) => problems.push({ level: 'warn', msg });
+
+  const ctx = document.createElement('canvas').getContext('2d');
+  const measure = (s, st) => { ctx.font = `${st.weight} ${st.size}px ${FONT}`; return ctx.measureText(s).width; };
+
+  // 中文按字断行，英文按词断行；行首不放标点
+  const CJK = '\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef\u3000-\u303f';
+  const TOKEN = new RegExp(`[${CJK}]|[^\\s${CJK}]+|\\s+`, 'g');
+  const NO_LINE_START = /^[，。、；：！？）》」』,.;:!?)]$/;
+  function wrap(text, st, maxW) {
+    const lines = [];
+    for (const para of String(text || '').split('\n')) {
+      let line = '';
+      for (const tok of para.match(TOKEN) || []) {
+        if (/^\s+$/.test(tok)) { if (line) line += ' '; continue; }
+        const next = line + tok;
+        if (line.trim() && measure(next.trimEnd(), st) > maxW && !NO_LINE_START.test(tok)) {
+          lines.push(line.trimEnd());
+          line = tok;
+        } else {
+          line = next;
+        }
+      }
+      if (line.trim()) lines.push(line.trimEnd());
+    }
+    return lines;
+  }
+  // 行数不变的前提下收窄宽度，让各行长度接近，避免末行只剩一两个字
+  function wrapBalanced(text, st, maxW) {
+    const lines = wrap(text, st, maxW);
+    if (lines.length < 2) return lines;
+    let lo = maxW / 2, hi = maxW;
+    while (hi - lo > 4) {
+      const mid = (lo + hi) / 2;
+      if (wrap(text, st, mid).length > lines.length) lo = mid; else hi = mid;
+    }
+    return wrap(text, st, hi);
+  }
+
+  function node(tag, attrs, parent) {
+    const n = document.createElementNS(svgNS, tag);
+    for (const [k, v] of Object.entries(attrs)) n.setAttribute(k, v);
+    parent.appendChild(n);
+    return n;
+  }
+  // top 是文字块上沿
+  function textLines(parent, lines, x, top, st, color, anchor = 'middle') {
+    const t = node('text', { x, y: top + st.lh / 2 + st.size * 0.35, 'text-anchor': anchor,
+      'font-family': FONT, 'font-size': st.size, 'font-weight': st.weight, fill: color }, parent);
+    lines.forEach((ln, i) => { node('tspan', { x, dy: i ? st.lh : 0 }, t).textContent = ln; });
+    return t;
+  }
+  const rect = (g, b, rx, c) => node('rect', { x: b.x, y: b.y, width: b.w, height: b.h, rx,
+    fill: '#fff', stroke: c, 'stroke-width': STROKE }, g);
+
+  // 形状。inset：顶部装饰占的高度，文字整体下移；side：左右各少用的文字宽度；shift：文字中心右移；
+  // clip：连线停靠的主体矩形（不写 = 整个外框）；key：图例默认文字
+  const COMPONENT = { key: 'Component', inset: 0, side: 26, shift: 9,
+    clip: (b) => ({ x: b.x + 18, y: b.y, w: b.w - 18, h: b.h }), draw: (g, b, c) => {
+      rect(g, { x: b.x + 18, y: b.y, w: b.w - 18, h: b.h }, 6, c);
+      for (const dy of [16, 44]) node('rect', { x: b.x, y: b.y + dy, width: 36, height: 18, rx: 4, fill: '#fff', stroke: c, 'stroke-width': STROKE }, g);
+    } };
+  const SHAPES = {
+    box: { key: 'Container', inset: 0, side: 0, draw: (g, b, c) => rect(g, b, BOX.rx, c) },
+    server: { key: 'Container, Server-side Application', inset: 14, side: 0, draw: (g, b, c) => {
+      rect(g, b, 6, c);
+      node('polyline', { points: `${b.x + 14},${b.y + 12} ${b.x + 26},${b.y + 19} ${b.x + 14},${b.y + 26}`,
+        fill: 'none', stroke: c, 'stroke-width': 3, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, g);
+      node('line', { x1: b.x + 30, y1: b.y + 29, x2: b.x + 44, y2: b.y + 29, stroke: c, 'stroke-width': 3, 'stroke-linecap': 'round' }, g);
+    } },
+    browser: { key: 'Container, Web Browser Application', inset: 24, side: 0, draw: (g, b, c) => {
+      rect(g, b, 6, c);
+      node('path', { d: `M${b.x} ${b.y + 26} V${b.y + 6} Q${b.x} ${b.y} ${b.x + 6} ${b.y} H${b.x + b.w - 6} Q${b.x + b.w} ${b.y} ${b.x + b.w} ${b.y + 6} V${b.y + 26} Z`, fill: c }, g);
+      for (const i of [0, 1, 2]) node('circle', { cx: b.x + 16 + i * 16, cy: b.y + 13, r: 5, fill: '#fff' }, g);
+      node('rect', { x: b.x + 64, y: b.y + 8, width: b.w - 76, height: 10, rx: 5, fill: '#fff' }, g);
+    } },
+    database: { key: 'Container, Database', inset: 22, side: 0, draw: (g, b, c) => {
+      const ry = 14, rx = b.w / 2;
+      node('path', { d: `M${b.x} ${b.y + ry} V${b.y + b.h - ry} A${rx} ${ry} 0 0 0 ${b.x + b.w} ${b.y + b.h - ry} V${b.y + ry}`,
+        fill: '#fff', stroke: c, 'stroke-width': STROKE }, g);
+      node('ellipse', { cx: b.x + rx, cy: b.y + ry, rx, ry, fill: '#fff', stroke: c, 'stroke-width': STROKE }, g);
+    } },
+    bucket: { key: 'Container, Blob Store', inset: 20, side: 26, draw: (g, b, c) => {
+      const ry = 12, rx = b.w / 2, inX = b.w * 0.1, by = b.y + b.h - 10;
+      node('path', { d: `M${b.x} ${b.y + ry} L${b.x + inX} ${by} A${rx - inX} 10 0 0 0 ${b.x + b.w - inX} ${by} L${b.x + b.w} ${b.y + ry}`,
+        fill: '#fff', stroke: c, 'stroke-width': STROKE, 'stroke-linejoin': 'round' }, g);
+      node('ellipse', { cx: b.x + rx, cy: b.y + ry, rx, ry, fill: '#fff', stroke: c, 'stroke-width': STROKE }, g);
+    } },
+    folder: { key: 'Container, File System', inset: 18, side: 0, clip: (b) => ({ x: b.x, y: b.y + 20, w: b.w, h: b.h - 20 }), draw: (g, b, c) => {
+      const tab = 20, tw = b.w * 0.35;
+      node('path', { d: `M${b.x + 8} ${b.y + tab} V${b.y + 5} Q${b.x + 8} ${b.y} ${b.x + 13} ${b.y} H${b.x + tw - 5} Q${b.x + tw} ${b.y} ${b.x + tw} ${b.y + 5} V${b.y + tab}`,
+        fill: '#fff', stroke: c, 'stroke-width': STROKE }, g);
+      rect(g, { x: b.x, y: b.y + tab, w: b.w, h: b.h - tab }, 3, c);
+    } },
+    queue: { key: 'Container, Message Queue', inset: 0, side: 22, draw: (g, b, c) => {
+      const rx = 18, ry = b.h / 2;
+      node('path', { d: `M${b.x + rx} ${b.y} H${b.x + b.w - rx} A${rx} ${ry} 0 0 1 ${b.x + b.w - rx} ${b.y + b.h} H${b.x + rx} A${rx} ${ry} 0 0 1 ${b.x + rx} ${b.y} Z`,
+        fill: '#fff', stroke: c, 'stroke-width': STROKE }, g);
+      node('ellipse', { cx: b.x + b.w - rx, cy: b.y + ry, rx, ry, fill: 'none', stroke: c, 'stroke-width': STROKE }, g);
+    } },
+  };
+  const shapeOf = (el) => (el.kind === 'component' ? COMPONENT : el.kind === 'container' ? SHAPES[el.shape] : null);
+
+  const inter = (a, b, m = 0) => a.x < b.x + b.w + m && b.x < a.x + a.w + m && a.y < b.y + b.h + m && b.y < a.y + a.h + m;
+  function segHitsRect([x0, y0], [x1, y1], r) {
+    let t0 = 0, t1 = 1;
+    const dx = x1 - x0, dy = y1 - y0;
+    for (const [p, q] of [[-dx, x0 - r.x], [dx, r.x + r.w - x0], [-dy, y0 - r.y], [dy, r.y + r.h - y0]]) {
+      if (p === 0) { if (q < 0) return false; continue; }
+      const t = q / p;
+      if (p < 0) { if (t > t1) return false; if (t > t0) t0 = t; }
+      else { if (t < t0) return false; if (t < t1) t1 = t; }
+    }
+    return true;
+  }
+  // 从形状内部 (ox, oy) 沿 (dx, dy) 射出，返回离开形状时的 t；人员 = 身体矩形 ∪ 头部圆，其余按主体矩形
+  function exitT(el, ox, oy, dx, dy) {
+    const b = el.clip || el.box;
+    let t = Infinity;
+    if (dx > 0) t = Math.min(t, (b.x + b.w - ox) / dx); else if (dx < 0) t = Math.min(t, (b.x - ox) / dx);
+    if (dy > 0) t = Math.min(t, (b.y + b.h - oy) / dy); else if (dy < 0) t = Math.min(t, (b.y - oy) / dy);
+    if (el.head) {
+      const fx = ox - el.head.cx, fy = oy - el.head.cy;
+      const a = dx * dx + dy * dy, bb = 2 * (fx * dx + fy * dy), c = fx * fx + fy * fy - el.head.r ** 2;
+      const disc = bb * bb - 4 * a * c;
+      if (disc >= 0) {
+        const tin = (-bb - Math.sqrt(disc)) / (2 * a), tout = (-bb + Math.sqrt(disc)) / (2 * a);
+        if (tin <= t + 1e-6 && tout > t) t = tout;
+      }
+    }
+    return t;
+  }
+
+  function drawShape(g, el) {
+    const { box, color } = el;
+    if (el.kind === 'person') {
+      node('rect', { x: box.x, y: box.y, width: box.w, height: box.h, rx: BODY.rx * box.w / BODY.w,
+        fill: '#fff', stroke: color, 'stroke-width': STROKE }, g);
+      for (const f of [0.2, 0.8]) {
+        node('line', { x1: box.x + box.w * f, y1: box.y + box.h * 0.44, x2: box.x + box.w * f, y2: box.y + box.h,
+          stroke: color, 'stroke-width': 1, 'stroke-opacity': 0.55 }, g);
+      }
+      node('circle', { cx: el.head.cx, cy: el.head.cy, r: el.head.r, fill: '#fff', stroke: color, 'stroke-width': STROKE }, g);
+    } else if (shapeOf(el)) {
+      shapeOf(el).draw(g, box, color);
+    } else {
+      rect(g, box, BOX.rx, color);
+    }
+  }
+  function place(el, cx, cy, w, h, headR) {
+    el.box = { x: cx - w / 2, y: cy - h / 2, w, h };
+    if (el.kind === 'person') {
+      el.head = { cx, cy: el.box.y - headR + headR * HEAD_OVERLAP / HEAD_R, r: headR };
+      const top = el.head.cy - headR;
+      el.bounds = { x: el.box.x, y: top, w, h: el.box.y + h - top };
+    } else {
+      el.bounds = el.box;
+      const shape = shapeOf(el);
+      if (shape && shape.clip) el.clip = shape.clip(el.box);
+    }
+  }
+  function textInset(el) {
+    if (el.kind === 'person') return HEAD_OVERLAP + 12;
+    return shapeOf(el) ? shapeOf(el).inset : 0;
+  }
+  const textShift = (el) => (shapeOf(el) && shapeOf(el).shift) || 0;
+  function drawArrow(g, start, end, dx, dy) {
+    const base = [end[0] - dx * ARROW_L, end[1] - dy * ARROW_L];
+    node('line', { x1: start[0], y1: start[1], x2: base[0], y2: base[1], stroke: INK, 'stroke-width': 2.5, 'stroke-dasharray': '10 7' }, g);
+    const nx = -dy * ARROW_W / 2, ny = dx * ARROW_W / 2;
+    node('polygon', { points: [end, [base[0] + nx, base[1] + ny], [base[0] - nx, base[1] - ny]].map((p) => p.join(',')).join(' '), fill: INK }, g);
+  }
+  const drawFrame = (g, r) => node('rect', { x: r.x, y: r.y, width: r.w, height: r.h, rx: 16, fill: 'none',
+    stroke: SCOPE_COLOR, 'stroke-width': 3 }, g);
+  // 边界名占的位置：用来检查关系标签有没有压到它
+  const FRAME_NAME = { size: 18, weight: 700 }, FRAME_TYPE = { size: 12, weight: 400 };
+  const frameLabelBox = (r, name, type) => ({ x: r.x + 14, y: r.y + r.h - 38,
+    w: measure(name, FRAME_NAME) + 6 + measure(`[${type}]`, FRAME_TYPE) + 12, h: 28 });
+  function frameLabel(g, r, name, type) {
+    const t = node('text', { x: r.x + 20, y: r.y + r.h - 18, 'font-family': FONT, fill: SCOPE_COLOR }, g);
+    node('tspan', { 'font-size': 18, 'font-weight': 700 }, t).textContent = name;
+    node('tspan', { 'font-size': 12, dx: 6 }, t).textContent = `[${type}]`;
+  }
+  // 外接矩形外扩 40px，底部再留 30px 写名字
+  function frameAround(boxes) {
+    const x0 = Math.min(...boxes.map((b) => b.x)), y0 = Math.min(...boxes.map((b) => b.y));
+    const x1 = Math.max(...boxes.map((b) => b.x + b.w)), y1 = Math.max(...boxes.map((b) => b.y + b.h));
+    return { x: x0 - 40, y: y0 - 40, w: x1 - x0 + 80, h: y1 - y0 + 80 + 30 };
+  }
+
+  function render() {
+    const model = JSON.parse(document.getElementById('c4-model').textContent);
+    if (model.title) document.title = model.title;
+    else fail('缺少 title（建议「Component View: 系统名 - 容器名」）');
+    if (!model.system) fail('缺少 system（范围系统的名字，和 Container 图里的一致）');
+    if (!model.container) fail('缺少 container（被展开的 container 的名字，和 Container 图里的一致）');
+    if (model.boundary) fail('Component 图不画企业边界（boundary），两层边界会自动画');
+
+    // ---- 元素 ----
+    const byId = new Map();
+    const els = [];
+    for (const el of model.elements || []) {
+      const who = el.id || el.name || '(未命名元素)';
+      if (!el.id) { fail(`${who}：缺少 id`); continue; }
+      if (byId.has(el.id)) { fail(`元素 id 重复：${el.id}`); continue; }
+      if (!KIND_LABEL[el.kind]) { fail(`${who}：kind 只能是 person / system / container / component`); continue; }
+      if (!Array.isArray(el.at) || el.at.length !== 2 || !el.at.every(Number.isFinite)) { fail(`${who}：at 必须是 [列, 行] 两个数字`); continue; }
+      if (el.kind === 'container') {
+        el.shape = el.shape || 'box';
+        if (!SHAPES[el.shape]) { fail(`${who}：shape 只能是 ${Object.keys(SHAPES).join(' / ')}`); continue; }
+      }
+      if ((el.kind === 'container' || el.kind === 'component') && !el.technology) fail(`${who}：${el.kind} 缺少 technology（不确定就写候选或大类）`);
+      if (!el.name) fail(`${who}：缺少 name`);
+      if (!el.description) fail(`${who}：缺少 description`);
+      if (el.scope) fail(`${who}：Component 图不设 scope，范围由 system、container 两个字段画成边界`);
+      byId.set(el.id, el);
+      els.push(el);
+    }
+    const components = els.filter((e) => e.kind === 'component');
+    const containers = els.filter((e) => e.kind === 'container');
+    if (!components.length) fail('Component 图至少要有一个 component');
+
+    const assigned = new Map(), used = { person: 0, system: 0 };
+    for (const el of els) {
+      if (el.color) continue;
+      if (el.kind === 'component' || el.kind === 'container') { el.color = SCOPE_COLOR; continue; }
+      const k = `${el.kind}:${el.tag || el.id}`;
+      if (!assigned.has(k)) assigned.set(k, PALETTE[el.kind][used[el.kind]++ % PALETTE[el.kind].length]);
+      el.color = assigned.get(k);
+    }
+
+    for (const el of els) {
+      const isPerson = el.kind === 'person';
+      const base = isPerson ? BODY : BOX;
+      const shape = shapeOf(el);
+      const innerW = base.w - 2 * PAD - (isPerson ? 24 : 0) - 2 * (shape ? shape.side : 0);
+      const meta = el.technology && shape ? `[${KIND_LABEL[el.kind]}: ${el.technology}]` : `[${KIND_LABEL[el.kind]}]`;
+      el.nameLines = wrapBalanced(el.name, TXT.name, innerW);
+      el.metaLines = wrapBalanced(meta, TXT.meta, innerW);
+      el.descLines = wrapBalanced(el.description, TXT.desc, innerW);
+      el.textH = el.nameLines.length * TXT.name.lh + el.metaLines.length * TXT.meta.lh + 6 + el.descLines.length * TXT.desc.lh;
+      const h = Math.max(base.h, el.textH + 2 * PAD + textInset(el));
+      place(el, el.at[0] * COL, el.at[1] * ROW, base.w, h, HEAD_R);
+    }
+    for (let i = 0; i < els.length; i++) {
+      for (let j = i + 1; j < els.length; j++) {
+        if (inter(els[i].bounds, els[j].bounds, 40)) fail(`「${els[i].name}」和「${els[j].name}」重叠或太近，调整 at`);
+      }
+    }
+
+    // ---- 关系 ----
+    // 跨进程 = 一端是 component、另一端是 container 或软件系统：必须写 technology
+    const crossProcess = (a, b) => (a.kind === 'component') !== (b.kind === 'component') && a.kind !== 'person' && b.kind !== 'person';
+    const rels = (model.relationships || []).filter((r) => {
+      const who = `${r.from} → ${r.to}`;
+      if (!byId.has(r.from) || !byId.has(r.to)) { fail(`关系 ${who}：端点 id 不存在`); return false; }
+      if (r.from === r.to) { fail(`关系 ${who}：不能指向自己`); return false; }
+      if (!r.description) fail(`关系 ${who}：缺少 description（写交互目的）`);
+      if (crossProcess(byId.get(r.from), byId.get(r.to)) && !r.technology) {
+        fail(`关系 ${who}：component 和 container、软件系统之间是跨进程调用，要写 technology（通信机制 / 协议）`);
+      }
+      return true;
+    });
+    const isComponent = (id) => byId.get(id).kind === 'component';
+    for (const el of els) {
+      if (el.kind === 'component') {
+        if (!rels.some((r) => r.from === el.id || r.to === el.id)) warn(`component「${el.name}」没有任何关系`);
+        continue;
+      }
+      const linked = rels.some((r) => (r.from === el.id && isComponent(r.to)) || (r.to === el.id && isComponent(r.from)));
+      if (!linked) fail(`「${el.name}」没有和任何 component 直接相连，不该出现在这张图上`);
+    }
+    // 同一对元素之间的多条关系：平行错开，标签沿线错开。错开量按同一个参考方向（id 小的一端 → 大的一端）算，
+    // 再换算回每条关系自己的方向 —— 否则两条方向相反的关系，标签会落在同一点
+    const pairs = new Map();
+    for (const r of rels) {
+      const k = [r.from, r.to].sort().join('\u0000');
+      if (!pairs.has(k)) pairs.set(k, []);
+      pairs.get(k).push(r);
+    }
+    for (const list of pairs.values()) {
+      list.forEach((r, i) => {
+        const k = i - (list.length - 1) / 2;
+        const along = 0.5 + k * 0.3;
+        r.offset = k * 28;
+        r.t = Number.isFinite(r.labelAt) ? r.labelAt : r.from < r.to ? along : 1 - along;
+      });
+    }
+    for (const r of rels) {
+      const a = byId.get(r.from), b = byId.get(r.to);
+      const [p, q] = r.from < r.to ? [a, b] : [b, a];
+      const pc = [p.box.x + p.box.w / 2, p.box.y + p.box.h / 2], qc = [q.box.x + q.box.w / 2, q.box.y + q.box.h / 2];
+      let nx = pc[1] - qc[1], ny = qc[0] - pc[0];
+      const nl = Math.hypot(nx, ny) || 1;
+      nx /= nl; ny /= nl;
+      const ac = [a.box.x + a.box.w / 2 + nx * r.offset, a.box.y + a.box.h / 2 + ny * r.offset];
+      const bc = [b.box.x + b.box.w / 2 + nx * r.offset, b.box.y + b.box.h / 2 + ny * r.offset];
+      const len = Math.hypot(bc[0] - ac[0], bc[1] - ac[1]);
+      if (!len) { r.skip = true; continue; }
+      r.dx = (bc[0] - ac[0]) / len; r.dy = (bc[1] - ac[1]) / len;
+      const t0 = exitT(a, ac[0], ac[1], r.dx, r.dy) + GAP;
+      const t1 = exitT(b, bc[0], bc[1], -r.dx, -r.dy) + GAP;
+      if (t0 + t1 + ARROW_L + 20 >= len) { fail(`关系「${r.description}」两端元素太近，连线放不下`); r.skip = true; continue; }
+      r.start = [ac[0] + r.dx * t0, ac[1] + r.dy * t0];
+      r.end = [bc[0] - r.dx * t1, bc[1] - r.dy * t1];
+      r.lines = wrapBalanced(r.description, TXT.rel, LABEL_W);
+      r.tech = r.technology ? `[${r.technology}]` : '';
+      const widths = r.lines.map((s) => measure(s, TXT.rel));
+      if (r.tech) widths.push(measure(r.tech, TXT.tech));
+      const lw = Math.max(...widths, 0) + 10;
+      const lh = r.lines.length * TXT.rel.lh + (r.tech ? TXT.tech.lh : 0) + 6;
+      const mx = r.start[0] + (r.end[0] - r.start[0]) * r.t, my = r.start[1] + (r.end[1] - r.start[1]) * r.t;
+      r.label = widths.length ? { x: mx - lw / 2, y: my - lh / 2, w: lw, h: lh } : null;
+    }
+    const drawn = rels.filter((r) => !r.skip);
+    const labelled = drawn.filter((r) => r.label);
+    for (const r of drawn) {
+      for (const el of els) {
+        if (r.from !== el.id && r.to !== el.id && segHitsRect(r.start, r.end, el.bounds)) warn(`关系「${r.description}」的连线穿过「${el.name}」`);
+        if (r.label && inter(r.label, el.bounds, 6)) warn(`关系「${r.description}」的标签压到「${el.name}」，调整 labelAt 或元素位置`);
+      }
+    }
+    for (let i = 0; i < labelled.length; i++) {
+      for (let j = i + 1; j < labelled.length; j++) {
+        if (inter(labelled[i].label, labelled[j].label, 4)) warn(`关系「${labelled[i].description}」和「${labelled[j].description}」的标签重叠`);
+      }
+    }
+
+    // ---- 两层边界：内层包住全部 component，外层再包住内层和同系统的其他 container ----
+    let inner = null, outer = null;
+    if (components.length) {
+      inner = frameAround(components.map((e) => e.bounds));
+      outer = frameAround([inner, ...containers.map((e) => e.bounds)]);
+      for (const el of els) {
+        if (el.kind !== 'component' && inter(el.bounds, inner)) fail(`「${el.name}」不是 component，却落在 container 边界里，调整 at`);
+        if ((el.kind === 'person' || el.kind === 'system') && inter(el.bounds, outer)) fail(`「${el.name}」在系统外，却落在系统边界里，调整 at`);
+      }
+      const names = [[frameLabelBox(inner, model.container || '', 'Container'), model.container], [frameLabelBox(outer, model.system || '', 'Software System'), model.system]];
+      for (const r of labelled) {
+        for (const [box, name] of names) {
+          if (inter(r.label, box, 2)) warn(`关系「${r.description}」的标签压到边界名「${name}」，调整 labelAt 或元素位置`);
+        }
+      }
+    }
+
+    // ---- 绘制 ----
+    const svg = document.getElementById('c4-diagram');
+    const gB = node('g', {}, svg), gR = node('g', {}, svg), gE = node('g', {}, svg), gL = node('g', {}, svg), gT = node('g', {}, svg);
+    if (outer) {
+      drawFrame(gB, outer);
+      frameLabel(gB, outer, model.system || '', 'Software System');
+      drawFrame(gB, inner);
+      frameLabel(gB, inner, model.container || '', 'Container');
+    }
+    for (const r of drawn) {
+      drawArrow(gR, r.start, r.end, r.dx, r.dy);
+      if (!r.label) continue;
+      node('rect', { x: r.label.x, y: r.label.y, width: r.label.w, height: r.label.h, fill: '#fff' }, gL);
+      const cx = r.label.x + r.label.w / 2;
+      textLines(gL, r.lines, cx, r.label.y + 3, TXT.rel, INK);
+      if (r.tech) textLines(gL, [r.tech], cx, r.label.y + 3 + r.lines.length * TXT.rel.lh, TXT.tech, INK);
+    }
+    for (const el of els) {
+      const g = node('g', {}, gE);
+      drawShape(g, el);
+      const cx = el.box.x + el.box.w / 2 + textShift(el);
+      const inset = textInset(el);
+      let y = el.box.y + inset + (el.box.h - inset - el.textH) / 2;
+      textLines(g, el.nameLines, cx, y, TXT.name, el.color);
+      y += el.nameLines.length * TXT.name.lh;
+      textLines(g, el.metaLines, cx, y, TXT.meta, el.color);
+      y += el.metaLines.length * TXT.meta.lh + 6;
+      textLines(g, el.descLines, cx, y, TXT.desc, el.color);
+    }
+    const boxes = [...els.map((e) => e.bounds), ...labelled.map((r) => r.label), ...(outer ? [outer] : [])];
+    if (!boxes.length) boxes.push({ x: 0, y: 0, w: 0, h: 0 });
+    const minX = Math.min(...boxes.map((b) => b.x)), minY = Math.min(...boxes.map((b) => b.y));
+    let maxX = Math.max(...boxes.map((b) => b.x + b.w)), maxY = Math.max(...boxes.map((b) => b.y + b.h));
+    const title = { size: 26, weight: 400, lh: 34 }, sub = { size: 15, weight: 400, lh: 22 };
+    textLines(gT, [model.title || ''], minX, maxY + 50, title, INK, 'start');
+    if (model.description) textLines(gT, [model.description], minX, maxY + 50 + title.lh, sub, '#666', 'start');
+    maxX = Math.max(maxX, minX + measure(model.title || '', title), minX + measure(model.description || '', sub));
+    maxY += 50 + title.lh + (model.description ? sub.lh : 0);
+    const vw = maxX - minX + 2 * MARGIN, vh = maxY - minY + 2 * MARGIN;
+    svg.setAttribute('viewBox', `${minX - MARGIN} ${minY - MARGIN} ${vw} ${vh}`);
+    svg.setAttribute('width', vw);
+    svg.setAttribute('aria-label', model.title || 'Component diagram');
+
+    renderKey(els, outer ? [model.container || '', model.system || ''] : []);
+  }
+
+  // ---- 图例：每种「类型 + 形状 + 颜色」一项，再加两层边界和关系线 ----
+  function renderKey(els, frameNames) {
+    const svg = document.getElementById('c4-key');
+    const rank = { component: 0, container: 1, system: 2, person: 3 };
+    const keyLabel = (el) => {
+      if (el.kind === 'component') return el.tag ? `Component, ${el.tag}` : 'Component';
+      if (el.kind === 'container') return el.tag ? `Container, ${el.tag}` : SHAPES[el.shape].key;
+      return el.tag || el.name;
+    };
+    const groups = new Map();
+    for (const el of [...els].sort((a, b) => rank[a.kind] - rank[b.kind])) {
+      const k = `${el.kind}|${el.shape || ''}|${el.color}`;
+      if (!groups.has(k)) groups.set(k, { kind: el.kind, shape: el.shape, color: el.color, labels: [] });
+      const label = keyLabel(el);
+      if (!groups.get(k).labels.includes(label)) groups.get(k).labels.push(label);
+    }
+    const items = [...groups.values()].map((g) => ({ ...g, text: (g.kind === 'person' ? 'Person, ' : '') + g.labels.join('、') }));
+    for (const name of frameNames) items.push({ kind: 'frame', text: `Boundary, ${name}` });
+    items.push({ kind: 'rel', text: 'Relationship' });
+
+    const CELL_W = 210, CELL_H = 200, PER_ROW = 8, W = 180, H = 116, HR = 38;
+    items.forEach((it, i) => {
+      const cx = (i % PER_ROW) * (CELL_W + 24) + CELL_W / 2, cy = Math.floor(i / PER_ROW) * (CELL_H + 24) + CELL_H - H / 2;
+      const g = node('g', {}, svg);
+      if (it.kind === 'rel') {
+        drawArrow(g, [cx - 80, cy - 10], [cx + 80, cy - 10], 1, 0);
+        textLines(g, [it.text], cx, cy + 6, TXT.key, INK);
+        return;
+      }
+      if (it.kind === 'frame') {
+        drawFrame(g, { x: cx - W / 2, y: cy - H / 2, w: W, h: H });
+        const lines = wrapBalanced(it.text, TXT.key, W - 30);
+        textLines(g, lines, cx, cy - (lines.length * TXT.key.lh) / 2, TXT.key, SCOPE_COLOR);
+        return;
+      }
+      const el = { kind: it.kind, shape: it.shape, color: it.color };
+      place(el, cx, cy, W, H, HR);
+      drawShape(g, el);
+      const shape = shapeOf(el);
+      const lines = wrapBalanced(it.text, TXT.key, W - 30 - 2 * (shape ? shape.side : 0));
+      const top = cy - (lines.length * TXT.key.lh) / 2 + (it.kind === 'person' ? 12 : textInset(el) / 2);
+      textLines(g, lines, cx + textShift(el), top, TXT.key, it.color);
+    });
+    const rows = Math.ceil(items.length / PER_ROW), cols = Math.min(items.length, PER_ROW);
+    const vw = cols * (CELL_W + 24), vh = rows * (CELL_H + 24);
+    svg.setAttribute('viewBox', `-10 -10 ${vw + 20} ${vh + 20}`);
+    svg.setAttribute('width', vw + 20);
+    svg.setAttribute('aria-label', 'Diagram key');
+  }
+
+  try {
+    render();
+  } catch (e) {
+    fail(`渲染异常：${e && e.message}`);
+    console.error(e);
+  }
+  const status = problems.some((p) => p.level === 'error') ? 'error' : problems.length ? 'warn' : 'ok';
+  document.documentElement.dataset.c4Status = status;
+  const report = document.getElementById('c4-report');
+  for (const p of problems) {
+    const li = document.createElement('li');
+    li.dataset.level = p.level;
+    li.textContent = p.msg;
+    report.appendChild(li);
+  }
+  report.hidden = !problems.length;
+  if (problems.length) console.warn('[c4]', problems);
+})();
+</script>
+</body>
+</html>

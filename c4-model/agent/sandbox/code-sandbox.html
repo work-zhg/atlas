@@ -33,7 +33,7 @@
   "description": "目标模型，只画期望的样子、不对照现状。沙箱组件的七个领域，每个只画对外入口和跨领域的扩展点，看依赖方向；领域内部见各自的 code-sandbox-*.html。",
   "component": "沙箱",
   "package": "沙箱（目标模型 · 领域总览）",
-  "overview": "沙箱组件分三层七个领域。业务层有三个：命令执行（在原生智能体的沙箱里跑命令）、原生沙箱（按工作区要沙箱、闲置回收）、会话 Pod（给 CLI 智能体要 Pod、交出 bridge 的地址）。中间是通用供给：按人管理沙箱，决定一个业务用哪个沙箱、什么时候建和退役。底下是基座，把 OpenSandbox 包成三个领域：生命周期（模板、建删查、生命周期日志）、沙箱内执行（execd：命令、文件、活动）、网络与凭据（出站策略、Credential Vault）。\n\n依赖只往下。通用供给经 SandboxKind 回调业务层，网络经 EgressLocator 向生命周期要地址，这两处是依赖倒置。组件外的调用方是引擎（Shell 工具）、工作区组件（读写选路）、CLI 运行时（确保会话 Pod）、会话管理组件和维护任务；凭据组件给出已授权的凭据。图上每个元素第一行写着它属于哪个领域。",
+  "overview": "沙箱组件分三层七个领域。业务层有三个：命令执行（在原生智能体的沙箱里跑命令）、原生沙箱（按工作区要沙箱、闲置回收）、会话 Pod（给 CLI 智能体要 Pod、交出 bridge 的地址）。中间是通用供给：按主体（人或数字员工）管理沙箱，以人为权限的按人共享、以数字员工为权限的一个会话一个，决定一个业务用哪个沙箱、什么时候建和退役。底下是基座，把 OpenSandbox 包成三个领域：生命周期（模板、建删查、生命周期日志）、沙箱内执行（execd：命令、文件、活动）、网络与凭据（出站策略、Credential Vault）。\n\n依赖只往下。通用供给经 SandboxKind 回调业务层，网络经 EgressLocator 向生命周期要地址，这两处是依赖倒置。组件外的调用方是引擎（Shell 工具）、工作区组件（读写选路）、CLI 运行时（确保会话 Pod）、会话管理组件和维护任务；凭据组件给出已授权的凭据。图上每个元素第一行写着它属于哪个领域。",
   "elements": [
     {
       "id": "shell",
@@ -63,7 +63,7 @@
       "kind": "class",
       "name": "NativeSandboxService",
       "stereotype": "应用服务",
-      "responsibility": "【原生沙箱】按工作区要沙箱（业务类型 NATIVE），档位选模板、镜像按档位准入；闲置回收、删除级联、孤儿回收都只释放自己的业务。详见 code-sandbox-native.html。",
+      "responsibility": "【原生沙箱】按工作区要沙箱（业务类型 NATIVE），主体是会话的文件主体；以人为权限按（模板，镜像）共享、以数字员工为权限一个工作区一个；档位选模板、镜像按档位准入；闲置回收、删除级联、孤儿回收都只释放自己的业务。详见 code-sandbox-native.html。",
       "attributes": [
         [
           "",
@@ -90,7 +90,7 @@
       "kind": "class",
       "name": "SessionPods",
       "stereotype": "应用服务",
-      "responsibility": "【会话 Pod】按会话要 Pod（业务类型 CLI_AGENT），交出 bridge 的地址和服务令牌；CLI、模型接入和已授权的凭据都由调用方作为参数传入；会话没有没结束的 run、闲置超过时限就释放。详见 code-sandbox-session-pod.html。",
+      "responsibility": "【会话 Pod】按会话要 Pod（业务类型 CLI_AGENT）：以人为权限按凭据集合共用、一个会话一个槽位，以数字员工为权限一个会话一个；交出 bridge 的地址和服务令牌；CLI、模型接入和已授权的凭据都由调用方作为参数传入；会话没有没结束的 run、闲置超过时限就释放。详见 code-sandbox-session-pod.html。",
       "attributes": [
         [
           "",
@@ -117,7 +117,7 @@
       "kind": "class",
       "name": "NativeSandboxKind",
       "stereotype": "策略",
-      "responsibility": "【原生沙箱】原生沙箱这一种：模板按档位、挂工作区和技能、就绪看 execd /ping。装配时按 biz_type = NATIVE 登记到通用供给。",
+      "responsibility": "【原生沙箱】原生沙箱这一种：模板按档位、共享键按权限类型、挂 /data（主体前缀）和 /space（应用工作空间，只在不共享时）、就绪看 execd /ping。装配时按 biz_type = NATIVE 登记到通用供给。",
       "attributes": [
         [
           "",
@@ -140,7 +140,7 @@
       "kind": "class",
       "name": "CliPodKind",
       "stereotype": "策略",
-      "responsibility": "【会话 Pod】会话 Pod 这一种：模板 cli、挂工作区 / 技能 / CLI 的 HOME，凭据非空才开凭据注入、每轮整份重写，就绪看 bridge /readyz。装配时按 biz_type = CLI_AGENT 登记。",
+      "responsibility": "【会话 Pod】会话 Pod 这一种：模板 cli、共享键按权限类型（人：凭据集合 + 槽位）、挂 /data 和 /space、CLI 的 HOME 在主体前缀下，凭据非空才开凭据注入、每轮整份重写，就绪看这个槽位的 bridge /readyz。装配时按 biz_type = CLI_AGENT 登记。",
       "attributes": [
         [
           "",
@@ -163,7 +163,7 @@
       "kind": "class",
       "name": "SandboxProvisioning",
       "stereotype": "应用服务",
-      "responsibility": "【通用供给】按人管理沙箱：沙箱账户（名下沙箱、绑定的业务）、状态 CREATING / READY / RETIRING，先登记再建，版本号 CAS。一个业务至多绑一个沙箱，现在独占，以后共享只改分配策略。详见 code-sandbox-provisioning.html。",
+      "responsibility": "【通用供给】按主体（人或数字员工）管理沙箱：沙箱账户（名下沙箱、绑定的业务）、状态 CREATING / READY / RETIRING，先登记再建，版本号 CAS。一个业务至多绑一个沙箱；共不共享看种类给的共享键。详见 code-sandbox-provisioning.html。",
       "attributes": [
         [
           "",
@@ -560,8 +560,8 @@
       "reason": "CLI 运行时连 bridge 必须带令牌，所以单独给一个服务令牌；拿到它也不能在 Pod 里执行任意命令。execd 令牌只在基座里流转。"
     },
     {
-      "decision": "沙箱归人，业务只释放、不删除",
-      "reason": "闲置、会话删除、孤儿回收都只解绑自己的业务，沙箱没有业务了才由通用供给退役。现在独占，效果和直接删一样；以后共享沙箱只改分配策略。"
+      "decision": "沙箱归主体，业务只释放、不删除",
+      "reason": "闲置、会话删除、孤儿回收都只解绑自己的业务，沙箱没有业务了才由通用供给退役。以人为权限的沙箱是共享的，别的会话还在用就不删；以数字员工为权限的一个会话一个，解绑就等于退役。"
     },
     {
       "decision": "两本账分开：活动记在基座执行（按沙箱），重放记在命令执行（按 run 和工具调用）",
