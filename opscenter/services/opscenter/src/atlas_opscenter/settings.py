@@ -89,6 +89,13 @@ _LOCAL_SYSTEMS = [
         capabilities=["lifecycle", "memory_scopes"],
         module_code="OpsMemory",
     ),
+    SystemConfig(
+        code="teamflow",
+        name="AI TeamFlow",
+        base_url="http://127.0.0.1:8040",
+        capabilities=["lifecycle", "jobs"],
+        module_code="OpsTeamFlow",
+    ),
 ]
 
 

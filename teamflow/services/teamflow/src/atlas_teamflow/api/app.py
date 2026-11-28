@@ -138,7 +138,7 @@ def create_app(
         app.include_router(r)
     _mount_jobs(app, jobs)
     key = settings.ops_api_key.get_secret_value() if settings.ops_api_key else None
-    mount_ops(app, key)
+    mount_ops(app, key, jobs)
     return app
 
 

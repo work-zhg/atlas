@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from atlas_jobs import JobScheduler
 from atlas_opsapi import OpsGuard, OpsRoutes, TenantLifecycle
 from atlas_tenancy import PurgeReport
 from fastapi import FastAPI
@@ -74,6 +75,7 @@ class TeamFlowTenantLifecycle(TenantLifecycle):
         return report
 
 
-def mount_ops(app: FastAPI, ops_api_key: str | None) -> None:
+def mount_ops(app: FastAPI, ops_api_key: str | None, jobs: JobScheduler | None = None) -> None:
+    """运营接口：租户开通 / 删除，以及定时任务（运营中心的「系统任务」）。"""
     app.state.ops_guard = guard = OpsGuard(ops_api_key)
-    OpsRoutes.mount(app, guard, TeamFlowTenantLifecycle(app))
+    OpsRoutes.mount(app, guard, TeamFlowTenantLifecycle(app), jobs=jobs)

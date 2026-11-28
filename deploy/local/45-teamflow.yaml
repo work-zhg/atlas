@@ -1,8 +1,10 @@
-# AI TeamFlow 后端（atlas_teamflow）：团队、项目、流程；API 进程内嵌 Agent 监督器（embedded_worker）。
+# AI TeamFlow 后端（atlas_teamflow）：团队、流程模板与市场、项目、流程；API 进程内跑投递器（开 run、
+# 取消 run，embedded_worker）和通知器。设计见 c4-model/teamflow/design-teamflow.html。
 #
-# ★ 原先在宿主上跑 uvicorn（:8040）；按「部署一律放 Pod」迁进集群。镜像与 Atlas 共用 atlas-app:dev。
-# ★ 凭据只剩 Gitee 令牌（atlas-teamflow-creds，由 apply.sh 从仓库根 .env 建）。调用户中心、
-#   Atlas 都是内网免令牌：请求头 X-Uid + X-Caller-App: teamflow（内网身份传递 §10）。
+# ★ 镜像与 Atlas 共用 atlas-app:dev。没有自己的凭据：调用户中心、Agent 平台都是内网免令牌，
+#   请求头 X-Uid + X-Tenant-Id + X-Caller-App: teamflow（内网身份传递 §10）。
+# ★ 多实例经 Redis 互相唤醒（ATLAS_TF_REDIS_URL）；运营接口（租户开通 / 删除、定时任务）的签名密钥在
+#   Secret atlas-ops-keys 的 teamflow 项（apply.sh 建，运营中心持有同一把）。
 # ★ Service 名不叫 atlas-tf：理由同 15-usercenter.yaml（ATLAS_TF_ 是配置前缀）。
 apiVersion: apps/v1
 kind: Deployment
@@ -28,9 +30,8 @@ spec:
             - {name: ATLAS_TF_REDIS_URL, value: "redis://__HOST_IP__:6380/0"}
             - {name: ATLAS_TF_UC_BASE_URL, value: "http://atlas-usercenter.atlas-system.svc.cluster.local:8030"}
             - {name: ATLAS_TF_ATLAS_BASE_URL, value: "http://atlas-server.atlas-system.svc.cluster.local:8000"}
-            - {name: ATLAS_TF_GIT_BACKEND, value: gitee}
-            - name: ATLAS_TF_GITEE_TOKEN
-              valueFrom: {secretKeyRef: {name: atlas-teamflow-creds, key: gitee_token}}
+            - name: ATLAS_TF_OPS_API_KEY
+              valueFrom: {secretKeyRef: {name: atlas-ops-keys, key: teamflow}}
       containers:
         - name: teamflow
           image: atlas-app:dev

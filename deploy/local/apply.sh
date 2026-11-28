@@ -71,7 +71,7 @@ kubectl -n atlas-system delete deployment/atlas-litellm service/atlas-litellm se
 # ★ 换某个系统的密钥：删掉 Secret 里那一项再跑本脚本，然后滚动重启那个系统和运营中心
 OPS_ARGS=()
 OPS_JSON=""
-for sys_code in usercenter atlas knowledge skill mcpgateway modelgateway memory; do
+for sys_code in usercenter atlas knowledge skill mcpgateway modelgateway memory teamflow; do
   key="$(secret_value atlas-ops-keys "$sys_code")"
   [ -n "$key" ] || key="$(openssl rand -hex 32)"
   OPS_ARGS+=(--from-literal="${sys_code}=${key}")
@@ -138,10 +138,8 @@ kubectl -n atlas-system create secret generic atlas-oss-creds \
   --from-literal=oss_access_key_secret="${OSS_ACCESS_KEY_SECRET}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
-# TeamFlow 后端的凭据：只剩 Gitee 令牌（迁到 GitLab 后换成 GitLab 的项目管理令牌）
-kubectl -n atlas-system create secret generic atlas-teamflow-creds \
-  --from-literal=gitee_token="${ATLAS_TF_GITEE_TOKEN:-}" \
-  --dry-run=client -o yaml | kubectl apply -f -
+# TeamFlow 后端不再有自己的凭据（产出物在流程空间里，不接 git）：删掉旧的 Gitee 令牌
+kubectl -n atlas-system delete secret atlas-teamflow-creds --ignore-not-found
 
 # TeamFlow 的 git 凭据档案（会话 Pod 里 git push 产物，经 Credential Vault）：.env 没有 Gitee 令牌就跳过
 if [ -n "${ATLAS_GIT_TEAMFLOW_TOKEN:-${ATLAS_TF_GITEE_TOKEN:-}}" ]; then

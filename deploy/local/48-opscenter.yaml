@@ -44,7 +44,7 @@ spec:
             # 前端与后端同源（都经 API 网关），不需要 CORS
             - {name: ATLAS_OPS_CORS_ORIGINS, value: "[]"}
             # 系统登记（按顺序：开通、删除时依次调）；module_code 是这个系统在运营中心里那个模块的数据编码。
-            # TeamFlow 这次不接（只给已有租户开通）
+            # TeamFlow 排在 Atlas 后面：删租户时它要先向 Atlas 释放流程空间
             - name: ATLAS_OPS_SYSTEMS
               value: >-
                 [{"code":"usercenter","name":"用户中心","base_url":"http://atlas-usercenter.atlas-system.svc.cluster.local:8030","capabilities":["user_center"],"module_code":"OpsUserCenter"},
@@ -53,7 +53,8 @@ spec:
                 {"code":"skill","name":"技能","base_url":"http://atlas-skill.atlas-system.svc.cluster.local:8020","capabilities":["lifecycle","skill_market"],"module_code":"OpsSkill"},
                 {"code":"mcpgateway","name":"MCP 网关","base_url":"http://atlas-mcpgateway.atlas-system.svc.cluster.local:8070","capabilities":["lifecycle","jobs"],"module_code":"OpsMcp"},
                 {"code":"modelgateway","name":"模型平台","base_url":"http://atlas-modelgateway.atlas-system.svc.cluster.local:8090","capabilities":["lifecycle","jobs"],"module_code":"OpsModel"},
-                {"code":"memory","name":"记忆服务","base_url":"http://atlas-memory.atlas-system.svc.cluster.local:8060","capabilities":["lifecycle","memory_scopes"],"module_code":"OpsMemory"}]
+                {"code":"memory","name":"记忆服务","base_url":"http://atlas-memory.atlas-system.svc.cluster.local:8060","capabilities":["lifecycle","memory_scopes"],"module_code":"OpsMemory"},
+                {"code":"teamflow","name":"AI TeamFlow","base_url":"http://atlas-teamflow.atlas-system.svc.cluster.local:8040","capabilities":["lifecycle","jobs"],"module_code":"OpsTeamFlow"}]
             - name: ATLAS_OPS_SYSTEM_KEYS
               valueFrom: {secretKeyRef: {name: atlas-ops-keys, key: system_keys}}
           readinessProbe:
