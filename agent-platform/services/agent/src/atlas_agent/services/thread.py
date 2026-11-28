@@ -13,6 +13,7 @@ from uuid import UUID
 from atlas_engine.contracts import SandboxUnavailable
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..app_workspaces import AppWorkspaces
 from ..auth.agent_access import AgentAccess
 from ..auth.principal import Principal
 from ..auth.uc import UCClient
@@ -66,6 +67,7 @@ from ..schemas.thread import (
     WorkspaceFilesOut,
 )
 from ..skills import skill_directory
+from .run import workspace_owner
 
 if TYPE_CHECKING:
     import redis.asyncio as aioredis
@@ -398,6 +400,17 @@ class ThreadService:
             )
         except CredentialDenied as exc:
             raise CredentialDeniedError(str(exc)) from exc
+        # 文件主体：以人为权限是创建人，以数字员工为权限是数字员工（建时定、不改）
+        owner = workspace_owner(agent, user_id)
+        # 应用工作空间：只有登记它的应用能指定、只给以数字员工为权限的智能体
+        app_workspace = None
+        if payload.app_workspace is not None:
+            if payload.workspace_dir is not None:
+                raise BadRequest("workspace_dir 和 app_workspace 只能给一个")
+            space = await AppWorkspaces(self._session, self._settings).attach(
+                payload.app_workspace, app=principal.app, agent=agent
+            )
+            app_workspace = space.space_uuid
         # 工作目录：指定了就校验（不能是根目录、隐藏目录、不能越界），不指定由仓储填
         # workspace。建会话时就落表，之后不变（沙箱里命令和 CLI 的 cwd）
         workspace_dir = None
@@ -415,6 +428,8 @@ class ThreadService:
             memory=memory,
             status="preview" if preview else "active",
             workspace_dir=workspace_dir,
+            owner=owner,
+            app_workspace=app_workspace,
         )
         on_device = await self._place_on_device(
             thread, self._spec_of(agent, version, preview=preview), payload, preview=preview
@@ -475,7 +490,13 @@ class ThreadService:
         if not spec.skills:
             return
         thread_id = thread.thread_uuid
-        fs = make_workspace(self._settings, thread.created_by_uuid, thread_id, thread.workspace_dir)
+        fs = make_workspace(
+            self._settings,
+            thread.owner_uuid,
+            thread_id,
+            thread.workspace_dir,
+            space=thread.space_prefix,
+        )
         if fs is None:
             logger.info("未配置对象存储，跳过技能投送 thread=%s", thread_id)
             return
@@ -528,10 +549,10 @@ class ThreadService:
         sandbox = SandboxComponent.build(self._settings, shared_redis())
         # 浏览器的附加件：沙箱因此退役时先导出登录态
         BrowserComponent.attach(self._settings, sandbox)
-        await sandbox.pods.release(thread.thread_uuid, thread.created_by_uuid)
+        await sandbox.pods.release(thread.thread_uuid, thread.owner_uuid)
         if self._settings.sandbox_enabled and thread.sandbox_thread_id == thread.thread_uuid:
             # 原生沙箱按会话树的根绑定：删的是根会话时它才有沙箱
-            await sandbox.native.release(WorkspaceRef(thread.thread_uuid, thread.created_by_uuid))
+            await sandbox.native.release(WorkspaceRef.of_thread(thread))
 
     # ------------------------------------------------------------------ 工作区文件
 
@@ -594,9 +615,7 @@ class ThreadService:
                 sandbox.native,
                 sandbox.exec,
                 sandbox.ledger,
-                WorkspaceRef(
-                    thread.sandbox_thread_id, thread.created_by_uuid, thread.workspace_dir
-                ),
+                WorkspaceRef.of_thread(thread),
                 command=payload.command,
                 profile="bench",
                 cwd=payload.cwd,
@@ -623,18 +642,18 @@ class ThreadService:
         thread, _ = await self._require(thread_id)
         fs = make_workspace(
             self._settings,
-            thread.created_by_uuid,
+            thread.owner_uuid,
             thread.thread_uuid,
             # ★ 子会话的工作目录与根会话相同（建子会话时复制的）
             thread.workspace_dir,
             routing=self._routing(thread, redis) if redis is not None else None,
+            space=thread.space_prefix,
         )
         return None if fs is None else WorkspaceListing(fs)
 
     def _routing(self, thread: Thread, redis: aioredis.Redis) -> WorkspaceRouting:
         sandbox = SandboxComponent.build(self._settings, redis)
-        ws = WorkspaceRef(thread.sandbox_thread_id, thread.created_by_uuid, thread.workspace_dir)
-        return WorkspaceRouting(sandbox.native, sandbox.exec, ws)
+        return WorkspaceRouting(sandbox.native, sandbox.exec, WorkspaceRef.of_thread(thread))
 
     # ------------------------------------------------------------------ 内部
 

@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends
 from ...auth.dependency import current_principal
 from . import (
     agents,
+    app_workspaces,
     auth,
     browser,
     catalog,
@@ -38,6 +39,7 @@ router.include_router(service_models.router, dependencies=_authed)
 router.include_router(tenant_settings.router, dependencies=_authed)
 router.include_router(credentials.router, dependencies=_authed)
 router.include_router(workspace.router, dependencies=_authed)
+router.include_router(app_workspaces.router, dependencies=_authed)
 router.include_router(devices.router, dependencies=_authed)
 router.include_router(browser.router, dependencies=_authed)
 # 浏览器画面是 WebSocket：路由自己按请求头解析身份（router 级的依赖按 HTTP 请求取）

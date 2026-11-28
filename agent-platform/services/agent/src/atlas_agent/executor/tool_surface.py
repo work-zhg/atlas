@@ -136,11 +136,7 @@ class ToolSurface:
                 native=sandbox.native,
                 exec=sandbox.exec,
                 ledger=sandbox.ledger,
-                ws=WorkspaceRef(
-                    segment.thread.sandbox_thread_id,
-                    segment.thread.created_by_uuid,
-                    segment.thread.workspace_dir,
-                ),
+                ws=WorkspaceRef.of_thread(segment.thread),
                 run_id=run_id,
                 spec=segment.spec.sandbox,
                 # 带浏览器的沙箱：每条命令带上会话名，browser 命令按它各开各的标签页

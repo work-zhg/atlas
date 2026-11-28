@@ -55,6 +55,7 @@ ATLAS_PURGE_ORDER: tuple[type[Any], ...] = (
     m.ThreadMemory,
     m.MemoryBackfill,
     m.Thread,
+    m.AppWorkspace,
     m.SkillUsageDaily,
     m.AgentVersion,
     m.Agent,
@@ -138,12 +139,21 @@ class AtlasTenantLifecycle(TenantLifecycle):
                 await redis.aclose()
 
     async def _delete_files(self, budget: int) -> tuple[int, bool]:
-        """这个租户的人在对象存储里的全部文件，最多删 budget 个。→ (删了几个, 还有没有剩)。"""
+        """这个租户的人（含数字员工）在对象存储里的全部文件、没释放的应用工作空间，最多删 budget
+        个。→ (删了几个, 还有没有剩)。"""
         async with self._sessions() as session:
             users = list(await session.scalars(select(m.AppUser.user_uuid)))
+            # ★ 数字员工不在 app_user 里：按会话的文件主体补上
+            owners = set(await session.scalars(select(m.Thread.owner_uuid).distinct()))
+            spaces = list(
+                await session.scalars(
+                    select(m.AppWorkspace.prefix).where(m.AppWorkspace.status == "active")
+                )
+            )
         if budget <= 0:
-            return 0, bool(users)
-        prefixes = [f"{WorkspaceLayout.of(u, u, '').user_prefix}/" for u in users]
+            return 0, bool(users or owners or spaces)
+        subjects = list(dict.fromkeys([*users, *sorted(owners - set(users))]))
+        prefixes = [f"{WorkspaceLayout.of(u, u, '').user_prefix}/" for u in subjects] + spaces
         return await asyncio.to_thread(_delete_prefixes, self._settings, prefixes, budget)
 
 

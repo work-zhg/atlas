@@ -19,12 +19,20 @@ export interface SendMessageInput {
   model?: string;
 }
 
-export function useSendMessage() {
+/**
+ * 嵌入方自己开新一轮（如 AI TeamFlow：开 run 要经它，它记下 run 和流程节点的对应）。
+ * 给了它，发消息就调它，不调 Atlas 的 POST /v1/threads/{id}/runs；读对话、事件流、审批仍直连 Atlas。
+ */
+export type SubmitRun = (input: SendMessageInput) => Promise<RunAccepted>;
+
+export function useSendMessage(submitRun?: SubmitRun) {
   const qc = useQueryClient();
   const http = useAtlasHttp();
   return useMutation({
-    mutationFn: ({ threadId, content, idempotencyKey, approvalMode, model }: SendMessageInput) =>
-      http.post<RunAccepted>(
+    mutationFn: (input: SendMessageInput) => {
+      if (submitRun) return submitRun(input);
+      const { threadId, content, idempotencyKey, approvalMode, model } = input;
+      return http.post<RunAccepted>(
         `/v1/threads/${threadId}/runs`,
         {
           content,
@@ -32,7 +40,8 @@ export function useSendMessage() {
           ...(model ? { model } : {}),
         },
         idempotencyKey ? { "Idempotency-Key": idempotencyKey } : undefined,
-      ),
+      );
+    },
     onSuccess: (_data, vars) => {
       // 用户消息已落库，列表要刷新；会话的 updated_at / message_count 也变了
       void qc.invalidateQueries({ queryKey: qk.threads.messages(vars.threadId) });

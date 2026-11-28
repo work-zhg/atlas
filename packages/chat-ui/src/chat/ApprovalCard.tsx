@@ -10,6 +10,7 @@ import { ApiError } from "../lib/http";
 import { toolLabel } from "../lib/steps";
 import type { PendingApproval } from "../lib/run-reducer";
 import styles from "./chat.module.css";
+import { useConversationReadOnly } from "./readOnly";
 
 interface Props {
   approval: PendingApproval;
@@ -38,6 +39,7 @@ interface Decided {
  *   执行命令要看到命令本身。长内容（写文件的整段内容）折叠起来，不把对话撑长。
  */
 export function ApprovalCard({ approval, waiting }: Props) {
+  const readOnly = useConversationReadOnly();
   const decide = useDecideApproval();
   const [decided, setDecided] = useState<Decided | null>(null);
   const [feedback, setFeedback] = useState("");
@@ -48,8 +50,9 @@ export function ApprovalCard({ approval, waiting }: Props) {
     approval.approvalId,
   );
   // 查库失败时宁可让用户能点：藏掉一个真在等的审批，run 就一直停在那里
-  const canDecide =
-    waiting && !decided && (stillPending.data === true || stillPending.isError);
+  const pending = waiting && !decided && (stillPending.data === true || stillPending.isError);
+  // 只读：看得到在等，但不能替人决定
+  const canDecide = pending && !readOnly;
   const closedElsewhere = waiting && !decided && stillPending.isSuccess && !stillPending.data;
   const isPlan = approval.kind === "plan";
 
@@ -83,6 +86,7 @@ export function ApprovalCard({ approval, waiting }: Props) {
     };
   } else if (decided) status = { color: "error", label: isPlan ? "已退回修改" : "已拒绝" };
   else if (canDecide) status = { color: "warning", label: "等待你确认" };
+  else if (pending) status = { color: "warning", label: "等待处理" };
   else if (closedElsewhere) status = { color: "default", label: "已处理" };
   else if (!waiting) status = { color: "default", label: "已结束" };
   else status = { color: "default", label: "核对中…" };

@@ -94,7 +94,8 @@ async def test_threads_are_isolated_by_owner(clean_db: None) -> None:
 
 async def test_business_app_threads(clean_db: None) -> None:
     """TeamFlow 建的会话：归 X-Uid 的人；同一应用来访时信任它已授权（团队其他执行人也能经它
-    看、能发指令）；从网关来只读；别的应用看不到。"""
+    看、能发指令）；从网关来能看、能停（前端直连平台），开新一轮、改名要回到 TeamFlow；别的应用
+    看不到。"""
     from atlas_agent.db.models import Run
     from atlas_agent.db.session import get_sessionmaker
 
@@ -120,13 +121,14 @@ async def test_business_app_threads(clean_db: None) -> None:
         assert on.json()["memory"] == "on"
 
     async with _client(app, li) as gw_li, _client(app, wang) as gw_wang:
-        # 发起人在 Atlas 里能看到（列表、详情），但只读：续聊要回到 TeamFlow
+        # 发起人在 Atlas 里能看到（列表、详情）；续聊、改名要回到 TeamFlow
         assert t["id"] in [x["id"] for x in (await gw_li.get("/v1/threads")).json()["data"]]
         assert (await gw_li.get(f"/v1/threads/{t['id']}/messages")).status_code == 200
         r = await gw_li.post(f"/v1/threads/{t['id']}/runs", json=TEXT)
         assert r.status_code == 403
         assert (await gw_li.patch(f"/v1/threads/{t['id']}", json={"title": "x"})).status_code == 403
-        assert (await gw_li.post(f"/v1/runs/{run_id}/cancel")).status_code == 403
+        # 停止、回答由前端直连平台：看得到就能做
+        assert (await gw_li.post(f"/v1/runs/{run_id}/cancel")).status_code == 200
         # 不是发起人：从网关来看不到
         assert (await gw_wang.get(f"/v1/threads/{t['id']}")).status_code == 404
     async with _client(app, wang, "bench") as bench:

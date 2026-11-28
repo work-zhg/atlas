@@ -44,6 +44,9 @@ class ThreadCreate(BaseModel):
     #: workspace（没指定目录的会话共用）。建会话时定下、之后不能换（它是沙箱里的 cwd）；
     #: 不能是根目录、隐藏目录
     workspace_dir: str | None = Field(default=None, max_length=1024)
+    #: 应用工作空间的编号（POST /v1/app-workspaces 申请的）：会话把它当工作目录，沙箱里挂在 /space。
+    #: 只有登记它的应用能指定，智能体必须以数字员工为权限；和 workspace_dir 二选一
+    app_workspace: UUID | None = None
     #: 本机 CLI 智能体：跑在哪台电脑（不传 = 默认设备）、哪个项目目录（不传 = 「默认项目地址 /
     #: 会话 id」，一个新的空目录）。建会话时定下、之后不能换；别的智能体传了也不用
     device_id: UUID | None = None

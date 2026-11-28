@@ -1,13 +1,14 @@
 """通用供给的领域对象（c4-model/agent/sandbox/code-sandbox-provisioning.html）。
 
-BizType · BizRef        要用沙箱的一个业务：类型 + 业务 id + 人
+BizType · BizRef        要用沙箱的一个业务：类型 + 业务 id + 人（主体）
+Subject                 沙箱记在谁名下：人，或数字员工（配额分开配）
 SandboxRef              交给调用方的沙箱句柄：只有 sandbox_uuid
 SandboxStatus           供给自己的状态（CREATING / READY / RETIRING），不是 OpenSandbox 的运行状态
 SandboxBinding          沙箱正在服务的一个业务（按业务全局唯一，唯一约束兜底），带沙箱内的槽位号
 UserSandbox             这个人名下的一个沙箱，和基座的实例一对一
 SandboxAccount          一个人的沙箱账户：聚合根，保存时用版本号 CAS
 Sharing                 一个业务怎么共享沙箱：共享键相同的业务共用，一个沙箱至多几个业务
-QuotaPolicy             每人同时几个沙箱（只数 CREATING 和 READY）
+QuotaPolicy             每个主体同时几个沙箱（只数 CREATING 和 READY；人和数字员工的上限分开）
 AllocationPolicy        给没绑定的业务挑沙箱：共享键相同、没在退役、没满的里挑一个；独占的一律新建
 """
 
@@ -33,6 +34,7 @@ __all__ = [
     "SandboxRetiring",
     "SandboxStatus",
     "Sharing",
+    "Subject",
     "UserSandbox",
 ]
 
@@ -52,16 +54,26 @@ class BizType(StrEnum):
     CLI_AGENT = "cli_agent"
 
 
+class Subject(StrEnum):
+    """沙箱记在谁名下（会话的文件主体）。同一个 uid 只会是其中一种，所以不进账户、不存库。"""
+
+    PERSON = "person"
+    #: 数字员工：一个会话一个沙箱，同一个数字员工同时被很多人用，上限另配
+    AGENT = "agent"
+
+
 @dataclass(frozen=True)
 class BizRef:
     """要用沙箱的一个业务。
 
     原生沙箱的业务 id 是工作区所属根会话的 uuid（子智能体与父会话共用）；CLI Agent 的是会话的 uuid。
+    subject 只给配额用，不参与比较（从库里读回的绑定一律是默认值）。
     """
 
     biz_type: BizType
     biz_id: UUID
     user_uuid: UUID
+    subject: Subject = field(default=Subject.PERSON, compare=False)
 
 
 @dataclass(frozen=True)
@@ -171,18 +183,29 @@ def _same_biz(a: BizRef, b: BizRef) -> bool:
 
 
 class QuotaPolicy:
-    """每个人能同时有几个沙箱：原生沙箱和 CLI Agent 合计，只数 CREATING 和 READY。0 = 不限。"""
+    """每个主体能同时有几个沙箱：原生沙箱和 CLI Agent 合计，只数 CREATING 和 READY。0 = 不限。
 
-    def __init__(self, default_limit: int) -> None:
+    agent_limit：数字员工的上限（一个会话一个沙箱，比人多得多）；None = 和人一样。
+    """
+
+    def __init__(self, default_limit: int, agent_limit: int | None = None) -> None:
         self.default_limit = default_limit
+        self.agent_limit = agent_limit
 
-    def admit(self, account: SandboxAccount) -> None:
-        if self.default_limit <= 0:
+    def limit_of(self, subject: Subject) -> int:
+        if subject is Subject.AGENT and self.agent_limit is not None:
+            return self.agent_limit
+        return self.default_limit
+
+    def admit(self, account: SandboxAccount, subject: Subject = Subject.PERSON) -> None:
+        limit = self.limit_of(subject)
+        if limit <= 0:
             return
         count = sum(1 for s in account.sandboxes if s.status.counted())
-        if count >= self.default_limit:
+        if count >= limit:
+            who = "这个数字员工" if subject is Subject.AGENT else ""
             raise QuotaExceeded(
-                f"已有 {count} 个沙箱 / 会话 Pod（上限 {self.default_limit}），先关掉一些旧会话再试"
+                f"{who}已有 {count} 个沙箱 / 会话 Pod（上限 {limit}），先关掉一些旧会话再试"
             )
 
 
@@ -243,7 +266,7 @@ class SandboxAccount:
         key = share_key_of(biz, spec, sharing)
         chosen = policy.pick(self, key, sharing.capacity if sharing is not None else None)
         if chosen is None:
-            quota.admit(self)
+            quota.admit(self, biz.subject)
             chosen = UserSandbox(
                 sandbox_uuid=uuid7(),
                 user_uuid=self.user_uuid,

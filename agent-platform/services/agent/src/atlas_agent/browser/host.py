@@ -292,12 +292,12 @@ class CliBrowserHost:
         return ref
 
     async def current(self, thread: Thread) -> SandboxRef | None:
-        biz = BizRef(BizType.CLI_AGENT, thread.thread_uuid, thread.created_by_uuid)
+        biz = BizRef(BizType.CLI_AGENT, thread.thread_uuid, thread.owner_uuid)
         return await self._prov.current(biz)
 
 
 def _workspace(thread: Thread) -> WorkspaceRef:
-    return WorkspaceRef(thread.sandbox_thread_id, thread.created_by_uuid, thread.workspace_dir)
+    return WorkspaceRef.of_thread(thread)
 
 
 # ---------------------------------------------------------------------------- 入口

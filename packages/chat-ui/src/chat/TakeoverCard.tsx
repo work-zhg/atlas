@@ -15,6 +15,7 @@ import { ApiError } from "../lib/http";
 import type { PendingApproval } from "../lib/run-reducer";
 import { BrowserView } from "./BrowserView";
 import styles from "./chat.module.css";
+import { useConversationReadOnly } from "./readOnly";
 
 interface Props {
   approval: PendingApproval;
@@ -40,6 +41,7 @@ interface Done {
  */
 export function TakeoverCard({ approval, waiting, settled }: Props) {
   const args = (approval.args ?? {}) as Partial<TakeoverArgs>;
+  const readOnly = useConversationReadOnly();
   const open = useOpenTakeover();
   const handBack = useHandBackTakeover();
   const decline = useDeclineTakeover();
@@ -51,8 +53,10 @@ export function TakeoverCard({ approval, waiting, settled }: Props) {
     waiting && !done && !settled ? approval.runId : undefined,
     approval.approvalId,
   );
-  const canAct =
+  const pending =
     waiting && !done && !settled && (stillPending.data === true || stillPending.isError);
+  // 只读：看得到在等，但不能替人接管
+  const canAct = pending && !readOnly;
   const closedElsewhere = waiting && !done && !settled && stillPending.isSuccess && !stillPending.data;
   const busy = open.isPending || handBack.isPending || decline.isPending;
   const error = open.error ?? handBack.error ?? decline.error;
@@ -93,6 +97,7 @@ export function TakeoverCard({ approval, waiting, settled }: Props) {
   else if (result?.decision === "rejected") status = { color: "default", label: "没有处理" };
   else if (result) status = { color: "default", label: "已失效" };
   else if (canAct) status = { color: "warning", label: threadId ? "请在画面里操作" : "等待你接管" };
+  else if (pending) status = { color: "warning", label: "等待接管" };
   else if (closedElsewhere) status = { color: "default", label: "已处理" };
   else if (!waiting) status = { color: "default", label: "已结束" };
   else status = { color: "default", label: "核对中…" };

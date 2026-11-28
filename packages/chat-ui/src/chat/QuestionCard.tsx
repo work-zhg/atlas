@@ -13,6 +13,7 @@ import type {
 import { ApiError } from "../lib/http";
 import type { PendingApproval } from "../lib/run-reducer";
 import styles from "./chat.module.css";
+import { useConversationReadOnly } from "./readOnly";
 
 interface Props {
   approval: PendingApproval;
@@ -36,6 +37,7 @@ interface Draft {
  */
 export function QuestionCard({ approval, waiting, answered }: Props) {
   const questions = (approval.args as AskUserQuestionArgs | undefined)?.questions ?? [];
+  const readOnly = useConversationReadOnly();
   const decide = useDecideApproval();
   const [drafts, setDrafts] = useState<Draft[]>(() => questions.map(initialDraft));
   const [submitted, setSubmitted] = useState<QuestionAnswerData[] | null>(null);
@@ -44,8 +46,10 @@ export function QuestionCard({ approval, waiting, answered }: Props) {
     waiting && !submitted && !answered ? approval.runId : undefined,
     approval.approvalId,
   );
-  const canAnswer =
+  const pending =
     waiting && !submitted && !answered && (stillPending.data === true || stillPending.isError);
+  // 只读：看得到在等，但不能替人回答
+  const canAnswer = pending && !readOnly;
   const closedElsewhere =
     waiting && !submitted && !answered && stillPending.isSuccess && !stillPending.data;
 
@@ -82,6 +86,7 @@ export function QuestionCard({ approval, waiting, answered }: Props) {
   let status: { color: string; label: string };
   if (answered || submitted) status = { color: "success", label: "已回答" };
   else if (canAnswer) status = { color: "warning", label: "等待你回答" };
+  else if (pending) status = { color: "warning", label: "等待回答" };
   else if (closedElsewhere) status = { color: "default", label: "已处理" };
   else if (!waiting) status = { color: "default", label: "已结束" };
   else status = { color: "default", label: "核对中…" };

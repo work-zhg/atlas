@@ -47,7 +47,8 @@ async def cancel_run(
     """写取消信号；engine 每秒查一次（工具跑着时也查），正在跑的工具随之取消，
     然后产出 run.cancelled。
     """
-    await ensure_run_owner(session, run_id, principal, write=True)
+    # 看得到就能停（以数字员工为权限的会话：有使用权的人；应用建的会话前端也直连这里停）
+    await ensure_run_owner(session, run_id, principal)
     return await service.cancel(run_id)
 
 
@@ -96,12 +97,13 @@ async def decide_approval(
     """
     # ★ 归属按审批**实际所在**的 run 判：只看路径里的 run 会让人拿自己的 run id
     #   去批别人的审批（子智能体的审批可能挂在子 run 上，所以不要求两者相等）
-    await ensure_run_owner(session, run_id, principal, write=True)
+    # 看得到就能答（不带 write：应用建的会话前端也直连这里答）
+    await ensure_run_owner(session, run_id, principal)
     # 做了决定由审批组件通知执行器续跑（DecisionListener，接线在 deps.get_approval_service）
     approval = await approvals.get(approval_id)
     if approval is None:
         raise NotFound("确认项不存在", approval_id=str(approval_id))
-    await ensure_run_owner(session, approval.run_uuid, principal, write=True)
+    await ensure_run_owner(session, approval.run_uuid, principal)
     await approvals.decide(
         approval_id,
         payload.decision,

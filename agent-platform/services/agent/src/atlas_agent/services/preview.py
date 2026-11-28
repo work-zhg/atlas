@@ -52,9 +52,10 @@ class PreviewService:
         return await self._issue(
             {
                 "thread_id": str(thread.thread_uuid),
-                # 工作区的 key 里有 user 段，取的是会话创建者而不是当前请求者
-                "owner_id": str(thread.created_by_uuid),
+                # 工作区的 key 里有主体段，取的是会话的文件主体而不是当前请求者
+                "owner_id": str(thread.owner_uuid),
                 "workspace_dir": thread.workspace_dir,
+                **({"space": thread.space_prefix} if thread.space_prefix else {}),
             }
         )
 
@@ -90,7 +91,11 @@ class PreviewService:
         if "workspace_dir" not in data:
             return None  # 0044 之前签发的（按旧布局），当作失效：前端会重新签发
         fs = make_workspace(
-            self._settings, UUID(data["owner_id"]), UUID(data["thread_id"]), data["workspace_dir"]
+            self._settings,
+            UUID(data["owner_id"]),
+            UUID(data["thread_id"]),
+            data["workspace_dir"],
+            space=data.get("space"),
         )
         return None if fs is None else WorkspaceListing(fs)
 

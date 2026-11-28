@@ -107,7 +107,7 @@ class SandboxComponent:
         config = RuntimeConfig(settings, sessions)
 
         async def quota() -> QuotaPolicy:
-            return QuotaPolicy(await config.sandbox_quota())
+            return QuotaPolicy(await config.sandbox_quota(), settings.sandbox_quota_per_agent)
 
         capacity = CapacityService(config)
 

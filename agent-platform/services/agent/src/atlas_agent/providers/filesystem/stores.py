@@ -2,7 +2,7 @@
 
     ObjectStoreFiles   直连对象存储（S3 API）：相对路径 rel → key {user}/{rel}
     SandboxFiles       经沙箱：读写 Pod 里挂载的 /data（和沙箱里的命令同一个挂载）：
-                       rel → /data/{rel}
+                       rel → /data/{rel}；应用工作空间的 space/{rel} → /space/{rel}
 
 两者语义一致（Workspace 不知道这一次走的是哪个）：按相对这个人前缀的路径查大小、读、写、删、列。
 列举按对象存储的语义：「前缀匹配 + delimiter 分组」，空目录不出现（对象存储里没有空目录）。
@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Protocol
 
-from ...domain.workspace_layout import DATA_MOUNT, WorkspaceLayout
+from ...domain.workspace_layout import WorkspaceLayout
 from .paths import FilePath
 
 if TYPE_CHECKING:
@@ -73,7 +73,7 @@ class ObjectStoreFiles:
 
     def pages(self, prefix: FilePath, *, recursive: bool) -> Iterator[Page]:
         """不递归时用 delimiter 模拟「一层」—— 对象存储没有真正的目录。"""
-        base = self._layout.key("")
+        rel_of = self._layout.rel_of_key
         kwargs: dict[str, Any] = {
             "Bucket": self._bucket,
             "Prefix": self.key(prefix),
@@ -87,8 +87,8 @@ class ObjectStoreFiles:
                 kwargs["ContinuationToken"] = token
             page = self._s3.list_objects_v2(**kwargs)
             yield (
-                [item["Key"].removeprefix(base) for item in page.get("Contents", ())],
-                [cp["Prefix"].removeprefix(base) for cp in page.get("CommonPrefixes", ())],
+                [rel_of(item["Key"]) for item in page.get("Contents", ())],
+                [rel_of(cp["Prefix"]) for cp in page.get("CommonPrefixes", ())],
             )
             token = page.get("NextContinuationToken")
             if not page.get("IsTruncated") or not token:
@@ -96,18 +96,18 @@ class ObjectStoreFiles:
 
 
 class SandboxFiles:
-    """经 execd 的文件 API 读写 Pod 里的 /data。
+    """经 execd 的文件 API 读写 Pod 里的 /data（和 /space）。
 
     ★ 列举语义与对象存储对齐：execd 列出的是真实目录树，这里换算成「前缀匹配 + delimiter 分组」，
       空目录因此不出现。
     """
 
-    def __init__(self, files: FileSession) -> None:
+    def __init__(self, files: FileSession, layout: WorkspaceLayout) -> None:
         self._f = files
+        self._layout = layout
 
-    @staticmethod
-    def _abs(path: FilePath) -> str:
-        return path.real
+    def _abs(self, path: FilePath) -> str:
+        return self._layout.real(path.rel)
 
     def size(self, path: FilePath) -> int | None:
         return self._f.size(self._abs(path))
@@ -128,11 +128,10 @@ class SandboxFiles:
         directory = (
             prefix.rel.rsplit("/", 1)[0] if "/" in prefix.rel else ""
         )  # 可以停在半个文件名上
-        root = f"{DATA_MOUNT}/"
         rels = sorted(
             rel
-            for f in self._f.search(WorkspaceLayout.real(directory))
-            if (rel := f.path.removeprefix(root)).startswith(prefix.rel)
+            for f in self._f.search(self._layout.real(directory))
+            if (rel := self._layout.rel_of_real(f.path)).startswith(prefix.rel)
         )
         if recursive:
             yield rels, []

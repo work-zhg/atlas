@@ -76,6 +76,19 @@ def run_auth_uid(agent: Agent, requested: UUID | None) -> UUID | None:
     return agent.digital_employee_uid
 
 
+def workspace_owner(agent: Agent, creator: UUID) -> tuple[UUID, str]:
+    """会话的文件归谁 → (文件主体, 种类 user | agent)。和 run_auth_uid 是同一条规则的两面：
+    以人为权限是创建人，以数字员工为权限是数字员工（sandbox/design-workspace-subject.html 原理 1）。
+
+    建会话时调一次、存在会话上，之后不改：改了权限类型只影响新会话。
+    """
+    if not agent.acts_as_itself:
+        return creator, "user"
+    subject = run_auth_uid(agent, None)  # 还没有数字员工时拒绝
+    assert subject is not None
+    return subject, "agent"
+
+
 class RunService:
     def __init__(
         self,

@@ -97,11 +97,12 @@ async def test_one_persons_workspaces_share_a_sandbox_each_in_its_own_cwd(
 
 async def test_bench_sandboxes_are_never_shared(fake: FakeOpenSandbox, redis: Any) -> None:
     """评测档独占：题目之间不能互相污染（同一个评测账号会并发跑很多题）。"""
-    from atlas_agent.sandbox.native import NativeSandboxKind
+    from atlas_agent.sandbox.native import NativeRequest, NativeSandboxKind
 
     kind = NativeSandboxKind(fake_settings(), None, None)  # type: ignore[arg-type]
-    assert kind.share(SandboxSpec(profile="bench")) is None
-    assert kind.share(SandboxSpec()) is not None
+    ws = new_workspace()
+    assert kind.share(NativeRequest(SandboxSpec(profile="bench"), ws)) is None
+    assert kind.share(NativeRequest(SandboxSpec(), ws)) is not None
 
 
 async def test_images_are_admitted_per_profile(fake: FakeOpenSandbox, redis: Any) -> None:

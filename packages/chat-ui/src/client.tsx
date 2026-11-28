@@ -3,8 +3,8 @@
 /**
  * 注入点：对话组件向哪个 Atlas 端点发请求、带什么头。
  *
- * ★ 组件与 hooks 不读任何环境变量 —— 同一套代码，Atlas 前端注入 Atlas 后端，
- *   嵌入方（AI TeamFlow）注入它的按节点限定的代理。
+ * ★ 组件与 hooks 不读任何环境变量 —— 同一套代码，Atlas 前端、嵌入方（AI TeamFlow）都注入经网关的
+ *   Atlas 接口；嵌入方要自己开新一轮时另给 ThreadConversation 的 submitRun。
  */
 import { createContext, useContext, useMemo, type ReactNode } from "react";
 

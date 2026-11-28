@@ -4,6 +4,7 @@
 
     /data/...      沙箱里的真实路径，剥掉挂载点 —— 只在下一段是布局里的东西（files、skills、home）
                    时；否则是工作区里一个叫 data 的子目录（见下）
+    /space/...     用应用工作空间的会话：空间里的真实路径，换成相对路径 space/...
     其余           相对所用工作区（引擎会把相对路径补成 / 开头，所以 /report.md 也按工作区算）
 
 然后看落没落在本会话能用的根里：所用工作区（压缩归档、外置结果在其中的 .atlas/{会话}/），
@@ -26,11 +27,12 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from ...domain.workspace_layout import DATA_MOUNT, Area, WorkspaceLayout
+from ...domain.workspace_layout import DATA_MOUNT, SPACE_DIR, SPACE_MOUNT, Area, WorkspaceLayout
 
 __all__ = ["FilePath", "PathEscape", "PathGate"]
 
 _DATA = DATA_MOUNT.strip("/")
+_SPACE = SPACE_MOUNT.strip("/")
 #: 旧布局的挂载点：现在都在 /data 下面
 _LEGACY_ROOTS = frozenset({"workspace", "skills"})
 
@@ -47,15 +49,12 @@ class PathEscape(ValueError):
 class FilePath:
     """关卡放行后的路径：相对这个人前缀的路径（不带开头的 /；前缀可以以 / 结尾）和它落在的根。
 
-    同一个路径在沙箱里是 /data/{rel}，在对象存储里是 {user}/{rel}：两种底层用的是同一个 rel。
+    同一个路径在沙箱里是 /data/{rel}，在对象存储里是 {user}/{rel}：两种底层用的是同一个 rel
+    （space/ 开头的换成应用工作空间的，见 WorkspaceLayout）。
     """
 
     area: Area
     rel: str
-
-    @property
-    def real(self) -> str:
-        return WorkspaceLayout.real(self.rel)
 
 
 def _normalize(parts: Iterable[str], original: str) -> list[str]:
@@ -109,7 +108,7 @@ class PathGate:
         parts = rel.split("/")
         if parts[: len(self._workspace)] == self._workspace:
             return "/".join(parts[len(self._workspace) :])
-        return WorkspaceLayout.real(rel)
+        return self._layout.real(rel)
 
     def local(self, rel: str) -> str:
         """相对路径 → 相对它所在的根（工作区、技能目录）的路径。search 的 glob 也按它匹配。"""
@@ -128,7 +127,10 @@ class PathGate:
         if "\x00" in path:
             raise PathEscape(f"路径含空字节：{path!r}")
         raw = [p for p in path.split("/") if p not in ("", ".")]
-        if path.startswith("/") and raw[:1] == [_DATA] and self._mounted(raw[1:]):
+        if path.startswith("/") and raw[:1] == [_SPACE] and self._layout.space is not None:
+            # ★ 相对路径 space/x 到这里也是 /space/x：按空间里的 x 算（空间本身就是工作区）
+            parts = _normalize([SPACE_DIR, *raw[1:]], path)
+        elif path.startswith("/") and raw[:1] == [_DATA] and self._mounted(raw[1:]):
             parts = _normalize(raw[1:], path)
         elif path.startswith("/") and raw[:1] and raw[0] in _LEGACY_ROOTS:
             raise PathEscape(

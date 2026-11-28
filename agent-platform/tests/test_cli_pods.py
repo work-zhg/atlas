@@ -93,8 +93,14 @@ def _thread(**over: Any) -> Any:
         "created_by_uuid": USER,
         "credential_profiles": [],
         "source_app": "",
+        "owned_by_agent": False,
+        "space_prefix": None,
+        "sandbox_thread_id": tid,
     }
-    return SimpleNamespace(**(fields | over))
+    thread = SimpleNamespace(**(fields | over))
+    # 文件主体：以人为权限就是创建人
+    thread.owner_uuid = over.get("owner_uuid", thread.created_by_uuid)
+    return thread
 
 
 def _granted() -> CredentialSet:

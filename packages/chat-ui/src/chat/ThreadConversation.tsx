@@ -13,7 +13,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 
 import { qk } from "../api/keys";
 import { selectableModels, useAgentModels } from "../api/models";
-import { useCancelRun, useSendMessage } from "../api/runs";
+import { useCancelRun, useSendMessage, type SubmitRun } from "../api/runs";
 import { flattenMessages, useMessages, useThread } from "../api/threads";
 import { avatarBackground, avatarLetter } from "../lib/avatar";
 import type { ApprovalMode } from "../lib/events";
@@ -24,6 +24,7 @@ import { Composer } from "./Composer";
 import { MessageStream } from "./MessageStream";
 import { ModelPicker } from "./ModelPicker";
 import { ModePicker } from "./ModePicker";
+import { ConversationReadOnly } from "./readOnly";
 import { useThreadStream } from "./useThreadStream";
 
 export interface ConversationStreamState {
@@ -35,8 +36,13 @@ export interface ConversationStreamState {
 
 export interface ThreadConversationProps {
   threadId: string;
-  /** 只读：不显示输入框（如：没有协同权限、节点不在协同中） */
+  /** 只读：不显示输入框，审批、提问、接管卡片也只显示不能操作（如：只能看的人、节点已冻结） */
   readOnly?: boolean;
+  /**
+   * 开新一轮的入口（嵌入方要自己记 run 时给，如 AI TeamFlow 经它的节点接口开）。不给 = 直连 Atlas。
+   * 其余（读对话、事件流、回答、接管、停止）都直连 Atlas。
+   */
+  submitRun?: SubmitRun;
   /** 只读时在输入框位置显示的说明 */
   readOnlyHint?: ReactNode;
   /** 头部右侧的附加操作（如 Atlas 的「智能体配置」按钮） */
@@ -75,6 +81,7 @@ function withAttachments(text: string, paths: string[]): string {
 export function ThreadConversation({
   threadId,
   readOnly = false,
+  submitRun,
   readOnlyHint,
   headerExtra,
   notice,
@@ -91,7 +98,7 @@ export function ThreadConversation({
   const threadQ = useThread(threadId);
   const messagesQ = useMessages(threadId);
   const messages = useMemo(() => flattenMessages(messagesQ.data?.pages), [messagesQ.data]);
-  const sendMessage = useSendMessage();
+  const sendMessage = useSendMessage(submitRun);
   const cancelRun = useCancelRun();
 
   // ★ 订阅**会话**而不是 run：刷新页面后天然恢复；当前是哪个 run 由事件流自己说（state.activeRunId）。
@@ -214,6 +221,7 @@ export function ThreadConversation({
   const agent = threadQ.data;
 
   return (
+    <ConversationReadOnly.Provider value={readOnly}>
     <section className={`${styles.pane} ${styles.chat}`} aria-label="对话">
       {!hideHeader && (
       <header className={`${styles.paneHead} ${styles.chatHead}`}>
@@ -309,5 +317,6 @@ export function ThreadConversation({
         />
       )}
     </section>
+    </ConversationReadOnly.Provider>
   );
 }

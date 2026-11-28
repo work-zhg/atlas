@@ -1,17 +1,22 @@
 """沙箱 · 原生沙箱（c4-model/agent/sandbox/code-sandbox-native.html）：原生智能体的 Shell 沙箱。
 
 按工作区要沙箱（子智能体和父会话共用一个）；换算成通用供给的业务：类型 NATIVE、业务 id 是根会话的
-uuid、人是会话的创建人。沙箱归人，由通用供给管理；strict 和评测两档各对应一个模板。
+uuid、人是会话的文件主体。沙箱归主体，由通用供给管理；strict 和评测两档各对应一个模板。
 
-    WorkspaceRef          一个工作区：根会话 + 人
+    WorkspaceRef          一个工作区：根会话 + 文件主体（+ 应用工作空间、是不是一个会话一个沙箱）
+    NativeRequest         一次确保：沙箱规格 + 工作区
     ImagePolicy           镜像准入：空镜像换成默认，按档位只放行各自的前缀
-    NativeSandboxKind     原生沙箱这一种（SandboxKind）：档位选模板、把这个人的整个前缀挂到 /data、
-                          strict 档按（模板，镜像）共享、评测档独占，就绪看 execd /ping
+    NativeSandboxKind     原生沙箱这一种（SandboxKind）：档位选模板、把主体的整个前缀挂到 /data
+                          （用应用工作空间的再挂 /space）、strict 档按（模板，镜像）共享、评测档和
+                          以数字员工为权限的会话独占，就绪看 execd /ping
     NativeSandboxService  ensure · current · current_of_user · confirm_gone · profile_of ·
                           reap_idle · release · reap_orphans
 
 ★ 一个人一个沙箱（同模板、同镜像）：这个人的工作区都绑在它上面，每条命令带自己工作区的 cwd。
   会话之间不隔离（Shell 能读写别的会话的文件），这是共享的前提。评测档独占：题目之间不能互相污染。
+★ 以数字员工为权限的会话一个会话（连同子孙会话）一个沙箱（sandbox/design-workspace-subject.html
+  原理 3）：同一个数字员工同时被很多人用，共用会串进程和登录态；独占才能在建时挂上会话专属的
+  /space。
 """
 
 from __future__ import annotations
@@ -22,16 +27,16 @@ import time
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from atlas_engine.contracts.spec import SandboxProfile, SandboxSpec
 
-from ...domain.workspace_layout import DATA_MOUNT, WorkspaceLayout
+from ...domain.workspace_layout import DATA_MOUNT, SPACE_MOUNT, WorkspaceLayout
 from ..base.execution.ports import SandboxExec
 from ..base.lifecycle.spec import CreateSpec, Labels, Resources, Volume
 from ..base.network.policy import NetworkPolicy
-from ..provisioning.model import BizRef, BizType, SandboxRef, Sharing
+from ..provisioning.model import BizRef, BizType, SandboxRef, Sharing, Subject
 from ..provisioning.service import SandboxProvisioning
 
 if TYPE_CHECKING:
@@ -42,6 +47,7 @@ __all__ = [
     "STRICT_TEMPLATE",
     "ImageDenied",
     "ImagePolicy",
+    "NativeRequest",
     "NativeSandboxKind",
     "NativeSandboxService",
     "WorkspaceRef",
@@ -66,25 +72,55 @@ class ImageDenied(PermissionError):
 
 @dataclass(frozen=True)
 class WorkspaceRef:
-    """一个工作区：所属的根会话加上人（会话的创建人，和对象存储路径 {user}/… 里的是同一个值）。
+    """一个工作区：所属的根会话加上文件主体（thread.owner_uuid，和对象存储路径 {主体}/… 里的是同一个
+    值；以人为权限是会话的创建人）。
 
     workspace_dir：会话的工作目录（相对 files/），命令默认的 cwd。不参与沙箱绑定（绑定按根会话），
-    只按绑定找沙箱时可以不给。
+    只按绑定找沙箱时可以不给。space：用的应用工作空间的前缀（挂到 /space，cwd 在那里）。
+    exclusive：一个会话一个沙箱（以数字员工为权限），沙箱记在数字员工名下。
     """
 
     root_thread_uuid: UUID
     user_uuid: UUID
     workspace_dir: str = field(default="", compare=False)
+    space: str | None = field(default=None, compare=False)
+    exclusive: bool = field(default=False, compare=False)
 
     def biz(self) -> BizRef:
-        return BizRef(BizType.NATIVE, self.root_thread_uuid, self.user_uuid)
+        subject = Subject.AGENT if self.exclusive else Subject.PERSON
+        return BizRef(BizType.NATIVE, self.root_thread_uuid, self.user_uuid, subject)
 
     def layout(self) -> WorkspaceLayout:
-        return WorkspaceLayout.of(self.user_uuid, self.root_thread_uuid, self.workspace_dir)
+        return WorkspaceLayout.of(
+            self.user_uuid, self.root_thread_uuid, self.workspace_dir, space=self.space
+        )
 
     @classmethod
-    def of_biz(cls, biz: BizRef) -> WorkspaceRef:
-        return cls(biz.biz_id, biz.user_uuid)
+    def of_thread(cls, thread: Any) -> WorkspaceRef:
+        """会话的工作区（子会话和根会话是同一个）。thread：会话行（db.models.Thread）。"""
+        return cls(
+            thread.sandbox_thread_id,
+            thread.owner_uuid,
+            thread.workspace_dir,
+            space=thread.space_prefix,
+            exclusive=thread.owned_by_agent,
+        )
+
+
+@dataclass(frozen=True)
+class NativeRequest:
+    """一次确保沙箱：规格（档位、镜像、带不带浏览器）+ 工作区（挂什么、共不共享）。
+
+    ★ 种类建沙箱时只拿得到请求和业务：挂载要跟着工作区走（/space 是会话专属的），所以一起带上。
+    """
+
+    spec: SandboxSpec
+    ws: WorkspaceRef
+
+    @property
+    def browser(self) -> bool:
+        """浏览器的附加件看它决定管不管。"""
+        return self.spec.browser
 
 
 #: 按档位的镜像前缀白名单
@@ -141,28 +177,32 @@ class NativeSandboxKind:
         self._exec = exec
         self._images = images
 
-    async def admit(self, req: SandboxSpec) -> None:
-        await self._images.check(self._images.resolve(req.image), req.profile)
+    async def admit(self, req: NativeRequest) -> None:
+        await self._images.check(self._images.resolve(req.spec.image), req.spec.profile)
 
-    def share(self, req: SandboxSpec) -> Sharing | None:
-        """strict 档按（模板，镜像）共享，不限个数；评测档独占。
+    def share(self, req: NativeRequest) -> Sharing | None:
+        """strict 档按（模板，镜像）共享，不限个数；评测档、以数字员工为权限的会话独占。
 
         ★ 带浏览器的另成一组：别的智能体配了和浏览器沙箱一样的镜像，也不能和浏览器沙箱共用 ——
           那样的沙箱可能是它先建的，建好时没拉起浏览器。
         """
-        if req.profile == "bench":
+        if req.spec.profile == "bench" or req.ws.exclusive:
             return None
         return Sharing("browser") if req.browser else Sharing()
 
-    def build(self, req: SandboxSpec, biz: BizRef) -> CreateSpec:
+    def build(self, req: NativeRequest, biz: BizRef) -> CreateSpec:
         s = self._settings
-        layout = WorkspaceRef.of_biz(biz).layout()
+        layout = req.ws.layout()
+        volumes = [Volume("data", s.sandbox_pvc, layout.user_prefix, DATA_MOUNT)]
+        if layout.space is not None:
+            # 应用工作空间：独占的沙箱才有（share 返回 None），会话专属
+            volumes.append(Volume("space", s.sandbox_pvc, layout.space, SPACE_MOUNT))
         env = {
             "EXECD_INIT": "1",  # execd 作 PID 1：回收僵尸进程、转发信号
             "EXECD_ENVS": "/tmp/.execd/env",  # 默认在 /opt/opensandbox；放 emptyDir，不占容器层
             "TMPDIR": "/tmp",
         }
-        if req.profile != "bench":
+        if req.spec.profile != "bench":
             # strict 档的 HOME 是模板挂的 emptyDir；评测档按镜像自己的
             # （题目环境可能在 HOME 里预置了东西）
             env["HOME"] = "/home/agent"
@@ -172,8 +212,8 @@ class NativeSandboxKind:
                 env[name] = env[name.upper()] = proxy
             env["no_proxy"] = env["NO_PROXY"] = "localhost,127.0.0.1,::1,.svc,.cluster.local"
         return CreateSpec(
-            template=template_of(req.profile),
-            image=self._images.resolve(req.image),
+            template=template_of(req.spec.profile),
+            image=self._images.resolve(req.spec.image),
             entrypoint=("tail", "-f", "/dev/null"),
             network=NetworkPolicy.allow_all(),
             resources=Resources(
@@ -184,9 +224,9 @@ class NativeSandboxKind:
                 s.sandbox_ephemeral_storage_limit,
             ),
             env=env,
-            # ★ 唯一的挂载：整个 {user}/ 读写挂到 /data。工作区、技能都在它下面，这个人新开的会话
-            #   一建好目录就看得见，不用改 Pod
-            volumes=(Volume("data", s.sandbox_pvc, layout.user_prefix, DATA_MOUNT),),
+            # ★ 整个 {主体}/ 读写挂到 /data。工作区、技能都在它下面，这个人新开的会话一建好目录就
+            #   看得见，不用改 Pod
+            volumes=tuple(volumes),
             labels=Labels.of(user=str(biz.user_uuid)),
         )
 
@@ -217,7 +257,7 @@ class NativeSandboxService:
 
     async def ensure(self, ws: WorkspaceRef, spec: SandboxSpec) -> SandboxRef:
         """已有的原样复用：改了镜像或档位，要等闲置回收后才按新配置建。"""
-        return await self._prov.ensure(ws.biz(), spec)
+        return await self._prov.ensure(ws.biz(), NativeRequest(spec, ws))
 
     async def current(self, ws: WorkspaceRef) -> SandboxRef | None:
         """这个工作区绑着、通用供给标为 READY 的沙箱；没有返回 None，不会触发新建。"""

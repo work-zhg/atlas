@@ -108,7 +108,8 @@ class ThreadRepository:
         """
         from .run import _UNFINISHED
 
-        scope = Thread.created_by_uuid == owner
+        # 按文件主体：以数字员工为权限的会话的工作目录在数字员工的 files/ 下，不在这个人的
+        scope = Thread.owner_uuid == owner
         if path:
             scope = and_(
                 scope,
@@ -177,9 +178,15 @@ class ThreadRepository:
         source_app: str | None = None,
         memory: str = "on",
         workspace_dir: str | None = None,
+        owner: tuple[UUID, str] | None = None,
+        app_workspace: UUID | None = None,
     ) -> Thread:
-        """workspace_dir：工作目录（相对 files/，调用方已校验）。不给就是 workspace；子会话
-        一律用父会话的（整棵会话树一个工作目录）。建会话时就落表，之后不变。"""
+        """workspace_dir：工作目录（相对文件主体的 files/，调用方已校验）。不给就是 workspace；
+        子会话一律用父会话的（整棵会话树一个工作目录）。建会话时就落表，之后不变。
+
+        owner：文件主体和种类（AuthSubjectPolicy 定的），不给 = 创建人、以人为权限；app_workspace：
+        用的应用工作空间（调用方已校验能挂）。子会话这两样也照搬父会话的。"""
+        owner_uuid, owner_kind = owner or (created_by, "user")
         thread_uuid = uuid7()
         root_thread_id = None
         if parent_thread_id is not None:
@@ -194,6 +201,9 @@ class ThreadRepository:
                         Thread.memory,
                         Thread.root_thread_uuid,
                         Thread.workspace_dir,
+                        Thread.owner_uuid,
+                        Thread.owner_kind,
+                        Thread.app_workspace_uuid,
                     ).where(Thread.thread_uuid == parent_thread_id)
                 )
             ).one_or_none()
@@ -205,6 +215,9 @@ class ThreadRepository:
                 source_app, memory = parent.source_app, parent.memory
                 root_thread_id = parent.root_thread_uuid or parent_thread_id
                 workspace_dir = parent.workspace_dir
+                # 文件和沙箱跟着整棵会话树走：子会话的智能体是什么权限类型都一样
+                owner_uuid, owner_kind = parent.owner_uuid, parent.owner_kind
+                app_workspace = parent.app_workspace_uuid
         thread = Thread(
             thread_uuid=thread_uuid,
             agent_uuid=agent_id,
@@ -220,6 +233,9 @@ class ThreadRepository:
             source_app=source_app,
             memory=memory,
             workspace_dir=workspace_dir or DEFAULT_WORKSPACE_DIR,
+            owner_uuid=owner_uuid,
+            owner_kind=owner_kind,
+            app_workspace_uuid=app_workspace,
         )
         self._session.add(thread)
         await self._session.flush()

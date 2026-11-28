@@ -28,6 +28,7 @@ from fastapi import APIRouter, Depends, Response, WebSocket
 
 from ...auth.authz import PrincipalDep, ensure_run_owner, ensure_thread_owner
 from ...auth.dependency import principal_of
+from ...auth.principal import Principal
 from ...browser.component import BrowserComponent
 from ...browser.daemon import DaemonError
 from ...browser.device import (
@@ -115,7 +116,7 @@ async def open_takeover(
     run_id: UUID, approval_id: UUID, session: SessionDep, principal: PrincipalDep, desk: DeskDep
 ) -> TakeoverOut:
     """可以重复点：同一个接管只开一个窗口。浏览器被闲置回收了，这里重建并导入登录态（要几十秒）。"""
-    await ensure_run_owner(session, run_id, principal, write=True)
+    await ensure_run_owner(session, run_id, principal)  # 看得到就能接管（前端直连）
     _same_run((await desk.get(approval_id)).run.run_uuid, run_id)
     takeover = await desk.open(principal.uid, approval_id)
     return TakeoverOut(
@@ -135,7 +136,7 @@ async def hand_back_takeover(
     principal: PrincipalDep,
     desk: DeskDep,
 ) -> TakeoverOut:
-    await ensure_run_owner(session, run_id, principal, write=True)
+    await ensure_run_owner(session, run_id, principal)  # 看得到就能接管（前端直连）
     takeover = await desk.get(approval_id)
     _same_run(takeover.run.run_uuid, run_id)
     result = await desk.hand_back(principal.uid, approval_id, payload.note)
@@ -157,7 +158,7 @@ async def decline_takeover(
     principal: PrincipalDep,
     desk: DeskDep,
 ) -> TakeoverOut:
-    await ensure_run_owner(session, run_id, principal, write=True)
+    await ensure_run_owner(session, run_id, principal)  # 看得到就能接管（前端直连）
     takeover = await desk.get(approval_id)
     _same_run(takeover.run.run_uuid, run_id)
     await desk.decline(principal.uid, approval_id, payload.note)
@@ -187,7 +188,7 @@ async def browser_status(
 ) -> BrowserStatusOut:
     await ensure_thread_owner(session, thread_id, principal)
     thread = await fetch_one(session, Thread, Thread.thread_uuid == thread_id)
-    if thread is None or thread.created_by_uuid != principal.uid:
+    if thread is None or not _operates(thread, principal):
         return BrowserStatusOut(running=False)
     if on_device(thread):
         # 电脑上：浏览器在跑、这个对话用过它（有自己那一块）才有画面
@@ -201,11 +202,17 @@ class BrowserNotRunning(Conflict):
     kind = "browser_not_running"
 
 
+def _operates(thread: Thread, principal: Principal) -> bool:
+    """能不能看、操作这个会话的浏览器（调用方已判过看得到这个会话）。以人为权限只有创建人：浏览器里
+    是他登录后的网页；以数字员工为权限，有使用权的人都行：浏览器和登录态都归数字员工。"""
+    return thread.owned_by_agent or thread.created_by_uuid == principal.uid
+
+
 async def _owned(session: SessionDep, thread_id: UUID, principal: PrincipalDep) -> Thread:
-    """会话创建人才能操作这个浏览器（同画面：浏览器里是他登录后的网页）。"""
+    """能操作这个浏览器的人（同画面）。"""
     await ensure_thread_owner(session, thread_id, principal, write=True)
     thread = await fetch_one(session, Thread, Thread.thread_uuid == thread_id)
-    if thread is None or thread.created_by_uuid != principal.uid:
+    if thread is None or not _operates(thread, principal):
         raise Forbidden("只有会话的创建人能操作这个浏览器")
     return thread
 
@@ -315,8 +322,9 @@ async def browser_view(websocket: WebSocket, thread_id: UUID) -> None:
     try:
         async with get_sessionmaker()() as session:
             principal = await principal_of(websocket, session, settings)
+            await ensure_thread_owner(session, thread_id, principal)  # 看不到的按 NOT_OWNER 关
             thread = await fetch_one(session, Thread, Thread.thread_uuid == thread_id)
-            if thread is None or thread.created_by_uuid != principal.uid:
+            if thread is None or not _operates(thread, principal):
                 await close(websocket, CloseReason.NOT_OWNER)
                 return
             route = None

@@ -32,6 +32,7 @@ __all__ = [
     "WorkspaceListing",
     "WorkspaceRouting",
     "make_s3_client",
+    "make_space_files",
     "make_user_files",
     "make_workspace",
 ]
@@ -45,6 +46,7 @@ def make_workspace(
     *,
     skills: Iterable[tuple[str, int | str]] = (),
     routing: WorkspaceRouting | None = None,
+    space: str | None = None,
 ) -> Workspace | None:
     """按配置构造会话工作区；没配对象存储则返回 None。
 
@@ -54,6 +56,7 @@ def make_workspace(
     skills: 本智能体绑定的技能 (slug, 版本)：文件工具只放行这几个技能目录。
     routing: 沙箱路由。这个人的沙箱在跑时，读写经它走 Pod 里的挂载；
         None = 永远直连对象存储。
+    space: 用的应用工作空间的前缀（thread.space_prefix）：给了它，工作区就是它，workspace_dir 不用。
 
     ★ 返回 None 不是降级，是**关闭文件能力**：文件工具一个都不注册。回落到某个内存实现才是有害的 ——
       模型以为自己有持久工作区，写进去的东西 run 结束即弃却毫无提示。
@@ -72,6 +75,7 @@ def make_workspace(
         workspace_dir=workspace_dir,
         skills=skills,
         routing=routing,
+        space=space,
     )
 
 
@@ -83,6 +87,16 @@ def make_user_files(
     ★ 整个文件区不属于哪个会话：thread_id 只决定 .atlas/{会话}/ 在哪，这里用不到，传人的 id 占位。
     """
     fs = make_workspace(settings, user_id, user_id, "", routing=routing)
+    return None if fs is None else UserFiles(fs)
+
+
+def make_space_files(settings: Any, space: str) -> UserFiles | None:
+    """一个应用工作空间里的文件（应用经文件接口读写）；没配对象存储返回 None。
+
+    ★ 直连对象存储：应用的读写不属于任何会话，没有「这个会话的沙箱」可走（挂着它的会话的沙箱有
+      s3fs 目录缓存，几秒后看得到）。主体、会话都用不到，传前缀占位。
+    """
+    fs = make_workspace(settings, space, space, "", space=space)
     return None if fs is None else UserFiles(fs)
 
 

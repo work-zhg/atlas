@@ -116,9 +116,10 @@ class Collaboration:
             return
         fs = make_workspace(
             self._settings,
-            thread.created_by_uuid,
+            thread.owner_uuid,
             thread.thread_uuid,
             thread.workspace_dir,
+            space=thread.space_prefix,
         )
         if fs is None:
             return

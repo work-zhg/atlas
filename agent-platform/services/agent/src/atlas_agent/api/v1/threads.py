@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import iterate_in_threadpool
 
+from ...app_workspaces import AppWorkspaces, SpaceReleased
 from ...auth.agent_access import AgentAccess
 from ...auth.authz import PrincipalDep, ensure_thread_owner
 from ...auth.dependency import uc_client
@@ -259,9 +260,8 @@ async def upload_file(
     await ensure_thread_owner(session, thread_id, principal, write=True)
     limits = await workspace_limits(request)
     data = await read_upload(request, limits.upload_max)
-    owner = await session.scalar(
-        select(Thread.created_by_uuid).where(Thread.thread_uuid == thread_id)
-    )
+    # 配额按文件主体算（以数字员工为权限的会话，文件在数字员工名下）
+    owner = await session.scalar(select(Thread.owner_uuid).where(Thread.thread_uuid == thread_id))
     if owner is not None:
         workspace = WorkspaceService(session, settings, capacity(request))
         await workspace.check_upload(owner, len(data), limits)
@@ -328,6 +328,7 @@ async def create_run(
     agents: AgentServiceDep,
     session: SessionDep,
     principal: PrincipalDep,
+    settings: SettingsDep,
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> RunAccepted:
     """发消息 + 创建 run，立刻返回 run_id；事件走 GET /runs/{id}/events。
@@ -345,6 +346,12 @@ async def create_run(
     )
     if agent is not None:
         await AgentAccess(uc_client(request)).require_use(principal, agent)
+    # 挂着的应用工作空间释放了：这一轮写不进去，明确报错（不悄悄回落到别的目录）
+    space = await session.scalar(
+        select(Thread.app_workspace_uuid).where(Thread.thread_uuid == thread_id)
+    )
+    if space is not None and await AppWorkspaces(session, settings).released(space):
+        raise SpaceReleased("会话用的应用工作空间已释放", app_workspace=str(space))
     # 调试预览的会话：这一轮按草稿运行（拍一个快照，run 指向它）。只有能编辑的人建得出这种会话
     version_id = None
     preview = await session.scalar(select(Thread.status).where(Thread.thread_uuid == thread_id))

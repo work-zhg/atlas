@@ -22,6 +22,8 @@ cli_sessions_per_pod 个会话），Pod 里按会话起各自的 bridge + CLI：
 ★ 交出 bridge 服务令牌，不交 execd 令牌：拿到它也不能在 Pod 里执行任意命令。令牌一个 Pod 一个，
   各会话的 bridge 都用它；握手头 X-Session-Id 必须等于 bridge 自己的会话，所以连不到别的会话。
 ★ 会话之间不隔离：同一个 Pod 里的 CLI 能读写别的会话的文件（共享的前提，用户 2026-11-04 定的）。
+★ 以数字员工为权限的会话一棵会话树一个 Pod（sandbox/design-workspace-subject.html 原理 3）：共享键里
+  带上根会话，Pod 记在数字员工名下；用应用工作空间的再挂 /space，CLI 的 cwd 在那里。
 """
 
 from __future__ import annotations
@@ -41,14 +43,14 @@ import httpx
 from atlas_host import HEADER_SESSION
 
 from ...credentials import CredentialSet, GitAuthor
-from ...domain.workspace_layout import DATA_MOUNT, HOME_CLAUDE, WorkspaceLayout
+from ...domain.workspace_layout import DATA_MOUNT, HOME_CLAUDE, SPACE_MOUNT, WorkspaceLayout
 from ..base.execution.ports import SandboxExec
 from ..base.execution.values import CommandGone, CommandSpec
 from ..base.lifecycle.runtime import DestroyReason, SandboxRuntime
 from ..base.lifecycle.spec import CreateSpec, Labels, Resources, Volume
 from ..base.network.egress import EgressControl
 from ..base.network.policy import MitmTrust, NetworkPolicy
-from ..provisioning.model import BizRef, BizType, SandboxRef, Sharing
+from ..provisioning.model import BizRef, BizType, SandboxRef, Sharing, Subject
 from ..provisioning.service import SandboxProvisioning, SandboxUnavailableError
 
 if TYPE_CHECKING:
@@ -140,6 +142,7 @@ class PodRequest:
     thread_uuid: UUID
     #: 会话的工作目录（相对 files/；子智能体与主 agent 相同）：CLI 的 cwd
     workspace_dir: str
+    #: 文件主体（thread.owner_uuid）：Pod 记在它名下、挂它的前缀
     user_uuid: UUID
     cli: CliSpec
     model: CliModel | None = None
@@ -149,10 +152,16 @@ class PodRequest:
     browser: bool = False
     #: 再给 CLI 的环境变量（会话级，跟着这个会话的 bridge 走，不进 Pod 的规格）
     agent_env: Mapping[str, str] = field(default_factory=dict)
+    #: 用的应用工作空间的前缀（挂到 /space，CLI 的 cwd 在那里）
+    space: str | None = None
+    #: 以数字员工为权限：会话树的根，同一棵树的会话共用一个 Pod、不和别的会话共用。None = 按人共享
+    tree: UUID | None = None
 
     @property
     def layout(self) -> WorkspaceLayout:
-        return WorkspaceLayout.of(self.user_uuid, self.thread_uuid, self.workspace_dir)
+        return WorkspaceLayout.of(
+            self.user_uuid, self.thread_uuid, self.workspace_dir, space=self.space
+        )
 
 
 def _git_env(author: GitAuthor | None, trust: MitmTrust) -> dict[str, str]:
@@ -216,6 +225,8 @@ class CliPodKind:
           建好时没拉起浏览器）。
         """
         key = _credential_key(req.credentials) + ("|browser" if req.browser else "")
+        if req.tree is not None:
+            key += f"|tree:{req.tree}"
         return Sharing(key, self._settings.cli_sessions_per_pod)
 
     def build(self, req: PodRequest, biz: BizRef) -> CreateSpec:
@@ -243,10 +254,18 @@ class CliPodKind:
                 "HOME": LOCAL_HOME,
             },
             service_token_env=SERVICE_TOKEN_ENV,
-            # ★ 唯一的挂载：整个 {user}/ 读写挂到 /data（工作区、技能、CLI 的会话记录）
-            volumes=(Volume("data", s.sandbox_pvc, req.layout.user_prefix, DATA_MOUNT),),
+            # ★ 整个 {主体}/ 读写挂到 /data（工作区、技能、CLI 的会话记录）；应用工作空间挂到 /space
+            #   （只有一棵会话树一个 Pod 的才有，见 share）
+            volumes=self._volumes(req.layout),
             labels=Labels.of(user=str(biz.user_uuid)),
         )
+
+    def _volumes(self, layout: WorkspaceLayout) -> tuple[Volume, ...]:
+        pvc = self._settings.sandbox_pvc
+        data = Volume("data", pvc, layout.user_prefix, DATA_MOUNT)
+        if layout.space is None:
+            return (data,)
+        return (data, Volume("space", pvc, layout.space, SPACE_MOUNT))
 
     async def attach(self, ref: SandboxRef, req: PodRequest, *, created: bool) -> None:
         """每轮把凭据整份写一遍：崩在「建好」和「写凭据」之间的能补上，换了令牌下一轮生效。
@@ -513,14 +532,16 @@ class SessionPods:
         req = PodRequest(
             thread_uuid=thread.thread_uuid,
             workspace_dir=thread.workspace_dir,
-            user_uuid=thread.created_by_uuid,
+            user_uuid=thread.owner_uuid,
             cli=cli,
             model=model,
             credentials=credentials or CredentialSet(),
             browser=browser,
             agent_env=dict(agent_env or {}),
+            space=thread.space_prefix,
+            tree=thread.sandbox_thread_id if thread.owned_by_agent else None,
         )
-        biz = _biz(thread.thread_uuid, thread.created_by_uuid)
+        biz = _biz(thread.thread_uuid, thread.owner_uuid, agent=thread.owned_by_agent)
         ref = await self._prov.ensure(biz, req)
         slot = await self._prov.slot(biz)
         if slot is None:
@@ -572,5 +593,6 @@ class SessionPods:
             await self._bridges.stop(ref, str(biz.biz_id))
 
 
-def _biz(thread_uuid: UUID, user_uuid: UUID) -> BizRef:
-    return BizRef(BizType.CLI_AGENT, thread_uuid, user_uuid)
+def _biz(thread_uuid: UUID, user_uuid: UUID, *, agent: bool = False) -> BizRef:
+    subject = Subject.AGENT if agent else Subject.PERSON
+    return BizRef(BizType.CLI_AGENT, thread_uuid, user_uuid, subject)

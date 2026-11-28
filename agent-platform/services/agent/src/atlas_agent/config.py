@@ -201,6 +201,9 @@ class Settings(BaseSettings):
     sandbox_ephemeral_storage_limit: str = "10Gi"
     #: 每用户同时存在的沙箱上限，原生沙箱与 会话 Pod 合计。★ 先数再建：软上限（§13）
     sandbox_quota_per_user: int = 10
+    #: 每个数字员工同时存在的沙箱上限（以数字员工为权限的会话一个会话一个，比人多得多）；0 = 不限。
+    #: 租户份额照样兜底
+    sandbox_quota_per_agent: int = 50
     #: 原生沙箱闲置多久回收（没有运行中的命令、最近没有命令和文件操作）
     sandbox_idle_ttl_s: float = 1800.0
     #: 会话 Pod 闲置多久回收：会话没有没结束的 run，且最近一次结束超过这么久。Pod 重建代价低

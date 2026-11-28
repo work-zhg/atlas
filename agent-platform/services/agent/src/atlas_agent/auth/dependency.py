@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Annotated
 from uuid import UUID
 
@@ -70,9 +71,18 @@ async def principal_of(
     caller = (h.get("x-caller-app") or "").strip() or "unknown"
     # ★ 先设出站身份：下面取授权快照调用户中心时就要带上
     use_identity(CallIdentity(uid=uid, auth_uid=auth_uid, tenant_id=tenant))
-    principal = await AuthService(session, settings, uc_client(conn)).resolve(
+    uc = uc_client(conn)
+    principal = await AuthService(session, settings, uc).resolve(
         uid, auth_uid, caller_app=caller, tenant_id=tenant
     )
+    if uc is not None:
+        # 按对象的数据权限（以数字员工为权限的会话按它判，auth/authz.py）：用到才查
+        judged = principal.auth_uid
+
+        async def data_check(code: str, data_id: str) -> str:
+            return await uc.data_check(code, data_id, judged)
+
+        principal = replace(principal, data_check=data_check)
     # 解析时已进入用户所属的租户；出站身份也换成核对过的租户（请求头可能没带）
     use_identity(CallIdentity(uid=uid, auth_uid=auth_uid, tenant_id=principal.tenant_id))
     # ★ 不查租户状态：租户停用、到期后，用户中心给的授权快照里没有 Atlas 的访问权（resolve 里 403）

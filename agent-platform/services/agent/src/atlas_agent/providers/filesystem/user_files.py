@@ -1,4 +1,5 @@
-"""一个人的全部文件（工作空间页面）：{user}/files/ 下一棵普通的目录树。
+"""一个人的全部文件（工作空间页面）：{user}/files/ 下一棵普通的目录树。应用工作空间
+（{应用}/{编号}/）里的文件也用它（根换成空间）。
 
     list_dir   列一层：递归列举这一层下面的对象，在内存里按一层聚合（文件夹的文件数、大小）
     search     按名称找文件和文件夹，不搜内容
@@ -22,7 +23,7 @@ from collections.abc import Iterator
 from datetime import datetime
 from typing import Any
 
-from ...domain.workspace_layout import FILES_DIR
+from ...domain.workspace_layout import FILES_DIR, SPACE_DIR
 from .listing import PreviewObject, WorkspaceListing, _paginate
 from .paths import PathEscape
 from .workspace import Workspace, is_hidden
@@ -38,17 +39,19 @@ _ZIP_CHUNK = 64 * 1024
 
 
 class UserFiles:
-    """fs：根是 files/ 的工作区（make_workspace(..., workspace_dir="")）。"""
+    """fs：根是 files/ 的工作区（make_workspace(..., workspace_dir="")），或者一个应用工作空间。"""
 
     def __init__(self, fs: Workspace) -> None:
-        if fs.layout.workspace != FILES_DIR:
-            raise ValueError("UserFiles 的根必须是 files/")
+        if fs.layout.workspace not in (FILES_DIR, SPACE_DIR):
+            raise ValueError("UserFiles 的根必须是 files/ 或应用工作空间")
         self._fs = fs
         self._listing = WorkspaceListing(fs)
         self._s3 = fs._s3
         self._bucket = fs._bucket
-        #: {user}/files/
-        self._prefix = fs.layout.key(f"{FILES_DIR}/")
+        #: 根在相对路径里的名字：files 或 space
+        self._root = fs.layout.workspace
+        #: {user}/files/，或 {应用}/{编号}/
+        self._prefix = fs.layout.key(f"{self._root}/")
 
     # ------------------------------------------------------------------ 路径
 
@@ -58,7 +61,7 @@ class UserFiles:
         if not p:
             return ""
         fp = self._fs.gate.resolve_prefix(f"{self._fs.workdir}/{p}/")
-        return fp.rel.removeprefix(f"{FILES_DIR}/").rstrip("/")
+        return fp.rel.removeprefix(f"{self._root}/").rstrip("/")
 
     def _writable(self, path: str, action: str) -> str:
         rel = self.rel(path)
@@ -265,6 +268,12 @@ class UserFiles:
         if result.error and not result.error.startswith("Nothing to delete"):
             raise OSError(result.error)
         self._remove([item["Key"] for item in self._objects(rel, limit=10**9)])
+
+    def clear(self) -> int:
+        """删掉根下的全部对象（含隐藏的、目录标记）→ 删了几个。释放应用工作空间用。"""
+        keys = [item["Key"] for item in self._objects("", limit=10**9)]
+        self._remove(keys)
+        return len(keys)
 
     def _copy(self, src_key: str, dst_key: str) -> None:
         self._s3.copy_object(

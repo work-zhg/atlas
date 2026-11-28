@@ -135,7 +135,7 @@ async def resolve_skills(
 
 def skill_dir(slug: str, version: int | str) -> str:
     """技能版本目录在沙箱里的路径（模型看到的）。"""
-    return WorkspaceLayout.real(WorkspaceLayout.skill(slug, version))
+    return WorkspaceLayout.data_path(WorkspaceLayout.skill(slug, version))
 
 
 def skill_refs_for(metas: Sequence[SkillMeta]) -> list[SkillRef]:

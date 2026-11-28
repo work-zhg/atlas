@@ -17,7 +17,7 @@ from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from atlas_agent.browser.daemon import Captured, DaemonClient, DaemonError, ViewKey
@@ -31,7 +31,7 @@ from atlas_agent.ids import uuid7
 from atlas_agent.redisx import make_redis
 from atlas_agent.sandbox.base.execution.values import CommandStatus, LogChunk
 from atlas_agent.sandbox.base.lifecycle.spec import CreateSpec
-from atlas_agent.sandbox.native import NativeSandboxKind
+from atlas_agent.sandbox.native import NativeRequest, NativeSandboxKind, WorkspaceRef
 from atlas_agent.sandbox.provisioning.model import (
     BizRef,
     BizType,
@@ -194,11 +194,12 @@ async def test_before_retire_runs_on_release_and_failure_does_not_block(
 
 def test_browser_sandboxes_share_among_themselves_only() -> None:
     kind = NativeSandboxKind(get_settings(), None, None)  # type: ignore[arg-type]
-    plain = kind.share(SandboxSpec(image="img"))
-    browser = kind.share(SandboxSpec(image="img", browser=True))
+    ws = WorkspaceRef(uuid4(), uuid4())
+    plain = kind.share(NativeRequest(SandboxSpec(image="img"), ws))
+    browser = kind.share(NativeRequest(SandboxSpec(image="img", browser=True), ws))
     assert plain is not None and browser is not None
     assert plain.key != browser.key
-    assert kind.share(SandboxSpec(profile="bench")) is None
+    assert kind.share(NativeRequest(SandboxSpec(profile="bench"), ws)) is None
 
 
 # ---------------------------------------------------------------------------- 守护客户端

@@ -74,12 +74,15 @@ class Takeover:
         return self.approval.status == "pending"
 
     def owned_by(self, user: UUID) -> bool:
-        return self.thread.created_by_uuid == user
+        """以数字员工为权限的会话：沙箱、浏览器、登录态都归数字员工，有使用权的人都算（接口层已按
+        使用权判过能不能看到这个 run）。"""
+        return self.thread.owned_by_agent or self.thread.created_by_uuid == user
 
 
 class TakeoverPolicy:
-    """只有沙箱的主人能打开、交还：浏览器里是这个人的登录态，键盘输入的是他的密码。业务应用里一起
-    参与会话的同事不能替他操作。"""
+    """以人为权限：只有沙箱的主人能打开、交还 —— 浏览器里是这个人的登录态，键盘输入的是他的密码，
+    业务应用里一起参与会话的同事不能替他操作。以数字员工为权限：登录用的是数字员工的账号，参与的人
+    （如 TeamFlow 的执行人）要能替它登录。"""
 
     def may_handle(self, takeover: Takeover, user: UUID) -> None:
         if not takeover.owned_by(user):
@@ -106,7 +109,8 @@ class LoginCapture:
             sites = captured.sites()
             if sites:
                 await self._vault.save(
-                    thread.created_by_uuid,
+                    # 存在沙箱主体名下：以数字员工为权限的存给数字员工，不存给操作的人
+                    thread.owner_uuid,
                     captured.state.only(sites),
                     sites=sites,
                     thread=thread.thread_uuid,

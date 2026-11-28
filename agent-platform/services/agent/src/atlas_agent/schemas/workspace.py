@@ -81,3 +81,32 @@ class WorkspaceMoveIn(BaseModel):
 class WorkspacePathOut(BaseModel):
     path: str
     size: int | None = None
+
+
+# ---------------------------------------------------------------------------- 应用工作空间
+
+
+class AppWorkspaceIn(BaseModel):
+    """业务应用申请一个应用工作空间：编号由应用生成（同一个编号重复申请得到同一个）。"""
+
+    space_uuid: UUID
+    title: str = Field(default="", max_length=200)
+
+
+class AppWorkspaceOut(BaseModel):
+    space_uuid: UUID
+    app_code: str
+    title: str
+    #: active | released
+    status: str
+    created_at: str
+
+
+class AppWorkspaceStatIn(BaseModel):
+    """提交前查文件在不在：路径相对空间的根。"""
+
+    paths: list[str] = Field(max_length=500)
+
+
+class AppWorkspaceStatOut(BaseModel):
+    missing: list[str]

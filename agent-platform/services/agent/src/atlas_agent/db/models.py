@@ -43,7 +43,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
-from ..domain.workspace_layout import WORKSPACE_DIR_MAX
+from ..domain.workspace_layout import WORKSPACE_DIR_MAX, app_space_prefix
 from ..ids import uuid7
 from ..sandbox.base.lifecycle.state import SandboxState
 from .base import Base, TimestampMixin
@@ -210,6 +210,11 @@ class AgentVersion(TenantOwned, Base):
     )
 
 
+def _creator(context: Any) -> Any:
+    """thread.owner_uuid 没给时：创建人（以人为权限）。"""
+    return context.get_current_parameters()["created_by_uuid"]
+
+
 class Thread(TenantOwned, Base, TimestampMixin):
     __tablename__ = "thread"
 
@@ -261,12 +266,39 @@ class Thread(TenantOwned, Base, TimestampMixin):
     #: 一个目录，多个会话可以共用），没指定就是 workspace；之后不变（它是沙箱里命令和 CLI 的
     #: cwd）。子会话建出时复制父会话的，所以整棵会话树是同一个（domain/workspace_layout.py）
     workspace_dir: Mapped[str] = mapped_column(String(WORKSPACE_DIR_MAX), nullable=False)
+    #: 文件主体（迁移 0050，sandbox/design-workspace-subject.html）：会话的文件归谁、沙箱记在
+    #: 谁名下。以人为权限是创建人，以数字员工为权限是数字员工（AuthSubjectPolicy，即
+    #: services/run.py 的 workspace_owner）；建会话时定、不改（改了权限类型只影响新会话），
+    #: 子会话照搬根会话的。workspace_dir 相对它的 files/
+    owner_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False, default=_creator)
+    #: 文件主体的种类：user | agent。agent = 以数字员工为权限：一棵会话树一个沙箱；对这个数字员工有
+    #: 使用权的人都能看、能答、能停（auth/authz.py）
+    owner_kind: Mapped[str] = mapped_column(String(8), nullable=False, server_default="user")
+    #: 用的应用工作空间（app_workspace.space_uuid）：给了它，工作目录就是它（挂到 /space），
+    #: workspace_dir 不用。只有以数字员工为权限的会话能用，由登记它的应用建会话时指定；子会话照搬
+    app_workspace_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
     #: 本机 CLI 会话跑在哪台电脑、哪个项目目录（迁移 0045，本机 CLI 方案 §2.3）。建会话时定下、
     #: 之后不变：CLI 的会话记录在那台电脑上，换电脑或换目录就接不上之前的上下文。
     #: 都为 NULL = 不是本机 CLI 会话，或者还没定（被委派建出的子会话在第一轮定：默认设备 +
     #: 「默认项目地址 / 根会话 id」）。目录是电脑上的路径，可含 ~，在电脑上展开
     device_uuid: Mapped[UUID | None] = mapped_column(UUIDType, nullable=True)
     device_project_dir: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+
+    @property
+    def owned_by_agent(self) -> bool:
+        """以数字员工为权限：文件归数字员工，一棵会话树一个沙箱。"""
+        return self.owner_kind == "agent"
+
+    @property
+    def space_prefix(self) -> str | None:
+        """用的应用工作空间在对象存储里的前缀；不用为 None。
+
+        ★ 只有登记它的应用能把它挂给会话，而会话的 source_app 就是建会话的应用，所以前缀按
+          source_app 算，不用回查 app_workspace。
+        """
+        if self.app_workspace_uuid is None or self.source_app is None:
+            return None
+        return app_space_prefix(self.source_app, self.app_workspace_uuid)
 
     @property
     def sandbox_thread_id(self) -> UUID:
@@ -290,8 +322,9 @@ class Thread(TenantOwned, Base, TimestampMixin):
     __table_args__ = (
         UniqueConstraint("thread_uuid", name="uk_thread_uuid"),
         Index("ix_thread_list", "status", text("updated_at DESC")),
-        # 工作空间里改名、删目录前查「哪些会话在用它」：按人 + 工作目录前缀
-        Index("ix_thread_workspace_dir", "created_by_uuid", "workspace_dir"),
+        # 工作空间里改名、删目录前查「哪些会话在用它」：按文件主体 + 工作目录前缀
+        Index("ix_thread_workspace_dir", "owner_uuid", "workspace_dir"),
+        CheckConstraint("owner_kind IN ('user','agent')", name="owner_kind_enum"),
         # ★ 恢复的查找键。条件里的 status='active' 是关键的一半：
         #   一次性（ephemeral）子会话以 status='ephemeral' 出生，因此不占这个
         #   键 —— 同一个一次性子智能体于是可以**真并行**（设计 §09），
@@ -322,7 +355,7 @@ class Device(TenantOwned, Base):
 
     id: Mapped[int] = _pk()
     device_uuid: Mapped[UUID] = _logical_key()
-    owner_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    owner_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False, default=_creator)
     #: 显示名，默认取电脑名
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -354,6 +387,36 @@ class Device(TenantOwned, Base):
         ),
         CheckConstraint("status IN ('active','revoked')", name="device_status_enum"),
     )
+
+
+class AppWorkspace(TenantOwned, Base, TimestampMixin):
+    """应用工作空间（迁移 0050，c4-model/agent/code-workspace-app.html）：业务应用为自己的一件事要的
+    目录（TeamFlow 的流程空间），不属于任何人或数字员工。
+
+    编号由应用给（同一个编号重复申请得到同一个）；目录 {应用}/{编号}/ 登记时定、不变；只认登记它的
+    应用和租户。释放 = 删目录 + 标 released，挂着它的会话之后开新一轮报错。
+    """
+
+    __tablename__ = "app_workspace"
+
+    id: Mapped[int] = _pk()
+    space_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    app_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    prefix: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="active")
+    #: 申请时请求头里的用户
+    created_by_uuid: Mapped[UUID] = mapped_column(UUIDType, nullable=False)
+    released_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("space_uuid", name="uk_app_workspace_space"),
+        CheckConstraint("status IN ('active','released')", name="status_enum"),
+    )
+
+    @property
+    def released(self) -> bool:
+        return self.status == "released"
 
 
 class Message(TenantOwned, Base):

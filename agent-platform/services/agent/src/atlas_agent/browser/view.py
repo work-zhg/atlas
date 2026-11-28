@@ -106,7 +106,8 @@ class ViewAccess:
 
     async def check(self, session: AsyncSession, user: UUID, thread_uuid: UUID) -> ViewTarget:
         thread = await fetch_one(session, Thread, Thread.thread_uuid == thread_uuid)
-        if thread is None or thread.created_by_uuid != user:
+        # 以数字员工为权限的会话：接口层已按使用权判过（浏览器归数字员工）
+        if thread is None or not (thread.owned_by_agent or thread.created_by_uuid == user):
             raise ViewDenied(CloseReason.NOT_OWNER)
         ref = await self._hosts.current(thread)
         if ref is None:

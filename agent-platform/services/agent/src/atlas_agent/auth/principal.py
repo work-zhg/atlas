@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from uuid import UUID
 
@@ -34,6 +34,11 @@ class Principal:
     #: 数据权限领域：数据编码 → 对该编码下**全部**数据的级别（用户中心的数据编码级授权）。
     #: ★ 与 operations 分开：「管理全部智能体」是数据权限，不经角色表达
     data_levels: Mapping[str, str] = field(default_factory=dict)
+    #: 按对象查数据权限级别（用户中心，按 auth_uid）：(数据编码, 数据 id) → 级别。接口层解析身份时
+    #: 接上；不经接口的内部调用（脚本、单测）没有 = 不限制（和 AgentAccess 一样）
+    data_check: Callable[[str, str], Awaitable[str]] | None = field(
+        default=None, compare=False, repr=False
+    )
 
     def __post_init__(self) -> None:
         if self.auth_uid is None:

@@ -149,7 +149,11 @@ class CliCapabilityAssembly:
         """
         thread = segment.thread
         fs = make_workspace(
-            self._settings, thread.created_by_uuid, thread.thread_uuid, thread.workspace_dir
+            self._settings,
+            thread.owner_uuid,
+            thread.thread_uuid,
+            thread.workspace_dir,
+            space=thread.space_prefix,
         )
         if fs is None:
             return

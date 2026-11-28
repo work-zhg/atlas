@@ -40,7 +40,6 @@ from ..browser.component import BrowserComponent, refresh_in_background
 from ..browser.login import BrowserNotConfigured
 from ..browser.plan import BrowserPlan
 from ..config import Settings
-from ..domain.workspace_layout import WorkspaceLayout
 from ..providers.filesystem import WorkspaceRouting, make_workspace
 from ..providers.llm.model_platform import (
     admit_models,
@@ -123,7 +122,7 @@ class CapabilityAssembly:
         browser = BrowserComponent.attach(self._settings, sandbox) if sandbox else None
         if browser is not None and segment.spec.sandbox.browser and closers is not None:
             closers.append(_refresher(self._settings, thread))
-        ws = WorkspaceRef(thread.sandbox_thread_id, thread.created_by_uuid, thread.workspace_dir)
+        ws = WorkspaceRef.of_thread(thread)
         # ★ 用会话的工作目录（子会话与根会话相同），隐藏目录 .atlas/{会话}/ 按自己；技能只放行本
         #   智能体绑定的版本。
         #   没配对象存储 = **没有文件能力**（make_workspace 返回 None，不回落任何内存实现）。
@@ -131,11 +130,12 @@ class CapabilityAssembly:
         #     挂在 /data，它在跑时文件工具也要进沙箱（与命令同一个挂载，只有一个写入方）。
         workspace = make_workspace(
             self._settings,
-            segment.thread.created_by_uuid,
+            thread.owner_uuid,
             segment.thread_id,
             thread.workspace_dir,
             skills=[(s.slug, s.version) for s in segment.spec.skills],
             routing=WorkspaceRouting(sandbox.native, sandbox.exec, ws) if sandbox else None,
+            space=thread.space_prefix,
         )
 
         # ── 三个能力领域，顺序固定 ────────────────────────────────────────────
@@ -184,9 +184,7 @@ class CapabilityAssembly:
             memory=context.memory_block,
             knowledge=segment.knowledge.catalog() if segment.knowledge else None,
             prompt_cache_ttl=await self._prompt_cache_ttl(segment),
-            workdir=WorkspaceLayout.of(
-                thread.created_by_uuid, segment.thread_id, thread.workspace_dir
-            ).workdir,
+            workdir=ws.layout().workdir,
             # 每段装配时取一次：跨过零点的会话下一段就换成新的一天
             today=datetime.now(ZoneInfo(self._settings.prompt_timezone)).date(),
             prior_tokens=segment.prior_tokens,

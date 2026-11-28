@@ -1,6 +1,7 @@
 """每次操作选底层（c4-model/agent/code-workspace.html · StoreRouter）。
 
     这个人的原生沙箱 READY → 经沙箱；否则直连对象存储。所有路径都在同一个挂载（/data）下，不分目录。
+    一个会话一个沙箱的（以数字员工为权限）只看本会话的：别的会话的沙箱没挂本会话的 /space。
 
 ★ 选路看这个人的沙箱，不只看本会话的：沙箱把整个 {user}/ 挂在 /data，用 s3fs，有目录和属性缓存。
   它在跑时绕过它直写对象存储，沙箱里的进程可能好一阵都看不到，同一个文件还会有两个写入方互相覆盖。
@@ -42,10 +43,12 @@ class WorkspaceRouting:
         self._ws = ws
 
     async def current(self) -> SandboxRef | None:
+        if self._ws.exclusive:
+            return await self._native.current(self._ws)
         return await self._native.current_of_user(self._ws)
 
     async def store(self, ref: SandboxRef) -> SandboxFiles:
-        return SandboxFiles(await self._exec.open_files(ref.sandbox_uuid))
+        return SandboxFiles(await self._exec.open_files(ref.sandbox_uuid), self._ws.layout())
 
     async def gone(self, ref: SandboxRef) -> bool:
         """请求失败后问一句：沙箱确实不在了就去掉记录（返回 True），之后走对象存储。"""

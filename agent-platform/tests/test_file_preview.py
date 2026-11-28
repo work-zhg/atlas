@@ -238,8 +238,13 @@ class _Repo:
 async def test_issue_and_resolve_token(monkeypatch) -> None:
     redis = FakeRedis()
     settings = _settings(preview_token_ttl_s=120)
+    owner = uuid4()
     thread = SimpleNamespace(
-        thread_uuid=uuid4(), created_by_uuid=uuid4(), workspace_dir="Q3 分析/report"
+        thread_uuid=uuid4(),
+        created_by_uuid=owner,
+        owner_uuid=owner,
+        space_prefix=None,
+        workspace_dir="Q3 分析/report",
     )
     service = PreviewService(redis, settings)  # type: ignore[arg-type]
 
@@ -248,7 +253,7 @@ async def test_issue_and_resolve_token(monkeypatch) -> None:
 
     seen = {}
 
-    def fake_make_workspace(_settings, owner, thread_id, workspace_dir):
+    def fake_make_workspace(_settings, owner, thread_id, workspace_dir, space=None):
         seen.update(owner=str(owner), thread_id=str(thread_id), ws=workspace_dir)
         return SimpleNamespace()
 
@@ -276,7 +281,7 @@ async def test_files_token_is_rooted_at_the_whole_file_space(monkeypatch) -> Non
     token, _ = await service.issue_files(owner)
     seen = {}
 
-    def fake_make_workspace(_settings, user, thread_id, workspace_dir):
+    def fake_make_workspace(_settings, user, thread_id, workspace_dir, space=None):
         seen.update(owner=str(user), ws=workspace_dir)
         return SimpleNamespace()
 

@@ -126,6 +126,7 @@ class Env:
             "sandbox_thread_id": uuid4(),
             "created_by_uuid": OWNER,
             "device_uuid": device,
+            "owned_by_agent": False,
         }
         return SimpleNamespace(**{**values, **kw})
 
