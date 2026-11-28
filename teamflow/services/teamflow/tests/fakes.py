@@ -18,6 +18,7 @@ from uuid import UUID
 from atlas_teamflow.agentplatform import RunBusy
 from atlas_teamflow.errors import Forbidden, Invalid, NotFound, TFError
 from atlas_teamflow.outbound import outbound_headers
+from atlas_tenancy import TenantScope
 
 LEVELS = {"NONE": 0, "READ": 1, "WRITE": 2, "OWNER": 3}
 NAMES = {v: k for k, v in LEVELS.items()}
@@ -29,6 +30,11 @@ TEAM_MEMBER_OPS = {"process:run", "process:view"}
 
 def _me() -> str:
     return outbound_headers().get("X-Uid", "")
+
+
+def _need_tenant() -> None:
+    """真的用户中心、Agent 平台按请求头 X-Tenant-Id 进入租户：出站调用时必须已经在某个租户里。"""
+    assert TenantScope.current() is not None, "出站调用没有租户上下文（X-Tenant-Id）"
 
 
 class FakeUC:
@@ -67,6 +73,7 @@ class FakeUC:
 
     # ── 人、租户、快照
     async def authz(self, uid: UUID) -> dict[str, Any]:
+        _need_tenant()
         u = self.users.get(str(uid))
         if u is None:
             raise NotFound("USER_NOT_FOUND", "用户不存在")
@@ -80,12 +87,14 @@ class FakeUC:
         }
 
     async def user(self, uid: UUID) -> dict[str, Any]:
+        _need_tenant()
         u = self.users.get(str(uid))
         if u is None:
             raise NotFound("USER_NOT_FOUND", "用户不存在")
         return dict(u)
 
     async def search_users(self, q: str | None, *, size: int = 20) -> list[dict[str, Any]]:
+        _need_tenant()
         return [
             dict(u) for u in self.users.values() if not q or q in u["name"] or q in u["account"]
         ][:size]
@@ -102,12 +111,15 @@ class FakeUC:
         return NAMES[best]
 
     async def data_level(self, code: str, data_id: UUID, uid: UUID) -> str:
+        _need_tenant()
         return self._level(code, str(data_id), str(uid))
 
     async def type_level(self, code: str, uid: UUID) -> str:
+        _need_tenant()
         return self.type_grants.get((code, str(uid)), "NONE")
 
     async def accessible(self, code: str, uid: UUID, min_level: str = "READ") -> dict[str, str]:
+        _need_tenant()
         out = {}
         for (c, data_id), rows in self.acls.items():
             if c != code:
@@ -125,6 +137,7 @@ class FakeUC:
         grants: list[dict[str, Any]],
         operator: UUID | None,
     ) -> dict[str, Any]:
+        _need_tenant()
         key = (code, str(data_id))
         rows = self.acls.setdefault(key, [])
         if rows:
@@ -152,11 +165,13 @@ class FakeUC:
         return {"added": len(grants)}
 
     async def acl(self, code: str, data_id: UUID) -> list[dict[str, Any]]:
+        _need_tenant()
         return [dict(r) for r in self.acls.get((code, str(data_id)), [])]
 
     async def holders(
         self, code: str, data_id: UUID, min_level: str = "READ"
     ) -> list[dict[str, Any]]:
+        _need_tenant()
         out = []
         for r in self.acls.get((code, str(data_id)), []):
             if LEVELS[r["permission"]] >= LEVELS[min_level] and r["subject"]["id"] in self.users:
@@ -177,6 +192,7 @@ class FakeUC:
         raise NotFound("GRANT_NOT_FOUND", "授权不存在")
 
     async def update_grant(self, acl_id: str, operator: UUID, *, permission: str) -> None:
+        _need_tenant()
         key, r = self._row(acl_id)
         if self._level(key[0], key[1], str(operator)) != "OWNER":
             raise Forbidden("OWNER_REQUIRED", "要 Owner")
@@ -184,6 +200,7 @@ class FakeUC:
         self._guard_owner(key)
 
     async def delete_grant(self, acl_id: str, operator: UUID) -> None:
+        _need_tenant()
         key, r = self._row(acl_id)
         if self._level(key[0], key[1], str(operator)) != "OWNER":
             raise Forbidden("OWNER_REQUIRED", "要 Owner")
@@ -195,9 +212,11 @@ class FakeUC:
             raise TFError("LAST_OWNER", "至少保留一个 Owner")
 
     async def delete_data(self, code: str, data_id: UUID) -> None:
+        _need_tenant()
         self.acls.pop((code, str(data_id)), None)
 
     async def rename_data(self, code: str, data_id: UUID, name: str) -> None:
+        _need_tenant()
         self.calls.append(("rename", (code, str(data_id), name)))
 
 
@@ -256,6 +275,7 @@ class FakeAtlas:
 
     # ── 智能体
     async def list_agents(self, q: str | None = None) -> list[dict[str, Any]]:
+        _need_tenant()
         me = _me()
         return [
             {k: v for k, v in a.items() if k not in ("grants", "owner")}
@@ -264,14 +284,17 @@ class FakeAtlas:
         ]
 
     async def get_agent(self, agent_id: str) -> dict[str, Any] | None:
+        _need_tenant()
         a = self.agents.get(agent_id)
         return {k: v for k, v in a.items() if k not in ("grants", "owner")} if a else None
 
     async def agent_grants(self, agent_id: str) -> dict[str, Any]:
+        _need_tenant()
         a = self.agents[agent_id]
         return {"data": [dict(g) for g in a["grants"]], "my_level": self._level(agent_id, _me())}
 
     async def grant_use(self, agent_id: str, uids: list[UUID]) -> None:
+        _need_tenant()
         if self._level(agent_id, _me()) != "OWNER":
             raise Forbidden("ATLAS_FORBIDDEN", "只有 Owner 能共享")
         for u in uids:
@@ -282,6 +305,7 @@ class FakeAtlas:
 
     # ── 应用工作空间
     async def open_workspace(self, space_uuid: UUID, title: str) -> dict[str, Any]:
+        _need_tenant()
         self.workspaces.setdefault(
             str(space_uuid), {"title": title, "files": {}, "released": False}
         )
@@ -289,11 +313,13 @@ class FakeAtlas:
         return {"space_uuid": str(space_uuid)}
 
     async def release_workspace(self, space_uuid: UUID) -> None:
+        _need_tenant()
         if str(space_uuid) in self.workspaces:
             self.workspaces[str(space_uuid)]["released"] = True
         self.calls.append(("release_workspace", str(space_uuid)))
 
     async def list_files(self, space_uuid: UUID, dir: str) -> dict[str, Any]:
+        _need_tenant()
         files = self.workspaces[str(space_uuid)]["files"]
         prefix = f"{dir}/" if dir else ""
         dirs, out = set(), []
@@ -313,14 +339,17 @@ class FakeAtlas:
         }
 
     async def stat_files(self, space_uuid: UUID, paths: list[str]) -> list[str]:
+        _need_tenant()
         files = self.workspaces[str(space_uuid)]["files"]
         return [p for p in paths if p not in files]
 
     async def put_file(self, space_uuid: UUID, path: str, data: bytes) -> dict[str, Any]:
+        _need_tenant()
         self.workspaces[str(space_uuid)]["files"][path] = data
         return {"path": path, "size": len(data)}
 
     async def download(self, space_uuid: UUID, path: str) -> tuple[int, AsyncIterator[bytes]]:
+        _need_tenant()
         data = self.workspaces[str(space_uuid)]["files"].get(path)
         if data is None:
             raise NotFound("ATLAS_NOT_FOUND", "文件不存在")
@@ -332,6 +361,7 @@ class FakeAtlas:
 
     # ── 会话
     async def create_thread(self, agent_id: str, *, title: str, app_workspace: UUID) -> str:
+        _need_tenant()
         tid = str(uuid.uuid4())
         self.threads[tid] = {
             "agent": agent_id,
@@ -346,6 +376,7 @@ class FakeAtlas:
     async def create_run(
         self, thread_id: str, content: list[dict[str, Any]], *, idempotency_key: str
     ) -> str:
+        _need_tenant()
         key = (_me(), idempotency_key)
         if key in self.idem:
             return self.idem[key]
@@ -369,6 +400,7 @@ class FakeAtlas:
         return rid
 
     async def cancel_run(self, run_id: str) -> None:
+        _need_tenant()
         r = self.runs.get(run_id)
         if r is not None and r["active"]:
             r["cancelled"] = True

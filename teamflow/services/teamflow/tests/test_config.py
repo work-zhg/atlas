@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from atlas_tenancy import TenantScope
 from kit import World, ok, setup_project, structure
 
 
@@ -12,7 +13,8 @@ async def test_team_create_needs_team_create_operation() -> None:
     team = ok(await w.as_("li").post("/api/v1/teams", {"name": "研发一部"}), 201)
     assert team["my_level"] == "OWNER"
     # 李工在用户中心是这个团队的 Owner
-    assert (await w.uc.data_level("Team", team["id"], w.ids["li"])) == "OWNER"
+    with TenantScope.enter(w.tenant):
+        assert (await w.uc.data_level("Team", team["id"], w.ids["li"])) == "OWNER"
     # 同名团队
     assert (await w.as_("li").post("/api/v1/teams", {"name": "研发一部"})).status_code == 409
 

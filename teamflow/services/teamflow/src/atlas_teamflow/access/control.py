@@ -20,6 +20,8 @@ from enum import Enum
 from typing import Any
 from uuid import UUID
 
+from atlas_tenancy import TenantScope
+
 from ..errors import Forbidden, NotFound, TFError, Unauthorized
 from ..usercenter import MARKET_CODE, TEAM_CODE, UserCenter
 
@@ -123,6 +125,11 @@ class AccessControl:
         return p
 
     async def _snapshot(self, uid: UUID, tenant: UUID) -> Principal:
+        # ★ 这时请求还没进入租户（要先核对完身份）：查用户中心要带上请求头里的租户，否则它不认
+        with TenantScope.enter(tenant):
+            return await self._snapshot_in_tenant(uid, tenant)
+
+    async def _snapshot_in_tenant(self, uid: UUID, tenant: UUID) -> Principal:
         got = await self.uc.authz(uid)
         user = got.get("user") or {}
         if user.get("status") == "disabled":
